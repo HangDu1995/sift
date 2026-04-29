@@ -1,0 +1,31 @@
+{
+  "skill_name": "sample-skill",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create a Python script that transforms the CSV data in data.csv to JSON format",
+      "expected_output": "A Python script that reads CSV and outputs JSON with proper error handling",
+      "expectations": [
+        "The script reads CSV input",
+        "The script writes JSON output",
+        "Error handling is included"
+      ],
+      "assertions": [
+        {"name": "Script exists", "type": "FILE_EXISTS", "params": {"filename": "transform.py"}},
+        {"name": "Contains json.dump", "type": "CONTAINS_PATTERN", "params": {"pattern": "json.dump", "path": "transform.py"}}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Validate that the output.json file is correctly formatted",
+      "expected_output": "Validation passes with no errors",
+      "expectations": [
+        "The validation script is executed",
+        "No errors are reported"
+      ],
+      "assertions": [
+        {"name": "JSON is valid", "type": "FILE_EXISTS", "params": {"filename": "output.json"}}
+      ]
+    }
+  ]
+}
