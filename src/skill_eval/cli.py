@@ -284,6 +284,79 @@ def main(
     pass
 
 
+def _run_security_vet(skill_path: Path, security_gate: bool, console: Console) -> None:
+    from skill_eval.security.vetter import SecurityVetter
+
+    vetter = SecurityVetter(skip_external=False)
+    report = vetter.vet(skill_path)
+
+    table = Table(title=f"Security Scan: {report.skill_name}")
+    table.add_column("Scanner", style="bold")
+    table.add_column("Status")
+    table.add_column("Detail")
+    for s in report.scanners:
+        if s.status == "PASS":
+            status = "[green]PASS[/green]"
+        elif s.status == "FAIL":
+            status = "[red]FAIL[/red]"
+        elif s.status == "WARN":
+            status = "[yellow]WARN[/yellow]"
+        else:
+            status = "[dim]SKIP[/dim]"
+        table.add_row(s.name, status, s.message)
+    console.print(table)
+
+    if report.findings:
+        console.print("\n[bold]Findings:[/bold]")
+        for f in report.findings:
+            color = "red" if f.severity in ("CRITICAL", "HIGH") else "yellow"
+            loc = f" ({f.file_path}" + (f":{f.line}" if f.line else "") + ")" if f.file_path else ""
+            console.print(f"  [{color}]{f.severity}[/{color}] [{f.scanner}] {f.description}{loc}")
+
+    if report.verdict == "BLOCKED":
+        console.print(f"\n[red bold]VERDICT: BLOCKED[/red bold] — {report.summary}")
+        if security_gate:
+            raise typer.Exit(code=1)
+    elif report.verdict == "REVIEW_NEEDED":
+        console.print(f"\n[yellow bold]VERDICT: REVIEW NEEDED[/yellow bold] — {report.summary}")
+        if security_gate:
+            raise typer.Exit(code=1)
+    else:
+        console.print(f"\n[green bold]VERDICT: SAFE[/green bold] — {report.summary}")
+
+
+@app.command()
+def vet(
+    skill_path: Path = typer.Argument(..., help="Path to skill directory or GitHub URL", exists=True),
+    format: str = typer.Option("table", "--format", help="Output format: table or json"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path"),
+    skip_external: bool = typer.Option(False, "--skip-external", help="Skip external scanners (aguara, skill-scanner)"),
+):
+    """Run security vetting on a Skill."""
+    from skill_eval.security.vetter import SecurityVetter
+
+    try:
+        vetter = SecurityVetter(skip_external=skip_external)
+        report = vetter.vet(skill_path)
+    except Exception as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=1)
+
+    if format == "json":
+        data = report.model_dump(mode="json")
+        text = json.dumps(data, indent=2, ensure_ascii=False)
+        if output:
+            output.write_text(text, encoding="utf-8")
+            console.print(f"Written to {output}")
+        else:
+            console.print(text)
+    else:
+        _run_security_vet(skill_path, True, console)
+
+    if report.verdict == "BLOCKED":
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def analyze(
     skill_path: Path = typer.Argument(..., help="Path to skill directory containing SKILL.md", exists=True),
@@ -388,6 +461,7 @@ def run(
     scoring: str = typer.Option("hybrid", "--scoring", help="Scoring mode: hybrid, programmatic, or llm"),
     compliance_gate: bool = typer.Option(False, "--compliance-gate", help="Force-fail if compliance_rate < 0.5"),
     no_calibration: bool = typer.Option(False, "--no-calibration", help="Skip scoring calibration"),
+    security_gate: bool = typer.Option(False, "--security-gate", help="Fail if security vetting returns BLOCKED or REVIEW_NEEDED"),
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
     format: str = typer.Option("table", "--format", help="Output format"),
 ):
@@ -396,6 +470,9 @@ def run(
     from skill_eval.execution.runner import ABTestRunner
     from skill_eval.execution.benchmark import BenchmarkAggregator
     from skill_eval.models import RunConfig, ScoringConfig
+
+    if security_gate:
+        _run_security_vet(skill_path, True, console)
 
     if not evals:
         candidates = [
@@ -557,6 +634,7 @@ def full(
     timeout: int = typer.Option(120, "--timeout", help="Timeout per run in seconds"),
     max_turns: int = typer.Option(10, "--max-turns", help="Max agentic turns per claude -p run"),
     compliance_gate: bool = typer.Option(False, "--compliance-gate", help="Force-fail if compliance_rate < 0.5"),
+    security_gate: bool = typer.Option(False, "--security-gate", help="Fail if security vetting returns BLOCKED or REVIEW_NEEDED"),
     open_browser: bool = typer.Option(False, "--open", help="Open report in browser"),
     format: str = typer.Option("table", "--format", help="Output format"),
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
@@ -575,7 +653,11 @@ def full(
     if not output_dir:
         output_dir = Path("output")
 
-    console.print("[bold]Step 1/4:[/bold] Static analysis...")
+    if security_gate:
+        console.print("[bold]Step 0/5:[/bold] Security vetting...")
+        _run_security_vet(skill_path, True, console)
+
+    console.print("[bold]Step 1/5:[/bold] Static analysis...")
     try:
         analyzer = StaticAnalyzer()
         scorecard = analyzer.analyze(skill_path)
@@ -583,7 +665,7 @@ def full(
     except SkillEvalError as exc:
         console.print(f"  [red]Error:[/red] {exc}")
 
-    console.print("[bold]Step 2/4:[/bold] Loading evals...")
+    console.print("[bold]Step 2/5:[/bold] Loading evals...")
     evals_path = None
     for candidate in [skill_path / "evals" / "evals.json", skill_path / "evals.json"]:
         if candidate.exists():
@@ -596,7 +678,7 @@ def full(
     loader = EvalLoader()
     eval_set = loader.load(evals_path)
 
-    console.print(f"[bold]Step 3/4:[/bold] Running A/B test (1 skill × {runs} runs × 2 configs)...")
+    console.print(f"[bold]Step 3/5:[/bold] Running A/B test (1 skill × {runs} runs × 2 configs)...")
     scoring_config = ScoringConfig(enable_programmatic=True, enable_llm=True, llm_model=model, llm_timeout=timeout)
     run_config = RunConfig(runs_per_config=runs, model=model, timeout_seconds=timeout, max_workers=workers, max_turns=max_turns, output_dir=output_dir)
 
@@ -614,7 +696,7 @@ def full(
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=exc.exit_code)
 
-    console.print("[bold]Step 4/4:[/bold] Aggregating and generating report...")
+    console.print("[bold]Step 4/5:[/bold] Aggregating and generating report...")
     agg = BenchmarkAggregator()
     benchmark = agg.aggregate(iteration_dir, skill_path)
 

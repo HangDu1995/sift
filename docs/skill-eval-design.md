@@ -21,6 +21,7 @@
   - [2.5 项目目录结构](#25-项目目录结构)
   - [2.6 与现有系统的关系及代码复用明细](#26-与现有系统的关系及代码复用明细)
 - [3. 核心模块功能设计](#3-核心模块功能设计)
+  - [3.0 安全审查引擎 (Security Vetting)](#30-安全审查引擎-security-vetting)
   - [3.1 静态分析引擎 (Static Analysis)](#31-静态分析引擎-static-analysis)
   - [3.2 评测定义层 (Eval Definition)](#32-评测定义层-eval-definition)
   - [3.3 执行引擎 (Execution Engine)](#33-执行引擎-execution-engine)
@@ -311,6 +312,10 @@ skill-eval/
 │       ├── parser.py                  # SKILL.md 解析器
 │       ├── errors.py                  # 自定义异常 + 错误码
 │       │
+│       ├── security/
+│       │   ├── __init__.py
+│       │   └── vetter.py              # SecurityVetter (4 扫描器)
+│       │
 │       ├── static_analysis/
 │       │   ├── __init__.py
 │       │   ├── analyzer.py            # StaticAnalyzer 类
@@ -391,6 +396,7 @@ skill-eval/
     ├── test_scoring_programmatic.py
     ├── test_compliance.py
     ├── test_calibration.py
+    ├── test_security.py
     ├── test_execution.py
     └── test_batch.py
 ```
@@ -417,6 +423,195 @@ skill-eval/
 ---
 
 ## 3. 核心模块功能设计
+
+### 3.0 安全审查引擎 (Security Vetting)
+
+#### 3.0.1 模块职责
+
+在安装或评测任何第三方 Skill 之前，对其目录进行多扫描器安全检查。检测恶意代码、硬编码凭证、Prompt 注入和结构异常。集成自 [skill-vetter](https://github.com/app-incubator-xyz/skill-vetter) 的安全扫描逻辑，以原生 Python 方式实现。
+
+#### 3.0.2 类图
+
+```mermaid
+classDiagram
+    class SecurityVetter {
+        +skip_external: bool
+        +vet(skill_path: Path) SecurityReport
+        +vet_url(url: str) SecurityReport
+        -_scan_aguara(skill_path: Path) ScannerResult
+        -_scan_skill_scanner(skill_path: Path) ScannerResult
+        -_scan_secrets(skill_path: Path) ScannerResult
+        -_scan_structure(skill_path: Path) ScannerResult
+    }
+
+    class SecurityReport {
+        +skill_name: str
+        +skill_path: str
+        +verdict: SecurityVerdict
+        +scanners: list~ScannerResult~
+        +findings: list~SecurityFinding~
+        +summary: str
+    }
+
+    class ScannerResult {
+        +name: str
+        +status: ScannerStatus
+        +findings: list~SecurityFinding~
+        +message: str
+    }
+
+    class SecurityFinding {
+        +scanner: str
+        +severity: SecuritySeverity
+        +description: str
+        +file_path: str
+        +line: int | None
+    }
+
+    class SecurityVerdict {
+        <<enumeration>>
+        SAFE
+        REVIEW_NEEDED
+        BLOCKED
+    }
+
+    class SecuritySeverity {
+        <<enumeration>>
+        CRITICAL
+        HIGH
+        MEDIUM
+        LOW
+    }
+
+    class ScannerStatus {
+        <<enumeration>>
+        PASS
+        WARN
+        FAIL
+        SKIP
+    }
+
+    SecurityVetter --> SecurityReport
+    SecurityReport --> ScannerResult
+    SecurityReport --> SecurityFinding
+    ScannerResult --> SecurityFinding
+    SecurityReport --> SecurityVerdict
+    SecurityFinding --> SecuritySeverity
+    ScannerResult --> ScannerStatus
+```
+
+#### 3.0.3 四个扫描器
+
+| # | 扫描器 | 实现方式 | 检查内容 | 依赖 |
+|---|--------|----------|----------|------|
+| 1 | **aguara** | subprocess 调用 `aguara scan --format json` | Prompt 注入、混淆、可疑 LLM 调用 | 可选（Go 二进制） |
+| 2 | **skill-scanner** | subprocess 调用 `skill-scanner scan --format json` | 已知恶意模式、CVE 漏洞库 | 可选（pip: cisco-ai-skill-scanner） |
+| 3 | **secrets-scan** | 原生 Python（re 正则匹配） | 硬编码 API Key、Token、凭证、Base64 编码字符串 | 无（总是可用） |
+| 4 | **structure-check** | 原生 Python | 缺失 SKILL.md、缺少 YAML frontmatter、危险 shell 命令（`rm -rf`、`curl|bash`、`eval`） | 无（总是可用） |
+
+**依赖降级策略**：外部扫描器（aguara、skill-scanner）未安装时自动 SKIP，不影响其他扫描器运行。使用 `--skip-external` 可显式禁用外部扫描器。
+
+#### 3.0.4 SecurityVetter.vet() 流程
+
+```
+1. 解析 skill_path 为绝对路径
+
+2. 依次运行四个扫描器：
+   - aguara:       如果可用，解析 JSON 输出，按 severity 字段分级
+   - skill-scanner: 如果可用，解析 JSON 输出，按 severity 字段分级
+   - secrets-scan:  递归遍历 skill_path 下所有文本文件
+                    模式: (api_key|secret|token|password|credential)\s*[:=]\s*['"][A-Za-z0-9_\-]{16,}['"]
+                    额外检查: .sh/.py/.js/.ts 文件中的 Base64 编码字符串（≥40字符）
+   - structure-check: 检查 SKILL.md 存在性、YAML frontmatter、危险命令模式
+
+3. 汇总所有 findings，判定 verdict:
+   - 任何 CRITICAL/HIGH → BLOCKED
+   - 任何 MEDIUM（无 HIGH）→ REVIEW_NEEDED
+   - 无 findings → SAFE
+
+4. 返回 SecurityReport
+```
+
+#### 3.0.5 判定规则与动作
+
+| Verdict | 含义 | 动作 |
+|---------|------|------|
+| **BLOCKED** | 存在 CRITICAL/HIGH 级别发现 | 不安装，不评测，exit code 1 |
+| **REVIEW_NEEDED** | 存在 MEDIUM 级别发现 | 展示发现，由用户决定是否继续 |
+| **SAFE** | 所有扫描器通过 | 可安全安装和评测 |
+
+#### 3.0.6 security-report.json 输出格式
+
+```json
+{
+  "skill_name": "some-skill",
+  "skill_path": "/path/to/skill",
+  "verdict": "BLOCKED",
+  "scanners": [
+    {
+      "name": "aguara",
+      "status": "SKIP",
+      "findings": [],
+      "message": "aguara not installed"
+    },
+    {
+      "name": "secrets-scan",
+      "status": "FAIL",
+      "findings": [
+        {
+          "scanner": "secrets-scan",
+          "severity": "HIGH",
+          "description": "Hardcoded credentials detected",
+          "file_path": "scripts/run.sh",
+          "line": 12
+        }
+      ],
+      "message": "Hardcoded credentials detected"
+    },
+    {
+      "name": "structure-check",
+      "status": "FAIL",
+      "findings": [
+        {
+          "scanner": "structure-check",
+          "severity": "HIGH",
+          "description": "Dangerous shell command detected",
+          "file_path": "scripts/run.sh",
+          "line": 5
+        }
+      ],
+      "message": "1 structure issue(s)"
+    }
+  ],
+  "findings": [ ... ],
+  "summary": "2 HIGH/CRITICAL, 0 MEDIUM"
+}
+```
+
+#### 3.0.7 CLI 集成
+
+**独立命令**：
+
+```bash
+skill-eval vet <skill-path> [--format table|json] [--output FILE] [--skip-external]
+```
+
+**安全门控 flag**：
+
+```bash
+skill-eval run <skill-path> --security-gate   # BLOCKED/REVIEW_NEEDED 时 exit code 1
+skill-eval full <skill-path> --security-gate   # 同上，作为 Step 0 在评测前执行
+```
+
+**`skill-eval full --security-gate` 的流程变更**：
+
+```
+Step 0/5: Security vetting (新增，仅 --security-gate 时)
+Step 1/5: Static analysis      (原 Step 1/4)
+Step 2/5: Loading evals         (原 Step 2/4)
+Step 3/5: Running A/B test      (原 Step 3/4)
+Step 4/5: Aggregating & report  (原 Step 4/4)
+```
 
 ### 3.1 静态分析引擎 (Static Analysis)
 
@@ -1908,13 +2103,14 @@ class RuntimeCacheUsage(BaseModel):
 
 | 命令 | 签名 | 耗时 | 需要 claude CLI |
 |------|------|------|----------------|
+| `vet` | `skill-eval vet SKILL_PATH [--format FORMAT] [--output FILE] [--skip-external]` | <1s | 否 |
 | `analyze` | `skill-eval analyze SKILL_PATH [--format FORMAT] [--output FILE]` | <1s | 否 |
 | `init` | `skill-eval init SKILL_PATH [--output DIR] [--generate-prompts]` | <1s（无 --generate-prompts）/ ~30s（有） | 仅 --generate-prompts |
-| `run` | `skill-eval run SKILL_PATH [--evals PATH] [--runs N] [--model MODEL] [--workers N] [--timeout N] [--scoring MODE] [--compliance-gate] [--no-calibration] [--output DIR]` | 5-30min | 是 |
+| `run` | `skill-eval run SKILL_PATH [--evals PATH] [--runs N] [--model MODEL] [--workers N] [--timeout N] [--scoring MODE] [--compliance-gate] [--security-gate] [--no-calibration] [--output DIR]` | 5-30min | 是 |
 | `optimize-trigger` | `skill-eval optimize-trigger SKILL_PATH --eval-set PATH [--max-iterations N] [--model MODEL]` | 10-60min | 是 |
 | `report` | `skill-eval report WORKSPACE [--benchmark PATH] [--previous PATH] [--static FILE] [--port PORT] [--open]` | <1s | 否 |
 | `import` | `skill-eval import JSONL_PATH --benchmark PATH` | <1s | 否 |
-| `full` | `skill-eval full SKILL_PATH [--runs N] [--model MODEL] [--compliance-gate] [--open]` | 5-30min | 是 |
+| `full` | `skill-eval full SKILL_PATH [--runs N] [--model MODEL] [--compliance-gate] [--security-gate] [--open]` | 5-30min | 是 |
 | `batch` | `skill-eval batch MANIFEST_OR_DIR [--runs N] [--model MODEL] [--layers LAYERS] [--baseline PATH] [--fail-fast] [--workers N] [--output DIR]` | 30-120min | 是 |
 
 #### 3.10.2 通用参数
@@ -1925,6 +2121,7 @@ class RuntimeCacheUsage(BaseModel):
 | `--output` | Path | 输出路径 |
 | `--verbose` | flag | 打印详细日志到 stderr |
 | `--compliance-gate` | flag | 启用遵循性门控（compliance_rate < 0.5 时强制判定为失败） |
+| `--security-gate` | flag | 启用安全门控（BLOCKED/REVIEW_NEEDED 时强制判定为失败） |
 | `--no-calibration` | flag | 跳过评分校准（节省 LLM 调用成本） |
 
 #### 3.10.3 Exit Code 规则
@@ -1939,6 +2136,10 @@ class RuntimeCacheUsage(BaseModel):
 #### 3.10.4 `skill-eval full` 完整流程
 
 ```
+0. (if --security-gate) SecurityVetter.vet(skill_path)
+   if BLOCKED: exit code 1
+   if REVIEW_NEEDED: exit code 1
+
 1. StaticAnalyzer.analyze(skill_path) → scorecard.json
    if error: print warning, continue
 
@@ -1961,7 +2162,7 @@ class RuntimeCacheUsage(BaseModel):
    ReportGenerator.write_static() → report.html
 ```
 
-**CLI flags**: `--runs`, `--model`, `--workers`, `--timeout`, `--max-turns`, `--compliance-gate`, `--open`, `--format`, `--output`
+**CLI flags**: `--runs`, `--model`, `--workers`, `--timeout`, `--max-turns`, `--compliance-gate`, `--security-gate`, `--open`, `--format`, `--output`
 
 ### 3.11 实时进度显示
 
@@ -3356,6 +3557,7 @@ class ExecutionError(SkillEvalError):
 
 | 阶段 | 内容 | 产出 | 验收标准 |
 |------|------|------|----------|
+| Phase 0 | 安全审查 | `skill-eval vet` + `--security-gate` 可用 | `pytest tests/test_security.py` 全绿，`skill-eval vet tests/fixtures/sample-skill` 返回 SAFE |
 | Phase 1 | 项目骨架 + 静态分析 | `skill-eval analyze` 可用 | `pytest tests/test_static_analysis.py` 全绿 |
 | Phase 2 | 执行引擎 + 评分 | `skill-eval run` 可用 | 用 sample-skill 跑 1 eval × 1 run，产出 benchmark.json |
 | Phase 3 | 遵循性引擎 + 评分校准 | `compliance.json` + `calibration.json` 可产出 | sample-skill 的 with_skill run 产出合规率 + 可信度等级 |

@@ -12,6 +12,7 @@
 - [快速开始](#快速开始)
 - [安装](#安装)
 - [CLI 命令参考](#cli-命令参考)
+  - [vet — 安全审查](#vet--安全审查)
   - [init — 初始化评测定义](#init--初始化评测定义)
   - [analyze — 静态分析](#analyze--静态分析)
   - [run — A/B 评测](#run--ab-评测)
@@ -38,6 +39,7 @@
 
 | 能力 | 说明 |
 |------|------|
+| **安全审查** | 在安装/评测前检测恶意代码、硬编码凭证、Prompt 注入等安全风险（<1s） |
 | **静态分析** | 对 SKILL.md 做 11 项零成本自动化体检（<1s），无需 API 调用 |
 | **A/B 评测** | 对每个 eval 用例分别执行 with_skill / without_skill，量化 Skill 的真实增量价值 |
 | **混合评分** | 程序化断言（确定性、快速）+ LLM 语义评分（深度分析），可独立开关 |
@@ -56,6 +58,9 @@
 # 安装
 pip install -e .
 
+# 安全审查（无需 API，<1s 完成）
+skill-eval vet path/to/my-skill/
+
 # 对 Skill 做静态分析（无需 API）
 skill-eval analyze path/to/my-skill/
 
@@ -70,7 +75,7 @@ skill-eval analyze path/to/my-skill/ --format json
 
 - **Python 3.10+**
 - **Claude CLI**（仅动态评测需要）— 运行 `claude` 命令需已在 PATH 中并完成认证
-- 静态分析（`analyze`）**不需要** Claude CLI 或 API 额度
+- 静态分析（`analyze`）和安全审查（`vet`）**不需要** Claude CLI 或 API 额度
 
 ---
 
@@ -97,9 +102,93 @@ pytest tests/ -v
 | `pydantic>=2.0` | 数据模型与 JSON Schema |
 | `pyyaml>=6.0` | SKILL.md frontmatter 解析 |
 
+### 可选安全扫描器
+
+安全审查（`vet`）内置 2 个原生扫描器（secrets-scan + structure-check），无需额外安装即可使用。以下 2 个外部扫描器为可选增强，未安装时自动跳过：
+
+| 扫描器 | 安装方式 | 检查内容 |
+|--------|----------|----------|
+| [aguara](https://github.com/garagon/aguara) | `go install github.com/garagon/aguara/cmd/aguara@latest` | Prompt 注入、混淆、可疑 LLM 调用 |
+| [skill-scanner](https://pypi.org/project/cisco-ai-skill-scanner/) | `pip install cisco-ai-skill-scanner` | 已知恶意模式、CVE 漏洞库 |
+
+> **注意**：aguara 需要安装 [Go](https://go.dev/dl/)（>= 1.21）。安装后确保 `~/go/bin` 在 PATH 中。
+
 ---
 
 ## CLI 命令参考
+
+### `vet` — 安全审查
+
+在安装或评测 Skill 之前，对其目录进行多扫描器安全检查。集成自 [skill-vetter](https://github.com/app-incubator-xyz/skill-vetter) 的安全扫描逻辑。
+
+```bash
+# 基本用法（终端表格输出）
+skill-eval vet path/to/skill/
+
+# JSON 输出（CI 友好）
+skill-eval vet path/to/skill/ --format json
+
+# 保存结果到文件
+skill-eval vet path/to/skill/ --format json -o security-report.json
+
+# 跳过外部扫描器（仅运行原生扫描器）
+skill-eval vet path/to/skill/ --skip-external
+```
+
+**参数**：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--format` | table | 输出格式：table / json |
+| `--output` | 无 | 输出文件路径 |
+| `--skip-external` | 关闭 | 跳过外部扫描器（aguara、skill-scanner） |
+
+**四个扫描器**：
+
+| # | 扫描器 | 依赖 | 检查内容 |
+|---|--------|------|----------|
+| 1 | aguara | 可选（Go） | Prompt 注入、混淆、可疑 LLM 调用 |
+| 2 | skill-scanner | 可选（pip） | 已知恶意模式、CVE 漏洞库 |
+| 3 | secrets-scan | 内置 | 硬编码 API Key / Token / 凭证、Base64 编码字符串 |
+| 4 | structure-check | 内置 | 缺失 SKILL.md、缺少 YAML frontmatter、危险 shell 命令 |
+
+> 内置扫描器始终可用，无需额外安装。外部扫描器缺失时自动 SKIP。
+
+**判定规则**：
+
+| Verdict | 含义 | Exit Code |
+|---------|------|-----------|
+| **SAFE** | 所有扫描器通过 | 0 |
+| **REVIEW_NEEDED** | 存在中等风险发现（MEDIUM） | 0 |
+| **BLOCKED** | 存在严重风险发现（CRITICAL/HIGH） | 1 |
+
+**输出示例**：
+
+```
+                          Security Scan: sample-skill
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Scanner         ┃ Status ┃ Detail                                     ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ aguara          │ SKIP   │ aguara not installed                       │
+│ skill-scanner   │ SKIP   │ skill-scanner not installed                │
+│ secrets-scan    │ PASS   │ No hardcoded secrets found                 │
+│ structure-check │ PASS   │ Skill structure valid                      │
+└─────────────────┴────────┴────────────────────────────────────────────┘
+
+VERDICT: SAFE — All scanners passed
+```
+
+**在 CI 中使用**：
+
+```bash
+# 安全审查 + JSON 输出（BLOCKED 时 exit code 1）
+skill-eval vet path/to/skill/ --format json
+
+# 在评测前启用安全门控
+skill-eval full path/to/skill/ --security-gate
+```
+
+---
 
 ### `init` — 初始化评测定义
 
@@ -206,6 +295,7 @@ skill-eval run path/to/skill/ --scoring llm
 | `--timeout` | 120 | 每次运行超时（秒） |
 | `--scoring` | hybrid | 评分模式：hybrid / programmatic / llm |
 | `--compliance-gate` | 关闭 | 遵循性率 < 0.5 时强制失败 |
+| `--security-gate` | 关闭 | 安全审查 BLOCKED/REVIEW_NEEDED 时强制失败（在评测前运行） |
 | `--no-calibration` | 关闭 | 跳过评分校准 |
 | `--output` | output/ | 输出目录 |
 | `--format` | table | 输出格式：table / json |
@@ -230,7 +320,7 @@ output/iteration-1/
 
 ### `full` — 一键完整流程
 
-自动执行：静态分析 → 加载 evals → A/B 测试 → 聚合 → 生成报告。
+自动执行：安全审查（可选门控）→ 静态分析 → 加载 evals → A/B 测试 → 聚合 → 生成报告。
 
 ```bash
 # 一键运行
@@ -239,9 +329,22 @@ skill-eval full path/to/skill/ --runs 3
 # 运行后打开报告
 skill-eval full path/to/skill/ --open
 
+# 评测前先做安全审查（BLOCKED/REVIEW_NEEDED 时停止）
+skill-eval full path/to/skill/ --security-gate
+
 # CI 模式
 skill-eval full path/to/skill/ --format json --runs 1
 ```
+
+**参数**（`full` 特有）：
+
+| 参数 | 说明 |
+|------|------|
+| `--security-gate` | 在评测前运行安全审查，BLOCKED 或 REVIEW_NEEDED 时立即失败（exit code 1） |
+| `--compliance-gate` | 遵循性率 < 0.5 时强制失败 |
+| `--open` | 运行完成后在浏览器中打开报告 |
+
+> 使用 `--security-gate` 后，`full` 流程从 4 步变为 5 步（Step 0: 安全审查 → Step 1-4: 原有流程）。
 
 ---
 
@@ -562,10 +665,12 @@ skill-eval/
 │   └── comparator.md              # 盲评 agent prompt
 ├── src/skill_eval/
 │   ├── __init__.py
-│   ├── cli.py                     # typer CLI 入口（8 个子命令）
+│   ├── cli.py                     # typer CLI 入口（9 个子命令）
 │   ├── models.py                  # 30+ Pydantic 数据模型
 │   ├── parser.py                  # SKILL.md 解析器
 │   ├── errors.py                  # 自定义异常 + 错误码
+│   ├── security/
+│   │   └── vetter.py              # SecurityVetter（4 扫描器，集成 skill-vetter）
 │   ├── static_analysis/
 │   │   ├── analyzer.py            # StaticAnalyzer（11 项检查 + 分类）
 │   │   ├── checks.py              # 11 个检查函数
@@ -610,6 +715,7 @@ skill-eval/
 │   ├── test_models.py
 │   ├── test_scoring_programmatic.py
 │   ├── test_compliance.py
+│   ├── test_security.py
 │   ├── test_execution.py
 │   └── test_batch.py
 └── docs/
@@ -633,7 +739,7 @@ pytest tests/test_compliance.py -v
 pytest tests/ --cov=skill_eval
 ```
 
-当前共 **99 个测试**，覆盖：
+当前共 **120 个测试**，覆盖：
 
 | 测试文件 | 覆盖模块 | 测试数 |
 |----------|----------|--------|
@@ -642,6 +748,7 @@ pytest tests/ --cov=skill_eval
 | `test_models.py` | Pydantic 模型验证 + JSON 往返 | 10 |
 | `test_scoring_programmatic.py` | 6 种断言类型 | 11 |
 | `test_compliance.py` | 指令提取 + 遵循性检查 + 校准 | 16 |
+| `test_security.py` | 4 扫描器 + 判定逻辑 + 外部扫描器降级 | 21 |
 | `test_execution.py` | EvalLoader + BenchmarkAggregator | 13 |
 | `test_batch.py` | DAG + 级联分析 + Manifest | 12 |
 
@@ -674,6 +781,7 @@ Skill-Eval 从 [skill-creator](https://github.com/user/skill-creator) 移植并�
 
 新增模块（无对应源码）：
 
+- `security/` — 安全审查引擎（4 扫描器，集成 [skill-vetter](https://github.com/app-incubator-xyz/skill-vetter)）
 - `compliance/` — 遵循性引擎（指令提取 + 过程合规检查）
 - `calibration/` — 评分校准（交叉验证 + 可信度等级）
 - `batch/` — 批量评测（DAG 调度 + 级联归因）
@@ -692,6 +800,19 @@ Skill-Eval 从 [skill-creator](https://github.com/user/skill-creator) 移植并�
 ---
 
 ## 常见问题
+
+### 安全审查需要安装额外的扫描器吗？
+
+不需要。`vet` 命令内置 2 个原生扫描器（secrets-scan + structure-check），开箱即用。安装 [aguara](https://github.com/garagon/aguara)（Go）和 [skill-scanner](https://pypi.org/project/cisco-ai-skill-scanner/)（pip）可获得 Prompt 注入检测和 CVE 漏洞库扫描能力，但未安装时自动 SKIP，不影响其他扫描器运行。
+
+### `--security-gate` 和 `--compliance-gate` 有什么区别？
+
+| Flag | 检查对象 | 失败条件 | 触发时机 |
+|------|----------|----------|----------|
+| `--security-gate` | Skill 源代码安全性 | 存在 CRITICAL/HIGH/MEDIUM 风险 | 评测执行前（Step 0） |
+| `--compliance-gate` | 执行过程是否遵循 SKILL.md | compliance_rate < 0.5 | 评测执行后（评分阶段） |
+
+两者可以同时使用：`skill-eval full path/to/skill/ --security-gate --compliance-gate`
 
 ### 静态分析需要安装 Claude CLI 吗？
 
@@ -716,14 +837,17 @@ Skill-Eval 从 [skill-creator](https://github.com/user/skill-creator) 移植并�
 ### 如何在 CI 中使用？
 
 ```bash
+# 安全审查（BLOCKED 时 exit code 1）
+skill-eval vet path/to/skill/ --format json
+
 # 静态分析 + JSON 输出
 skill-eval analyze path/to/skill/ --format json -o scorecard.json
 
-# 完整评测 + JSON 输出
-skill-eval full path/to/skill/ --format json --runs 1
+# 完整评测 + 安全门控 + JSON 输出
+skill-eval full path/to/skill/ --format json --runs 1 --security-gate
 
 # exit code 自动反映结果：
-# 0 = 通过, 1 = 失败/回归, 2 = 输入错误, 3 = 执行错误
+# 0 = 通过, 1 = 失败/回归/安全风险, 2 = 输入错误, 3 = 执行错误
 ```
 
 ### Skill Monitor 集成是必须的吗？

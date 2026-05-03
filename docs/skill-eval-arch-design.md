@@ -152,11 +152,12 @@ skinparam shadowing false
 skinparam defaultFontSize 11
 
 package "CLI 层 (typer)" as cli_pkg {
-    [analyze | init | run | optimize-trigger\nreport | import | full | batch] as cli
+    [vet | analyze | init | run | optimize-trigger\nreport | import | full | batch] as cli
     note right of cli : _ProgressState\n_BatchProgressState\n(Rich Live __rich__ 协议)
 }
 
 package "核心模块" {
+    [安全审查\n4 扫描器\naguara + skill-scanner\n+ secrets + structure\n零依赖基线] as sec #LightCoral
     [静态分析\n11项评分卡\nSkill分类\n零API成本] as sa #LightGreen
     [评测定义\nevals.json加载\nSchema验证\n模板生成] as ed #LightGreen
     rectangle "执行引擎\n**一体化:** A/B编排\n+评分+遵循性\n+校准+诊断" as exe #LightBlue
@@ -173,12 +174,15 @@ package "核心模块" {
 
 rectangle "Claude CLI\nclaude -p (subprocess)\n--dangerously-skip-permissions\n--bare / --max-turns N" as claude #LightCoral
 
+rectangle "External Scanners\naguara (Go binary)\nskill-scanner (pip)\n可选，缺失时自动跳过" as ext_sec #MistyRose
+
 package "共享层" {
     [parser.py] as parser
     [models.py\nToolCallRecord\nRunOutput (7字段)] as models
     [errors.py] as errors
 }
 
+sec --> ext_sec : subprocess (可选)
 ed --> exe : EvalSet
 exe ..> scr : 内联调用
 exe ..> comp : 内联调用
@@ -196,11 +200,34 @@ exe ..> cli : on_progress
 @enduml
 ```
 
-各模块在核心流水线中从左到右串联：静态分析 → 评测定义 → 执行引擎 → 评分引擎 → 遵循性引擎 → 评分校准 → Benchmark 聚合。优化循环和批量评测作为上层编排器，使用执行和评分模块作为内部组件。
+各模块在核心流水线中从左到右串联：**安全审查**（门控）→ 静态分析 → 评测定义 → 执行引擎 → 评分引擎 → 遵循性引擎 → 评分校准 → Benchmark 聚合。安全审查是独立的门控层，不依赖 LLM，可在评测前快速拦截恶意 Skill。优化循环和批量评测作为上层编排器，使用执行和评分模块作为内部组件。
 
 ---
 
 ## 5. 模块契约
+
+### 5.0 安全审查引擎 (`security/`)
+
+| 属性 | 值 |
+|------|------|
+| **职责** | 在评测/安装前对 Skill 进行多扫描器安全检查——检查**恶意代码和凭证泄露** |
+| **输入** | Skill 目录路径（本地）或 GitHub URL |
+| **输出** | `SecurityReport`（verdict: SAFE/REVIEW_NEEDED/BLOCKED + 4 个 ScannerResult + findings 列表） |
+| **外部调用** | `aguara scan --format json`（subprocess，可选）；`skill-scanner scan --format json`（subprocess，可选） |
+| **关键契约** | 两个原生扫描器（secrets-scan + structure-check）始终可用，零外部依赖。外部扫描器缺失时自动 SKIP。`--security-gate` 启用时 BLOCKED/REVIEW_NEEDED 导致 exit code 1 |
+
+**四个扫描器**：
+
+| 扫描器 | 实现方式 | 检查内容 | 失败判定 |
+|--------|----------|----------|----------|
+| **aguara** | subprocess（可选） | Prompt 注入、混淆、可疑 LLM 调用 | severity ≥ 4 → HIGH |
+| **skill-scanner** | subprocess（可选） | 已知恶意模式、CVE 漏洞库 | severity = critical/high → FAIL |
+| **secrets-scan** | 原生 Python (re) | 硬编码 API Key/Token/凭证、Base64 编码字符串 | 匹配凭证模式 → HIGH，Base64 → MEDIUM |
+| **structure-check** | 原生 Python | 缺失 SKILL.md、缺少 YAML frontmatter、危险 shell 命令 | 缺失 SKILL.md → HIGH，缺少 frontmatter → MEDIUM |
+
+**判定逻辑**：任何 CRITICAL/HIGH → BLOCKED；仅 MEDIUM → REVIEW_NEEDED；无 findings → SAFE。
+
+**与 skill-vetter 的关系**：集成自 [skill-vetter](https://github.com/app-incubator-xyz/skill-vetter) 的安全扫描逻辑，以原生 Python 方式重新实现（而非调用 bash 脚本），保持相同的扫描语义和判定规则。好处：结构化输出（Pydantic 模型）、更好的错误处理、无缝 CLI 集成、支持 `--format json` CI 模式。
 
 ### 5.1 静态分析引擎 (`static_analysis/`)
 
@@ -535,6 +562,11 @@ start
 :依赖发现+DAG\n自动扫描+拓扑排序;
 :静态分析 (旁路)\n→ scorecard.json;
 
+|安全审查 (门控，可选)|
+:SecurityVetter.vet()\n4 扫描器并行;
+:→ SecurityReport\nSAFE / REVIEW_NEEDED / BLOCKED;
+:if --security-gate\nBLOCKED → exit code 1;
+
 |执行\n(ABTestRunner 一体化引擎)|
 :claude -p\nwith/without skill;
 :Run Outputs\n文件 + transcript\n+ stream events;
@@ -559,14 +591,17 @@ stop
 
 ### 主流水线
 
-输入（SKILL.md + evals.json）→ 解析/加载 → A/B 执行（一体化引擎：执行 + 评分 + 遵循性检查 + 评分校准 + 诊断，with_skill × N, without_skill × N）→ 产出（grading.json + compliance.json + calibration.json + run_debug.json + timing.json）→ Benchmark 聚合 → 输出（benchmark.json + report.html + CI exit code）。
+输入（SKILL.md + evals.json）→ 解析/加载 → 安全审查（可选门控，`--security-gate`）→ 静态分析（旁路）→ A/B 执行（一体化引擎：执行 + 评分 + 遵循性检查 + 评分校准 + 诊断，with_skill × N, without_skill × N）→ 产出（grading.json + compliance.json + calibration.json + run_debug.json + timing.json）→ Benchmark 聚合 → 输出（benchmark.json + report.html + CI exit code）。
 
 静态分析是独立的旁路分支：SKILL.md → 解析 → 11 项评分 → scorecard.json → 直接汇入报告。
+
+安全审查是独立的门控分支：SKILL.md → 4 扫描器 → SecurityReport → 门控判定。`--security-gate` 启用时，BLOCKED 结果会立即终止流水线。
 
 ### 每个阶段产出的文件
 
 | 阶段 | 产出文件 | 核心内容 |
 |------|----------|----------|
+| 安全审查 | `SecurityReport`（内存/JSON） | 4 扫描器结果 + findings + verdict (SAFE/REVIEW_NEEDED/BLOCKED) |
 | 静态分析 | `scorecard.json` | 11 项检查结果 + 总分 + Skill 分类 |
 | 执行+评分 | `outputs/` + `timing.json` + `grading.json` + `run_debug.json` + `eval_metadata.json` | 原始输出文件 + 耗时/token + 评分结果 + 诊断（tool_trace/result_text/expectations） |
 | 遵循性 | `compliance.json` | 每条 SKILL.md 指令的 followed/confidence + 总体 compliance_rate |
@@ -577,6 +612,9 @@ stop
 ### `skill-eval full` 完整流程编排
 
 ```
+0. (if --security-gate) SecurityVetter.vet(skill_path)
+   if BLOCKED or REVIEW_NEEDED: exit code 1
+
 1. StaticAnalyzer.analyze(skill_path) → scorecard.json
 
 2. EvalLoader.load(skill_path / "evals/evals.json")
@@ -716,6 +754,7 @@ batch-workspace-{timestamp}/
 
 | 命令 | 耗时 | 需要 claude | 用途 |
 |------|------|-------------|------|
+| `vet` | <1s | 否 | Skill 安全扫描（4 扫描器） |
 | `analyze` | <1s | 否 | SKILL.md 静态体检 |
 | `init` | <1s~30s | 仅生成 prompt 时 | 生成评测用例模板 |
 | `run` | 5-30min | 是 | 执行 A/B 评测 + 评分 + 遵循性 + 校准 |
@@ -727,6 +766,7 @@ batch-workspace-{timestamp}/
 
 **关键 flags**：
 - `--compliance-gate`：compliance_rate < 0.5 时强制判失败
+- `--security-gate`：安全审查 BLOCKED/REVIEW_NEEDED 时强制判失败
 - `--no-calibration`：跳过评分校准（节省 LLM 调用）
 - `--format json`：非交互 JSON 输出（CI 模式）
 
@@ -739,6 +779,8 @@ batch-workspace-{timestamp}/
 | 集成点 | 方向 | 机制 | 用途 |
 |--------|------|------|------|
 | `claude` CLI | 出站 (subprocess) | `subprocess.Popen` / `subprocess.run`，prompt 通过 stdin 传入 | 所有 LLM 交互：执行、评分、遵循性评判、触发检测、描述改进 |
+| `aguara` CLI | 出站 (subprocess) | `subprocess.run`，可选 | Prompt 注入检测 |
+| `skill-scanner` CLI | 出站 (subprocess) | `subprocess.run`，可选 | CVE 漏洞扫描 |
 | skill-monitor JSONL | 入站 (文件读取) | MonitorImporter 逐行解析 | 运行时指标补充（真实 token/耗时） |
 | skill-creator schema | 兼容约束 | 共享 JSON 字段名和结构 | 工具链共享（viewer.html 等） |
 | `.claude/commands/` | 临时文件写入 | UUID 命名，执行后清理 | 使 Skill 可被 `claude -p` 发现 |
@@ -768,6 +810,7 @@ batch-workspace-{timestamp}/
 
 | 阶段 | 内容 | 产出 | 验收标准 |
 |------|------|------|----------|
+| Phase 0 | 安全审查 | `skill-eval vet` + `--security-gate` 可用 | `pytest tests/test_security.py` 全绿 |
 | Phase 1 | 项目骨架 + 静态分析 | `skill-eval analyze` 可用 | `pytest tests/test_static_analysis.py` 全绿 |
 | Phase 2 | 执行引擎 + 评分 | `skill-eval run` 可用 | 用 sample-skill 跑 1 eval × 1 run，产出 benchmark.json |
 | Phase 3 | 遵循性引擎 + 评分校准 | compliance.json + calibration.json 可产出 | sample-skill 的 with_skill run 产出合规率 + 可信度等级 |

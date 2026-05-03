@@ -473,3 +473,52 @@ class EdgeType(str, Enum):
     STATIC_DEP = "STATIC_DEP"
     RUNTIME_CALL = "RUNTIME_CALL"
     MANIFEST_DECLARED = "MANIFEST_DECLARED"
+
+
+# ---------------------------------------------------------------------------
+# Security vetting
+# ---------------------------------------------------------------------------
+
+
+class SecuritySeverity(str, Enum):
+    CRITICAL = "CRITICAL"
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+class SecurityVerdict(str, Enum):
+    SAFE = "SAFE"
+    REVIEW_NEEDED = "REVIEW_NEEDED"
+    BLOCKED = "BLOCKED"
+
+
+class ScannerStatus(str, Enum):
+    PASS = "PASS"
+    WARN = "WARN"
+    FAIL = "FAIL"
+    SKIP = "SKIP"
+
+
+class SecurityFinding(BaseModel):
+    scanner: str
+    severity: SecuritySeverity
+    description: str
+    file_path: str = ""
+    line: int | None = None
+
+
+class ScannerResult(BaseModel):
+    name: str
+    status: ScannerStatus
+    findings: list[SecurityFinding] = Field(default_factory=list)
+    message: str = ""
+
+
+class SecurityReport(BaseModel):
+    skill_name: str
+    skill_path: str
+    verdict: SecurityVerdict
+    scanners: list[ScannerResult] = Field(default_factory=list)
+    findings: list[SecurityFinding] = Field(default_factory=list)
+    summary: str = ""
