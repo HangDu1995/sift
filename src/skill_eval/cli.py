@@ -833,6 +833,26 @@ def batch(
         if cascade.get("failed", 0) > 0:
             raise typer.Exit(code=1)
 
+    if "integration" in layer_list:
+        console.print(f"[bold]Running integration tests...[/bold]")
+        from skill_eval.config.loader import load_config
+
+        scheduler = BatchScheduler(manifest, run_config, scoring_config, base_dir)
+        project_config = load_config(base_dir)
+        int_result = scheduler.run_integration_tests(output_dir, config=project_config)
+
+        console.print(f"  Integration: {int_result['passed']}/{int_result['total']} passed")
+        if int_result["scenarios"]:
+            for sc in int_result["scenarios"]:
+                icon = "[green]✓[/green]" if sc.get("passed") else "[red]✗[/red]"
+                console.print(f"    {icon} {sc.get('name', '?')} ({sc.get('type', '?')})")
+
+        int_path = output_dir / "integration-report.json"
+        int_path.write_text(json.dumps(int_result, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        if int_result.get("failed", 0) > 0:
+            raise typer.Exit(code=1)
+
 
 @app.command(name="scan")
 def scan(

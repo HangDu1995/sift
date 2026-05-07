@@ -110,3 +110,35 @@ class BatchScheduler:
             "attributions": {k: v.value for k, v in attributions.items()},
         }
         return report
+
+    def run_integration_tests(
+        self,
+        workspace: Path,
+        config: object | None = None,
+        scenario_type: str | None = None,
+    ) -> dict:
+        from skill_eval.integration.runner import run_integration_batch
+
+        scenarios = []
+        skill_keywords: dict[str, list[str]] = {}
+        if config is not None:
+            scenarios = getattr(config, "integration_scenarios", []) or []
+            skill_keywords = getattr(config, "skill_keywords", {}) or {}
+        integration_evals = self.manifest.integration_evals if hasattr(self.manifest, "integration_evals") else []
+        if integration_evals:
+            for ie in integration_evals:
+                scenarios.append({
+                    "name": getattr(ie, "id", "ie"),
+                    "type": "routing",
+                    "test_prompts": [{"prompt": ie.prompt, "should_trigger": ie.expected_skills_triggered}],
+                })
+
+        if not scenarios:
+            return {"total": 0, "passed": 0, "failed": 0, "scenarios": []}
+
+        return run_integration_batch(
+            scenarios=scenarios,
+            skill_keywords=skill_keywords,
+            scenario_type=scenario_type,
+            workspace_dir=workspace / "integration",
+        )
