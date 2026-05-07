@@ -481,17 +481,26 @@ skill-eval optimize-trigger path/to/skill/ \
 
 ### `batch` — 批量评测
 
-对多个相互依赖的 Skill 执行批量评测。
+对多个相互依赖的 Skill 执行分层评测：Unit（独立 A/B 测试）→ Integration（Skill 间协作）→ Regression（与基线对比）。
 
 ```bash
-# 从目录自动发现
+# 从目录自动发现，运行所有层
 skill-eval batch path/to/skills-directory/
 
 # 从 manifest 运行
 skill-eval batch manifest.json --runs 3 --workers 8
 
-# 指定测试层
+# 只跑 Unit 测试（每个 Skill 独立 A/B）
 skill-eval batch manifest.json --layers unit
+
+# 只跑 Integration 测试（Skill 间协作，需 eval-config.yaml）
+skill-eval batch manifest.json --layers integration
+
+# 跑 Unit + Integration
+skill-eval batch manifest.json --layers unit,integration
+
+# 跑 Unit + Regression（需上次 baseline）
+skill-eval batch manifest.json --layers unit,regression --baseline batch-workspace-20260427/batch-benchmark.json
 ```
 
 **Manifest 格式**：
@@ -507,6 +516,14 @@ skill-eval batch manifest.json --layers unit
   "integration_evals": []
 }
 ```
+
+**三层测试**：
+
+| 层 | 测试内容 | 需要什么 | 产出 |
+|----|----------|----------|------|
+| `unit` | 每个 Skill 独立 A/B 测试 | Skill 目录 + evals.json | unit-pass-rate per skill |
+| `integration` | Skill 间协作（chain/routing/contract） | eval-config.yaml 的 `integration_scenarios` | integration-report.json |
+| `regression` | 与上次 benchmark 逐 Skill 对比 | `--baseline` 上次的 batch-benchmark.json | regression-delta.json |
 
 **级联失败归因**：当上游 Skill 失败时，下游 Skill 会被标记为 `CASCADE` 而非 `ROOT_CAUSE`，帮助快速定位真正的故障源头。
 
@@ -666,36 +683,131 @@ evals.json 中的 eval_case
 3. 结果写入 `grading.json`（总体）+ `checkpoints.json`（per-checkpoint）
 4. `CalibrationChecker` 交叉验证两种来源的 agreement rate
 
-#### 什么时候用 expectations vs assertions
+#### 测试层级总览
 
-| 测试层级 | expectations | assertions | 说明 |
-|----------|-------------|------------|------|
-| **L1**（单元级） | 有 | 通常无 | 问答型，claude 只输出文字，无文件产物 |
-| **L2**（Mock 场景） | 有 | 有 | claude 操作 fixture 文件，可断言文件内容 |
-| **L3**（全流程） | 有 | 有 | claude 在真实项目中执行，断言最终产物 |
+skill-eval 支持三层测试，对应从"单个 Skill 规则理解"到"Skill 间协作"的不同粒度：
 
-**示例**：
+| 层级 | 测试什么 | 需要什么 | 运行方式 |
+|------|----------|----------|----------|
+| **L1**（单元级） | 单个 Skill 的规则理解是否正确 | evals.json + expectations | `skill-eval run/full` |
+| **L2**（Mock 场景） | Skill 在有 fixture 的场景下能否正确产出文件 | evals.json + expectations + assertions + fixtures | `skill-eval run/full` |
+| **L2 集成**（Integration） | 多个 Skill 之间的协作是否正确 | eval-config.yaml 的 `integration_scenarios` | `skill-eval batch --layers integration` |
 
-L1 测试（纯问答）：
+#### L1 测试（纯问答，验证规则理解）
+
+L1 测试只验证 claude **是否理解了 SKILL.md 的规则**，不产生文件。只有 expectations，没有 assertions。
+
 ```json
 {
   "id": 1,
   "prompt": "在 a2h-execute Stage 1 中，如果 Batch 1 有 3 个页面...",
+  "level": "L1",
   "expectations": ["page_0001 和 page_0002 应该并行派发"],
   "assertions": []
 }
 ```
 
-L2 测试（有文件产物）：
+#### L2 测试（Mock 场景，验证文件产出）
+
+L2 测试预置 fixture 文件，验证 claude 执行后**是否产出了正确的文件**。同时有 expectations 和 assertions。
+
 ```json
 {
   "id": 10,
   "prompt": "执行 a2h-execute，plans 目录已有文件...",
+  "level": "L2",
   "fixtures": [{"path": "spec/baseline/plans/ui-plan.md", "content": "..."}],
   "expectations": ["生成了 ui-manifest.md"],
   "assertions": [
     {"name": "manifest 存在", "type": "FILE_EXISTS", "params": {"filename": "ui-manifest.md"}},
     {"name": "包含 converted", "type": "CONTAINS_PATTERN", "params": {"pattern": "converted"}}
+  ]
+}
+```
+
+#### L2 集成测试（Skill 间协作）
+
+验证多个 Skill 之间的**编排正确性**——上游输出是否被下游消费、路由是否正确触发、制品是否符合契约。
+
+集成测试通过 `eval-config.yaml` 的 `integration_scenarios` 定义，由 `skill-eval batch --layers integration` 运行。
+
+**三种场景类型**：
+
+**1. Chain（链式传递）**：验证 Skill 链的顺序执行和失败传播。
+
+```yaml
+integration_scenarios:
+  - name: "data-transform → report-gen pipeline"
+    type: "chain"
+    chain: ["data-transform", "report-gen"]
+    input: { source: "raw.csv" }
+```
+
+如果 `data-transform` 失败，`report-gen` 应被标记为 SKIPPED（而非独立失败）。
+
+**2. Routing（关键词路由）**：验证用户 prompt 是否触发了正确的 Skill。
+
+```yaml
+integration_scenarios:
+  - name: "keyword routing"
+    type: "routing"
+    test_prompts:
+      - prompt: "把这些数据转换为 ArkTS 格式"
+        should_trigger: ["data-transform"]
+        should_not_trigger: ["report-gen"]
+      - prompt: "生成项目报告"
+        should_trigger: ["report-gen"]
+        should_not_trigger: ["data-transform"]
+
+skill_keywords:
+  data-transform: ["转换", "transform", "convert"]
+  report-gen: ["报告", "report", "生成"]
+```
+
+路由通过 `skill_keywords` 配置的关键词匹配实现——prompt 中出现关键词就认为触发了对应 Skill。
+
+**3. Contract（制品契约）**：验证 Skill 间传递的制品是否符合消费者期望。
+
+```yaml
+integration_scenarios:
+  - name: "transform output satisfies report-gen"
+    type: "contract"
+    producer: "data-transform"
+    consumer: "report-gen"
+    artifact: "workspace/transformed.json"
+    checks:
+      - type: "FILE_EXISTS"
+      - type: "JSON_VALID"
+      - type: "PATTERN_MATCH"
+        pattern: '"status":\\s*"ok"'
+```
+
+**运行集成测试**：
+
+```bash
+# 生成配置（包含 integration_scenarios）
+skill-eval generate-config path/to/skills-dir/ --output eval-config.yaml
+
+# 编辑 eval-config.yaml，添加 integration_scenarios 和 skill_keywords
+
+# 运行集成测试
+skill-eval batch manifest.json --layers integration
+
+# 同时跑 Unit + Integration
+skill-eval batch manifest.json --layers unit,integration
+```
+
+产出 `integration-report.json`：
+
+```json
+{
+  "total": 3,
+  "passed": 2,
+  "failed": 1,
+  "scenarios": [
+    {"name": "data pipeline", "type": "chain", "passed": true, ...},
+    {"name": "keyword routing", "type": "routing", "passed": true, ...},
+    {"name": "contract check", "type": "contract", "passed": false, ...}
   ]
 }
 ```
