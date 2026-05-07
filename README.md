@@ -15,12 +15,15 @@
   - [vet — 安全审查](#vet--安全审查)
   - [init — 初始化评测定义](#init--初始化评测定义)
   - [analyze — 静态分析](#analyze--静态分析)
+  - [scan — 覆盖率扫描](#scan--覆盖率扫描)
+  - [generate-config — 生成配置](#generate-config--生成配置)
   - [run — A/B 评测](#run--ab-评测)
   - [full — 一键完整流程](#full--一键完整流程)
   - [report — HTML 报告](#report--html-报告)
   - [optimize-trigger — 触发优化](#optimize-trigger--触发优化)
   - [batch — 批量评测](#batch--批量评测)
   - [import — 数据导入](#import--数据导入)
+- [配置驱动架构](#配置驱动架构)
 - [评测体系](#评测体系)
   - [三层质量保障](#三层质量保障)
   - [量化公式](#量化公式)
@@ -49,6 +52,9 @@
 | **批量评测** | 支持多 Skill 依赖关系的 DAG 调度，含级联失败归因 |
 | **HTML 报告** | 自包含 HTML 报告，支持键盘导航、历史对比、反馈保存 |
 | **CI 就绪** | 所有命令支持 `--format json` + exit code，可直接集成 CI 流水线 |
+| **配置驱动** | 三层配置系统 + LLM 配置生成 + 插件机制，框架零硬编码，适配任意 Skill 集合 |
+| **L0 覆盖率扫描** | 扫描 evals.json 结构完整性和断言覆盖率，无需 API |
+| **L2 集成测试** | Chain/Routing/Contract 三类集成测试 + 影响分析 |
 
 ---
 
@@ -63,6 +69,12 @@ skill-eval vet path/to/my-skill/
 
 # 对 Skill 做静态分析（无需 API）
 skill-eval analyze path/to/my-skill/
+
+# L0 覆盖率扫描（无需 API）
+skill-eval scan path/to/skills-dir/
+
+# 为 Skill 集合生成配置（需要 claude CLI）
+skill-eval generate-config path/to/skills-dir/ --output eval-config.yaml
 
 # 运行完整评测（需要本地安装 claude CLI）
 skill-eval full path/to/my-skill/ --runs 3
@@ -259,6 +271,93 @@ skill-eval analyze path/to/skill/ --format json -o scorecard.json
 
 ---
 
+### `scan` — L0 覆盖率扫描
+
+扫描 Skill 集合的 evals.json 结构完整性和断言覆盖率，**零 API 成本，<1s 完成**。
+
+```bash
+# 扫描目录下所有 Skill 的 evals.json
+skill-eval scan path/to/skills-dir/
+
+# 指定配置前缀（只检查特定配置下的断言）
+skill-eval scan path/to/skills-dir/ --config-prefix arkts
+
+# 按领域/类型过滤
+skill-eval scan path/to/skills-dir/ --domain frontend --type create
+
+# JSON 输出
+skill-eval scan path/to/skills-dir/ --format json
+```
+
+**检查项**：
+
+| 检查项 | 说明 |
+|--------|------|
+| evals.json 存在性 | Skill 目录下是否有 evals/evals.json |
+| skill_name 完整性 | evals.json 的 skill_name 非空 |
+| prompt 完整性 | 每个 eval 的 prompt 非空 |
+| assertion 类型合法性 | 断言类型在 9 种内置类型范围内 |
+| 断言覆盖率 | 有 assertions 的 eval 占比 |
+
+---
+
+### `generate-config` — LLM 配置生成
+
+通过 `claude -p` 扫描 Skill 集合的元数据，自动生成 `eval-config.yaml` 配置文件。
+
+```bash
+# 为 Skill 集合生成配置
+skill-eval generate-config path/to/skills-dir/ --output eval-config.yaml
+
+# 指定模型
+skill-eval generate-config path/to/skills-dir/ --model claude-sonnet-4-20250514
+```
+
+**工作流程**：
+
+1. `scan_skills_metadata()` — 扫描所有 SKILL.md frontmatter，提取 name/type/domain/description/tags
+2. `ConfigGenerator.build_prompt()` — 将元数据 + 9 种可用断言类型组合成 prompt
+3. `claude -p` — LLM 生成 eval-config.yaml 内容
+4. 写入项目根目录
+
+**生成的 `eval-config.yaml` 包含**：
+
+```yaml
+domain_templates:
+  frontend:
+    - name: "component structure valid"
+      type: "CROSS_FILE_CONSISTENCY"
+      params: {}
+  backend:
+    - name: "API response is valid JSON"
+      type: "JSON_HAS_FIELD"
+      params: { "filename": "response.json", "field": "status" }
+
+type_templates:
+  create:
+    - name: "output compiles"
+      type: "CODE_COMPILES"
+      params: {}
+  refactor:
+    - name: "no regressions"
+      type: "NOT_CONTAINS"
+      params: { "pattern": "ERROR" }
+
+integration_scenarios:
+  - name: "create then review"
+    type: "chain"
+    skills: ["create-skill", "review-skill"]
+    steps: [...]
+
+skill_keywords:
+  create-skill: ["generate", "scaffold"]
+  review-skill: ["review", "audit"]
+```
+
+> **核心理念**：框架代码零硬编码，所有领域/类型模板通过配置注入。不同 Skill 集合（如 ArkTs-Core）各自运行此命令生成自己的配置。
+
+---
+
 ### `run` — A/B 评测
 
 对 Skill 执行完整的 A/B 对照实验。
@@ -423,6 +522,65 @@ skill-eval import monitor-data.jsonl --benchmark output/iteration-1/benchmark.js
 
 ---
 
+## 配置驱动架构
+
+Skill-Eval 是**通用框架**，不包含任何领域特定的断言模板、domain 定义或 skill 关键词。所有项目特定内容通过 `eval-config.yaml` 注入。
+
+### 三层配置系统
+
+```
+config/defaults.yaml          ← 框架内置，通用默认值
+    ↓ 深度合并
+<project>/eval-config.yaml    ← 项目根目录，领域特定配置（由 LLM 生成）
+    ↓ 深度合并
+<skill>/eval-config.yaml      ← skill 目录内（可选），局部覆盖
+```
+
+### 插件机制
+
+领域特定断言（如 ArkTS 结构检查）不内置在框架中，通过 `CUSTOM_PLUGIN` + `AssertionPluginRegistry` 实现：
+
+```python
+from skill_eval.scoring.plugins import AssertionPluginRegistry
+from skill_eval.scoring.programmatic import ProgrammaticChecker
+
+registry = AssertionPluginRegistry()
+registry.register("ARKTS_STRUCTURE_VALID", my_arkts_checker)
+checker = ProgrammaticChecker(plugin_registry=registry)
+```
+
+每个项目在初始化时注册自己的领域插件。
+
+### 断言模板库
+
+`AssertionTemplateLibrary` 从 `eval-config.yaml` 的 `domain_templates` 和 `type_templates` 读取模板，`EvalInitGenerator` 生成 evals 时自动注入领域相关断言。
+
+```python
+from skill_eval.scoring.templates import get_default_assertions
+
+# 根据 skill 的 domain 和 type，从配置获取推荐断言
+assertions = get_default_assertions(domain="frontend", type="create", config=eval_config)
+```
+
+### 工作流程
+
+```
+1. skill-eval generate-config <skills_dir>
+   → 扫描所有 SKILL.md 元数据
+   → claude -p 生成 eval-config.yaml
+
+2. skill-eval init <skill_path>  (读取 eval-config.yaml)
+   → 自动注入 domain/type 断言模板
+
+3. skill-eval scan <skills_dir>  (读取 eval-config.yaml)
+   → 检查覆盖率 + 配置前缀过滤
+
+4. skill-eval batch <manifest> --layers integration
+   → 运行 eval-config.yaml 中的 integration_scenarios
+```
+
+---
+
 ## 评测体系
 
 ### 三层质量保障
@@ -479,6 +637,9 @@ Score = StaticCompliance(0-11)
 | `LINE_COUNT` | 行数范围 | `min`/`max`(至少一个), `path`(可选) |
 | `NOT_CONTAINS` | 反向匹配 | `pattern`, `path`(可选) |
 | `CUSTOM_SCRIPT` | 自定义脚本 | `script`, `args`(可选) |
+| `CROSS_FILE_CONSISTENCY` | 检查相对 import 是否解析 | `include`(可选, glob) |
+| `CODE_COMPILES` | 基础语法检查（括号/花括号/方括号匹配） | `include`(可选, glob) |
+| `CUSTOM_PLUGIN` | 领域特定插件断言 | `plugin_name`, 其他由插件定义 |
 
 ### 测试设定指南
 
@@ -665,25 +826,34 @@ skill-eval/
 │   └── comparator.md              # 盲评 agent prompt
 ├── src/skill_eval/
 │   ├── __init__.py
-│   ├── cli.py                     # typer CLI 入口（9 个子命令）
+│   ├── cli.py                     # typer CLI 入口（11 个子命令）
 │   ├── models.py                  # 30+ Pydantic 数据模型
 │   ├── parser.py                  # SKILL.md 解析器
 │   ├── errors.py                  # 自定义异常 + 错误码
+│   ├── config/                    # 配置驱动架构
+│   │   ├── loader.py              # 三层配置加载 + EvalConfig
+│   │   ├── defaults.yaml          # 框架默认值（无领域内容）
+│   │   └── generator.py           # LLM 配置生成器 + scan_skills_metadata()
 │   ├── security/
 │   │   └── vetter.py              # SecurityVetter（4 扫描器，集成 skill-vetter）
 │   ├── static_analysis/
 │   │   ├── analyzer.py            # StaticAnalyzer（11 项检查 + 分类）
 │   │   ├── checks.py              # 11 个检查函数
 │   │   └── classifier.py          # Skill 分类器
+│   ├── scanning/
+│   │   └── scanner.py             # L0 覆盖率扫描（evals 验证 + 断言覆盖）
 │   ├── evals/
-│   │   └── loader.py              # EvalLoader（加载+验证 evals.json）
+│   │   ├── loader.py              # EvalLoader（加载+验证 evals.json）
+│   │   └── generator.py           # EvalInitGenerator（config + mode 增强）
 │   ├── execution/
 │   │   ├── runner.py              # ClaudeRunner + ABTestRunner
 │   │   └── benchmark.py           # BenchmarkAggregator（统计+delta）
 │   ├── scoring/
-│   │   ├── programmatic.py        # ProgrammaticChecker（6 种断言）
+│   │   ├── programmatic.py        # ProgrammaticChecker（9 种断言 + 插件调度）
 │   │   ├── llm_grader.py          # LLMGrader（语义评分）
-│   │   └── orchestrator.py        # ScoringOrchestrator（合并结果）
+│   │   ├── orchestrator.py        # ScoringOrchestrator（合并结果）
+│   │   ├── plugins.py             # AssertionPluginRegistry（领域插件注册）
+│   │   └── templates.py           # AssertionTemplateLibrary（配置驱动模板）
 │   ├── compliance/
 │   │   ├── extractor.py           # InstructionExtractor（6 类指令提取）
 │   │   └── checker.py             # ComplianceChecker（过程合规验证）
@@ -698,12 +868,14 @@ skill-eval/
 │   │   └── templates/
 │   │       └── viewer.html        # 自包含 HTML 模板
 │   ├── integration/
-│   │   └── monitor_importer.py    # JSONL 数据导入
+│   │   ├── monitor_importer.py    # JSONL 数据导入
+│   │   ├── runner.py              # L2 集成测试（chain/routing/contract）
+│   │   └── impact.py              # 影响分析（爆炸半径）
 │   └── batch/
 │       ├── manifest.py            # ManifestLoader + 自动发现
 │       ├── dag.py                 # DAG 构建 + 拓扑排序 + 环检测
 │       ├── cascade.py             # CascadeAnalyzer（级联归因）
-│       └── scheduler.py           # BatchScheduler（多 Skill 编排）
+│       └── scheduler.py           # BatchScheduler（多 Skill 编排 + L2 集成）
 ├── tests/
 │   ├── conftest.py                # 共享 fixture
 │   ├── fixtures/
@@ -714,13 +886,22 @@ skill-eval/
 │   ├── test_static_analysis.py
 │   ├── test_models.py
 │   ├── test_scoring_programmatic.py
+│   ├── test_extended_assertions.py  # 3 种新断言 + 插件注册
+│   ├── test_assertion_templates.py  # 配置驱动断言模板
 │   ├── test_compliance.py
 │   ├── test_security.py
 │   ├── test_execution.py
-│   └── test_batch.py
+│   ├── test_batch.py
+│   ├── test_config_loader.py       # 三层配置加载
+│   ├── test_config_generator.py    # LLM 配置生成
+│   ├── test_eval_generator.py      # config + mode 增强
+│   ├── test_scanner.py             # L0 覆盖率扫描
+│   ├── test_integration.py         # L2 集成测试
+│   └── test_impact.py              # 影响分析
 └── docs/
     ├── skill-eval-design.md       # 实现级设计文档
-    └── skill-eval-arch-design.md  # 架构师版设计文档
+    ├── skill-eval-arch-design.md  # 架构师版设计文档
+    └── skill-eval-principles.md   # 底层原理与参考出处
 ```
 
 ---
@@ -739,18 +920,26 @@ pytest tests/test_compliance.py -v
 pytest tests/ --cov=skill_eval
 ```
 
-当前共 **120 个测试**，覆盖：
+当前共 **190 个测试**，覆盖：
 
 | 测试文件 | 覆盖模块 | 测试数 |
 |----------|----------|--------|
 | `test_parser.py` | SKILL.md 解析（正常/异常/边界） | 7 |
 | `test_static_analysis.py` | 11 项检查 + 分类器 + 分析器 | 30 |
 | `test_models.py` | Pydantic 模型验证 + JSON 往返 | 10 |
-| `test_scoring_programmatic.py` | 6 种断言类型 | 11 |
+| `test_scoring_programmatic.py` | 6 种基础断言类型 | 11 |
+| `test_extended_assertions.py` | 3 种新断言 + 插件注册表 | 13 |
+| `test_assertion_templates.py` | 配置驱动断言模板库 | 8 |
 | `test_compliance.py` | 指令提取 + 遵循性检查 + 校准 | 16 |
 | `test_security.py` | 4 扫描器 + 判定逻辑 + 外部扫描器降级 | 21 |
 | `test_execution.py` | EvalLoader + BenchmarkAggregator | 13 |
 | `test_batch.py` | DAG + 级联分析 + Manifest | 12 |
+| `test_config_loader.py` | 三层配置加载 + 模板展开 | 8 |
+| `test_config_generator.py` | 元数据扫描 + prompt 构建 + YAML 清洗 | 9 |
+| `test_eval_generator.py` | domain 断言注入 + mode 支持 | 5 |
+| `test_scanner.py` | L0 evals 验证 + 覆盖率 + 过滤 | 13 |
+| `test_integration.py` | L2 chain/routing/contract 集成测试 | 8 |
+| `test_impact.py` | 影响分析（爆炸半径） | 4 |
 
 ---
 
@@ -760,6 +949,7 @@ pytest tests/ --cov=skill_eval
 |------|------|------|
 | `docs/skill-eval-arch-design.md` | 架构师/技术决策者 | 设计决策、模块契约、质量公式、12 章 |
 | `docs/skill-eval-design.md` | 实现工程师 | Pydantic 模型、函数签名、CLI 参数、伪代码、6 个附录 |
+| `docs/skill-eval-principles.md` | 所有开发者 | 底层原理、参考出处、配置驱动架构 v0.2 |
 
 ---
 
@@ -785,6 +975,12 @@ Skill-Eval 从 [skill-creator](https://github.com/user/skill-creator) 移植并�
 - `compliance/` — 遵循性引擎（指令提取 + 过程合规检查）
 - `calibration/` — 评分校准（交叉验证 + 可信度等级）
 - `batch/` — 批量评测（DAG 调度 + 级联归因）
+- `config/` — 三层配置系统 + LLM 配置生成（v0.2 新增）
+- `scanning/` — L0 覆盖率扫描（v0.2 新增）
+- `integration/runner.py` — L2 集成测试（chain/routing/contract）（v0.2 新增）
+- `integration/impact.py` — 影响分析/爆炸半径（v0.2 新增）
+- `scoring/plugins.py` — 插件注册机制（v0.2 新增）
+- `scoring/templates.py` — 配置驱动断言模板库（v0.2 新增）
 
 ---
 

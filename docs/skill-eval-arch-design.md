@@ -152,7 +152,7 @@ skinparam shadowing false
 skinparam defaultFontSize 11
 
 package "CLI 层 (typer)" as cli_pkg {
-    [vet | analyze | init | run | optimize-trigger\nreport | import | full | batch] as cli
+    [vet | analyze | init | scan | generate-config\nrun | optimize-trigger\nreport | import | full | batch] as cli
     note right of cli : _ProgressState\n_BatchProgressState\n(Rich Live __rich__ 协议)
 }
 
@@ -167,9 +167,14 @@ package "核心模块" {
     [Benchmark聚合\nmean/stddev/delta\nschema兼容] as agg #Lavender
 
     [优化循环\n触发描述优化\n自动迭代\ntrain/test分割] as opt #LightYellow
-    [批量关联评测\nDAG拓扑排序\nUnit测试策略\n级联失败归因] as batch #LightYellow
+    [批量关联评测\nDAG拓扑排序\nUnit测试策略\n级联失败归因\n+L2集成测试] as batch #LightYellow
     [报告可视化\nHTML Viewer\n静态导出/HTTP\nBenchmark看板] as rpt #Lavender
     [外部数据集成\nskill-monitor JSONL\n运行时指标补充] as intg #Lavender
+    [配置驱动\n三层配置\nLLM生成\n零硬编码] as cfg #LightGreen
+    [L0覆盖率扫描\nevals验证\n断言覆盖率] as scan_mod #LightGreen
+    [L2集成测试\nChain/Routing\n/Contract] as inttest #LightYellow
+    [插件机制\n领域断言注册\nCUSTOM_PLUGIN] as plug #LightBlue
+    [断言模板库\n配置驱动\ndomain/type] as tmpl #LightBlue
 }
 
 rectangle "Claude CLI\nclaude -p (subprocess)\n--dangerously-skip-permissions\n--bare / --max-turns N" as claude #LightCoral
@@ -193,10 +198,17 @@ comp --> claude : LLM评判
 exe --> agg : iteration_dir
 opt ..> exe : 使用
 batch ..> exe : 调度
+batch ..> inttest : L2集成
 agg --> rpt : benchmark.json
 sa --> rpt : scorecard
 intg ..> agg : 运行时指标
 exe ..> cli : on_progress
+cfg --> ed : domain/type 断言
+cfg --> scan_mod : config_prefix 过滤
+cfg --> inttest : integration_scenarios
+scr --> plug : CUSTOM_PLUGIN
+ed --> tmpl : get_default_assertions
+cfg --> claude : generate-config
 @enduml
 ```
 
@@ -531,7 +543,81 @@ overall_confidence = 0.7 (baseline)
 
 **匹配补充逻辑**：对每条 JSONL 记录，按 skill_name 匹配 + 时间窗口 ±24h，将真实世界的 token 统计（input + output + reasoning）和耗时数据补充到对应 run 中。
 
-### 5.11 批量关联评测 (`batch/`)
+### 5.11 配置驱动架构 (`config/`) — v0.2 新增
+
+| 属性 | 值 |
+|------|------|
+| **职责** | 三层配置加载 + LLM 配置生成 + 零硬编码 |
+| **输入** | `defaults.yaml`（框架）+ `eval-config.yaml`（项目级）+ `eval-config.yaml`（skill 级，可选） |
+| **输出** | `EvalConfig` Pydantic 模型（内存），或磁盘上的 `eval-config.yaml`（generate-config） |
+| **外部调用** | `generate-config` 通过 `claude -p` 生成配置 |
+| **关键契约** | 框架代码零硬编码——不包含任何 domain/type/skill 关键词。所有领域内容通过配置注入 |
+
+**三层配置**：
+
+```
+config/defaults.yaml          ← 框架内置，通用默认值
+    ↓ 深度合并
+<project>/eval-config.yaml    ← 项目根目录，由 LLM 生成
+    ↓ 深度合并
+<skill>/eval-config.yaml      ← skill 目录内（可选）
+```
+
+`EvalConfig` 模型包含：`domain_templates`、`type_templates`、`integration_scenarios`、`skill_keywords`、`default_assertions`。
+
+**LLM 配置生成**：`scan_skills_metadata()` → `ConfigGenerator.build_prompt()` → `claude -p` → `eval-config.yaml`。
+
+### 5.12 L0 覆盖率扫描 (`scanning/`) — v0.2 新增
+
+| 属性 | 值 |
+|------|------|
+| **职责** | 扫描 evals.json 结构完整性和断言覆盖率 |
+| **输入** | Skill 集合目录 + 可选的 EvalConfig |
+| **输出** | 扫描报告（JSON/表格）：evals 存在性、字段完整性、断言覆盖率 |
+| **外部调用** | 无（纯本地文件分析） |
+| **关键契约** | 不调用任何 LLM。支持 config_prefix 过滤、domain/type 过滤 |
+
+**CLI 命令**：`skill-eval scan <skills-dir> [--config-prefix PREFIX] [--domain DOMAIN] [--type TYPE]`
+
+### 5.13 L2 集成测试 (`integration/runner.py`) — v0.2 新增
+
+| 属性 | 值 |
+|------|------|
+| **职责** | 执行 Skill 间协作的集成测试（chain/routing/contract） |
+| **输入** | `EvalConfig.integration_scenarios` + skill 集合目录 |
+| **输出** | 集成测试报告（pass/fail per scenario） |
+| **关键契约** | 三种场景类型：chain（链式传递+失败传播）、routing（关键词路由）、contract（制品验证） |
+
+**与 batch 的集成**：`BatchScheduler.run_integration_tests()` 从 `EvalConfig` 读取 `integration_scenarios`，`batch --layers integration` 执行。
+
+### 5.14 影响分析 (`integration/impact.py`) — v0.2 新增
+
+| 属性 | 值 |
+|------|------|
+| **职责** | 分析新 Skill 的爆炸半径（影响范围） |
+| **输入** | 目标 skill + 所有 skill 的依赖关系 + 关键词配置 |
+| **输出** | `ImpactReport`：connections（上下游关联）、risk_level（low/medium/high） |
+| **关键契约** | 纯分析逻辑，不调用 LLM |
+
+### 5.15 插件机制 (`scoring/plugins.py`) — v0.2 新增
+
+| 属性 | 值 |
+|------|------|
+| **职责** | 领域特定断言的注册和调度 |
+| **输入** | 插件名称 + 检查函数（`Callable[[dict, Path], ExpectationResult]`） |
+| **输出** | 注册表，被 `ProgrammaticChecker` 消费 |
+| **关键契约** | `CUSTOM_PLUGIN` 类型断言通过 registry 调用对应检查函数，未知插件名返回 FAIL |
+
+### 5.16 断言模板库 (`scoring/templates.py`) — v0.2 新增
+
+| 属性 | 值 |
+|------|------|
+| **职责** | 从 EvalConfig 的 domain/type templates 读取断言模板，供 eval 生成使用 |
+| **输入** | `EvalConfig` + domain + type |
+| **输出** | `list[Assertion]`（去重后的断言列表） |
+| **关键契约** | 纯数据查询，不调用 LLM。domain 和 type 模板取并集后去重 |
+
+### 5.17 批量关联评测 (`batch/`)
 
 | 属性 | 值 |
 |------|------|
@@ -757,12 +843,14 @@ batch-workspace-{timestamp}/
 | `vet` | <1s | 否 | Skill 安全扫描（4 扫描器） |
 | `analyze` | <1s | 否 | SKILL.md 静态体检 |
 | `init` | <1s~30s | 仅生成 prompt 时 | 生成评测用例模板 |
+| `scan` | <1s | 否 | L0 覆盖率扫描（evals 验证 + 断言覆盖率） |
+| `generate-config` | ~30s | 是 | LLM 生成 eval-config.yaml |
 | `run` | 5-30min | 是 | 执行 A/B 评测 + 评分 + 遵循性 + 校准 |
 | `optimize-trigger` | 10-60min | 是 | 迭代优化触发描述 |
 | `report` | <1s | 否 | 生成/展示 HTML 报告 |
 | `import` | <1s | 否 | 导入 skill-monitor 运行时数据 |
 | `full` | 5-30min | 是 | 一键完整流程 |
-| `batch` | 30-120min | 是 | 批量关联评测 |
+| `batch` | 30-120min | 是 | 批量关联评测（支持 --layers integration） |
 
 **关键 flags**：
 - `--compliance-gate`：compliance_rate < 0.5 时强制判失败

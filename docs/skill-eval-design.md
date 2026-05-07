@@ -303,6 +303,8 @@ skill-eval/
 ├── README.md
 ├── docs/
 │   └── skill-eval-design.md          ← 本文档
+│   └── skill-eval-arch-design.md     # 架构师版设计文档
+│   └── skill-eval-principles.md      # 底层原理与参考出处
 │
 ├── src/
 │   └── skill_eval/
@@ -316,6 +318,16 @@ skill-eval/
 │       │   ├── __init__.py
 │       │   └── vetter.py              # SecurityVetter (4 扫描器)
 │       │
+│       ├── config/                    # v0.2 配置驱动
+│       │   ├── __init__.py
+│       │   ├── loader.py              # 三层配置加载 + EvalConfig
+│       │   ├── defaults.yaml          # 框架默认值
+│       │   └── generator.py           # LLM 配置生成器
+│       │
+│       ├── scanning/                  # v0.2 L0 覆盖率扫描
+│       │   ├── __init__.py
+│       │   └── scanner.py             # scan_evals + validate + coverage
+│       │
 │       ├── static_analysis/
 │       │   ├── __init__.py
 │       │   ├── analyzer.py            # StaticAnalyzer 类
@@ -325,7 +337,7 @@ skill-eval/
 │       ├── evals/
 │       │   ├── __init__.py
 │       │   ├── loader.py              # EvalLoader 类
-│       │   └── generator.py           # EvalInitGenerator 类
+│       │   └── generator.py           # EvalInitGenerator 类（config + mode 增强）
 │       │
 │       ├── execution/
 │       │   ├── __init__.py
@@ -334,9 +346,11 @@ skill-eval/
 │       │
 │       ├── scoring/
 │       │   ├── __init__.py
-│       │   ├── programmatic.py        # ProgrammaticChecker
+│       │   ├── programmatic.py        # ProgrammaticChecker (9 种断言 + 插件)
 │       │   ├── llm_grader.py          # LLMGrader
-│       │   └── orchestrator.py        # ScoringOrchestrator
+│       │   ├── orchestrator.py        # ScoringOrchestrator
+│       │   ├── plugins.py             # AssertionPluginRegistry (v0.2)
+│       │   └── templates.py           # AssertionTemplateLibrary (v0.2)
 │       │
 │       ├── compliance/
 │       │   ├── __init__.py
@@ -363,7 +377,9 @@ skill-eval/
 │       │
 │       ├── integration/
 │       │   ├── __init__.py
-│       │   └── monitor_importer.py    # MonitorImporter
+│       │   ├── monitor_importer.py    # MonitorImporter
+│       │   ├── runner.py              # L2 集成测试 (chain/routing/contract) (v0.2)
+│       │   └── impact.py              # 影响分析/爆炸半径 (v0.2)
 │       │
 │       └── batch/
 │           ├── __init__.py
@@ -394,11 +410,19 @@ skill-eval/
     ├── test_static_analysis.py
     ├── test_models.py
     ├── test_scoring_programmatic.py
+    ├── test_extended_assertions.py      # v0.2: CROSS_FILE/CODE_COMPILES/PLUGIN
+    ├── test_assertion_templates.py      # v0.2: 配置驱动模板
     ├── test_compliance.py
     ├── test_calibration.py
     ├── test_security.py
     ├── test_execution.py
-    └── test_batch.py
+    ├── test_batch.py
+    ├── test_config_loader.py            # v0.2: 三层配置
+    ├── test_config_generator.py         # v0.2: LLM 配置生成
+    ├── test_eval_generator.py           # v0.2: config+mode 增强
+    ├── test_scanner.py                  # v0.2: L0 覆盖率
+    ├── test_integration.py              # v0.2: L2 集成测试
+    └── test_impact.py                   # v0.2: 影响分析
 ```
 
 ### 2.6 与现有系统的关系及代码复用明细
@@ -2106,6 +2130,8 @@ class RuntimeCacheUsage(BaseModel):
 | `vet` | `skill-eval vet SKILL_PATH [--format FORMAT] [--output FILE] [--skip-external]` | <1s | 否 |
 | `analyze` | `skill-eval analyze SKILL_PATH [--format FORMAT] [--output FILE]` | <1s | 否 |
 | `init` | `skill-eval init SKILL_PATH [--output DIR] [--generate-prompts]` | <1s（无 --generate-prompts）/ ~30s（有） | 仅 --generate-prompts |
+| `scan` | `skill-eval scan SKILLS_DIR [--config-prefix PREFIX] [--domain DOMAIN] [--type TYPE] [--format FORMAT]` | <1s | 否 |
+| `generate-config` | `skill-eval generate-config SKILLS_DIR [--output FILE] [--model MODEL]` | ~30s | 是 |
 | `run` | `skill-eval run SKILL_PATH [--evals PATH] [--runs N] [--model MODEL] [--workers N] [--timeout N] [--scoring MODE] [--compliance-gate] [--security-gate] [--no-calibration] [--output DIR]` | 5-30min | 是 |
 | `optimize-trigger` | `skill-eval optimize-trigger SKILL_PATH --eval-set PATH [--max-iterations N] [--model MODEL]` | 10-60min | 是 |
 | `report` | `skill-eval report WORKSPACE [--benchmark PATH] [--previous PATH] [--static FILE] [--port PORT] [--open]` | <1s | 否 |
@@ -3564,3 +3590,377 @@ class ExecutionError(SkillEvalError):
 | Phase 4 | 可视化 + 优化 | `skill-eval report` + `skill-eval optimize-trigger` 可用 | report.html 可在浏览器打开且显示数据 |
 | Phase 5 | 一键流程 + CI | `skill-eval full` 可用 | `--format json` 模式下 exit code 正确，`--compliance-gate` 生效 |
 | Phase 6 | Batch Evaluation | `skill-eval batch` 可用 | 3 层依赖的 sample skills 跑完整 batch，cascade-report 正确归因 |
+
+---
+
+## 5. 配置驱动架构（v0.2 新增）
+
+### 5.1 三层配置系统 (`config/loader.py`)
+
+#### 5.1.1 模块职责
+
+提供三层配置加载和合并，实现框架代码零硬编码。
+
+#### 5.1.2 类图
+
+```mermaid
+classDiagram
+    class EvalConfig {
+        +domain_templates: dict~str, list~
+        +type_templates: dict~str, list~
+        +integration_scenarios: list~dict~
+        +skill_keywords: dict~str, list~
+        +default_assertions: list~dict~
+        +from_dict(data: dict) EvalConfig
+    }
+
+    class ConfigLoader {
+        +load_config(skill_path: Path, project_root: Path | None) EvalConfig
+        -_load_yaml(path: Path) dict | None
+        -_deep_merge(base: dict, override: dict) dict
+    }
+
+    ConfigLoader --> EvalConfig
+```
+
+#### 5.1.3 三层合并逻辑
+
+```python
+def load_config(skill_path: Path, project_root: Path | None = None) -> EvalConfig:
+    """
+    三层配置加载：
+    1. config/defaults.yaml — 框架内置默认值
+    2. <project_root>/eval-config.yaml — 项目级配置
+    3. <skill_path>/eval-config.yaml — skill 级配置（可选）
+
+    后层覆盖前层，使用深度合并（dict 递归合并，list 替换）。
+    """
+```
+
+#### 5.1.4 EvalConfig 模型
+
+```python
+class EvalConfig(BaseModel):
+    domain_templates: dict[str, list[dict]] = {}
+    type_templates: dict[str, list[dict]] = {}
+    integration_scenarios: list[dict] = []
+    skill_keywords: dict[str, list[str]] = {}
+    default_assertions: list[dict] = []
+```
+
+#### 5.1.5 defaults.yaml
+
+框架内置默认配置文件，位于 `src/skill_eval/config/defaults.yaml`。只包含通用默认值（如空断言列表），不包含任何领域特定内容。
+
+### 5.2 LLM 配置生成 (`config/generator.py`)
+
+#### 5.2.1 模块职责
+
+扫描 Skill 集合元数据，通过 `claude -p` 自动生成 `eval-config.yaml`。
+
+#### 5.2.2 类图
+
+```mermaid
+classDiagram
+    class SkillMetadata {
+        +name: str
+        +description: str
+        +domain: str | None
+        +type: str | None
+        +tags: list~str~
+        +path: Path
+    }
+
+    class ConfigGenerator {
+        +scan_skills_metadata(skills_dir: Path) list~SkillMetadata~
+        +build_prompt(metadata: list~SkillMetadata~) str
+        +clean_yaml_output(raw: str) str
+    }
+
+    ConfigGenerator --> SkillMetadata
+```
+
+#### 5.2.3 scan_skills_metadata() 实现
+
+```
+1. 遍历 skills_dir 下所有含 SKILL.md 的子目录
+2. 对每个 SKILL.md 调用 parse_skill_md() 获取 frontmatter
+3. 提取 name, description, domain, type, tags
+4. 返回 list[SkillMetadata]
+```
+
+#### 5.2.4 ConfigGenerator.build_prompt() 实现
+
+构建包含以下内容的 prompt：
+- 所有 Skill 的元数据（name + domain + type + tags + description）
+- 9 种可用断言类型（FILE_EXISTS, CONTAINS_PATTERN, ..., CUSTOM_PLUGIN）
+- 要求 LLM 输出 YAML 格式的 eval-config.yaml
+
+#### 5.2.5 CLI 命令
+
+```bash
+skill-eval generate-config <skills_dir> --output eval-config.yaml
+```
+
+### 5.3 插件机制 (`scoring/plugins.py`)
+
+#### 5.3.1 模块职责
+
+注册和调度领域特定的 `CUSTOM_PLUGIN` 断言。
+
+#### 5.3.2 类图
+
+```mermaid
+classDiagram
+    class AssertionPluginRegistry {
+        -_plugins: dict~str, Callable~
+        +register(name: str, checker: Callable) None
+        +get(name: str) Callable | None
+        +has(name: str) bool
+    }
+
+    class ProgrammaticChecker {
+        +plugin_registry: AssertionPluginRegistry | None
+        +check_all(assertions: list~Assertion~, output_dir: Path) list~ExpectationResult~
+    }
+
+    ProgrammaticChecker --> AssertionPluginRegistry
+```
+
+#### 5.3.3 插件注册
+
+```python
+registry = AssertionPluginRegistry()
+registry.register("ARKTS_STRUCTURE_VALID", my_arkts_checker)
+checker = ProgrammaticChecker(plugin_registry=registry)
+```
+
+插件函数签名：`def checker(params: dict, output_dir: Path) -> ExpectationResult`
+
+当 `ProgrammaticChecker` 遇到 `CUSTOM_PLUGIN` 类型断言时，从 `plugin_registry` 查找 `params["plugin_name"]` 对应的函数调用。未注册的插件名返回 FAIL + `"Plugin 'xxx' not registered"`。
+
+### 5.4 断言模板库 (`scoring/templates.py`)
+
+#### 5.4.1 模块职责
+
+从 `EvalConfig` 的 `domain_templates` 和 `type_templates` 读取模板，供 eval 生成使用。
+
+#### 5.4.2 核心函数
+
+```python
+class AssertionTemplateLibrary:
+    def __init__(self, config: EvalConfig | None = None): ...
+    def get_domain_assertions(self, domain: str) -> list[Assertion]: ...
+    def get_type_assertions(self, type_: str) -> list[Assertion]: ...
+    def list_domains(self) -> list[str]: ...
+
+def get_default_assertions(
+    domain: str | None = None,
+    type_: str | None = None,
+    config: EvalConfig | None = None,
+) -> list[Assertion]:
+    """
+    获取 domain + type 的合并断言列表（去重）。
+    """
+```
+
+**去重逻辑**：按 `(name, type)` 二元组去重，domain 优先于 type。
+
+### 5.5 L0 覆盖率扫描 (`scanning/scanner.py`)
+
+#### 5.5.1 模块职责
+
+扫描 evals.json 结构完整性和断言覆盖率，零 API 成本。
+
+#### 5.5.2 核心函数
+
+```python
+def scan_evals(
+    skills_dir: Path,
+    config: EvalConfig | None = None,
+    config_prefix: str | None = None,
+    domain_filter: str | None = None,
+    type_filter: str | None = None,
+) -> list[SkillScanResult]:
+
+def validate_evals_json(evals_path: Path) -> list[str]:
+
+def check_assertion_coverage(evals_path: Path) -> AssertionCoverage:
+```
+
+#### 5.5.3 SkillScanResult 模型
+
+```python
+class SkillScanResult(BaseModel):
+    skill_name: str
+    skill_path: str
+    has_evals: bool
+    evals_path: str | None
+    validation_errors: list[str]
+    num_evals: int
+    num_with_assertions: int
+    assertion_coverage: float  # 0.0-1.0
+    metadata: dict | None
+```
+
+#### 5.5.4 CLI 命令
+
+```bash
+skill-eval scan <skills_dir> [--config-prefix PREFIX] [--domain DOMAIN] [--type TYPE]
+```
+
+### 5.6 L2 集成测试 (`integration/runner.py`)
+
+#### 5.6.1 模块职责
+
+执行 Skill 间协作的集成测试，支持三种场景类型。
+
+#### 5.6.2 三种场景类型
+
+| 类型 | 说明 | 检查内容 |
+|------|------|----------|
+| `chain` | 链式传递 | 上游 Skill 的输出是否被下游 Skill 正确消费，失败是否传播 |
+| `routing` | 关键词路由 | 根据 skill_keywords 配置，检查是否触发了正确的 Skill |
+| `contract` | 制品验证 | 验证 Skill 间传递的制品是否符合契约 |
+
+#### 5.6.3 核心函数
+
+```python
+def run_chain_test(
+    skills: list[Path],
+    steps: list[dict],
+    output_dir: Path,
+) -> ChainTestResult: ...
+
+def run_routing_test(
+    skills: list[Path],
+    keywords: dict[str, list[str]],
+    input_prompt: str,
+    expected_skill: str,
+    output_dir: Path,
+) -> RoutingTestResult: ...
+
+def run_contract_test(
+    provider_skill: Path,
+    consumer_skill: Path,
+    artifact_path: str,
+    output_dir: Path,
+) -> ContractTestResult: ...
+
+def run_integration_batch(
+    scenarios: list[dict],
+    skills_dir: Path,
+    output_dir: Path,
+) -> list[IntegrationTestResult]: ...
+```
+
+### 5.7 影响分析 (`integration/impact.py`)
+
+#### 5.7.1 模块职责
+
+分析新 Skill 的爆炸半径（影响范围），纯分析逻辑，不调用 LLM。
+
+#### 5.7.2 核心函数
+
+```python
+class ImpactAnalyzer:
+    def analyze(
+        self,
+        target_skill: str,
+        all_skills: dict[str, list[str]],  # skill_name -> depends_on
+        skill_keywords: dict[str, list[str]] | None = None,
+    ) -> ImpactReport: ...
+
+class ImpactReport(BaseModel):
+    target_skill: str
+    connections: list[str]      # 上下游关联的 skill
+    risk_level: str             # low / medium / high
+    affected_skills: list[str]  # 可能受影响的 skill
+    routing_scenarios: list[str] # 涉及的路由场景
+```
+
+### 5.8 扩展的 AssertionType
+
+v0.2 新增 3 种断言类型，加上原有 6 种，共 9 种内置断言类型：
+
+| 类型 | 描述 | 参数 | 来源 |
+|------|------|------|------|
+| `CROSS_FILE_CONSISTENCY` | 检查相对 import 是否解析 | `include`(可选, glob) | 通用 |
+| `CODE_COMPILES` | 基础语法检查（括号匹配） | `include`(可选, glob) | 通用 |
+| `CUSTOM_PLUGIN` | 领域特定插件断言 | `plugin_name` + 插件自定义参数 | 扩展点 |
+
+#### 5.8.1 CROSS_FILE_CONSISTENCY 实现
+
+```python
+def _check_cross_file_consistency(params: dict, output_dir: Path) -> ExpectationResult:
+    """
+    扫描 output_dir 下所有代码文件，检查相对 import 是否在目录中存在。
+    支持 include 参数过滤文件类型。
+    """
+```
+
+#### 5.8.2 CODE_COMPILES 实现
+
+```python
+def _check_code_compiles(params: dict, output_dir: Path) -> ExpectationResult:
+    """
+    扫描 output_dir 下所有代码文件，检查括号/花括号/方括号是否匹配。
+    支持 include 参数过滤文件类型。
+    """
+```
+
+#### 5.8.3 CUSTOM_PLUGIN 实现
+
+```python
+# 在 ProgrammaticChecker._check_single() 中：
+elif assertion.type == AssertionType.CUSTOM_PLUGIN:
+    plugin_name = assertion.params.get("plugin_name", "")
+    if self.plugin_registry and self.plugin_registry.has(plugin_name):
+        checker_fn = self.plugin_registry.get(plugin_name)
+        return checker_fn(assertion.params, output_dir)
+    else:
+        return ExpectationResult(
+            text=assertion.name,
+            passed=False,
+            evidence=f"Plugin '{plugin_name}' not registered",
+            source="programmatic",
+        )
+```
+
+### 5.9 EvalInitGenerator 增强
+
+`EvalInitGenerator` 新增两个参数：
+
+```python
+class EvalInitGenerator:
+    def __init__(self, config: EvalConfig | None = None, modes: list[str] | None = None): ...
+
+    def generate_with_llm(self, skill_path: Path) -> EvalSet:
+        """
+        增强：
+        - config 不为 None 时，从 domain_templates 自动注入领域断言
+        - modes 不为 None 时，每个 mode 生成独立的 eval set
+        """
+```
+
+`EvalCase` 模型新增 `mode` 字段：
+
+```python
+class EvalCase(BaseModel):
+    ...
+    mode: str = ""  # 所属 mode（如 create/refactor），空字符串表示通用
+```
+
+### 5.10 BatchScheduler 集成测试增强
+
+```python
+class BatchScheduler:
+    def run_integration_tests(self, config: EvalConfig | None = None) -> list[IntegrationTestResult]:
+        """
+        从 EvalConfig.integration_scenarios 读取集成测试场景，
+        调用 run_integration_batch() 执行。
+        写入 integration-report.json。
+        """
+```
+
+CLI 支持：`skill-eval batch manifest.json --layers integration`
