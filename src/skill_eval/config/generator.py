@@ -1,0 +1,211 @@
+"""LLM-driven eval-config.yaml generator — scans skills metadata, builds prompt, generates config."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import textwrap
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+def scan_skills_metadata(root_dir: Path | str) -> dict:
+    root = Path(root_dir)
+    skills: list[dict] = []
+    domains: set[str] = set()
+    types: set[str] = set()
+    collection_prefixes: set[str] = set()
+
+    if not root.is_dir():
+        return {"total_skills": 0, "collection_prefixes": [], "domains": [], "types": [], "skills": skills}
+
+    for entry in sorted(root.iterdir()):
+        skills_dir = entry / "skills"
+        if not skills_dir.is_dir():
+            continue
+        parts = entry.name.split("-")
+        collection_prefixes.add(parts[0] + "-*" if parts else entry.name)
+
+        for skill_entry in sorted(skills_dir.iterdir()):
+            skill_dir = skills_dir / skill_entry
+            if not skill_dir.is_dir():
+                continue
+            fm = _extract_frontmatter(skill_dir / "SKILL.md")
+            name = fm.get("name", skill_entry.name)
+            stype = fm.get("type", "domain")
+            domain = fm.get("domain", "general")
+            desc = fm.get("description", "")
+            tags = fm.get("tags", [])
+            domains.add(domain)
+            types.add(stype)
+            skills.append({
+                "name": name, "type": stype, "domain": domain,
+                "description": desc[:200], "tags": tags,
+            })
+
+    return {
+        "total_skills": len(skills),
+        "collection_prefixes": sorted(collection_prefixes),
+        "domains": sorted(domains),
+        "types": sorted(types),
+        "skills": skills,
+    }
+
+
+class ConfigGenerator:
+    def build_prompt(self, metadata: dict) -> str:
+        skills_json = json.dumps(metadata, indent=2, ensure_ascii=False)
+        domains = metadata.get("domains", [])
+        types = metadata.get("types", [])
+        prefixes = metadata.get("collection_prefixes", [])
+
+        domains_hint = ", ".join(domains) if domains else "(detect from skills)"
+        types_hint = ", ".join(types) if types else "(detect from skills)"
+        prefix_hint = prefixes[0] if prefixes else "(detect from directory names)"
+
+        return textwrap.dedent(f"""\
+            You are a configuration generator for a skill evaluation framework.
+
+            Given the skill metadata (JSON below), generate an `eval-config.yaml` file.
+
+            ## Available assertion types
+
+            Programmatic (deterministic, fast):
+            - `FILE_EXISTS`: check files exist (params: filename)
+            - `CONTAINS_PATTERN`: regex match in files (params: pattern, path)
+            - `NOT_CONTAINS`: regex must NOT match (params: pattern, path)
+            - `JSON_HAS_FIELD`: check JSON field exists (params: filename, field)
+            - `LINE_COUNT`: check line count range (params: min, max, path)
+            - `CUSTOM_SCRIPT`: run custom Python script (params: script, args)
+            - `CROSS_FILE_CONSISTENCY`: check imports resolve (params: include)
+            - `CODE_COMPILES`: basic syntax check (params: include)
+            - `CUSTOM_PLUGIN`: domain-specific plugin (params: plugin_type)
+
+            LLM-based:
+            - `llm_judge`: LLM quality judgment (params: criteria)
+
+            ## YAML structure
+
+            ```yaml
+            version: 1
+            scanning:
+              collection_prefix: "<prefix>"
+
+            domain_templates:
+              <domain>:
+                assertions:
+                  - type: <ASSERTION_TYPE>
+                    pattern: "<regex>"
+                    description: "<what it checks>"
+
+            type_templates:
+              <type>:
+                assertions:
+                  - type: <ASSERTION_TYPE>
+                    description: "<desc>"
+
+            integration_scenarios:
+              - name: "<name>"
+                type: chain|routing|contract
+                # chain: chain (list), input (dict)
+                # routing: test_prompts (list of {{prompt, should_trigger, should_not_trigger}})
+                # contract: producer, consumer, artifact, checks (list)
+
+            skill_keywords:
+              <skill_name>: ["keyword1", "keyword2"]
+            ```
+
+            ## Rules
+
+            1. **scanning.collection_prefix**: `{prefix_hint}`
+            2. **domain_templates**: One entry per domain. Domains: {domains_hint}.
+               For each domain, write 3-6 assertions derived from skill descriptions.
+            3. **type_templates**: One entry per type. Types: {types_hint}.
+               Write 2-4 assertions per type.
+            4. **integration_scenarios**: Generate 2-4 scenarios:
+               - At least 1 chain (sequence of skills)
+               - At least 1 routing (keyword-based dispatch test)
+               - At least 1 contract (producer-consumer artifact check)
+            5. **skill_keywords**: For each skill, extract 5-8 keywords from its description.
+            6. Output ONLY the YAML. No explanation, no markdown fences.
+
+            ## Skill Metadata
+
+            ```json
+            {skills_json}
+            ```
+            """)
+
+    def generate(
+        self,
+        root_dir: Path | str,
+        output_path: Path | str | None = None,
+        model: str | None = None,
+        dry_run: bool = False,
+    ) -> dict:
+        metadata = scan_skills_metadata(root_dir)
+        if metadata["total_skills"] == 0:
+            raise ValueError(f"No skills found in {root_dir}")
+
+        prompt = self.build_prompt(metadata)
+
+        if dry_run:
+            return {"dry_run": True, "metadata": metadata, "prompt_length": len(prompt)}
+
+        raw = self._call_claude(prompt, model=model)
+        cleaned = _clean_yaml_output(raw)
+        parsed = yaml.safe_load(cleaned)
+        if not isinstance(parsed, dict):
+            raise ValueError(f"LLM output is not a valid YAML dict: {cleaned[:200]}")
+
+        if output_path:
+            out = Path(output_path)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(yaml.dump(parsed, allow_unicode=True, default_flow_style=False, sort_keys=False),
+                           encoding="utf-8")
+
+        return parsed
+
+    def _call_claude(self, prompt: str, model: str | None = None) -> str:
+        cmd = ["claude", "-p", "--output-format", "text", "--dangerously-skip-permissions"]
+        if model:
+            cmd.extend(["--model", model])
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        result = subprocess.run(cmd, input=prompt, capture_output=True, text=True, env=env, timeout=300)
+        if result.returncode != 0:
+            raise RuntimeError(f"claude CLI failed: {result.stderr[:500]}")
+        return result.stdout
+
+
+def _extract_frontmatter(md_path: Path) -> dict:
+    if not md_path.exists():
+        return {}
+    try:
+        content = md_path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    if not content.startswith("---"):
+        return {}
+    rest = content[3:]
+    end = rest.find("\n---")
+    if end == -1:
+        return {}
+    try:
+        parsed = yaml.safe_load(rest[:end])
+        return parsed if isinstance(parsed, dict) else {}
+    except yaml.YAMLError:
+        return {}
+
+
+def _clean_yaml_output(raw: str) -> str:
+    text = raw.strip()
+    if text.startswith("```yaml"):
+        text = text[len("```yaml"):]
+    elif text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    return text.strip()

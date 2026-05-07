@@ -5,12 +5,20 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from skill_eval.models import AssertionType, EvalCase, ExpectationResult, GradingResult, GradingSummary
 
+if TYPE_CHECKING:
+    from skill_eval.scoring.plugins import AssertionPluginRegistry
+
 
 class ProgrammaticChecker:
+    def __init__(self, plugin_registry: AssertionPluginRegistry | None = None) -> None:
+        self._plugins = plugin_registry
+
     def check(self, eval_case: EvalCase, output_dir: Path) -> list[ExpectationResult]:
         results: list[ExpectationResult] = []
         for assertion in eval_case.assertions:
@@ -31,6 +39,9 @@ class ProgrammaticChecker:
             AssertionType.LINE_COUNT: self._line_count,
             AssertionType.NOT_CONTAINS: self._not_contains,
             AssertionType.CUSTOM_SCRIPT: self._custom_script,
+            AssertionType.CROSS_FILE_CONSISTENCY: self._cross_file_consistency,
+            AssertionType.CODE_COMPILES: self._code_compiles,
+            AssertionType.CUSTOM_PLUGIN: self._custom_plugin,
         }.get(atype)
         if handler is None:
             return False, f"Unknown assertion type: {atype}"
@@ -148,5 +159,78 @@ class ProgrammaticChecker:
         except FileNotFoundError:
             return False, f"Script not found: {script}"
 
+    def _cross_file_consistency(self, params: dict, output_dir: Path) -> tuple[bool, str]:
+        include = params.get("include")
+        files = self._read_all_files(output_dir, include)
+        if not files:
+            return True, "No files to check"
+        import_re = re.compile(r"""import\s+.*\s+from\s+['"](\.[^'"]+)['"]""")
+        broken: list[str] = []
+        for filepath, content in files.items():
+            for m in import_re.finditer(content):
+                ref = m.group(1)
+                for ext in ("", ".ts", ".js", ".ets", ".json"):
+                    if ext and ref.endswith(ext):
+                        base = ref[:-len(ext)]
+                    else:
+                        base = ref
+                    candidate = (Path(filepath).parent / (base + ext)).resolve()
+                    if candidate.exists():
+                        break
+                else:
+                    broken.append(f"{Path(filepath).name}: {ref}")
+        if broken:
+            return False, f"Unresolved imports: {broken[:5]}"
+        return True, "All imports resolve"
 
-import sys
+    def _code_compiles(self, params: dict, output_dir: Path) -> tuple[bool, str]:
+        include = params.get("include")
+        files = self._read_all_files(output_dir, include)
+        if not files:
+            return True, "No files to check"
+        pairs = {"{": "}", "(": ")", "[": "]"}
+        errors: list[str] = []
+        for filepath, content in files.items():
+            stack: list[str] = []
+            for ch in content:
+                if ch in pairs:
+                    stack.append(ch)
+                elif ch in pairs.values():
+                    if not stack:
+                        errors.append(f"{Path(filepath).name}: unexpected '{ch}'")
+                        break
+                    opener = stack.pop()
+                    if pairs[opener] != ch:
+                        errors.append(f"{Path(filepath).name}: mismatched '{opener}' vs '{ch}'")
+                        break
+            if stack and not errors:
+                errors.append(f"{Path(filepath).name}: unclosed '{stack[-1]}'")
+        if errors:
+            return False, f"Syntax issues: {errors[:5]}"
+        return True, "All files pass basic syntax check"
+
+    def _custom_plugin(self, params: dict, output_dir: Path) -> tuple[bool, str]:
+        plugin_type = params.get("plugin_type", "")
+        if not self._plugins:
+            return False, f"No plugin registry, cannot resolve '{plugin_type}'"
+        handler = self._plugins.get(plugin_type)
+        if handler is None:
+            return False, f"Unknown plugin type: '{plugin_type}'"
+        return handler(params, output_dir)
+
+    @staticmethod
+    def _read_all_files(output_dir: Path, include: str | None = None) -> dict[str, str]:
+        contents: dict[str, str] = {}
+        if include:
+            pattern = str(output_dir / include)
+        else:
+            pattern = str(output_dir / "**" / "*")
+        import glob
+        for filepath in glob.glob(pattern, recursive=True):
+            p = Path(filepath)
+            if p.is_file():
+                try:
+                    contents[filepath] = p.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+        return contents

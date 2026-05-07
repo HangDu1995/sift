@@ -7,21 +7,36 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from skill_eval.models import Assertion, AssertionType, EvalCase, EvalSet
 from skill_eval.parser import parse_skill_md
+
+if TYPE_CHECKING:
+    from skill_eval.config.loader import EvalConfig
 
 MAX_EVALS = 50
 MAX_EXPECTATIONS_PER_EVAL = 8
 
 
 class EvalInitGenerator:
-    def __init__(self, model: str | None = None, timeout: int = 120):
+    def __init__(
+        self,
+        model: str | None = None,
+        timeout: int = 120,
+        config: EvalConfig | None = None,
+        modes: list[str] | None = None,
+    ) -> None:
         self.model = model
         self.timeout = timeout
+        self.config = config
+        self.modes = modes or []
 
     def generate_template(self, skill_path: Path) -> EvalSet:
         name, description, content, frontmatter, body = parse_skill_md(skill_path)
+
+        effective_modes = self.modes or frontmatter.get("modes", [])
+        domain = frontmatter.get("domain", "general")
 
         cases: list[EvalCase] = []
         sections = self._split_into_sections(body)
@@ -31,20 +46,35 @@ class EvalInitGenerator:
             if not section_text.strip():
                 continue
 
-            eval_id += 1
             prompt = self._derive_prompt(section_title, section_text, name, description)
             expectations = self._derive_expectations(section_text, name)
-            assertions = self._derive_assertions(section_text)
+            base_assertions = self._derive_assertions(section_text)
+            domain_assertions = self._derive_domain_assertions(domain)
+            assertions = self._merge_assertions(base_assertions, domain_assertions)
             expected_output = self._derive_expected_output(section_title, section_text, description)
 
-            cases.append(EvalCase(
-                id=eval_id,
-                name=section_title,
-                prompt=prompt,
-                expected_output=expected_output,
-                expectations=expectations,
-                assertions=assertions,
-            ))
+            if effective_modes:
+                for mode in effective_modes:
+                    eval_id += 1
+                    cases.append(EvalCase(
+                        id=eval_id,
+                        name=f"{section_title} [{mode}]",
+                        prompt=prompt,
+                        expected_output=expected_output,
+                        expectations=expectations,
+                        assertions=assertions,
+                        mode=mode,
+                    ))
+            else:
+                eval_id += 1
+                cases.append(EvalCase(
+                    id=eval_id,
+                    name=section_title,
+                    prompt=prompt,
+                    expected_output=expected_output,
+                    expectations=expectations,
+                    assertions=assertions,
+                ))
 
             if len(cases) >= MAX_EVALS:
                 break
@@ -249,6 +279,36 @@ class EvalInitGenerator:
                 ))
 
         return assertions
+
+    def _derive_domain_assertions(self, domain: str) -> list[Assertion]:
+        if not self.config:
+            return []
+        templates = self.config.domain_templates.get(domain, [])
+        result: list[Assertion] = []
+        for t in templates:
+            atype_str = t.get("type", "")
+            try:
+                atype = AssertionType(atype_str)
+            except ValueError:
+                continue
+            params = {k: v for k, v in t.items() if k not in ("type", "description")}
+            result.append(Assertion(
+                name=t.get("description", f"Domain check: {atype_str}"),
+                type=atype,
+                params=params,
+            ))
+        return result
+
+    @staticmethod
+    def _merge_assertions(base: list[Assertion], extra: list[Assertion]) -> list[Assertion]:
+        seen = {(a.type, json.dumps(a.params, sort_keys=True)) for a in base}
+        merged = list(base)
+        for a in extra:
+            key = (a.type, json.dumps(a.params, sort_keys=True))
+            if key not in seen:
+                seen.add(key)
+                merged.append(a)
+        return merged
 
     # ------------------------------------------------------------------
     # LLM-based generation

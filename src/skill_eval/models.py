@@ -21,6 +21,9 @@ class AssertionType(str, Enum):
     LINE_COUNT = "LINE_COUNT"
     NOT_CONTAINS = "NOT_CONTAINS"
     CUSTOM_SCRIPT = "CUSTOM_SCRIPT"
+    CROSS_FILE_CONSISTENCY = "CROSS_FILE_CONSISTENCY"
+    CODE_COMPILES = "CODE_COMPILES"
+    CUSTOM_PLUGIN = "CUSTOM_PLUGIN"
 
 
 class InstructionSource(str, Enum):
@@ -99,6 +102,7 @@ class EvalCase(BaseModel):
     assertions: list[Assertion] = Field(default_factory=list)
     fixtures: list[FixtureFile] = Field(default_factory=list)
     level: str = "L1"
+    mode: str = ""
 
     def get_name(self) -> str:
         return self.name or f"eval-{self.id}"
