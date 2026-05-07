@@ -20,6 +20,7 @@ class EvalConfig:
         prompt_templates: list[str] | None = None,
         grading_threshold: float = 0.7,
         workspace_defaults: dict | None = None,
+        pipelines: list[dict] | None = None,
         extra: dict | None = None,
     ) -> None:
         self.collection_prefix = collection_prefix
@@ -31,6 +32,7 @@ class EvalConfig:
         self.prompt_templates = prompt_templates or []
         self.grading_threshold = grading_threshold
         self.workspace_defaults = workspace_defaults or {}
+        self.pipelines = pipelines or []
         self.extra = extra or {}
 
     @classmethod
@@ -50,10 +52,11 @@ class EvalConfig:
             prompt_templates=data.get("prompt_templates", []),
             grading_threshold=grading.get("default_threshold", 0.7),
             workspace_defaults=data.get("workspace", {}),
+            pipelines=data.get("pipelines", []),
             extra={k: v for k, v in data.items() if k not in {
                 "scanning", "grading", "domain_templates", "type_templates",
                 "integration_scenarios", "skill_keywords", "prompt_templates",
-                "workspace", "version",
+                "workspace", "version", "pipelines",
             }},
         )
 

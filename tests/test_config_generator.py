@@ -108,3 +108,48 @@ class TestCleanYamlOutput:
         from skill_eval.config.generator import _clean_yaml_output
         raw = "foo: bar"
         assert _clean_yaml_output(raw) == "foo: bar"
+
+
+class TestBuildPipelineFromDeps:
+    def test_linear_chain(self):
+        skills = [
+            {"name": "builder", "domain": "android"},
+            {"name": "tester", "domain": "android"},
+            {"name": "deployer", "domain": "android"},
+        ]
+        dep_graph = {
+            "tester": ["builder"],
+            "deployer": ["tester"],
+        }
+        pipelines = ConfigGenerator.build_pipeline_from_deps(skills, dep_graph)
+        assert len(pipelines) == 1
+        steps = pipelines[0]["steps"]
+        names = [s["name"] for s in steps]
+        assert names.index("builder") < names.index("tester") < names.index("deployer")
+
+    def test_empty_skills(self):
+        pipelines = ConfigGenerator.build_pipeline_from_deps([])
+        assert pipelines == []
+
+    def test_no_deps(self):
+        skills = [
+            {"name": "a", "domain": "x"},
+            {"name": "b", "domain": "x"},
+        ]
+        pipelines = ConfigGenerator.build_pipeline_from_deps(skills)
+        assert len(pipelines) == 1
+        assert len(pipelines[0]["steps"]) == 2
+
+    def test_custom_project(self):
+        skills = [{"name": "s1", "domain": "api"}]
+        pipelines = ConfigGenerator.build_pipeline_from_deps(
+            skills, project="fixtures/projects/android-medium"
+        )
+        assert pipelines[0]["project"] == "fixtures/projects/android-medium"
+
+    def test_prompt_contains_pipelines_section(self):
+        gen = ConfigGenerator()
+        meta = {"total_skills": 0, "domains": [], "types": [],
+                "collection_prefixes": [], "skills": []}
+        prompt = gen.build_prompt(meta)
+        assert "pipelines:" in prompt

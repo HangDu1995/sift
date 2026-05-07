@@ -27,6 +27,7 @@ class TestEvalConfigDefaults:
         assert config.type_templates == {}
         assert config.integration_scenarios == []
         assert config.grading_threshold == 0.7
+        assert config.pipelines == []
 
     def test_from_dict(self):
         data = {
@@ -47,6 +48,25 @@ class TestEvalConfigDefaults:
     def test_from_empty_dict(self):
         config = EvalConfig.from_dict({})
         assert config.collection_prefix == ""
+
+    def test_from_dict_with_pipelines(self):
+        data = {
+            "pipelines": [
+                {
+                    "name": "full-flow",
+                    "description": "Test all skills",
+                    "project": "fixtures/projects/android-minimal",
+                    "steps": [
+                        {"name": "build", "skill": "builder", "prompt": "Build", "depends_on": []},
+                        {"name": "test", "skill": "tester", "prompt": "Test", "depends_on": ["build"]},
+                    ],
+                },
+            ],
+        }
+        config = EvalConfig.from_dict(data)
+        assert len(config.pipelines) == 1
+        assert config.pipelines[0]["name"] == "full-flow"
+        assert len(config.pipelines[0]["steps"]) == 2
 
 
 class TestThreeLayerMerge:

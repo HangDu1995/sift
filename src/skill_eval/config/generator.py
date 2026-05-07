@@ -116,6 +116,21 @@ class ConfigGenerator:
 
             skill_keywords:
               <skill_name>: ["keyword1", "keyword2"]
+
+            pipelines:
+              - name: "<pipeline-name>"
+                description: "<what this pipeline tests>"
+                project: "fixtures/projects/android-medium"
+                steps:
+                  - name: "<step-name>"
+                    skill: "<skill-name>"
+                    prompt: "<prompt to send to claude>"
+                    expectations: ["<expectation>"]
+                    assertions:
+                      - name: "<assertion>"
+                        type: <ASSERTION_TYPE>
+                        params: {{}}
+                    depends_on: ["<previous-step>"]
             ```
 
             ## Rules
@@ -130,7 +145,11 @@ class ConfigGenerator:
                - At least 1 routing (keyword-based dispatch test)
                - At least 1 contract (producer-consumer artifact check)
             5. **skill_keywords**: For each skill, extract 5-8 keywords from its description.
-            6. Output ONLY the YAML. No explanation, no markdown fences.
+            6. **pipelines**: Generate 1 pipeline that chains all skills in dependency order.
+               Each step should have a realistic prompt, 1-2 expectations, and 1-2 assertions.
+               Use depends_on to create the dependency chain.
+               Default project: "fixtures/projects/android-medium".
+            7. Output ONLY the YAML. No explanation, no markdown fences.
 
             ## Skill Metadata
 
@@ -138,6 +157,53 @@ class ConfigGenerator:
             {skills_json}
             ```
             """)
+
+    @staticmethod
+    def build_pipeline_from_deps(
+        skills: list[dict],
+        dep_graph: dict[str, list[str]] | None = None,
+        project: str = "fixtures/projects/android-medium",
+    ) -> list[dict]:
+        if not skills:
+            return []
+
+        skill_names = [s["name"] for s in skills]
+        graph = dep_graph or {}
+
+        visited: set[str] = set()
+        order: list[str] = []
+
+        def visit(name: str) -> None:
+            if name in visited or name not in skill_names:
+                return
+            visited.add(name)
+            for dep in graph.get(name, []):
+                visit(dep)
+            order.append(name)
+
+        for name in skill_names:
+            visit(name)
+
+        skill_map = {s["name"]: s for s in skills}
+        steps: list[dict] = []
+        for idx, name in enumerate(order):
+            s = skill_map.get(name, {})
+            deps = graph.get(name, [])
+            steps.append({
+                "name": name.split("-")[-1] if "-" in name else name,
+                "skill": name,
+                "prompt": f"Execute {name} on the project",
+                "expectations": [],
+                "assertions": [],
+                "depends_on": deps,
+            })
+
+        return [{
+            "name": f"{skills[0]['domain'] if skills else 'default'}-full-flow",
+            "description": "Auto-generated pipeline from skill dependency graph",
+            "project": project,
+            "steps": steps,
+        }]
 
     def generate(
         self,

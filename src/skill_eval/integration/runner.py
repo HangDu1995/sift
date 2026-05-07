@@ -143,11 +143,18 @@ def run_integration_batch(
     skill_keywords: dict[str, list[str]],
     scenario_type: str | None = None,
     workspace_dir: Path | None = None,
+    pipelines: list[dict] | None = None,
+    pipeline_name: str | None = None,
+    pipeline_steps: list[str] | None = None,
+    project_overrides: list[str] | None = None,
+    skills_dir: Path | None = None,
+    skills_map: dict[str, Path] | None = None,
 ) -> dict:
     if workspace_dir is None:
         workspace_dir = Path("workspace")
 
     results: list[dict] = []
+
     for scenario in scenarios:
         stype = scenario.get("type", "")
         if scenario_type and stype != scenario_type:
@@ -179,6 +186,24 @@ def run_integration_batch(
                 output_dir=out,
             )
             r["name"] = scenario.get("name", "")
+            results.append(r)
+
+    if pipelines:
+        from skill_eval.integration.project_runner import run_pipeline
+
+        for pl in pipelines:
+            if pipeline_name and pl.get("name") != pipeline_name:
+                continue
+            ws = workspace_dir / pl.get("name", "pipeline")
+            ws.mkdir(parents=True, exist_ok=True)
+            r = run_pipeline(
+                pipeline=pl,
+                workspace=ws,
+                projects=project_overrides,
+                steps_to_run=pipeline_steps,
+                skills_dir=skills_dir,
+                skills_map=skills_map,
+            )
             results.append(r)
 
     passed = sum(1 for r in results if r.get("passed"))

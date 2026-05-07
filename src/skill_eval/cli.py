@@ -775,6 +775,10 @@ def batch(
     fail_fast: bool = typer.Option(False, "--fail-fast", help="Stop on first failure"),
     workers: int = typer.Option(4, "--workers", help="Max parallel workers"),
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
+    pipeline: Optional[str] = typer.Option(None, "--pipeline", help="Run a specific pipeline by name"),
+    pipeline_steps: Optional[str] = typer.Option(None, "--pipeline-steps", help="Comma-separated step names to run (with auto dep resolution)"),
+    project: Optional[str] = typer.Option(None, "--project", help="Override project path for pipeline"),
+    projects: Optional[str] = typer.Option(None, "--projects", help="Comma-separated project paths to override pipeline projects"),
 ):
     """Run batch evaluation across multiple Skills."""
     from skill_eval.batch.manifest import ManifestLoader
@@ -796,6 +800,9 @@ def batch(
     scoring_config = ScoringConfig(enable_programmatic=True, enable_llm=True, llm_model=model)
 
     console.print(f"[bold]Batch evaluation:[/bold] {manifest.name} ({len(manifest.skills)} skills)")
+
+    pipeline_steps_list = [s.strip() for s in pipeline_steps.split(",")] if pipeline_steps else None
+    project_overrides = [p.strip() for p in projects.split(",")] if projects else ([project] if project else None)
 
     layer_list = [l.strip() for l in layers.split(",")]
     if "unit" in layer_list:
@@ -839,7 +846,13 @@ def batch(
 
         scheduler = BatchScheduler(manifest, run_config, scoring_config, base_dir)
         project_config = load_config(base_dir)
-        int_result = scheduler.run_integration_tests(output_dir, config=project_config)
+        int_result = scheduler.run_integration_tests(
+            output_dir,
+            config=project_config,
+            pipeline_name=pipeline,
+            pipeline_steps=pipeline_steps_list,
+            project_overrides=project_overrides,
+        )
 
         console.print(f"  Integration: {int_result['passed']}/{int_result['total']} passed")
         if int_result["scenarios"]:
@@ -934,3 +947,4 @@ def generate_config(
         console.print(f"  Types: {types}")
         console.print(f"  Integration scenarios: {len(result.get('integration_scenarios', []))}")
         console.print(f"  Skill keywords: {len(result.get('skill_keywords', {}))}")
+        console.print(f"  Pipelines: {len(result.get('pipelines', []))}")

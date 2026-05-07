@@ -116,14 +116,19 @@ class BatchScheduler:
         workspace: Path,
         config: object | None = None,
         scenario_type: str | None = None,
+        pipeline_name: str | None = None,
+        pipeline_steps: list[str] | None = None,
+        project_overrides: list[str] | None = None,
     ) -> dict:
         from skill_eval.integration.runner import run_integration_batch
 
         scenarios = []
         skill_keywords: dict[str, list[str]] = {}
+        pipelines: list[dict] = []
         if config is not None:
             scenarios = getattr(config, "integration_scenarios", []) or []
             skill_keywords = getattr(config, "skill_keywords", {}) or {}
+            pipelines = getattr(config, "pipelines", []) or []
         integration_evals = self.manifest.integration_evals if hasattr(self.manifest, "integration_evals") else []
         if integration_evals:
             for ie in integration_evals:
@@ -133,12 +138,26 @@ class BatchScheduler:
                     "test_prompts": [{"prompt": ie.prompt, "should_trigger": ie.expected_skills_triggered}],
                 })
 
-        if not scenarios:
+        if not scenarios and not pipelines:
             return {"total": 0, "passed": 0, "failed": 0, "scenarios": []}
+
+        skills_dir = self.base_dir
+        skills_map: dict[str, Path] = {}
+        for skill in self.manifest.skills:
+            sp = self.base_dir / (skill.path if hasattr(skill, "path") else str(skill))
+            if (sp / "SKILL.md").exists():
+                name = getattr(skill, "name", sp.name)
+                skills_map[name] = sp
 
         return run_integration_batch(
             scenarios=scenarios,
             skill_keywords=skill_keywords,
             scenario_type=scenario_type,
             workspace_dir=workspace / "integration",
+            pipelines=pipelines if pipelines else None,
+            pipeline_name=pipeline_name,
+            pipeline_steps=pipeline_steps,
+            project_overrides=project_overrides,
+            skills_dir=skills_dir,
+            skills_map=skills_map,
         )
