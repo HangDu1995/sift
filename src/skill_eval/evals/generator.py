@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from skill_eval.models import Assertion, AssertionType, EvalCase, EvalSet
 from skill_eval.parser import parse_skill_md
+from skill_eval.utils import call_claude
 
 if TYPE_CHECKING:
     from skill_eval.config.loader import EvalConfig
@@ -95,7 +94,10 @@ class EvalInitGenerator:
         name, description, content, frontmatter, body = parse_skill_md(skill_path)
 
         prompt = self._build_llm_prompt(name, description, content)
-        response = self._call_claude(prompt)
+        try:
+            response = call_claude(prompt, model=self.model, timeout=self.timeout)
+        except RuntimeError:
+            return self.generate_template(skill_path)
 
         eval_set = self._parse_llm_response(response, name)
         if eval_set is not None:
@@ -383,14 +385,3 @@ class EvalInitGenerator:
                 pass
 
         return None
-
-    def _call_claude(self, prompt: str) -> str:
-        cmd = ["claude", "-p", "--output-format", "text", "--dangerously-skip-permissions"]
-        if self.model:
-            cmd.extend(["--model", self.model])
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-        result = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True,
-            env=env, timeout=self.timeout,
-        )
-        return result.stdout

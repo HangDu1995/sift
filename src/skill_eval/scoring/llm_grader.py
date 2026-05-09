@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
+import re
 from pathlib import Path
 
 from skill_eval.models import EvalCase, GradingResult
+from skill_eval.utils import call_claude
 
 
 class LLMGrader:
@@ -69,20 +69,10 @@ class LLMGrader:
         return "\n\n".join(parts) if parts else "(no output files)"
 
     def _call_claude(self, prompt: str) -> str:
-        cmd = ["claude", "-p", "--output-format", "text", "--dangerously-skip-permissions", "--max-turns", "1"]
-        if self.model:
-            cmd.extend(["--model", self.model])
-
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         try:
-            stdout_bytes, _ = proc.communicate(input=prompt.encode("utf-8"), timeout=self.timeout)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
+            return call_claude(prompt, model=self.model, timeout=self.timeout, max_turns=1)
+        except RuntimeError:
             return ""
-        return stdout_bytes.decode("utf-8", errors="replace")
 
     def _parse_response(self, response: str, eval_case: EvalCase) -> GradingResult:
         json_match = None

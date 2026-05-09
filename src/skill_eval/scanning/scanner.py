@@ -7,9 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from skill_eval.models import AssertionType
+from skill_eval.parser import parse_skill_md
 
 PROGRAMMATIC_TYPES = {t.value for t in AssertionType} - {"CUSTOM_SCRIPT"}
 
@@ -113,7 +112,12 @@ def check_assertion_coverage(evals_data: dict) -> float:
 
 def _parse_skill(skill_dir: Path) -> dict:
     skill_md = skill_dir / "SKILL.md"
-    frontmatter = _extract_frontmatter(skill_md)
+    frontmatter: dict = {}
+    if skill_md.exists():
+        try:
+            _, _, _, frontmatter, _ = parse_skill_md(skill_dir)
+        except Exception:
+            pass
 
     evals_path = ""
     for candidate in ("evals/evals.json", "evals.json"):
@@ -152,26 +156,6 @@ def _parse_skill(skill_dir: Path) -> dict:
         "skill_dir": str(skill_dir),
         "issues": eval_issues,
     }
-
-
-def _extract_frontmatter(md_path: Path) -> dict:
-    if not md_path.exists():
-        return {}
-    try:
-        content = md_path.read_text(encoding="utf-8")
-    except OSError:
-        return {}
-    if not content.startswith("---"):
-        return {}
-    rest = content[3:]
-    end = rest.find("\n---")
-    if end == -1:
-        return {}
-    try:
-        parsed = yaml.safe_load(rest[:end])
-        return parsed if isinstance(parsed, dict) else {}
-    except yaml.YAMLError:
-        return {}
 
 
 def _matches_filters(skill_data: dict, filters: dict) -> bool:

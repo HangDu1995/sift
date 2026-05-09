@@ -5,13 +5,14 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import os
 import signal
 import subprocess
+import sys
 import webbrowser
 from functools import partial
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from string import Template
 
 METADATA_FILES = {"transcript.md", "user_notes.md", "metrics.json"}
 
@@ -259,6 +260,8 @@ class ReportGenerator:
 
 
 def _kill_port(port: int) -> None:
+    if sys.platform == "win32":
+        return
     try:
         result = subprocess.run(
             ["lsof", "-ti", f":{port}"],
@@ -272,6 +275,3 @@ def _kill_port(port: int) -> None:
                     pass
     except Exception:
         pass
-
-
-import os

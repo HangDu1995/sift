@@ -190,6 +190,7 @@ class GradingResult(BaseModel):
     claims: list[Claim] = Field(default_factory=list)
     user_notes_summary: UserNotes | None = None
     eval_feedback: EvalFeedback | None = None
+    error: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +205,7 @@ class RunConfig(BaseModel):
     max_workers: int = 4
     output_dir: Path = Path("output")
     max_turns: int = 10
+    skip_calibration: bool = False
 
 
 class ToolCallRecord(BaseModel):
@@ -249,8 +251,12 @@ class AnalysisReport(BaseModel):
     category: SkillCategory
     checks: list[CheckResult] = Field(default_factory=list)
     score: int = 0
-    max_score: int = 11
+    max_score: int = 0
     timestamp: str = ""
+
+    def model_post_init(self, __context) -> None:
+        if self.max_score == 0 and self.checks:
+            self.max_score = len(self.checks)
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +329,7 @@ class BenchmarkData(BaseModel):
     metadata: BenchmarkMetadata
     runs: list[RunResultEntry] = Field(default_factory=list)
     run_summary: dict[str, Any] = Field(default_factory=dict)
-    notes: list[str] = Field(default_factory=list)
+    notes: list[Any] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

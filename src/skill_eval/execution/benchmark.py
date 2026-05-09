@@ -105,7 +105,9 @@ class BenchmarkAggregator:
                 configs_data[config_name].append(entry_data)
 
         run_summary = self._build_summary(configs_data)
-        eval_ids = sorted(set(r.eval_id for r in runs))
+
+        checkpoints_data = self._load_checkpoints(iteration_dir)
+        eval_ids = sorted(set(cp.get("eval_id", 0) for cp in checkpoints_data)) if checkpoints_data else sorted(set(r.eval_id for r in runs))
 
         main_benchmark = BenchmarkData(
             metadata=BenchmarkMetadata(
@@ -127,7 +129,7 @@ class BenchmarkAggregator:
 
     def _load_checkpoints(self, iteration_dir: Path) -> list[dict]:
         for config_dir in sorted(iteration_dir.iterdir()):
-            if not config_dir.is_dir() or config_dir.name != "with_skill":
+            if not config_dir.is_dir():
                 continue
             for run_dir in sorted(config_dir.glob("run-*")):
                 cp_path = run_dir / "checkpoints.json"

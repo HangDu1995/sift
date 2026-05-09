@@ -58,4 +58,4 @@ class MonitorImporter:
     def _find_closest(self, records: list[dict], run) -> dict | None:
         if not records:
             return None
-        return records[0]
+        return records.pop(0) if records else None

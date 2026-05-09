@@ -1,3 +1,6 @@
+# Framework defaults — override via project-level eval-config.yaml or skill-level eval-config.yaml.
+# These values are used when no higher-priority config is found.
+
 version: 1
 
 scanning:

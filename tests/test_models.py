@@ -155,7 +155,7 @@ class TestAnalysisModels:
                 CheckResult(name="description_length", passed=True, message="OK"),
             ],
             score=1,
-            max_score=11,
+            max_score=1,
         )
         data = ar.model_dump(mode="json")
         assert data["category"] == "CAPABILITY_UPLIFT"

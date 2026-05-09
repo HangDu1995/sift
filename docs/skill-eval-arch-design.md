@@ -275,7 +275,7 @@ cfg --> claude : generate-config
 | 属性 | 值 |
 |------|------|
 | **职责** | A/B 测试编排 + 内联评分 + 遵循性检查 + 诊断输出 |
-| **输入** | Skill 路径 + EvalSet + RunConfig（runs_per_config, model, timeout, max_workers, output_dir, **max_turns**）+ ScoringConfig + on_progress 回调 |
+| **输入** | Skill 路径 + EvalSet + RunConfig（runs_per_config, model, timeout, max_workers, output_dir, max_turns, **skip_calibration**）+ ScoringConfig + on_progress 回调 |
 | **输出** | 结构化输出目录（with_skill/run-{n}/ 和 without_skill/run-{n}/ 含 grading.json + checkpoints.json + calibration.json + run_debug.json + compliance.json） |
 | **外部调用** | `claude -p <prompt> --output-format stream-json --verbose --dangerously-skip-permissions --max-turns <N>`（subprocess.Popen + communicate(timeout) + proc.kill()） |
 | **关键契约** | **一体化引擎 + 单次 AB 测试**。evals.json 中的 EvalCase 作为 checkpoint，整个 skill 只跑 2 次 `claude -p`（with/without），然后批量检查所有 checkpoint 覆盖率 |
@@ -377,9 +377,9 @@ for config_name in ("with_skill", "without_skill"):
 | 属性 | 值 |
 |------|------|
 | **职责** | 验证执行**过程**是否遵循 SKILL.md 定义的工作流、工具使用要求和约束规则——检查**过程合规** |
-| **输入** | instructions（预提取）+ 执行 transcript + tool_trace（RunOutput.tool_trace）+ 输出目录 + grading |
+| **输入** | instructions（预提取）+ 执行 transcript + tool_trace（RunOutput.tool_trace）+ 输出目录 |
 | **输出** | `compliance.json`（每条指令的 followed/evidence/confidence + 总体 compliance_rate） |
-| **外部调用** | LLM_JUDGE 类指令通过**一次批量** `claude -p` 调用（subprocess.Popen + communicate(timeout=90s) + proc.kill()），最多 30 条指令/批。程序化检查逐条执行无需 LLM |
+| **外部调用** | LLM_JUDGE 类指令通过共享工具 `utils.call_claude()` 调用，最多 30 条指令/批。程序化检查逐条执行无需 LLM |
 | **关键契约** | **仅对 with_skill 配置运行**（without_skill 没有可遵循的指令）。instructions 和 tool_trace 由调用方（ABTestRunner）传入 |
 
 **为什么需要独立的遵循性检查？**
@@ -427,7 +427,7 @@ for config_name in ("with_skill", "without_skill"):
 | **输入** | grading.json + compliance.json（可选）+ transcript |
 | **输出** | `calibration.json`（agreement_rate + disagreements + confidence_signals + overall_confidence + grade + recommendations） |
 | **外部调用** | 无（纯分析逻辑） |
-| **关键契约** | 可信度分四级（HIGH/MEDIUM/LOW/UNRELIABLE）。对 with_skill 和 without_skill 都运行 |
+| **关键契约** | 可信度分四级（HIGH/MEDIUM/LOW/UNRELIABLE）。对 with_skill 和 without_skill 都运行。构造函数接受 `trust_llm_on_conflict: bool = True` 参数控制分歧解决策略 |
 
 **为什么需要评分校准？**
 
@@ -701,9 +701,10 @@ stop
 0. (if --security-gate) SecurityVetter.vet(skill_path)
    if BLOCKED or REVIEW_NEEDED: exit code 1
 
-1. StaticAnalyzer.analyze(skill_path) → scorecard.json
+1. StaticAnalyzer.analyze(skill_path) → scorecard (非阻塞)
+   if SkillEvalError: warning, continue
 
-2. EvalLoader.load(skill_path / "evals/evals.json")
+2. EvalLoader.load("evals/evals.json")
    if not found: exit code 2
 
 3. ABTestRunner.run_ab_test(skill_path, eval_set)  ← 一体化引擎
@@ -855,7 +856,7 @@ batch-workspace-{timestamp}/
 **关键 flags**：
 - `--compliance-gate`：compliance_rate < 0.5 时强制判失败
 - `--security-gate`：安全审查 BLOCKED/REVIEW_NEEDED 时强制判失败
-- `--no-calibration`：跳过评分校准（节省 LLM 调用）
+- `- `--no-calibration`：跳过评分校准（通过 RunConfig.skip_calibration 传递）
 - `--format json`：非交互 JSON 输出（CI 模式）
 
 **Exit code**：0 = 通过，1 = 失败/回归，2 = 输入错误，3 = 执行错误
@@ -866,7 +867,7 @@ batch-workspace-{timestamp}/
 
 | 集成点 | 方向 | 机制 | 用途 |
 |--------|------|------|------|
-| `claude` CLI | 出站 (subprocess) | `subprocess.Popen` / `subprocess.run`，prompt 通过 stdin 传入 | 所有 LLM 交互：执行、评分、遵循性评判、触发检测、描述改进 |
+| `claude` CLI | 出站 (subprocess) | `utils.call_claude()`（统一 subprocess.run，含返回码检查和超时处理） | 所有 LLM 交互：执行、评分、遵循性评判、触发检测、描述改进 |
 | `aguara` CLI | 出站 (subprocess) | `subprocess.run`，可选 | Prompt 注入检测 |
 | `skill-scanner` CLI | 出站 (subprocess) | `subprocess.run`，可选 | CVE 漏洞扫描 |
 | skill-monitor JSONL | 入站 (文件读取) | MonitorImporter 逐行解析 | 运行时指标补充（真实 token/耗时） |

@@ -227,17 +227,31 @@ pipelines:
 
 ```
 output/iteration-1/
-  eval-1/
-    eval_metadata.json
-    with_skill/
-      run-1/outputs/, timing.json, grading.json
-      run-2/...
-    without_skill/
-      run-1/outputs/, timing.json, grading.json
-      run-2/...
-  eval-2/...
+  merged_prompt.txt
+  with_skill/
+    run-1/
+      outputs/        ← Claude 产生的文件
+      grading.json
+      checkpoints.json
+      compliance.json
+      calibration.json
+      run_debug.json
+      timing.json
+    run-2/...
+  without_skill/
+    run-1/
+      outputs/
+      grading.json
+      checkpoints.json
+      calibration.json
+      run_debug.json
+      timing.json
+    run-2/...
   benchmark.json
+  report.html
 ```
+
+> 所有 eval case 合并为一个 prompt，通过 checkpoint 机制逐个评估，无 per-eval 子目录。`compliance.json` 仅在 `with_skill` 配置中生成。
 
 ### `full` — 一键完整流程
 
@@ -490,7 +504,7 @@ assertions = get_default_assertions(domain="frontend", type="create", config=eva
 ### 量化公式
 
 ```
-Score = StaticCompliance(0-11)
+Score = StaticCompliance(0-N)       # N = 检查项数量（当前 11）
       + DeltaPassRate(%)
       + InstructionCompliance(%)
       + TriggerAccuracy(%)
@@ -688,9 +702,12 @@ integration_scenarios:
   ],
   "summary": {"passed": 1, "failed": 0, "total": 1, "pass_rate": 1.0},
   "execution_metrics": {"tool_calls": {"Read": 3, "Write": 2}, "total_tool_calls": 5},
-  "timing": {"total_tokens": 84852, "duration_ms": 23332, "total_duration_seconds": 23.3}
+  "timing": {"total_tokens": 84852, "duration_ms": 23332, "total_duration_seconds": 23.3},
+  "error": ""
 }
 ```
+
+> `error` 字段：运行失败（如超时、Claude CLI 错误）时，错误信息写入此字段，`pass_rate` 设为 0.0。
 
 ### benchmark.json
 
@@ -702,9 +719,12 @@ integration_scenarios:
     "with_skill": {"pass_rate": {"mean": 0.85, "stddev": 0.05}},
     "without_skill": {"pass_rate": {"mean": 0.35, "stddev": 0.08}},
     "delta": {"pass_rate": "+0.50", "time_seconds": "+13.0", "tokens": "+1700"}
-  }
+  },
+  "notes": [{"eval_id": 1, "eval_name": "L1-...", "passed": 4, "total": 4, ...}]
 }
 ```
+
+> `notes` 字段类型为 `list[Any]`，可包含字符串和结构化的 checkpoint 数据。
 
 ---
 

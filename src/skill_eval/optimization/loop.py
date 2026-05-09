@@ -103,7 +103,10 @@ class OptimizationLoop:
                 break
 
             eval_for_improver = train_result
-            prev_descriptions = [{"description": r.description, "score": "unknown"} for r in history]
+            prev_descriptions = [
+                {"description": r.description, "score": f"{r.train_passed}/{r.train_total}"}
+                for r in history
+            ]
             current_desc = improver.improve(current_desc, eval_for_improver, prev_descriptions)
 
         return LoopResult(

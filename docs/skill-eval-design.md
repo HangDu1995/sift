@@ -627,15 +627,17 @@ skill-eval run <skill-path> --security-gate   # BLOCKED/REVIEW_NEEDED 时 exit c
 skill-eval full <skill-path> --security-gate   # 同上，作为 Step 0 在评测前执行
 ```
 
-**`skill-eval full --security-gate` 的流程变更**：
+**`skill-eval full` 的流程编排**（动态步骤编号）：
 
 ```
-Step 0/5: Security vetting (新增，仅 --security-gate 时)
-Step 1/5: Static analysis      (原 Step 1/4)
-Step 2/5: Loading evals         (原 Step 2/4)
-Step 3/5: Running A/B test      (原 Step 3/4)
-Step 4/5: Aggregating & report  (原 Step 4/4)
+Step 1/5: Security vetting    (仅 --security-gate 时)
+Step 2/5: Static analysis     (非阻塞，失败显示 warning)
+Step 3/5: Loading evals
+Step 4/5: Running A/B test
+Step 5/5: Aggregating & report
 ```
+
+> 不开启 `--security-gate` 时，步骤编号为 1/4 ~ 4/4。
 
 ### 3.1 静态分析引擎 (Static Analysis)
 
@@ -658,7 +660,7 @@ classDiagram
         +category: SkillCategory
         +checks: list~CheckResult~
         +score: int
-        +max_score: int
+        +max_score: int         # 动态计算 = len(checks)
         +timestamp: str
         +to_json() str
         +to_table() str
@@ -698,9 +700,9 @@ def check_xxx(skill_path: Path, content: str, frontmatter: dict, body: str) -> C
 
 | # | name | Pass 条件 | 实现方式 | 失败 message 格式 |
 |---|------|-----------|----------|-------------------|
-| 1 | `description_length` | `frontmatter["description"]` 非空且 `len(description.strip()) <= 1024` | 读取 frontmatter 字段 | `"Description is {len} chars, max 1024"` 或 `"Description is empty"` |
-| 2 | `description_has_trigger` | description 中包含以下任一（不区分大小写）：`"use when"`, `"activate when"`, `"用于"`, `"trigger"`, `"when the user"`, `"适用"` | `re.search(patterns, description, re.IGNORECASE)` | `"Description lacks trigger condition (e.g., 'Use when...')"` |
-| 3 | `description_third_person` | description 中不包含以下模式：`"I can"`, `"I will"`, `"You can"`, `"You should"`, `"我会"`, `"你能"`, `"我可以"` | `re.search(patterns, description, re.IGNORECASE)` 取反 | `"Description uses first/second person: '{match}'"` |
+| 1 | `description_length` | `frontmatter["description"]` 非空且 `len(description) >= 20` | 读取 frontmatter 字段 | `"Description length: {N} chars"` 或 `"Description is empty"` |
+| 2 | `description_has_trigger` | description 中包含以下任一动作词（不区分大小写）：`create`, `generate`, `build`, `write`, `implement`, `refactor`, `convert`, `extract`, `analyze`, `design`, `validate`, `deploy`, `process`, `execute`, `run`, `handle`, `configure`, `manage`, `review`, `test`, `debug`, `fix`, `optimize`, `migrate` | 遍历触发词列表，`keyword.lower() in lower` | `"Description contains trigger word"` 或 `"Description lacks trigger word (e.g., 'create', 'generate'...)"` |
+| 3 | `description_third_person` | description 中不包含第一人称模式：`" i "`, `" i'll"`, `" i'm"`, `" i can"`, `" i will"`, `" i use"`, `" my "`（空格分隔，英文） | 遍历模式列表 | `"Description uses first person: '{match}'"` 或 `"Description uses third person"` |
 | 4 | `name_kebab_case` | `frontmatter["name"]` 匹配 `^[a-z0-9]+(-[a-z0-9]+)*$`，且不以 `-` 开头/结尾，且不含 `--` | `re.match(pattern, name)` | `"Name '{name}' is not kebab-case"` |
 | 5 | `name_max_64` | `len(name) <= 64` | `len(name)` | `"Name is {len} chars, max 64"` |
 | 6 | `name_no_reserved` | name 不包含（不区分大小写）`"anthropic"`, `"claude"`, `"opencode"` | `re.search(patterns, name, re.IGNORECASE)` 取反 | `"Name contains reserved word: '{match}'"` |
@@ -891,6 +893,7 @@ classDiagram
         +max_workers: int
         +output_dir: Path
         +max_turns: int
+        +skip_calibration: bool
     }
 
     class ClaudeRunner {
@@ -1131,6 +1134,7 @@ classDiagram
         +claims: list~Claim~
         +user_notes_summary: UserNotes | None
         +eval_feedback: EvalFeedback | None
+        +error: str
     }
 
     class ExpectationResult {
@@ -1260,8 +1264,7 @@ classDiagram
 ```mermaid
 classDiagram
     class ComplianceChecker {
-        +skill_path: Path
-        +check(transcript: str, stream_events: list~dict~, output_dir: Path) ComplianceReport
+        +check(instructions: list~InstructionCheck~, transcript: str, output_dir: Path, model: str | None, timeout: int, tool_trace: list | None, on_substep, log_path: Path | None) ComplianceReport
     }
 
     class InstructionExtractor {
@@ -1609,7 +1612,8 @@ BenchmarkAggregator.aggregate() → 合并 grading + compliance + calibration �
 ```mermaid
 classDiagram
     class CalibrationChecker {
-        +calibrate(grading: GradingResult, compliance: ComplianceReport | None, transcript: str) CalibrationReport
+        +trust_llm_on_conflict: bool
+        +calibrate(grading: GradingResult, compliance: ComplianceReport | None) CalibrationReport
     }
 
     class DisagreementRecord {
@@ -3259,7 +3263,7 @@ class BenchmarkData(BaseModel):
     metadata: BenchmarkMetadata
     runs: list[RunResultEntry] = []
     run_summary: dict[str, Any] = {}
-    notes: list[str] = []
+    notes: list[Any] = []    # 可包含字符串和结构化 checkpoint 数据
 
 # --- Compliance 模型 ---
 

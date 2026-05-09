@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import textwrap
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from skill_eval.utils import call_claude
 
 
 def scan_skills_metadata(root_dir: Path | str) -> dict:
@@ -120,7 +120,7 @@ class ConfigGenerator:
             pipelines:
               - name: "<pipeline-name>"
                 description: "<what this pipeline tests>"
-                project: "fixtures/projects/android-medium"
+                project: "fixtures/projects/example"
                 steps:
                   - name: "<step-name>"
                     skill: "<skill-name>"
@@ -148,7 +148,7 @@ class ConfigGenerator:
             6. **pipelines**: Generate 1 pipeline that chains all skills in dependency order.
                Each step should have a realistic prompt, 1-2 expectations, and 1-2 assertions.
                Use depends_on to create the dependency chain.
-               Default project: "fixtures/projects/android-medium".
+               Use a placeholder project path like "fixtures/projects/example" that users can replace.
             7. Output ONLY the YAML. No explanation, no markdown fences.
 
             ## Skill Metadata
@@ -162,7 +162,7 @@ class ConfigGenerator:
     def build_pipeline_from_deps(
         skills: list[dict],
         dep_graph: dict[str, list[str]] | None = None,
-        project: str = "fixtures/projects/android-medium",
+        project: str = "fixtures/projects/example",
     ) -> list[dict]:
         if not skills:
             return []
@@ -221,7 +221,7 @@ class ConfigGenerator:
         if dry_run:
             return {"dry_run": True, "metadata": metadata, "prompt_length": len(prompt)}
 
-        raw = self._call_claude(prompt, model=model)
+        raw = call_claude(prompt, model=model, timeout=300)
         cleaned = _clean_yaml_output(raw)
         parsed = yaml.safe_load(cleaned)
         if not isinstance(parsed, dict):
@@ -235,22 +235,12 @@ class ConfigGenerator:
 
         return parsed
 
-    def _call_claude(self, prompt: str, model: str | None = None) -> str:
-        cmd = ["claude", "-p", "--output-format", "text", "--dangerously-skip-permissions"]
-        if model:
-            cmd.extend(["--model", model])
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-        result = subprocess.run(cmd, input=prompt, capture_output=True, text=True, env=env, timeout=300)
-        if result.returncode != 0:
-            raise RuntimeError(f"claude CLI failed: {result.stderr[:500]}")
-        return result.stdout
-
 
 def _extract_frontmatter(md_path: Path) -> dict:
     if not md_path.exists():
         return {}
     try:
-        content = md_path.read_text(encoding="utf-8")
+        content = md_path.read_text(encoding="utf-8").lstrip("\ufeff")
     except OSError:
         return {}
     if not content.startswith("---"):
@@ -270,6 +260,8 @@ def _clean_yaml_output(raw: str) -> str:
     text = raw.strip()
     if text.startswith("```yaml"):
         text = text[len("```yaml"):]
+    elif text.startswith("```yml"):
+        text = text[len("```yml"):]
     elif text.startswith("```"):
         text = text[3:]
     if text.endswith("```"):

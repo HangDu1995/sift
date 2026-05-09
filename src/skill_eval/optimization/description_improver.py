@@ -2,19 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import re
-import subprocess
 from pathlib import Path
 
-
-def _call_claude(prompt: str, model: str | None = None, timeout: int = 300) -> str:
-    cmd = ["claude", "-p", "--output-format", "text", "--dangerously-skip-permissions"]
-    if model:
-        cmd.extend(["--model", model])
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-    result = subprocess.run(cmd, input=prompt, capture_output=True, text=True, env=env, timeout=timeout)
-    return result.stdout
+from skill_eval.utils import call_claude
 
 
 class DescriptionImprover:
@@ -32,16 +23,20 @@ class DescriptionImprover:
     ) -> str:
         history = history or []
         prompt = self._build_prompt(current_description, eval_results, history)
-        response = _call_claude(prompt, self.model, self.timeout)
+        try:
+            response = call_claude(prompt, self.model, self.timeout)
+        except RuntimeError:
+            return current_description
         new_desc = self._extract_description(response)
 
+        if not new_desc:
+            return current_description
+
         if len(new_desc) > 1024:
-            shorten_prompt = (
-                f"Shorten this skill description to 1024 characters or fewer while keeping the key trigger information.\n\n"
-                f"Description:\n{new_desc}\n\n"
-                f"Write ONLY the shortened description, no explanation."
-            )
-            shortened = _call_claude(shorten_prompt, self.model, self.timeout)
+            try:
+                shortened = call_claude(shorten_prompt, self.model, self.timeout)
+            except RuntimeError:
+                return new_desc[:1024]
             candidate = self._extract_description(shortened) or shortened.strip()
             if len(candidate) <= 1024:
                 new_desc = candidate

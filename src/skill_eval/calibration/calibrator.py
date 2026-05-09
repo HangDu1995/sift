@@ -16,6 +16,9 @@ from skill_eval.models import (
 
 
 class CalibrationChecker:
+    def __init__(self, trust_llm_on_conflict: bool = True):
+        self.trust_llm_on_conflict = trust_llm_on_conflict
+
     def calibrate(
         self,
         grading: GradingResult,
@@ -36,7 +39,7 @@ class CalibrationChecker:
 
         disagreements = self._find_disagreements(expectations)
         agreement_count = both_evaluated - len(disagreements)
-        agreement_rate = agreement_count / both_evaluated if both_evaluated > 0 else 1.0
+        agreement_rate = agreement_count / both_evaluated if both_evaluated > 0 else 0.0
 
         signals = self._detect_signals(
             agreement_rate=agreement_rate,
@@ -80,7 +83,10 @@ class CalibrationChecker:
             prog = verdicts.get("programmatic")
             llm = verdicts.get("llm") if "llm" in verdicts else verdicts.get("llm_batch")
             if prog is not None and llm is not None and prog != llm:
-                resolution = ResolutionStrategy.LLM_CORRECT if llm else ResolutionStrategy.PROGRAMMATIC_CORRECT
+                if self.trust_llm_on_conflict:
+                    resolution = ResolutionStrategy.LLM_CORRECT if llm else ResolutionStrategy.PROGRAMMATIC_CORRECT
+                else:
+                    resolution = ResolutionStrategy.PROGRAMMATIC_CORRECT if prog else ResolutionStrategy.LLM_CORRECT
                 disagreements.append(DisagreementRecord(
                     expectation_text=text,
                     programmatic_verdict=prog,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -111,8 +112,12 @@ class ClaudeRunner:
                 num_turns=num_turns,
                 stop_reason=stop_reason,
             )
-        except subprocess.TimeoutExpired:
-            raise ClaudeRunnerError(f"claude -p timed out after {timeout}s")
+        except ClaudeRunnerError:
+            raise
+        except FileNotFoundError:
+            raise ClaudeRunnerError("'claude' CLI not found — ensure it is installed and in PATH")
+        except Exception as exc:
+            raise ClaudeRunnerError(f"claude -p failed: {exc}")
 
     def _parse_stream_json(self, stdout: str) -> tuple[str, int, dict[str, int], str, int, str, list]:
         from skill_eval.models import ToolCallRecord
@@ -216,7 +221,7 @@ class ABTestRunner:
                     grading = GradingResult(
                         summary=GradingSummary(pass_rate=0.0, passed=0, failed=0, total=0),
                         expectations=[],
-                        evidence=f"Run failed: {exc}",
+                        error=str(exc),
                     )
                     (run_dir / "grading.json").write_text(
                         grading.model_dump_json(indent=2), encoding="utf-8"
@@ -303,7 +308,6 @@ class ABTestRunner:
                             instructions=instructions,
                             transcript=run_output.transcript,
                             output_dir=outputs_dir,
-                            grading=overall_grading,
                             model=self.config.model,
                             timeout=self.scoring_config.llm_timeout,
                             tool_trace=list(run_output.tool_trace),
@@ -315,19 +319,22 @@ class ABTestRunner:
                             compliance_report.model_dump_json(indent=2), encoding="utf-8"
                         )
 
-                self._emit_progress(
-                    config_name, config_name,
-                    1, 1,
-                    completed_runs, total_runs,
-                    None, 0.0, None, phase="calibration",
-                )
-                from skill_eval.calibration.calibrator import CalibrationChecker
+                if not self.config.skip_calibration:
+                    self._emit_progress(
+                        config_name, config_name,
+                        1, 1,
+                        completed_runs, total_runs,
+                        None, 0.0, None, phase="calibration",
+                    )
+                    from skill_eval.calibration.calibrator import CalibrationChecker
 
-                calibrator = CalibrationChecker()
-                calibration_report = calibrator.calibrate(overall_grading, compliance=compliance_report)
-                (run_dir / "calibration.json").write_text(
-                    calibration_report.model_dump_json(indent=2), encoding="utf-8"
-                )
+                    calibrator = CalibrationChecker()
+                    calibration_report = calibrator.calibrate(overall_grading, compliance=compliance_report)
+                    (run_dir / "calibration.json").write_text(
+                        calibration_report.model_dump_json(indent=2), encoding="utf-8"
+                    )
+                else:
+                    calibration_report = None
 
                 run_debug = {
                     "config": config_name,
@@ -343,10 +350,11 @@ class ABTestRunner:
                     "transcript_preview": run_output.transcript[:2000] if run_output.transcript else "",
                     "grading_summary": overall_grading.summary.model_dump(),
                     "num_checkpoints": num_checkpoints,
-                    "calibration_grade": calibration_report.grade.value,
-                    "calibration_confidence": calibration_report.overall_confidence,
-                    "calibration_agreement_rate": calibration_report.agreement_rate,
                 }
+                if calibration_report:
+                    run_debug["calibration_grade"] = calibration_report.grade.value
+                    run_debug["calibration_confidence"] = calibration_report.overall_confidence
+                    run_debug["calibration_agreement_rate"] = calibration_report.agreement_rate
                 if compliance_report:
                     run_debug["compliance_rate"] = compliance_report.compliance_rate
                 (run_dir / "run_debug.json").write_text(
@@ -423,12 +431,10 @@ class ABTestRunner:
         response = grader._call_claude(prompt)
 
         results_by_index: dict[int, tuple[bool, str]] = {}
-        import re
         array_match = re.search(r"\[[\s\S]*\]", response)
         if array_match:
             try:
-                import json as _json
-                items = _json.loads(array_match.group())
+                items = json.loads(array_match.group())
                 for item in items:
                     if isinstance(item, dict):
                         idx = item.get("index")

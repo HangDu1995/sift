@@ -82,14 +82,14 @@ def run_pipeline_step(
                 "passed": False,
             }
 
-    has_skill = skills_map and skill_name in skills_map
+    has_skill = not skills_map or skill_name in skills_map
 
     return {
         "name": step["name"],
         "skill": skill_name,
         "project_dir": str(project_dir),
-        "status": "PASSED" if has_skill else "PASSED",
-        "passed": True,
+        "status": "PASSED" if has_skill else "SKIPPED",
+        "passed": has_skill,
     }
 
 

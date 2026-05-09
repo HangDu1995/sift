@@ -29,6 +29,112 @@ app = typer.Typer(
 console = Console()
 
 
+def _log_console(fmt: str) -> Console:
+    return Console(stderr=True) if fmt == "json" else console
+
+
+def _run_ab_eval(
+    skill_path: Path,
+    eval_set,
+    runs: int,
+    model: str | None,
+    workers: int,
+    timeout: int,
+    max_turns: int,
+    scoring: str,
+    no_calibration: bool,
+    output_dir: Path,
+    fmt: str = "table",
+) -> tuple:
+    from skill_eval.execution.runner import ABTestRunner
+    from skill_eval.execution.benchmark import BenchmarkAggregator
+    from skill_eval.models import RunConfig, ScoringConfig
+
+    lc = _log_console(fmt)
+    lc.print(f"Running A/B test: {eval_set.skill_name} ({len(eval_set.evals)} evals × {runs} runs)")
+
+    scoring_config = ScoringConfig(
+        enable_programmatic=scoring in ("hybrid", "programmatic"),
+        enable_llm=scoring in ("hybrid", "llm"),
+        llm_model=model,
+        llm_timeout=timeout,
+    )
+    run_config = RunConfig(
+        runs_per_config=runs,
+        model=model,
+        timeout_seconds=timeout,
+        max_workers=workers,
+        max_turns=max_turns,
+        output_dir=output_dir,
+        skip_calibration=no_calibration,
+    )
+
+    quiet_console = Console(stderr=True) if fmt == "json" else console
+    progress_state = _ProgressState(len(eval_set.evals), runs)
+
+    def on_progress(eval_name, config_name, eval_idx, total_evals, completed, total, grading, run_duration=0.0, run_output=None, phase="", substep=""):
+        progress_state.update(eval_name, config_name, eval_idx, completed, total, grading, run_duration, run_output, phase=phase, substep=substep)
+
+    try:
+        with Live(progress_state, console=quiet_console, refresh_per_second=1) as live:
+            progress_state.live = live
+            ab = ABTestRunner(run_config, scoring_config, on_progress=on_progress)
+            iteration_dir = ab.run_ab_test(skill_path, eval_set)
+    except SkillEvalError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=exc.exit_code)
+
+    agg = BenchmarkAggregator()
+    benchmark = agg.aggregate(iteration_dir, skill_path)
+
+    benchmark_path = iteration_dir / "benchmark.json"
+    benchmark_path.write_text(
+        json.dumps(benchmark.model_dump(mode="json"), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    summary = benchmark.run_summary
+    delta = summary.get("delta", {})
+
+    if fmt == "json":
+        console.print(json.dumps(benchmark.model_dump(mode="json"), indent=2, ensure_ascii=False))
+    else:
+        ws = summary.get("with_skill", {}).get("pass_rate", {})
+        wos = summary.get("without_skill", {}).get("pass_rate", {})
+        console.print(f"\n[bold]Results:[/bold]")
+        console.print(f"  with_skill:    {ws.get('mean', 0)*100:.0f}% pass rate")
+        console.print(f"  without_skill: {wos.get('mean', 0)*100:.0f}% pass rate")
+        console.print(f"  delta:         {delta.get('pass_rate', '—')}")
+        console.print(f"\nBenchmark saved to: {benchmark_path}")
+
+    pr = delta.get("pass_rate", "+0.00")
+    if isinstance(pr, str) and pr.startswith("-"):
+        raise typer.Exit(code=1)
+    elif isinstance(pr, (int, float)) and pr < 0:
+        raise typer.Exit(code=1)
+
+    return benchmark, iteration_dir
+
+
+def _check_claude_or_exit() -> None:
+    from skill_eval.claude_version import check_claude_version
+
+    ok, ver_msg = check_claude_version()
+    if not ok:
+        console.print(f"[red]Error:[/red] {ver_msg}")
+        raise typer.Exit(code=3)
+    lc = console
+    lc.print(f"[dim]{ver_msg}[/dim]")
+
+
+def _discover_evals(skill_path: Path) -> Path:
+    for candidate in [skill_path / "evals" / "evals.json", skill_path / "evals.json"]:
+        if candidate.exists():
+            return candidate
+    console.print("[red]Error:[/red] No evals.json found. Use --evals to specify path.")
+    raise typer.Exit(code=2)
+
+
 class _ProgressState:
     def __init__(self, num_evals: int, runs_per_config: int):
         self.num_evals = num_evals
@@ -403,7 +509,6 @@ def init(
     generate_prompts: bool = typer.Option(True, "--generate-prompts/--no-generate-prompts", help="Use LLM to generate L1 unit-level evals"),
 ):
     """Initialize evals.json for a Skill."""
-    import json as _json
     from skill_eval.evals.generator import EvalInitGenerator
 
     try:
@@ -425,7 +530,7 @@ def init(
 
         data = eval_set.model_dump(mode="json")
         output.write_text(
-            _json.dumps(data, indent=2, ensure_ascii=False),
+            json.dumps(data, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
 
@@ -457,42 +562,23 @@ def run(
     format: str = typer.Option("table", "--format", help="Output format"),
 ):
     """Run A/B evaluation of a Skill."""
-    from skill_eval.claude_version import check_claude_version
     from skill_eval.evals.loader import EvalLoader
-    from skill_eval.execution.runner import ABTestRunner
-    from skill_eval.execution.benchmark import BenchmarkAggregator
-    from skill_eval.models import RunConfig, ScoringConfig
-
-    ok, ver_msg = check_claude_version()
-    if not ok:
-        console.print(f"[red]Error:[/red] {ver_msg}")
-        raise typer.Exit(code=3)
-    console.print(f"[dim]{ver_msg}[/dim]")
+    _check_claude_or_exit()
 
     if security_gate:
         from skill_eval.security.vetter import SecurityVetter
-
         vet_report = SecurityVetter(skip_external=False).vet(skill_path)
         _render_security_report(vet_report, console)
         if vet_report.verdict in ("BLOCKED", "REVIEW_NEEDED"):
             raise typer.Exit(code=1)
 
-    if not evals:
-        candidates = [
-            skill_path / "evals" / "evals.json",
-            skill_path / "evals.json",
-        ]
-        for c in candidates:
-            if c.exists():
-                evals = c
-                break
-        if not evals:
-            console.print("[red]Error:[/red] No evals.json found. Use --evals to specify path.")
-            raise typer.Exit(code=2)
+    evals_path = evals or _discover_evals(skill_path)
+    if not evals_path:
+        return
 
     try:
         loader = EvalLoader()
-        eval_set = loader.load(evals)
+        eval_set = loader.load(evals_path)
     except SkillEvalError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=exc.exit_code)
@@ -500,62 +586,19 @@ def run(
     if not output_dir:
         output_dir = Path("output")
 
-    scoring_config = ScoringConfig(
-        enable_programmatic=scoring in ("hybrid", "programmatic"),
-        enable_llm=scoring in ("hybrid", "llm"),
-        llm_model=model,
-        llm_timeout=timeout,
-    )
-    run_config = RunConfig(
-        runs_per_config=runs,
+    _run_ab_eval(
+        skill_path=skill_path,
+        eval_set=eval_set,
+        runs=runs,
         model=model,
-        timeout_seconds=timeout,
-        max_workers=workers,
+        workers=workers,
+        timeout=timeout,
         max_turns=max_turns,
+        scoring=scoring,
+        no_calibration=no_calibration,
         output_dir=output_dir,
+        fmt=format,
     )
-
-    console.print(f"Running A/B test: {eval_set.skill_name} ({len(eval_set.evals)} evals × {runs} runs)")
-
-    progress_state = _ProgressState(len(eval_set.evals), runs)
-
-    def on_progress(eval_name, config_name, eval_idx, total_evals, completed, total, grading, run_duration=0.0, run_output=None, phase="", substep=""):
-        progress_state.update(eval_name, config_name, eval_idx, completed, total, grading, run_duration, run_output, phase=phase, substep=substep)
-
-    try:
-        with Live(progress_state, console=console, refresh_per_second=1) as live:
-            progress_state.live = live
-            ab = ABTestRunner(run_config, scoring_config, on_progress=on_progress)
-            iteration_dir = ab.run_ab_test(skill_path, eval_set)
-    except SkillEvalError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(code=exc.exit_code)
-
-    agg = BenchmarkAggregator()
-    benchmark = agg.aggregate(iteration_dir, skill_path)
-
-    benchmark_path = iteration_dir / "benchmark.json"
-    benchmark_path.write_text(
-        json.dumps(benchmark.model_dump(mode="json"), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-    summary = benchmark.run_summary
-    delta = summary.get("delta", {})
-
-    if format == "json":
-        console.print(json.dumps(benchmark.model_dump(mode="json"), indent=2, ensure_ascii=False))
-    else:
-        ws = summary.get("with_skill", {}).get("pass_rate", {})
-        wos = summary.get("without_skill", {}).get("pass_rate", {})
-        console.print(f"\n[bold]Results:[/bold]")
-        console.print(f"  with_skill:    {ws.get('mean', 0)*100:.0f}% pass rate")
-        console.print(f"  without_skill: {wos.get('mean', 0)*100:.0f}% pass rate")
-        console.print(f"  delta:         {delta.get('pass_rate', '—')}")
-        console.print(f"\nBenchmark saved to: {benchmark_path}")
-
-    if delta.get("pass_rate", "+0.00").startswith("-"):
-        raise typer.Exit(code=1)
 
 
 @app.command(name="optimize-trigger")
@@ -684,98 +727,69 @@ def full(
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
 ):
     """One-click full evaluation pipeline."""
-    from skill_eval.claude_version import check_claude_version
-    from skill_eval.compliance.extractor import InstructionExtractor
-    from skill_eval.compliance.checker import ComplianceChecker
-    from skill_eval.calibration.calibrator import CalibrationChecker
     from skill_eval.evals.loader import EvalLoader
-    from skill_eval.execution.runner import ABTestRunner
-    from skill_eval.execution.benchmark import BenchmarkAggregator
-    from skill_eval.models import RunConfig, ScoringConfig
     from skill_eval.reporting.viewer import ReportGenerator
-    from skill_eval.static_analysis.analyzer import StaticAnalyzer
 
-    ok, ver_msg = check_claude_version()
-    if not ok:
-        console.print(f"[red]Error:[/red] {ver_msg}")
-        raise typer.Exit(code=3)
-    console.print(f"[dim]{ver_msg}[/dim]")
+    _check_claude_or_exit()
 
     if not output_dir:
         output_dir = Path("output")
 
-    if security_gate:
-        console.print("[bold]Step 0/5:[/bold] Security vetting...")
-        from skill_eval.security.vetter import SecurityVetter
+    total_steps = 5 if security_gate else 4
+    step = 0
 
+    if security_gate:
+        step += 1
+        console.print(f"[bold]Step {step}/{total_steps}:[/bold] Security vetting...")
+        from skill_eval.security.vetter import SecurityVetter
         vet_report = SecurityVetter(skip_external=False).vet(skill_path)
         _render_security_report(vet_report, console)
         if vet_report.verdict in ("BLOCKED", "REVIEW_NEEDED"):
             raise typer.Exit(code=1)
 
-    console.print("[bold]Step 1/5:[/bold] Static analysis...")
+    step += 1
+    console.print(f"[bold]Step {step}/{total_steps}:[/bold] Static analysis...")
     try:
         analyzer = StaticAnalyzer()
         scorecard = analyzer.analyze(skill_path)
         console.print(f"  Score: {scorecard.score}/{scorecard.max_score}")
     except SkillEvalError as exc:
-        console.print(f"  [red]Error:[/red] {exc}")
+        console.print(f"  [yellow]Warning:[/yellow] {exc}")
 
-    console.print("[bold]Step 2/5:[/bold] Loading evals...")
-    evals_path = None
-    for candidate in [skill_path / "evals" / "evals.json", skill_path / "evals.json"]:
-        if candidate.exists():
-            evals_path = candidate
-            break
-    if not evals_path:
-        console.print("[red]Error:[/red] No evals.json found")
-        raise typer.Exit(code=2)
+    step += 1
+    console.print(f"[bold]Step {step}/{total_steps}:[/bold] Loading evals...")
+    evals_path = _discover_evals(skill_path)
 
     loader = EvalLoader()
     eval_set = loader.load(evals_path)
 
-    console.print(f"[bold]Step 3/5:[/bold] Running A/B test (1 skill × {runs} runs × 2 configs)...")
-    scoring_config = ScoringConfig(enable_programmatic=True, enable_llm=True, llm_model=model, llm_timeout=timeout)
-    run_config = RunConfig(runs_per_config=runs, model=model, timeout_seconds=timeout, max_workers=workers, max_turns=max_turns, output_dir=output_dir)
+    step += 1
+    lc = _log_console(format)
+    lc.print(f"[bold]Step {step}/{total_steps}:[/bold] Running A/B test ({len(eval_set.evals)} evals × {runs} runs × 2 configs)...")
 
-    progress_state = _ProgressState(1, runs)
+    benchmark, iteration_dir = _run_ab_eval(
+        skill_path=skill_path,
+        eval_set=eval_set,
+        runs=runs,
+        model=model,
+        workers=workers,
+        timeout=timeout,
+        max_turns=max_turns,
+        scoring="hybrid",
+        no_calibration=False,
+        output_dir=output_dir,
+        fmt=format,
+    )
 
-    def on_progress(eval_name, config_name, eval_idx, total_evals, completed, total, grading, run_duration=0.0, run_output=None, phase="", substep=""):
-        progress_state.update(eval_name, config_name, eval_idx, completed, total, grading, run_duration, run_output, phase=phase, substep=substep)
-
-    try:
-        with Live(progress_state, console=console, refresh_per_second=1) as live:
-            progress_state.live = live
-            ab = ABTestRunner(run_config, scoring_config, on_progress=on_progress)
-            iteration_dir = ab.run_ab_test(skill_path, eval_set)
-    except SkillEvalError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(code=exc.exit_code)
-
-    console.print("[bold]Step 4/5:[/bold] Aggregating and generating report...")
-    agg = BenchmarkAggregator()
-    benchmark = agg.aggregate(iteration_dir, skill_path)
-
-    benchmark_path = iteration_dir / "benchmark.json"
-    benchmark_path.write_text(json.dumps(benchmark.model_dump(mode="json"), indent=2, ensure_ascii=False), encoding="utf-8")
+    step += 1
+    lc = _log_console(format)
+    lc.print(f"[bold]Step {step}/{total_steps}:[/bold] Aggregating and generating report...")
 
     gen = ReportGenerator()
     report_path = iteration_dir / "report.html"
     gen.write_static(iteration_dir, report_path, benchmark.model_dump(mode="json"))
 
-    summary = benchmark.run_summary
-    delta = summary.get("delta", {})
-    ws = summary.get("with_skill", {}).get("pass_rate", {})
-    wos = summary.get("without_skill", {}).get("pass_rate", {})
-
-    if format == "json":
-        console.print(json.dumps(benchmark.model_dump(mode="json"), indent=2, ensure_ascii=False))
-    else:
-        console.print(f"\n[bold]Results:[/bold]")
-        console.print(f"  with_skill:    {ws.get('mean', 0)*100:.0f}% pass rate")
-        console.print(f"  without_skill: {wos.get('mean', 0)*100:.0f}% pass rate")
-        console.print(f"  delta:         {delta.get('pass_rate', '—')}")
-
+    if format != "json":
         checkpoints_data = (benchmark.notes or []) if isinstance(benchmark.notes, list) else []
         if checkpoints_data:
             console.print(f"\n[bold]Checkpoint Breakdown:[/bold]")
@@ -788,15 +802,11 @@ def full(
                 for ast in cp.get("assertions", []):
                     icon = "[green]✓[/green]" if ast.get("passed") else "[red]✗[/red]"
                     console.print(f"      {icon} [dim](assertion)[/dim] {ast.get('text', '')[:80]}")
-
         console.print(f"\n  Report: {report_path}")
 
     if open_browser:
         import webbrowser
         webbrowser.open(f"file://{report_path.resolve()}")
-
-    if delta.get("pass_rate", "+0.00").startswith("-"):
-        raise typer.Exit(code=1)
 
     worst_grade = None
     for config_dir in iteration_dir.iterdir():
@@ -805,7 +815,10 @@ def full(
         for run_dir in config_dir.glob("run-*"):
             cal_file = run_dir / "calibration.json"
             if cal_file.exists():
-                cal_data = json.loads(cal_file.read_text(encoding="utf-8"))
+                try:
+                    cal_data = json.loads(cal_file.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
                 grade = cal_data.get("grade", "HIGH")
                 if grade == "UNRELIABLE":
                     worst_grade = "UNRELIABLE"

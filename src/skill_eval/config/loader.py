@@ -66,6 +66,7 @@ def load_config(
     config_path: Path | str | None = None,
     project_config_path: Path | str | None = None,
     skill_config_path: Path | str | None = None,
+    skill_dir: Path | str | None = None,
 ) -> EvalConfig:
     root = Path(root_dir)
 
@@ -82,6 +83,8 @@ def load_config(
 
     if skill_config_path:
         skill_data = _load_yaml(Path(skill_config_path))
+    elif skill_dir:
+        skill_data = _load_yaml(Path(skill_dir) / "eval-config.yaml")
     else:
         skill_data = {}
 
@@ -96,7 +99,9 @@ def _load_yaml(path: Path) -> dict:
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except yaml.YAMLError:
+        return {}
+    except OSError:
         return {}
 
 

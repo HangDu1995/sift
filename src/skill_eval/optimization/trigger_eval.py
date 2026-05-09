@@ -30,8 +30,9 @@ def _run_single_query(
     try:
         commands_dir.mkdir(parents=True, exist_ok=True)
         indented_desc = "\n  ".join(skill_description.split("\n"))
+        escaped_desc = skill_description.replace(":", "\\:").replace("#", "\\#")
         command_file.write_text(
-            f"---\ndescription: |\n  {indented_desc}\n---\n\n# {skill_name}\n\n{skill_description}\n",
+            f"---\ndescription: |\n  {escaped_desc}\n---\n\n# {skill_name}\n\n{skill_description}\n",
             encoding="utf-8",
         )
 
@@ -80,11 +81,15 @@ def _run_single_query(
                         se_type = se.get("type", "")
                         if se_type == "content_block_start":
                             cb = se.get("content_block", {})
-                            if cb.get("type") == "tool_use" and cb.get("name", "") in ("Skill", "Read"):
-                                pending_tool_name = cb["name"]
-                                accumulated_json = ""
+                            if cb.get("type") == "tool_use":
+                                tn = cb.get("name", "")
+                                if tn in ("Skill", "Read"):
+                                    pending_tool_name = tn
+                                    accumulated_json = ""
+                                else:
+                                    pending_tool_name = None
                             else:
-                                return False
+                                pending_tool_name = None
                         elif se_type == "content_block_delta" and pending_tool_name:
                             delta = se.get("delta", {})
                             if delta.get("type") == "input_json_delta":
@@ -167,8 +172,9 @@ class TriggerEvaluator:
                 query_triggers.setdefault(item.query, [])
                 try:
                     query_triggers[item.query].append(future.result())
-                except Exception:
+                except Exception as exc:
                     query_triggers[item.query].append(False)
+                    pass
 
         for query, triggers in query_triggers.items():
             item = query_items[query]

@@ -208,6 +208,8 @@ pytest tests/ --cov=skill_eval
 | [架构设计](docs/skill-eval-arch-design.md) | 设计决策、模块契约、质量公式（架构师向） |
 | [实现设计](docs/skill-eval-design.md) | Pydantic 模型、函数签名、伪代码（工程师向） |
 | [原理](docs/skill-eval-principles.md) | 底层原理、参考出处 |
+| [测试指南](docs/cli-test-results.md) | 测试 Skill 介绍、指标解读、如何编写测试 |
+| [代码审查修复记录](docs/code-audit-fixes.md) | 三轮代码审查与修复记录（45 个问题） |
 
 ---
 

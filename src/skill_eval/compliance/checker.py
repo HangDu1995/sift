@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
-import time
 from pathlib import Path
 
 from skill_eval.models import (
     CheckMethod,
     ComplianceReport,
     ComplianceResultItem,
-    GradingResult,
     InstructionCheck,
+    InstructionPriority,
 )
+from skill_eval.utils import call_claude
 
 _BATCH_TIMEOUT = 90
 _SINGLE_TIMEOUT = 30
@@ -28,7 +26,6 @@ class ComplianceChecker:
         instructions: list[InstructionCheck],
         transcript: str,
         output_dir: Path,
-        grading: GradingResult | None = None,
         model: str | None = None,
         timeout: int = 120,
         tool_trace: list | None = None,
@@ -80,7 +77,7 @@ class ComplianceChecker:
 
         items = [results[i] for i in range(total)]
         followed = sum(1 for i in items if i.followed)
-        required_items = [i for i in items if i.instruction.priority == "REQUIRED"]
+        required_items = [i for i in items if i.instruction.priority == InstructionPriority.REQUIRED]
         required_followed = sum(1 for i in required_items if i.followed)
 
         return ComplianceReport(
@@ -98,7 +95,8 @@ class ComplianceChecker:
             return
         tag = "PASS" if item.followed else "FAIL"
         line = f"[{tag}] {step}/{total} [{item.source}] conf={item.confidence:.1f} {text}\n"
-        log_path.write_text(log_path.read_text(encoding="utf-8") + line, encoding="utf-8")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(line)
 
     def _check_instruction(
         self,
@@ -214,31 +212,9 @@ class ComplianceChecker:
         )
 
         try:
-            cmd = ["claude", "-p", "--output-format", "text", "--dangerously-skip-permissions", "--max-turns", "1"]
-            if model:
-                cmd.extend(["--model", model])
-            env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-            try:
-                stdout_bytes, stderr_bytes = proc.communicate(input=prompt.encode("utf-8"), timeout=timeout)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
-                return [
-                    ComplianceResultItem(
-                        instruction=inst,
-                        followed=False,
-                        evidence=f"LLM batch check timed out after {timeout}s",
-                        confidence=0.0,
-                        source="llm",
-                    )
-                    for inst in instructions
-                ]
-
-            result_text = stdout_bytes.decode("utf-8", errors="replace")
+            result_text = call_claude(prompt, model=model, timeout=timeout, max_turns=1)
             return self._parse_batch_result(result_text, instructions)
-
-        except Exception:
+        except RuntimeError:
             return [
                 ComplianceResultItem(
                     instruction=inst,
@@ -311,24 +287,7 @@ class ComplianceChecker:
         )
 
         try:
-            cmd = ["claude", "-p", "--output-format", "text", "--dangerously-skip-permissions", "--max-turns", "1"]
-            if model:
-                cmd.extend(["--model", model])
-            env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-            try:
-                stdout_bytes, stderr_bytes = proc.communicate(input=prompt.encode("utf-8"), timeout=timeout)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
-                return ComplianceResultItem(
-                    instruction=instruction,
-                    followed=False,
-                    evidence=f"LLM check timed out after {timeout}s",
-                    confidence=0.0,
-                    source="llm",
-                )
-            result_text = stdout_bytes.decode("utf-8", errors="replace")
+            result_text = call_claude(prompt, model=model, timeout=timeout, max_turns=1)
             match = re.search(r"\{[^}]+\}", result_text, re.DOTALL)
             if match:
                 data = json.loads(match.group())

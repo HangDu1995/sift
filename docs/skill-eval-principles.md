@@ -14,7 +14,7 @@ skill-creator（位于 `/Users/layne/codes/skills/skills/skill-creator`）是 Cl
 | `scripts/utils.py` → `parse_skill_md()` | `parser.py` | 扩展为 5-tuple 返回值（增加 frontmatter_dict + body_text） |
 | `scripts/run_eval.py` → `run_single_query()` | `optimization/trigger_eval.py` → `TriggerEvaluator` | 解耦 CLI 参数，保留 stream-json 解析 + `ProcessPoolExecutor` 并行 |
 | `scripts/aggregate_benchmark.py` → `generate_benchmark()` | `execution/benchmark.py` → `BenchmarkAggregator` | 迁移到 Pydantic 模型，`calculate_stats()` 逻辑不变 |
-| `scripts/improve_description.py` → `_call_claude()` | `optimization/description_improver.py` → `DescriptionImprover` | 提取为类，新增 >1024 字符自动缩短 |
+| `scripts/improve_description.py` → `_call_claude()` | `optimization/description_improver.py` → `DescriptionImprover` + `utils.call_claude()` | 提取为类，新增 >1024 字符自动缩短；LLM 调用统一使用共享 `utils.call_claude()` |
 | `scripts/run_loop.py` → `run_loop()` + `split_eval_set()` | `optimization/loop.py` → `OptimizationLoop` | 重构为类，保留分层 train/test 分割 |
 | `eval-viewer/generate_review.py` | `reporting/viewer.py` → `ReportGenerator` | 移植 `find_runs()`、`embed_file()`、HTTP server，新增历史对比 |
 | `eval-viewer/viewer.html` | `reporting/templates/viewer.html` | **直接复制**——自包含 HTML 评测结果查看器 |

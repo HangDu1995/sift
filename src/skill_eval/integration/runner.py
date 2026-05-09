@@ -90,7 +90,16 @@ def run_contract_test(
     checks: list[dict],
     output_dir: Path,
 ) -> dict:
-    artifact = Path(artifact_path)
+    artifact = Path(artifact_path) if artifact_path else Path.cwd()
+    if not artifact_path:
+        return {
+            "type": "contract",
+            "producer": producer,
+            "consumer": consumer,
+            "artifact": "",
+            "checks": [],
+            "passed": False,
+        }
     check_results: list[dict] = []
     all_passed = True
 

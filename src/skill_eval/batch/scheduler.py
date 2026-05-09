@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
@@ -86,9 +85,13 @@ class BatchScheduler:
 
                 delta = benchmark.run_summary.get("delta", {})
                 pr = delta.get("pass_rate", "+0.00")
-                results[skill_path] = NodeStatus.PASSED if not pr.startswith("-") else NodeStatus.FAILED
+                is_fail = (isinstance(pr, str) and pr.startswith("-")) or (isinstance(pr, (int, float)) and pr < 0)
+                results[skill_path] = NodeStatus.PASSED if not is_fail else NodeStatus.FAILED
 
-            except Exception:
+            except Exception as exc:
+                import traceback
+                print(f"[skill-eval batch] ERROR in {skill_path}: {exc}", flush=True)
+                traceback.print_exc()
                 results[skill_path] = NodeStatus.FAILED
 
             if fail_fast and results[skill_path] in (NodeStatus.FAILED,):
