@@ -210,12 +210,12 @@ class ProgrammaticChecker:
         return True, "All files pass basic syntax check"
 
     def _custom_plugin(self, params: dict, output_dir: Path) -> tuple[bool, str]:
-        plugin_type = params.get("plugin_type", "")
+        plugin_name = params.get("plugin_name") or params.get("plugin_type", "")
         if not self._plugins:
-            return False, f"No plugin registry, cannot resolve '{plugin_type}'"
-        handler = self._plugins.get(plugin_type)
+            return False, f"No plugin registry, cannot resolve '{plugin_name}'"
+        handler = self._plugins.get(plugin_name)
         if handler is None:
-            return False, f"Unknown plugin type: '{plugin_type}'"
+            return False, f"Unknown plugin: '{plugin_name}'"
         return handler(params, output_dir)
 
     @staticmethod

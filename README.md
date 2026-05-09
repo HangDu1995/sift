@@ -28,7 +28,7 @@ skill-eval generate-config path/to/skills-dir/ --output eval-config.yaml
 skill-eval full path/to/my-skill/ --runs 3
 ```
 
-**前置条件**：Python 3.10+，Claude CLI（仅动态评测需要）
+**前置条件**：Python 3.10+，Claude Code CLI >= 2.1.0, < 2.2.0（仅动态评测需要）
 
 ---
 
@@ -41,6 +41,28 @@ skill-eval --version
 ```
 
 依赖：`typer>=0.9` / `rich>=13` / `pydantic>=2.0` / `pyyaml>=6.0`
+
+### Claude CLI 版本要求
+
+skill-eval 通过 `claude -p`（Agent SDK / headless 模式）调用 Claude Code CLI，依赖以下 CLI flags：
+
+| Flag | 引入版本 | 用途 |
+|------|----------|------|
+| `--output-format {text,json,stream-json}` | < 1.0 | 结构化输出解析 |
+| `--verbose` | < 1.0 | 完整 turn-by-turn 输出 |
+| `--dangerously-skip-permissions` | < 1.0 | 无人值守执行 |
+| `--max-turns` | < 1.0 | 限制 agentic turns |
+| `--disable-slash-commands` | 2.0.60 | 隔离 without_skill 基线 |
+| `--include-partial-messages` | 1.0.109 | 流式 token delta |
+| `--model` | < 1.0 | 模型选择 |
+
+**支持范围**：`>= 2.1.0, < 2.2.0`
+
+- **2.1.0**（2026-01-07）：首个 2.1.x 稳定版，所有必需 flags 均可用
+- **< 2.2.0**：当前测试范围；超出此版本会打印兼容性警告但仍尝试运行
+- 版本检查在启动时自动执行（`run`、`full`、`batch`、`optimize-trigger`、`generate-config` 命令）
+
+安装 Claude Code：[官方文档](https://docs.anthropic.com/en/docs/claude-code/overview) | [CLI 参考](https://docs.anthropic.com/en/docs/claude-code/cli-usage) | [Changelog](https://docs.anthropic.com/en/docs/claude-code/changelog)
 
 可选安全扫描器：[aguara](https://github.com/garagon/aguara)（Go）、[skill-scanner](https://pypi.org/project/cisco-ai-skill-scanner/)（pip），未安装时自动跳过。
 

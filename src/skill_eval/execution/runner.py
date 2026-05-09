@@ -6,7 +6,6 @@ import json
 import os
 import subprocess
 import time
-import uuid
 from pathlib import Path
 from typing import Callable
 
@@ -47,32 +46,25 @@ class ClaudeRunner:
         max_turns: int = 10,
     ) -> RunOutput:
         project_root = cwd or find_project_root()
-        command_file: Path | None = None
 
         try:
+            skill_injected_prompt = prompt
             if skill_path:
-                name, description, content, _, _ = parse_skill_md(skill_path)
-                unique_id = uuid.uuid4().hex[:8]
-                clean_name = f"{name}-skill-{unique_id}"
-                commands_dir = project_root / ".claude" / "commands"
-                commands_dir.mkdir(parents=True, exist_ok=True)
-                command_file = commands_dir / f"{clean_name}.md"
-
-                indented_desc = "\n  ".join(description.split("\n"))
-                command_content = (
-                    f"---\n"
-                    f"description: |\n"
-                    f"  {indented_desc}\n"
+                name, description, content, _, skill_body = parse_skill_md(skill_path)
+                skill_injected_prompt = (
+                    f"You have the following Skill loaded. Follow its instructions when handling the user's request.\n\n"
+                    f"<skill name=\"{name}\">\n"
+                    f"{skill_body}\n"
+                    f"</skill>\n\n"
                     f"---\n\n"
-                    f"{content.split('---', 2)[-1].strip() if '---' in content else content}\n"
+                    f"{prompt}"
                 )
-                command_file.write_text(command_content, encoding="utf-8")
 
-            cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
+            cmd = ["claude", "-p", skill_injected_prompt, "--output-format", "stream-json", "--verbose",
                     "--dangerously-skip-permissions",
                     "--max-turns", str(max_turns)]
             if not skill_path:
-                cmd.append("--bare")
+                cmd.append("--disable-slash-commands")
             if model:
                 cmd.extend(["--model", model])
 
@@ -121,9 +113,6 @@ class ClaudeRunner:
             )
         except subprocess.TimeoutExpired:
             raise ClaudeRunnerError(f"claude -p timed out after {timeout}s")
-        finally:
-            if command_file and command_file.exists():
-                command_file.unlink()
 
     def _parse_stream_json(self, stdout: str) -> tuple[str, int, dict[str, int], str, int, str, list]:
         from skill_eval.models import ToolCallRecord
@@ -219,6 +208,7 @@ class ABTestRunner:
                         model=self.config.model,
                         timeout=self.config.timeout_seconds,
                         max_turns=self.config.max_turns,
+                        cwd=outputs_dir,
                     )
                 except ClaudeRunnerError as exc:
                     run_duration = time.time() - run_start
@@ -380,7 +370,6 @@ class ABTestRunner:
         for eval_case in eval_set.evals:
             sections.append(f"## {eval_case.get_name()}\n{eval_case.prompt}")
         return (
-            f"You are evaluating the skill: {eval_set.skill_name}\n\n"
             f"Please complete ALL of the following tasks in sequence:\n\n"
             + "\n\n".join(sections)
         )

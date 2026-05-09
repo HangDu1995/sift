@@ -15,7 +15,7 @@
 |------|------|
 | **输入** | 一个或多个 `SKILL.md` 所在目录 + 可选的 `evals.json` 评测定义 |
 | **输出** | `benchmark.json` + `grading.json` + `compliance.json` + `run_debug.json` + HTML 报告 + CLI exit code |
-| **外部依赖** | 本地安装的 `claude` CLI（通过 subprocess 调用 `claude -p`） |
+| **外部依赖** | 本地安装的 `claude` CLI >= 2.1.0, < 2.2.0（通过 subprocess 调用 `claude -p`） |
 | **不依赖** | Claude Code 运行时、OpenCode 运行时、任何第三方 API Key |
 
 ### 系统上下文

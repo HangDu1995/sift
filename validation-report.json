@@ -1,0 +1,11 @@
+{
+  "valid_count": 0,
+  "invalid_count": 2,
+  "errors": [
+    "Record 1: 'id' is -1, must be a positive integer",
+    "Record 1: 'name' is empty, must be a non-empty string",
+    "Record 1: 'type' is 'unknown', must be one of: user, order, product",
+    "Record 2: 'id' is 0, must be a positive integer",
+    "Record 2: required field 'type' is missing"
+  ]
+}

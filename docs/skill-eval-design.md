@@ -70,7 +70,7 @@
 
 | 编号 | 约束 | 说明 |
 |------|------|------|
-| C1 | **Claude Code 优先** | 第一版仅支持 Claude Code 的 `claude -p` CLI 子进程调用模式 |
+| C1 | **Claude Code 优先** | 第一版仅支持 Claude Code 的 `claude -p` CLI 子进程调用模式，依赖 Claude Code CLI >= 2.1.0, < 2.2.0 |
 | C2 | **Schema 兼容** | 所有 JSON 输出格式与 `skill-creator`（位于 `/Users/layne/codes/skills/skills/skill-creator`）保持一致 |
 | C3 | **独立 CLI** | 不依赖 Claude Code 的 subagent 机制，作为独立命令行工具运行 |
 | C4 | **渐进式成本** | 静态分析零 API 成本；评测执行需要本地安装了 `claude` CLI 且有 API 额度 |

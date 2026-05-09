@@ -1,0 +1,110 @@
+domain_templates:
+  data:
+    - name: "output is valid JSON"
+      type: "JSON_HAS_FIELD"
+      params:
+        filename: "output.json"
+        field: "status"
+    - name: "no SQL injection"
+      type: "NOT_CONTAINS"
+      params:
+        pattern: "(DROP TABLE|SELECT \\*|INSERT INTO)"
+        path: "output.json"
+
+type_templates:
+  validate:
+    - name: "report file exists"
+      type: "FILE_EXISTS"
+      params:
+        filename: "validation-report.json"
+  transform:
+    - name: "output has metadata"
+      type: "JSON_HAS_FIELD"
+      params:
+        filename: "transformed.json"
+        field: "metadata"
+  report:
+    - name: "markdown report exists"
+      type: "FILE_EXISTS"
+      params:
+        filename: "report.md"
+
+integration_scenarios:
+  - name: "validate-then-transform chain"
+    type: "chain"
+    chain: ["data-validator", "data-transform"]
+    input:
+      source: "input.json"
+
+  - name: "keyword routing"
+    type: "routing"
+    test_prompts:
+      - prompt: "Validate this JSON data file for me"
+        should_trigger: ["data-validator"]
+        should_not_trigger: ["report-generator"]
+      - prompt: "Transform the data from nested to flat format"
+        should_trigger: ["data-transform"]
+        should_not_trigger: ["data-validator"]
+      - prompt: "Generate a summary report from the data"
+        should_trigger: ["report-generator"]
+        should_not_trigger: ["data-transform"]
+
+  - name: "validator output satisfies transformer"
+    type: "contract"
+    producer: "data-validator"
+    consumer: "data-transform"
+    artifact: "validation-report.json"
+    checks:
+      - type: "FILE_EXISTS"
+      - type: "JSON_HAS_FIELD"
+
+skill_keywords:
+  data-validator: ["validate", "check", "验证", "校验", "schema"]
+  data-transform: ["transform", "convert", "flatten", "nest", "转换", "迁移"]
+  report-generator: ["report", "summary", "generate report", "报告", "汇总"]
+
+pipelines:
+  - name: "full-data-pipeline"
+    description: "Run the full data pipeline: validate → transform → report"
+    project: "fixtures/projects/android-minimal"
+    steps:
+      - name: "validate"
+        skill: "data-validator"
+        prompt: "Validate the data in input.json and write a validation report"
+        expectations:
+          - "Validation report generated"
+          - "Data quality checked"
+        assertions:
+          - name: "report exists"
+            type: FILE_EXISTS
+            params:
+              filename: "validation-report.json"
+        depends_on: []
+      - name: "transform"
+        skill: "data-transform"
+        prompt: "Flatten the data in input.json and write to transformed.json"
+        expectations:
+          - "Data transformed successfully"
+          - "Metadata header included"
+        assertions:
+          - name: "transformed output exists"
+            type: FILE_EXISTS
+            params:
+              filename: "transformed.json"
+        depends_on: ["validate"]
+      - name: "report"
+        skill: "report-generator"
+        prompt: "Generate a summary report from transformed.json"
+        expectations:
+          - "Report generated"
+          - "Summary statistics included"
+        assertions:
+          - name: "report.md exists"
+            type: FILE_EXISTS
+            params:
+              filename: "report.md"
+          - name: "report-summary.json exists"
+            type: FILE_EXISTS
+            params:
+              filename: "report-summary.json"
+        depends_on: ["transform"]

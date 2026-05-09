@@ -30,7 +30,7 @@ def scan_skills_metadata(root_dir: Path | str) -> dict:
         collection_prefixes.add(parts[0] + "-*" if parts else entry.name)
 
         for skill_entry in sorted(skills_dir.iterdir()):
-            skill_dir = skills_dir / skill_entry
+            skill_dir = skill_entry
             if not skill_dir.is_dir():
                 continue
             fm = _extract_frontmatter(skill_dir / "SKILL.md")

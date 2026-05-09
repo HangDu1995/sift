@@ -284,12 +284,7 @@ def main(
     pass
 
 
-def _run_security_vet(skill_path: Path, security_gate: bool, console: Console) -> None:
-    from skill_eval.security.vetter import SecurityVetter
-
-    vetter = SecurityVetter(skip_external=False)
-    report = vetter.vet(skill_path)
-
+def _render_security_report(report, console: Console) -> None:
     table = Table(title=f"Security Scan: {report.skill_name}")
     table.add_column("Scanner", style="bold")
     table.add_column("Status")
@@ -315,12 +310,8 @@ def _run_security_vet(skill_path: Path, security_gate: bool, console: Console) -
 
     if report.verdict == "BLOCKED":
         console.print(f"\n[red bold]VERDICT: BLOCKED[/red bold] — {report.summary}")
-        if security_gate:
-            raise typer.Exit(code=1)
     elif report.verdict == "REVIEW_NEEDED":
         console.print(f"\n[yellow bold]VERDICT: REVIEW NEEDED[/yellow bold] — {report.summary}")
-        if security_gate:
-            raise typer.Exit(code=1)
     else:
         console.print(f"\n[green bold]VERDICT: SAFE[/green bold] — {report.summary}")
 
@@ -351,9 +342,9 @@ def vet(
         else:
             console.print(text)
     else:
-        _run_security_vet(skill_path, True, console)
+        _render_security_report(report, console)
 
-    if report.verdict == "BLOCKED":
+    if report.verdict in ("BLOCKED", "REVIEW_NEEDED"):
         raise typer.Exit(code=1)
 
 
@@ -466,13 +457,25 @@ def run(
     format: str = typer.Option("table", "--format", help="Output format"),
 ):
     """Run A/B evaluation of a Skill."""
+    from skill_eval.claude_version import check_claude_version
     from skill_eval.evals.loader import EvalLoader
     from skill_eval.execution.runner import ABTestRunner
     from skill_eval.execution.benchmark import BenchmarkAggregator
     from skill_eval.models import RunConfig, ScoringConfig
 
+    ok, ver_msg = check_claude_version()
+    if not ok:
+        console.print(f"[red]Error:[/red] {ver_msg}")
+        raise typer.Exit(code=3)
+    console.print(f"[dim]{ver_msg}[/dim]")
+
     if security_gate:
-        _run_security_vet(skill_path, True, console)
+        from skill_eval.security.vetter import SecurityVetter
+
+        vet_report = SecurityVetter(skip_external=False).vet(skill_path)
+        _render_security_report(vet_report, console)
+        if vet_report.verdict in ("BLOCKED", "REVIEW_NEEDED"):
+            raise typer.Exit(code=1)
 
     if not evals:
         candidates = [
@@ -537,11 +540,12 @@ def run(
         encoding="utf-8",
     )
 
+    summary = benchmark.run_summary
+    delta = summary.get("delta", {})
+
     if format == "json":
         console.print(json.dumps(benchmark.model_dump(mode="json"), indent=2, ensure_ascii=False))
     else:
-        summary = benchmark.run_summary
-        delta = summary.get("delta", {})
         ws = summary.get("with_skill", {}).get("pass_rate", {})
         wos = summary.get("without_skill", {}).get("pass_rate", {})
         console.print(f"\n[bold]Results:[/bold]")
@@ -560,10 +564,17 @@ def optimize_trigger(
     eval_set: Path = typer.Option(..., "--eval-set", help="Path to trigger eval set JSON"),
     max_iterations: int = typer.Option(5, "--max-iterations", help="Max optimization iterations"),
     model: Optional[str] = typer.Option(None, "--model", help="Model for claude -p"),
+    format: str = typer.Option("table", "--format", help="Output format: table or json"),
 ):
     """Optimize Skill trigger description."""
+    from skill_eval.claude_version import check_claude_version
     from skill_eval.models import LoopConfig, TriggerQuery
     from skill_eval.optimization.loop import OptimizationLoop
+
+    ok, ver_msg = check_claude_version()
+    if not ok:
+        console.print(f"[red]Error:[/red] {ver_msg}")
+        raise typer.Exit(code=3)
 
     try:
         raw = json.loads(eval_set.read_text(encoding="utf-8"))
@@ -604,13 +615,22 @@ def report(
 
     prev_data = None
     if previous and previous.exists():
-        prev_data = {"feedback": None, "runs": []}
+        from skill_eval.reporting.viewer import load_previous_iteration
+
+        prev_data = load_previous_iteration(previous.parent) if previous.is_dir() else None
+        if prev_data is None:
+            try:
+                prev_runs_data = json.loads(previous.read_text(encoding="utf-8"))
+                prev_data = {"feedback": None, "runs": prev_runs_data.get("runs", [])}
+            except Exception:
+                pass
 
     gen = ReportGenerator()
 
     if not open_browser:
         output_path = workspace / "report.html"
-        gen.write_static(workspace, output_path, bench_data)
+        html = gen.generate_html(workspace, bench_data, previous=prev_data)
+        output_path.write_text(html, encoding="utf-8")
         console.print(f"Report written to {output_path}")
     else:
         gen.serve(workspace, port, bench_data, open_browser=True)
@@ -622,7 +642,31 @@ def import_data(
     benchmark: Path = typer.Option(..., "--benchmark", help="Path to benchmark.json to augment"),
 ):
     """Import skill-monitor JSONL data into benchmark."""
-    console.print("[yellow]import command not yet implemented[/yellow]")
+    from skill_eval.integration.monitor_importer import MonitorImporter
+    from skill_eval.models import BenchmarkData
+
+    if not jsonl_path.exists():
+        console.print(f"[red]Error:[/red] JSONL file not found: {jsonl_path}")
+        raise typer.Exit(code=2)
+
+    if not benchmark.exists():
+        console.print(f"[red]Error:[/red] Benchmark file not found: {benchmark}")
+        raise typer.Exit(code=2)
+
+    try:
+        bench_data = BenchmarkData.model_validate_json(benchmark.read_text(encoding="utf-8"))
+    except Exception as exc:
+        console.print(f"[red]Error:[/red] Failed to parse benchmark.json: {exc}")
+        raise typer.Exit(code=2)
+
+    importer = MonitorImporter()
+    updated = importer.import_jsonl(jsonl_path, bench_data)
+
+    benchmark.write_text(
+        json.dumps(updated.model_dump(mode="json"), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    console.print(f"[green]Updated[/green] {benchmark} with monitor data from {jsonl_path}")
 
 
 @app.command(name="full")
@@ -640,6 +684,7 @@ def full(
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
 ):
     """One-click full evaluation pipeline."""
+    from skill_eval.claude_version import check_claude_version
     from skill_eval.compliance.extractor import InstructionExtractor
     from skill_eval.compliance.checker import ComplianceChecker
     from skill_eval.calibration.calibrator import CalibrationChecker
@@ -650,12 +695,23 @@ def full(
     from skill_eval.reporting.viewer import ReportGenerator
     from skill_eval.static_analysis.analyzer import StaticAnalyzer
 
+    ok, ver_msg = check_claude_version()
+    if not ok:
+        console.print(f"[red]Error:[/red] {ver_msg}")
+        raise typer.Exit(code=3)
+    console.print(f"[dim]{ver_msg}[/dim]")
+
     if not output_dir:
         output_dir = Path("output")
 
     if security_gate:
         console.print("[bold]Step 0/5:[/bold] Security vetting...")
-        _run_security_vet(skill_path, True, console)
+        from skill_eval.security.vetter import SecurityVetter
+
+        vet_report = SecurityVetter(skip_external=False).vet(skill_path)
+        _render_security_report(vet_report, console)
+        if vet_report.verdict in ("BLOCKED", "REVIEW_NEEDED"):
+            raise typer.Exit(code=1)
 
     console.print("[bold]Step 1/5:[/bold] Static analysis...")
     try:
@@ -783,7 +839,14 @@ def batch(
     """Run batch evaluation across multiple Skills."""
     from skill_eval.batch.manifest import ManifestLoader
     from skill_eval.batch.scheduler import BatchScheduler
+    from skill_eval.claude_version import check_claude_version
     from skill_eval.models import RunConfig, ScoringConfig
+
+    ok, ver_msg = check_claude_version()
+    if not ok:
+        console.print(f"[red]Error:[/red] {ver_msg}")
+        raise typer.Exit(code=3)
+    console.print(f"[dim]{ver_msg}[/dim]")
 
     loader = ManifestLoader()
     if manifest_or_dir.is_dir():
@@ -795,6 +858,8 @@ def batch(
 
     if not output_dir:
         output_dir = Path(f"batch-workspace")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     run_config = RunConfig(runs_per_config=runs, model=model, max_workers=workers, max_turns=max_turns, output_dir=output_dir)
     scoring_config = ScoringConfig(enable_programmatic=True, enable_llm=True, llm_model=model)
@@ -866,6 +931,32 @@ def batch(
         if int_result.get("failed", 0) > 0:
             raise typer.Exit(code=1)
 
+    if "regression" in layer_list:
+        console.print(f"[bold]Running regression tests...[/bold]")
+        if not baseline:
+            console.print("[yellow]Warning:[/yellow] No --baseline provided, skipping regression")
+        else:
+            scheduler = BatchScheduler(manifest, run_config, scoring_config, base_dir)
+            reg_result = scheduler.run_regression_tests(output_dir, baseline)
+
+            console.print(f"  Regression: {reg_result['passed']}/{reg_result['total']} passed")
+            for entry in reg_result.get("regressions", []):
+                status = entry.get("status", "?")
+                if status == "REGRESSED":
+                    icon, color = "✗", "red"
+                elif status == "IMPROVED":
+                    icon, color = "✓", "green"
+                else:
+                    icon, color = "○", "dim"
+                delta_str = f" ({entry['delta']:+.2f})" if entry.get("delta") is not None else ""
+                console.print(f"    [{color}]{icon}[/{color}] {entry['skill']}  {status}{delta_str}")
+
+            reg_path = output_dir / "regression-delta.json"
+            reg_path.write_text(json.dumps(reg_result, indent=2, ensure_ascii=False), encoding="utf-8")
+
+            if reg_result.get("failed", 0) > 0:
+                raise typer.Exit(code=1)
+
 
 @app.command(name="scan")
 def scan(
@@ -921,7 +1012,14 @@ def generate_config(
     dry_run: bool = typer.Option(False, "--dry-run", help="Scan only, don't call LLM"),
 ):
     """Generate eval-config.yaml from skills directory using LLM."""
+    from skill_eval.claude_version import check_claude_version
     from skill_eval.config.generator import ConfigGenerator
+
+    if not dry_run:
+        ok, ver_msg = check_claude_version()
+        if not ok:
+            console.print(f"[red]Error:[/red] {ver_msg}")
+            raise typer.Exit(code=3)
 
     gen = ConfigGenerator()
     out_path = output or skills_dir / "eval-config.yaml"

@@ -97,8 +97,10 @@ VERDICT: SAFE — All scanners passed
 
 1. 解析 SKILL.md 的 `##` 二级标题，每个标题对应一个 eval case（最多 50 个）
 2. 从标题下的列表项中提取 expectations
-3. 从代码块中检测可能的输出文件，生成 assertions
-4. 根据 description 中的关键词推断动作类型（create/convert/build/...）
+3. 从代码块中检测可能的输出文件，生成基础 assertions
+4. 若传入了 `EvalConfig`（即项目根目录存在 `eval-config.yaml`），自动从 `domain_templates` 注入领域断言，与基础 assertions 去重合并
+5. 根据 description 中的关键词推断动作类型（create/convert/build/...）
+6. 若 SKILL.md frontmatter 包含 `modes` 字段，为每个 mode 生成独立的 eval case（如 `[mode-a]`、`[mode-b]`）
 
 生成的 `evals.json` 可以手动编辑——调整 prompt、增删 expectations、添加 assertions，然后再运行 `run` 或 `full`。
 
@@ -213,6 +215,7 @@ pipelines:
 | `--model` | 用户默认模型 | claude -p 使用的模型 |
 | `--workers` | 4 | 最大并行 worker 数 |
 | `--timeout` | 120 | 每次运行超时（秒） |
+| `--max-turns` | 10 | claude -p 最大 agentic 轮数 |
 | `--scoring` | hybrid | 评分模式：hybrid / programmatic / llm |
 | `--compliance-gate` | 关闭 | 遵循性率 < 0.5 时强制失败 |
 | `--security-gate` | 关闭 | 安全审查 BLOCKED/REVIEW_NEEDED 时强制失败（在评测前运行） |
@@ -712,7 +715,7 @@ skill-eval/
 ├── pyproject.toml
 ├── agents/                        # LLM prompt 模板
 ├── src/skill_eval/
-│   ├── cli.py                     # typer CLI 入口（12 个子命令）
+│   ├── cli.py                     # typer CLI 入口（11 个子命令）
 │   ├── models.py                  # 30+ Pydantic 数据模型
 │   ├── parser.py                  # SKILL.md 解析器
 │   ├── config/                    # 配置驱动架构
@@ -805,6 +808,18 @@ Skill-Eval 从 [skill-creator](https://github.com/user/skill-creator) 移植并�
 ### 运行评测时提示 "claude CLI not found"
 
 确保 `claude` 已安装并在 PATH 中。Skill-Eval 通过 `subprocess` 调用 `claude -p`，复用 CLI 认证。
+
+**Claude CLI 版本要求**：`>= 2.1.0, < 2.2.0`（推荐 2.1.x 系列）。skill-eval 在启动需要 claude 的命令时自动检查版本，版本过低会报错并提示升级；版本超出测试范围会打印警告但仍尝试运行。使用到的 claude flags：`--output-format stream-json`、`--verbose`、`--dangerously-skip-permissions`、`--max-turns`、`--disable-slash-commands`、`--include-partial-messages`、`--model`。详见 [Claude Code CLI 参考](https://docs.anthropic.com/en/docs/claude-code/cli-usage) 和 [Changelog](https://docs.anthropic.com/en/docs/claude-code/changelog)。
+
+安装 Claude Code：[官方文档](https://docs.anthropic.com/en/docs/claude-code/overview)
+
+```bash
+# 检查当前版本
+claude --version
+
+# 升级
+claude update
+```
 
 ### evals.json 放在哪里？
 

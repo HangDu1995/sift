@@ -46,7 +46,7 @@ def scan_evals(
         if not skills_dir.is_dir():
             continue
         for skill_entry in sorted(skills_dir.iterdir()):
-            skill_dir = skills_dir / skill_entry
+            skill_dir = skill_entry
             if not skill_dir.is_dir():
                 continue
             skill_data = _parse_skill(skill_dir)
