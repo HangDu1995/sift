@@ -1,0 +1,24 @@
+{
+  "skill_name": "bad-instruction",
+  "evals": [
+    {
+      "id": 1,
+      "name": "L2-数据转换",
+      "prompt": "请根据 SKILL.md 中的指令，处理 input.json 文件并输出结果",
+      "expected_output": "转换后的 JSON 数据文件",
+      "level": "L2",
+      "expectations": [
+        "输出文件存在",
+        "输出包含有效的 JSON 数据",
+        "转换方式与 SKILL.md 指令一致"
+      ],
+      "assertions": [
+        {"name": "输出文件存在", "type": "FILE_EXISTS", "params": {"filename": "output.json"}},
+        {"name": "输出是有效 JSON", "type": "JSON_HAS_FIELD", "params": {"filename": "output.json", "field": "records"}}
+      ],
+      "fixtures": [
+        {"path": "input.json", "content": "[{\"id\": 1, \"name\": \"test\", \"type\": \"user\"}]"}
+      ]
+    }
+  ]
+}

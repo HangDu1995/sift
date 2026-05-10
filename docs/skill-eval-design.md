@@ -350,7 +350,9 @@ skill-eval/
 │       │   ├── llm_grader.py          # LLMGrader
 │       │   ├── orchestrator.py        # ScoringOrchestrator
 │       │   ├── plugins.py             # AssertionPluginRegistry (v0.2)
-│       │   └── templates.py           # AssertionTemplateLibrary (v0.2)
+│       │   ├── templates.py           # AssertionTemplateLibrary (v0.2)
+│       │   ├── comparator.py          # BlindComparator（盲比较）
+│       │   └── analyzer.py            # PosthocAnalyzer（深度分析）
 │       │
 │       ├── compliance/
 │       │   ├── __init__.py
@@ -392,8 +394,8 @@ skill-eval/
 ├── agents/                            # LLM prompt 模板 (纯文本 .md)
 │   ├── grader.md
 │   ├── compliance-judge.md            # 遵循性评判 prompt
-│   ├── comparator.md
-│   └── analyzer.md
+│   ├── comparator.md                  # 盲比较 prompt（BlindComparator 使用）
+│   └── analyzer.md                    # 深度分析 prompt（PosthocAnalyzer 使用）
 │
 └── tests/
     ├── conftest.py
@@ -422,7 +424,8 @@ skill-eval/
     ├── test_eval_generator.py           # v0.2: config+mode 增强
     ├── test_scanner.py                  # v0.2: L0 覆盖率
     ├── test_integration.py              # v0.2: L2 集成测试
-    └── test_impact.py                   # v0.2: 影响分析
+    ├── test_impact.py                   # v0.2: 影响分析
+    └── test_agents.py                   # 盲比较器 + 深度分析器（26 个测试）
 ```
 
 ### 2.6 与现有系统的关系及代码复用明细
@@ -438,8 +441,8 @@ skill-eval/
 | `eval-viewer/generate_review.py` | skill-creator | `src/skill_eval/reporting/viewer.py` 的 eval viewer 部分 | 移植 `find_runs()`, `embed_file()`, `generate_html()`, HTTP server |
 | `eval-viewer/viewer.html` | skill-creator | `src/skill_eval/reporting/templates/viewer.html` | 直接复制 |
 | `agents/grader.md` | skill-creator | `agents/grader.md` | 直接复制，作为 LLMGrader 的 prompt 模板 |
-| `agents/comparator.md` | skill-creator | `agents/comparator.md` | 直接复制，供后续盲审功能使用 |
-| `agents/analyzer.md` | skill-creator | `agents/analyzer.md` | 直接复制，供 benchmark 分析使用 |
+| `agents/comparator.md` | skill-creator | `agents/comparator.md` | 直接复制，已实现为 `BlindComparator`，在 `BenchmarkAggregator._run_comparisons()` 中调用 |
+| `agents/analyzer.md` | skill-creator | `agents/analyzer.md` | 直接复制，已实现为 `PosthocAnalyzer`，在 `BenchmarkAggregator._run_analysis()` 中调用 |
 | `references/schemas.md` | skill-creator | `src/skill_eval/models.py` | 转为 Pydantic 数据模型 |
 | skill-benchmark 11 项规则 | skill-benchmark SKILL.md | `src/skill_eval/static_analysis/checks.py` | 转为可执行检查函数 |
 | skill-monitor JSONL 格式 | skill-monitor `src/index.ts` | `src/skill_eval/integration/monitor_importer.py` | 根据 `SkillCallData` 接口（TS）定义 Python 数据模型 |
@@ -1074,6 +1077,31 @@ for config_name in ("with_skill", "without_skill"):
 
 ```python
 class BenchmarkAggregator:
+    def __init__(self, model: str | None = None, timeout: int = 120):
+        """
+        model: 用于 comparator/analyzer LLM 调用的模型名（None 则使用默认）
+        timeout: 单次 claude -p 调用的超时秒数
+        """
+
+    def _run_comparisons(self, with_skill_run: RunResultEntry, without_skill_run: RunResultEntry, transcript_a: str, transcript_b: str) -> ComparisonResult:
+        """
+        使用 BlindComparator 对同一 eval 的 with_skill vs without_skill 输出做盲比较。
+        从 agents/comparator.md 加载 prompt 模板，调用 claude -p。
+        """
+
+    def _run_analysis(self, benchmark_data: BenchmarkData, skill_path: Path) -> AnalysisResult:
+        """
+        使用 PosthocAnalyzer 对 benchmark 整体做深度分析。
+        从 agents/analyzer.md 加载 prompt 模板，调用 claude -p。
+        """
+
+    def _run_comparison_analysis(self, workspace_dir: Path, skill_path: Path, skill_name: str) -> tuple[list[ComparisonResult], AnalysisResult | None]:
+        """
+        在 aggregate() 末尾自动调用 _run_comparisons() 和 _run_analysis()。
+        先对每对 with_skill/without_skill run 做盲比较，再对整体做深度分析。
+        结果写入 benchmark.json 的 comparisons 和 analysis 字段。
+        """
+
     def aggregate(self, workspace_dir: Path, skill_name: str) -> BenchmarkData:
         """
         直接扫描 workspace_dir 下的 with_skill/ 和 without_skill/ 目录，
@@ -1089,6 +1117,15 @@ class BenchmarkAggregator:
         - grading.json execution_metrics.total_tool_calls → run result.tool_calls
         - grading.json execution_metrics.errors_encountered → run result.errors
         - grading.json expectations → run expectations（直接传递，要求 text/passed/evidence 字段）
+
+        **执行步骤**：
+        1. 扫描 with_skill/ 和 without_skill/ 目录
+        2. 读取并解析每个 run 的 grading.json
+        3. 计算 run_summary（mean/stddev/min/max）
+        4. 计算 delta（with_skill - without_skill）
+        5. 对每对 with_skill/without_skill run 调用 _run_comparisons() 做盲比较
+        6. 调用 _run_analysis() 对 benchmark 整体做深度分析
+        7. 将 comparisons 和 analysis 结果写入 benchmark.json
 
         输出 benchmark.json（格式见附录 A）。
         """
@@ -2869,6 +2906,8 @@ batch-workspace-20260427/
     "skill_name": "string",
     "skill_path": "string",
     "executor_model": "string",
+    "comparator_model": "string, 可选, BlindComparator 使用的模型",
+    "analyzer_model": "string, 可选, PosthocAnalyzer 使用的模型",
     "timestamp": "ISO 8601",
     "evals_run": ["integer"],
     "runs_per_configuration": "integer"
@@ -2927,7 +2966,75 @@ batch-workspace-20260427/
       "tokens": "string, 如 +1700"
     }
   },
-  "notes": ["string"]
+  "notes": ["string"],
+  "comparisons": [
+    {
+      "eval_id": "integer",
+      "run_number": "integer",
+      "winner": "A | B | TIE | INCONCLUSIVE",
+      "confidence": "float 0.0-1.0",
+      "rubric_scores": {
+        "relevance": {"score_a": "integer 1-5", "score_b": "integer 1-5", "reasoning": "string"},
+        "accuracy": {"score_a": "integer 1-5", "score_b": "integer 1-5", "reasoning": "string"},
+        "completeness": {"score_a": "integer 1-5", "score_b": "integer 1-5", "reasoning": "string"},
+        "clarity": {"score_a": "integer 1-5", "score_b": "integer 1-5", "reasoning": "string"},
+        "actionability": {"score_a": "integer 1-5", "score_b": "integer 1-5", "reasoning": "string"}
+      },
+      "structure_scores": {
+        "organization": {"score_a": "integer 1-5", "score_b": "integer 1-5", "reasoning": "string"},
+        "formatting": {"score_a": "integer 1-5", "score_b": "integer 1-5", "reasoning": "string"},
+        "code_quality": {"score_a": "integer 1-5", "score_b": "integer 1-5", "reasoning": "string"},
+        "documentation": {"score_a": "integer 1-5", "score_b": "integer 1-5", "reasoning": "string"}
+      },
+      "output_rubric": {
+        "overall_winner": "A | B | TIE",
+        "overall_reasoning": "string",
+        "key_differences": ["string"],
+        "recommendation": "string"
+      },
+      "output_quality": {
+        "meets_requirements": {"a": "boolean", "b": "boolean"},
+        "has_errors": {"a": "boolean", "b": "boolean"},
+        "completeness_level": {"a": "string", "b": "string"}
+      },
+      "expectation_results": {
+        "total": "integer",
+        "a_passed": "integer",
+        "b_passed": "integer",
+        "details": [
+          {
+            "expectation": "string",
+            "a_passed": "boolean",
+            "b_passed": "boolean",
+            "a_evidence": "string",
+            "b_evidence": "string"
+          }
+        ]
+      }
+    }
+  ],
+  "analysis": {
+    "summary": "string, 整体分析摘要",
+    "strengths": ["string, Skill 的优势"],
+    "weaknesses": ["string, Skill 的不足"],
+    "improvement_suggestions": [
+      {
+        "area": "string",
+        "current_state": "string",
+        "suggestion": "string",
+        "priority": "HIGH | MEDIUM | LOW",
+        "expected_impact": "string"
+      }
+    ],
+    "instruction_following": {
+      "overall_score": "float 0.0-1.0",
+      "well_followed": ["string, 遵循良好的指令"],
+      "poorly_followed": ["string, 遵循较差的指令"],
+      "recommendations": ["string"]
+    },
+    "model_used": "string, 分析使用的模型",
+    "timestamp": "ISO 8601"
+  }
 }
 ```
 
@@ -3249,10 +3356,82 @@ class RunSummaryConfig(BaseModel):
     time_seconds: StatsValue
     tokens: StatsValue
 
+# --- Comparison 模型 ---
+
+class ComparisonRubricScores(BaseModel):
+    score_a: int
+    score_b: int
+    reasoning: str
+
+class ComparisonStructureScores(BaseModel):
+    score_a: int
+    score_b: int
+    reasoning: str
+
+class ComparisonOutputRubric(BaseModel):
+    overall_winner: str
+    overall_reasoning: str
+    key_differences: list[str] = []
+    recommendation: str = ""
+
+class ComparisonOutputQuality(BaseModel):
+    meets_requirements: dict[str, bool] = {}
+    has_errors: dict[str, bool] = {}
+    completeness_level: dict[str, str] = {}
+
+class ComparisonExpectationDetail(BaseModel):
+    expectation: str
+    a_passed: bool
+    b_passed: bool
+    a_evidence: str = ""
+    b_evidence: str = ""
+
+class ComparisonExpectationResults(BaseModel):
+    total: int
+    a_passed: int
+    b_passed: int
+    details: list[ComparisonExpectationDetail] = []
+
+class ComparisonResult(BaseModel):
+    eval_id: int
+    run_number: int
+    winner: str
+    confidence: float
+    rubric_scores: dict[str, ComparisonRubricScores] = {}
+    structure_scores: dict[str, ComparisonStructureScores] = {}
+    output_rubric: ComparisonOutputRubric | None = None
+    output_quality: ComparisonOutputQuality | None = None
+    expectation_results: ComparisonExpectationResults | None = None
+
+# --- Analysis 模型 ---
+
+class AnalysisImprovementSuggestion(BaseModel):
+    area: str
+    current_state: str
+    suggestion: str
+    priority: str
+    expected_impact: str = ""
+
+class AnalysisInstructionFollowing(BaseModel):
+    overall_score: float
+    well_followed: list[str] = []
+    poorly_followed: list[str] = []
+    recommendations: list[str] = []
+
+class AnalysisResult(BaseModel):
+    summary: str
+    strengths: list[str] = []
+    weaknesses: list[str] = []
+    improvement_suggestions: list[AnalysisImprovementSuggestion] = []
+    instruction_following: AnalysisInstructionFollowing | None = None
+    model_used: str = ""
+    timestamp: str = ""
+
 class BenchmarkMetadata(BaseModel):
     skill_name: str
     skill_path: str = ""
     executor_model: str = ""
+    comparator_model: str = ""
     analyzer_model: str = ""
     timestamp: str = ""
     evals_run: list[int] = []
@@ -3263,7 +3442,9 @@ class BenchmarkData(BaseModel):
     metadata: BenchmarkMetadata
     runs: list[RunResultEntry] = []
     run_summary: dict[str, Any] = {}
-    notes: list[Any] = []    # 可包含字符串和结构化 checkpoint 数据
+    notes: list[Any] = []
+    comparisons: list[ComparisonResult] = []
+    analysis: AnalysisResult | None = None
 
 # --- Compliance 模型 ---
 
@@ -3550,6 +3731,201 @@ Output ONLY a JSON array wrapped in ```json``` code block:
 3. 如果某条 instruction 在 LLM 返回中缺失，标记为 `followed=false, confidence=0.0, evidence="LLM did not evaluate this instruction"`
 4. 如果整体解析失败，所有 LLM_JUDGE 类指令标记为 `followed=false, confidence=0.0, evidence="Failed to parse compliance judge response"`
 5. **如果指令因预算或总超时被跳过**，标记为 `followed=false, confidence=0.0, evidence="Skipped: LLM check budget (20) exhausted"` 或 `"Skipped: overall compliance timeout exceeded"`
+
+### B.7 comparator prompt 构建规则
+
+BlindComparator（`scoring/comparator.py`）对同一 eval 的 with_skill (A) 和 without_skill (B) 输出做盲比较。从 `agents/comparator.md` 加载 prompt 模板，调用 `claude -p`。
+
+**盲比较设计**：prompt 中不告知 LLM 哪个输出是 A（with_skill）、哪个是 B（without_skill），仅标记为"Output A"和"Output B"，避免 LLM 偏向。
+
+**prompt 结构**（整合 `agents/comparator.md` 的核心逻辑）：
+
+```
+You are an expert evaluator performing a blind comparison between two outputs.
+
+## Task
+Compare Output A and Output B against the following expectations:
+{逐条列出 expectations}
+
+## Evaluation Criteria
+
+### Rubric Scores (1-5 scale for each)
+- Relevance: How well does the output address the prompt?
+- Accuracy: Is the information correct?
+- Completeness: Does it cover all aspects?
+- Clarity: Is it well-organized and easy to understand?
+- Actionability: Can the output be directly used?
+
+### Structure Scores (1-5 scale for each)
+- Organization: Logical flow and structure
+- Formatting: Proper use of formatting elements
+- Code Quality: Quality of any code produced
+- Documentation: Quality of explanations and comments
+
+## Outputs to Compare
+
+### Output A
+{transcript_a}
+
+### Output B
+{transcript_b}
+
+## Output Format
+
+Output ONLY a JSON object wrapped in ```json``` code block:
+
+```json
+{
+  "winner": "A | B | TIE | INCONCLUSIVE",
+  "confidence": 0.0-1.0,
+  "rubric_scores": {
+    "relevance": {"score_a": 1-5, "score_b": 1-5, "reasoning": "..."},
+    "accuracy": {"score_a": 1-5, "score_b": 1-5, "reasoning": "..."},
+    "completeness": {"score_a": 1-5, "score_b": 1-5, "reasoning": "..."},
+    "clarity": {"score_a": 1-5, "score_b": 1-5, "reasoning": "..."},
+    "actionability": {"score_a": 1-5, "score_b": 1-5, "reasoning": "..."}
+  },
+  "structure_scores": {
+    "organization": {"score_a": 1-5, "score_b": 1-5, "reasoning": "..."},
+    "formatting": {"score_a": 1-5, "score_b": 1-5, "reasoning": "..."},
+    "code_quality": {"score_a": 1-5, "score_b": 1-5, "reasoning": "..."},
+    "documentation": {"score_a": 1-5, "score_b": 1-5, "reasoning": "..."}
+  },
+  "output_rubric": {
+    "overall_winner": "A | B | TIE",
+    "overall_reasoning": "...",
+    "key_differences": ["..."],
+    "recommendation": "..."
+  },
+  "output_quality": {
+    "meets_requirements": {"a": true/false, "b": true/false},
+    "has_errors": {"a": true/false, "b": true/false},
+    "completeness_level": {"a": "full|partial|minimal", "b": "full|partial|minimal"}
+  },
+  "expectation_results": {
+    "total": N,
+    "a_passed": N,
+    "b_passed": N,
+    "details": [
+      {"expectation": "...", "a_passed": true/false, "b_passed": true/false, "a_evidence": "...", "b_evidence": "..."}
+    ]
+  }
+}
+```
+
+Important: You MUST NOT know which output used a skill. Evaluate purely on quality.
+```
+
+`claude -p` 的调用方式：
+
+```python
+subprocess.run(
+    ["claude", "-p", "--output-format", "text", "--dangerously-skip-permissions", "--max-turns", "1"],
+    input=full_prompt,
+    capture_output=True,
+    text=True,
+    timeout=timeout,
+    env={k: v for k, v in os.environ.items() if k != "CLAUDECODE"},
+)
+```
+
+**输出解析**：与 B.2 相同规则——查找 ```` ```json ```` 代码块，解析为 `ComparisonResult` 模型。解析失败时构建降级结果（`winner="INCONCLUSIVE"`, `confidence=0.0`）。
+
+**`_run_comparisons()` 调度逻辑**：
+
+```
+1. 从 runs 中按 eval_id 配对 with_skill 和 without_skill 的同编号 run
+2. 读取每对 run 的 transcript（从 run_debug.json 或 outputs 目录）
+3. 对每对调用 BlindComparator（即一次 claude -p 调用）
+4. 收集所有 ComparisonResult，返回 list[ComparisonResult]
+```
+
+### B.8 analyzer prompt 构建规则
+
+PosthocAnalyzer（`scoring/analyzer.py`）对 benchmark 整体做深度分析，生成改进建议。从 `agents/analyzer.md` 加载 prompt 模板，调用 `claude -p`。
+
+**prompt 结构**（整合 `agents/analyzer.md` 的核心逻辑）：
+
+```
+You are an expert skill evaluation analyst. Analyze the following benchmark data and provide deep insights.
+
+## Benchmark Data
+
+### Metadata
+- Skill: {skill_name}
+- Model: {executor_model}
+- Runs per configuration: {runs_per_configuration}
+
+### Run Summary
+{run_summary 的 JSON 格式}
+
+### Detailed Runs
+{逐条列出每个 run 的 configuration, pass_rate, expectations, compliance, calibration}
+
+### Comparisons (if available)
+{逐条列出 ComparisonResult 的 winner, confidence, key_differences}
+
+## Your Task
+
+Provide a comprehensive analysis covering:
+
+1. **Summary**: Overall assessment of the skill's effectiveness
+2. **Strengths**: What the skill does well (with evidence from runs)
+3. **Weaknesses**: Where the skill falls short (with evidence from runs)
+4. **Improvement Suggestions**: Specific, actionable recommendations
+5. **Instruction Following**: How well the execution followed SKILL.md instructions
+
+## Output Format
+
+Output ONLY a JSON object wrapped in ```json``` code block:
+
+```json
+{
+  "summary": "string, 整体分析摘要",
+  "strengths": ["string, 优势列表"],
+  "weaknesses": ["string, 不足列表"],
+  "improvement_suggestions": [
+    {
+      "area": "string, 改进领域",
+      "current_state": "string, 当前状况",
+      "suggestion": "string, 具体建议",
+      "priority": "HIGH | MEDIUM | LOW",
+      "expected_impact": "string, 预期影响"
+    }
+  ],
+  "instruction_following": {
+    "overall_score": 0.0-1.0,
+    "well_followed": ["string, 遵循良好的指令"],
+    "poorly_followed": ["string, 遵循较差的指令"],
+    "recommendations": ["string, 改进建议"]
+  }
+}
+```
+
+Be specific and evidence-based. Reference actual pass rates, expectation results, and comparison outcomes.
+```
+
+`claude -p` 的调用方式与 comparator 相同（`--output-format text`，通过 stdin 传入，`--max-turns 1`）。
+
+**输出解析**：与 B.2 相同规则——查找 ```` ```json ```` 代码块，解析为 `AnalysisResult` 模型。解析失败时构建降级结果（`summary="Failed to parse analyzer response"`, 空列表）。
+
+**`_run_analysis()` 调度逻辑**：
+
+```
+1. 构建 benchmark_data 的摘要（从 BenchmarkData 模型序列化）
+2. 构建 prompt，包含 run_summary、detailed runs、comparisons
+3. 调用 PosthocAnalyzer（即一次 claude -p 调用）
+4. 返回 AnalysisResult
+```
+
+**`_run_comparison_analysis()` 编排逻辑**：
+
+```
+1. 调用 _run_comparisons() 获取 list[ComparisonResult]
+2. 调用 _run_analysis() 获取 AnalysisResult
+3. 将两者写入 benchmark.json 的 comparisons 和 analysis 字段
+4. 返回 (comparisons, analysis)
+```
 
 ---
 

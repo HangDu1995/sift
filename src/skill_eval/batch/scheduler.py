@@ -64,7 +64,7 @@ class BatchScheduler:
                 self.run_config.output_dir = skill_workspace
 
                 def make_batch_progress(skill_name, idx, total):
-                    def on_run_progress(eval_name, config_name, eval_idx, total_evals, completed, total_runs, grading, run_duration=0.0, run_output=None):
+                    def on_run_progress(eval_name, config_name, eval_idx, total_evals, completed, total_runs, grading, run_duration=0.0, run_output=None, phase="", substep=""):
                         if self.on_progress:
                             self.on_progress(
                                 skill_name, idx, total,
@@ -76,7 +76,7 @@ class BatchScheduler:
                 ab = ABTestRunner(self.run_config, self.scoring_config, on_progress=make_batch_progress(skill_path, skill_idx, total_skills))
                 iteration_dir = ab.run_ab_test(skill_dir, eval_set)
 
-                agg = BenchmarkAggregator()
+                agg = BenchmarkAggregator(model=self.run_config.model)
                 benchmark = agg.aggregate(iteration_dir, skill_dir)
                 (iteration_dir / "benchmark.json").write_text(
                     json.dumps(benchmark.model_dump(mode="json"), indent=2, ensure_ascii=False),

@@ -84,7 +84,7 @@ def _run_ab_eval(
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=exc.exit_code)
 
-    agg = BenchmarkAggregator()
+    agg = BenchmarkAggregator(model=model)
     benchmark = agg.aggregate(iteration_dir, skill_path)
 
     benchmark_path = iteration_dir / "benchmark.json"
@@ -139,7 +139,7 @@ class _ProgressState:
     def __init__(self, num_evals: int, runs_per_config: int):
         self.num_evals = num_evals
         self.runs_per_config = runs_per_config
-        self.total_runs = num_evals * 2 * runs_per_config
+        self.total_runs = 2 * runs_per_config
         self.completed = 0
         self.current_eval = ""
         self.current_config = ""
@@ -790,7 +790,8 @@ def full(
     gen.write_static(iteration_dir, report_path, benchmark.model_dump(mode="json"))
 
     if format != "json":
-        checkpoints_data = (benchmark.notes or []) if isinstance(benchmark.notes, list) else []
+        all_notes = benchmark.notes if isinstance(benchmark.notes, list) else []
+        checkpoints_data = [n for n in all_notes if isinstance(n, dict)]
         if checkpoints_data:
             console.print(f"\n[bold]Checkpoint Breakdown:[/bold]")
             for cp in checkpoints_data:

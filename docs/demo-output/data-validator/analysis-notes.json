@@ -1,0 +1,13 @@
+[
+  "Only 1 run per configuration was executed (runs_per_configuration: 1), so all stddev values are 0 — pass rate variance and time variance cannot be assessed from this data",
+  "Eval 2 (L2-有效数据验证) is the sole failing eval in the with_skill configuration, scoring 50% (3/6): the 3 programmatic checks pass but all 3 LLM expectations fail — the agent produced the report file but classified valid records as invalid",
+  "The valid-record misclassification ('valid_count: 0, invalid_count: 2') occurs in both the with_skill and without_skill runs, suggesting this is not a skill-instruction gap but a validation logic issue common to both — possibly overly strict SQL injection detection triggering on clean data",
+  "Eval 1 (L1-验证规则理解) and Eval 3 (L2-无效数据验证) both pass at 100% in the with_skill run — the skill reliably instills correct rule understanding and correctly identifies invalid records",
+  "Without_skill fails all 5 programmatic assertions because validation-report.json is never created; with_skill passes all 5 — the skill provides the critical instruction to write output to that specific filename",
+  "Without_skill uses wrong allowed type values ('admin/user/guest' instead of 'user/order/product'), failing the type-domain expectation; with_skill correctly applies the task-specific domain — this is a direct factual knowledge gap the skill fills",
+  "SQL injection pattern checking ('需要检查 SQL 注入模式') passes in with_skill but fails in without_skill — the skill explicitly includes this requirement which the agent would not infer unaided",
+  "With_skill runs 17.7 seconds faster than without_skill (29.9s vs 47.6s) despite producing a structured output file, suggesting the skill reduces exploratory reasoning and tool call overhead",
+  "Token counts are 0 for all runs — token tracking appears not implemented or not captured in this benchmark, making cost comparison impossible",
+  "Comparison data shows with_skill (A) at 73% expectation pass rate vs without_skill (B) at 60%, a smaller gap than the direct benchmark delta (80% vs 33%) — the comparison used a different prompt or data set than the main benchmark runs",
+  "In the comparison, B (without_skill) scored higher on structure (5.0 vs 4.0) while A won on content correctness (4.7 vs 3.3) — without the skill, the agent produces better-organized output but with factually incorrect content"
+]

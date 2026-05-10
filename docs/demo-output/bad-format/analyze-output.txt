@@ -1,0 +1,1 @@
+Error: SKILL.md missing frontmatter (no opening ---)

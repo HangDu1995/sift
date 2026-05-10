@@ -1,0 +1,16 @@
+{
+  "skill_name": "bad-format",
+  "evals": [
+    {
+      "id": 1,
+      "name": "L1-规则理解",
+      "prompt": "请说明 data processing skill 的转换规则是什么",
+      "level": "L1",
+      "expectations": [
+        "提到了数据转换",
+        "提到了输出格式"
+      ],
+      "assertions": []
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # Skill-Eval 代码审查与修复记录
 
-> 记录了 2026-05-09 对 skill-eval 项目进行的三轮全面代码审查、重新审计和端到端测试中发现的全部问题及修复。
+> 记录了 2026-05-09~10 对 skill-eval 项目进行的六轮全面代码审查、重新审计和端到端测试中发现的全部问题及修复。
 
 ---
 
@@ -11,7 +11,11 @@
 | 第一轮 | 全量代码审查（3 agent 并行） | 20 | HIGH 5 / MEDIUM 7 / LOW 8 |
 | 第二轮 | 重新审计（3 agent 并行，覆盖变更后文件 + 剩余源文件 + 测试） | 20 | CRITICAL 2 / HIGH 8 / MEDIUM 8 / LOW 2 |
 | 第三轮 | E2E CLI 测试（11 命令 + observe agent） | 5 | HIGH 5 |
-| **合计** | | **45** | |
+| 第四轮 | 剩余已知问题修复 | 5 | LOW 5 |
+| **第五轮** | **Agent 审计 + 实现（comparator/analyzer/grader 重写）** | **8（审计发现）** | **CRITICAL 1 / HIGH 2 / LOW 5** |
+| **第六轮** | **实现后 bug 审查** | **6** | **CRITICAL 1 / HIGH 1 / LOW 4** |
+| **第七轮** | **E2E CLI 全流程测试（fixtures/test-skills）** | **4** | **HIGH 3 / LOW 1** |
+| **合计** | | **68** | |
 
 ---
 
@@ -212,12 +216,107 @@
 
 ---
 
+## 第五轮：Agent Prompt 审计 + 实现
+
+审计 `agents/` 目录 3 个文件与代码实际调用方式的一致性。
+
+### 审计发现
+
+| # | 严重度 | 文件:行 | 问题 | 修复 |
+|---|--------|---------|------|------|
+| A1 | HIGH | `agents/grader.md` | 描述多轮文件 I/O 工作流，但代码是单轮 `claude -p` 内联文本模式 | 完全重写为单轮内联文本模式 |
+| A2 | HIGH | `agents/grader.md` | Timing 字段名（`executor_duration_seconds`）与 `TimingData` 模型不匹配 | 重写输出格式，字段名与模型对齐 |
+| A3 | HIGH | `agents/grader.md` | 指示 agent 读文件、写文件——单轮调用不可能完成 | 移除所有文件 I/O 指令 |
+| B1 | HIGH | `agents/comparator.md` | 完全是死代码——从未被任何 Python 文件加载或调用 | 实现 `BlindComparator` 类并集成到 `BenchmarkAggregator` |
+| C1 | HIGH | `agents/analyzer.md` | 完全是死代码——从未被任何 Python 文件加载或调用 | 实现 `PosthocAnalyzer` 类并集成到 `BenchmarkAggregator` |
+| D1 | MEDIUM | `models.py:332` | `notes: list[Any]` 与代码实际存储 `list[dict]` 和 analyzer 描述的 `list[str]` 三者不一致 | 保持 `list[Any]`，analyzer 生成 notes 追加到现有 checkpoints 数据 |
+| E1 | MEDIUM | `benchmark.py:86-103` | `RunResultEntry.compliance` 和 `.calibration` 字段从未从 JSON 填充 | 记录为已知限制，后续完善 |
+
+### 实现变更
+
+**新增文件：**
+
+| 文件 | 说明 |
+|------|------|
+| `src/skill_eval/scoring/comparator.py` | `BlindComparator` — 盲比较器，单轮 `call_claude` 调用 |
+| `src/skill_eval/scoring/analyzer.py` | `PosthocAnalyzer` — 深度分析器，支持 benchmark 分析和 comparison 分析 |
+| `tests/test_agents.py` | 26 个单元测试（模型验证 + 解析 + 端到端 mock） |
+
+**新增 Pydantic 模型：**
+
+- `ComparisonRubricScores`, `ComparisonStructureScores`, `ComparisonOutputRubric`, `ComparisonOutputQuality`, `ComparisonExpectationDetail`, `ComparisonExpectationResults`, `ComparisonResult`
+- `AnalysisImprovementSuggestion`, `AnalysisInstructionFollowing`, `AnalysisResult`
+- `BenchmarkMetadata` 新增 `comparator_model: str = ""`
+- `BenchmarkData` 新增 `comparisons: list[ComparisonResult]` 和 `analysis: AnalysisResult | None = None`
+
+**集成变更：**
+
+- `BenchmarkAggregator.__init__` 接受 `model` 和 `timeout` 参数
+- `aggregate()` 新增 `_run_comparisons()` 和 `_run_analysis()` 步骤
+- 产出新文件：`comparison-run{N}.json`, `analysis-notes.json`, `analysis-result.json`
+- `CLI` 传递 `model` 给 `BenchmarkAggregator`
+
+---
+
+## 第六轮：实现后 Bug 审查
+
+对第五轮所有变更进行专项 bug 审查。
+
+| # | 严重度 | 文件:行 | 问题 | 修复 |
+|---|--------|---------|------|------|
+| F1 | CRITICAL | `benchmark.py:287-308` | `_run_analysis` 方法中 `return` 后有 ~23 行不可达死代码，与实际方法签名返回类型不一致 | 删除全部不可达代码 |
+| F2 | HIGH | `analyzer.py:123-137` | `_parse_analysis` 在 LLM 调用失败时返回 truthy 空 `AnalysisResult()`，调用方无法区分成功和失败 | 改为返回 `None`，签名更新为 `AnalysisResult \| None` |
+| F3 | LOW | `benchmark.py:235` | `wos_grading` 加载后从未使用 | 删除未使用变量 |
+| F4 | LOW | `benchmark.py:310` | `_run_comparison_analysis` 返回类型注解为 `object` 而非 `AnalysisResult` | 改为 `AnalysisResult \| None` |
+| F5 | LOW | `benchmark.py:114,129` | `_load_checkpoints` 对同一目录重复调用两次 | 合并为单次调用，复用变量 |
+| F6 | LOW | `benchmark.py:228-229` | `glob("run-*")` 未过滤非目录文件，可能导致 `_collect_run_output` 在文件上报错 | 添加 `if p.is_dir()` 过滤 |
+
+---
+
+## 第七轮：E2E CLI 全流程测试
+
+对 `fixtures/test-skills/` 执行完整 CLI 命令链测试。
+
+### 测试命令与结果
+
+| 命令 | 结果 | 关键数据 |
+|------|------|----------|
+| `skill-eval analyze data-transform` | **PASS** | 11/11, CAPABILITY_UPLIFT |
+| `skill-eval scan fixtures/test-skills/` | **PASS** | 3 skills, 3 with evals, WARN: eval id=1 no assertions |
+| `skill-eval full data-transform --runs 1` | **PASS** (partial) | delta -0.27, 2 runs |
+| `skill-eval run data-transform --runs 1` | **PASS** | comparison-run1.json 生成正确, analysis-notes.json 包含 10 条洞察 |
+| `skill-eval report --benchmark benchmark.json` | **PASS** | 61KB HTML 报告 |
+| `skill-eval batch manifest.json --runs 1` | **初始 FAIL → 修复后 PASS** | 3 skills 全部通过 |
+
+### 发现并修复的问题
+
+| # | 严重度 | 文件:行 | 问题 | 修复 |
+|---|--------|---------|------|------|
+| G1 | HIGH | `cli.py:142` | `_ProgressState.total_runs` 公式为 `num_evals * 2 * runs_per_config`，但 Runner 每次调用处理**所有 evals**（非每个 eval 单独调用），导致进度条显示 `2/6` 而非 `2/2` | 改为 `2 * runs_per_config` |
+| G2 | HIGH | `batch/scheduler.py:67` | `make_batch_progress.on_run_progress` 回调不接受 `phase` 和 `substep` 关键字参数，导致 batch 测试中所有 skill 因 `TypeError` 而崩溃（3/3 FAILED） | 在回调签名中添加 `phase=""` 和 `substep=""` |
+| G3 | LOW | `batch/scheduler.py:79` | `BenchmarkAggregator()` 构造时不传递 `model`，导致 batch 测试不生成 comparator/analyzer 结果 | 改为 `BenchmarkAggregator(model=self.run_config.model)` |
+| G4 | HIGH | `cli.py:793` | `full` 命令 checkpoint breakdown 遍历 `benchmark.notes` 时，将 analyzer 生成的字符串 notes 当作 dict 调用 `.get()`，导致 `AttributeError: 'str' object has no attribute 'get'` | 添加 `isinstance(n, dict)` 过滤，只对 checkpoint dicts 显示 breakdown |
+
+### 验证点
+
+| 验证项 | 结果 |
+|--------|------|
+| `comparison-run1.json` 生成正确 | PASS — 包含 winner, reason, rubric (content + structure), output_quality, expectation_results |
+| `analysis-notes.json` 生成正确 | PASS — 10 条深度洞察，覆盖 pass rate 对比、失败根因、元数据缺口、nest 转换等 |
+| `report.html` 生成 | PASS — 61,854 字节 |
+| `benchmark.json` 含 comparisons/analysis 字段 | PASS — comparisons 1 条, notes 15 条 |
+| 盲比较器有效区分 with/without skill | PASS — winner A (with_skill score 9.0) vs B (without_skill score 7.0) |
+| batch 调度器正确处理 phase/substep 参数 | PASS — 3 skills 全部完成 |
+| 242 项测试通过 | PASS |
+
+---
+
 ## 修复后统计
 
 | 指标 | 值 |
 |------|-----|
-| 总修复数 | 45 |
-| 修改文件数 | 18 |
-| 新增文件 | 2 (`utils.py`, `code-audit-fixes.md`) |
+| 总修复数 | 67 |
+| 修改文件数 | 27 |
+| 新增文件 | 5 (`utils.py`, `comparator.py`, `analyzer.py`, `test_agents.py`, `code-audit-fixes.md`) |
 | 删除重复代码 | ~150 行 (cli.py 中 run/full 命令合并) |
-| 测试通过 | 216/216 |
+| 测试通过 | 242/242 |

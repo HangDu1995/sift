@@ -1,0 +1,20 @@
+{
+  "skill_name": "missing-dep",
+  "evals": [
+    {
+      "id": 1,
+      "name": "L2-数据处理",
+      "prompt": "处理数据并输出 result.json",
+      "level": "L2",
+      "expectations": [
+        "输出文件存在"
+      ],
+      "assertions": [
+        {"name": "输出文件存在", "type": "FILE_EXISTS", "params": {"filename": "result.json"}}
+      ],
+      "fixtures": [
+        {"path": "input.json", "content": "[{\"id\": 1}]"}
+      ]
+    }
+  ]
+}

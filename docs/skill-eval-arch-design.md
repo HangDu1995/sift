@@ -14,7 +14,7 @@
 | 边界 | 内容 |
 |------|------|
 | **输入** | 一个或多个 `SKILL.md` 所在目录 + 可选的 `evals.json` 评测定义 |
-| **输出** | `benchmark.json` + `grading.json` + `compliance.json` + `run_debug.json` + HTML 报告 + CLI exit code |
+| **输出** | `benchmark.json`（含 `comparisons` + `analysis` 字段）+ `grading.json` + `compliance.json` + `comparison-run*.json` + `analysis-result.json` + `run_debug.json` + HTML 报告 + CLI exit code |
 | **外部依赖** | 本地安装的 `claude` CLI >= 2.1.0, < 2.2.0（通过 subprocess 调用 `claude -p`） |
 | **不依赖** | Claude Code 运行时、OpenCode 运行时、任何第三方 API Key |
 
@@ -164,6 +164,8 @@ package "核心模块" {
     [评分引擎\n程序化断言(快)\nLLM评分(深)\n混合合并] as scr #LightBlue
     [遵循性引擎\n指令提取\ntool_trace匹配\n仅with_skill] as comp #LightYellow
     [评分校准\n交叉验证\n可信度评估\nHIGH/MEDIUM/LOW/UNRELIABLE] as cal #LightYellow
+    [盲比较器\nBlindComparator\nwith/without\n输出对比] as comp_agent #LightBlue
+    [深度分析器\nPosthocAnalyzer\nbenchmark分析\n比较分析] as analysis_agent #LightYellow
     [Benchmark聚合\nmean/stddev/delta\nschema兼容] as agg #Lavender
 
     [优化循环\n触发描述优化\n自动迭代\ntrain/test分割] as opt #LightYellow
@@ -196,6 +198,11 @@ exe --> claude : claude -p
 scr --> claude : LLM评分
 comp --> claude : LLM评判
 exe --> agg : iteration_dir
+agg --> comp_agent : with/without runs
+comp_agent --> analysis_agent : comparison results
+comp_agent --> claude : LLM比较
+analysis_agent --> claude : LLM分析
+analysis_agent --> agg : comparisons + analysis
 opt ..> exe : 使用
 batch ..> exe : 调度
 batch ..> inttest : L2集成
@@ -329,6 +336,9 @@ for config_name in ("with_skill", "without_skill"):
   without_skill/run-1/
     outputs/, timing.json, grading.json, checkpoints.json,
     calibration.json, run_debug.json, error.txt (if failed)
+  comparison-run1.json
+  analysis-notes.json
+  analysis-result.json
   benchmark.json
 ```
 
@@ -498,9 +508,9 @@ overall_confidence = 0.7 (baseline)
 
 | 属性 | 值 |
 |------|------|
-| **职责** | 将所有 run 的 grading + compliance + calibration 结果聚合为 benchmark.json |
+| **职责** | 将所有 run 的 grading + compliance + calibration 结果聚合为 benchmark.json，并执行盲比较和深度分析 |
 | **输入** | 工作空间目录（直接扫描 with_skill/ 和 without_skill/ 下的 run-*/grading.json） |
-| **输出** | `benchmark.json`（runs 列表 + run_summary + delta + calibration_grade） |
+| **输出** | `benchmark.json`（runs 列表 + run_summary + delta + calibration_grade + comparisons + analysis） |
 | **关键契约** | 格式必须与 skill-creator 兼容。缺文件时跳过该 run 并 warning |
 
 **聚合逻辑**：
@@ -508,12 +518,17 @@ overall_confidence = 0.7 (baseline)
 - 计算 delta：with_skill 与 without_skill 的差值
 - 取所有 run 中最低的 calibration_grade 作为聚合 grade
 - 如果 grade 为 UNRELIABLE，delta 字段标注警告
+- `_run_comparisons()`：BlindComparator 对每对 with_skill/without_skill run 进行盲比较，输出 `comparison-run{N}.json`
+- `_run_analysis()`：PosthocAnalyzer 基于所有 run 数据生成 benchmark 分析笔记，输出 `analysis-notes.json`
+- `_run_comparison_analysis()`：PosthocAnalyzer 对比较结果进行深度分析，产出 `AnalysisResult`，输出 `analysis-result.json`
 
 **字段映射**：grading.json → benchmark.json 的对应关系：
 - `summary.pass_rate` → `run.result.pass_rate`
 - `timing.total_duration_seconds` → `run.result.time_seconds`
 - `timing.total_tokens` → `run.result.tokens`
 - `execution_metrics.total_tool_calls` → `run.result.tool_calls`
+- `_run_comparisons()` 产出 → `benchmark.json` 中 `comparisons` 字段
+- `_run_analysis()` + `_run_comparison_analysis()` 产出 → `benchmark.json` 中 `analysis` 字段
 
 ### 5.9 报告可视化 (`reporting/`)
 
@@ -667,8 +682,8 @@ start
 :→ calibration.json;
 
 |聚合与输出|
-:Benchmark Aggregator\nmean/stddev/delta;
-:→ benchmark.json\n含compliance+calibration;
+:Benchmark Aggregator\nmean/stddev/delta\n+盲比较+分析;
+:→ benchmark.json\n含compliance+calibration\n+comparisons+analysis;
 :HTML 报告\nEval Viewer;
 :CI Exit Code\n0=pass 1=fail\nUNRELIABLE→1;
 stop
@@ -677,7 +692,7 @@ stop
 
 ### 主流水线
 
-输入（SKILL.md + evals.json）→ 解析/加载 → 安全审查（可选门控，`--security-gate`）→ 静态分析（旁路）→ A/B 执行（一体化引擎：执行 + 评分 + 遵循性检查 + 评分校准 + 诊断，with_skill × N, without_skill × N）→ 产出（grading.json + compliance.json + calibration.json + run_debug.json + timing.json）→ Benchmark 聚合 → 输出（benchmark.json + report.html + CI exit code）。
+输入（SKILL.md + evals.json）→ 解析/加载 → 安全审查（可选门控，`--security-gate`）→ 静态分析（旁路）→ A/B 执行（一体化引擎：执行 + 评分 + 遵循性检查 + 评分校准 + 诊断，with_skill × N, without_skill × N）→ 产出（grading.json + compliance.json + calibration.json + run_debug.json + timing.json）→ Benchmark 聚合（含 BlindComparator 盲比较 + PosthocAnalyzer 深度分析）→ 输出（benchmark.json 含 comparisons + analysis + report.html + CI exit code）。
 
 静态分析是独立的旁路分支：SKILL.md → 解析 → 11 项评分 → scorecard.json → 直接汇入报告。
 
@@ -692,7 +707,9 @@ stop
 | 执行+评分 | `outputs/` + `timing.json` + `grading.json` + `run_debug.json` + `eval_metadata.json` | 原始输出文件 + 耗时/token + 评分结果 + 诊断（tool_trace/result_text/expectations） |
 | 遵循性 | `compliance.json` | 每条 SKILL.md 指令的 followed/confidence + 总体 compliance_rate |
 | 校准 | `calibration.json` | agreement_rate + 分歧记录 + 可信度等级 + 改进建议 |
-| 聚合 | `benchmark.json` | 所有 run 的汇总 + with/without delta + calibration_grade |
+| 聚合 | `benchmark.json` | 所有 run 的汇总 + with/without delta + calibration_grade + comparisons + analysis |
+| 比较 | `comparison-run{N}.json` | 每对 with/without run 的盲比较结果 |
+| 分析 | `analysis-result.json` | PosthocAnalyzer 深度分析结果（benchmark 分析 + 比较分析） |
 | 报告 | `report.html` | 自包含 HTML，数据内嵌 |
 
 ### `skill-eval full` 完整流程编排

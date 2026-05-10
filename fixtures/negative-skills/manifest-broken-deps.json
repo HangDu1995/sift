@@ -1,0 +1,8 @@
+{
+  "name": "negative-dependency-demo",
+  "skills": [
+    {"path": "broken-root", "depends_on": []},
+    {"path": "cascade-victim", "depends_on": ["broken-root"]},
+    {"path": "missing-dep", "depends_on": ["nonexistent-skill"]}
+  ]
+}

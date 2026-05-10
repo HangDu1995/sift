@@ -315,11 +315,78 @@ class RunSummaryConfig(BaseModel):
     tokens: StatsValue
 
 
+class ComparisonRubricScores(BaseModel):
+    correctness: int = 0
+    completeness: int = 0
+    accuracy: int = 0
+
+
+class ComparisonStructureScores(BaseModel):
+    organization: int = 0
+    formatting: int = 0
+    usability: int = 0
+
+
+class ComparisonOutputRubric(BaseModel):
+    content: ComparisonRubricScores = Field(default_factory=ComparisonRubricScores)
+    structure: ComparisonStructureScores = Field(default_factory=ComparisonStructureScores)
+    content_score: float = 0.0
+    structure_score: float = 0.0
+    overall_score: float = 0.0
+
+
+class ComparisonOutputQuality(BaseModel):
+    score: int = 0
+    strengths: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+
+
+class ComparisonExpectationDetail(BaseModel):
+    text: str = ""
+    passed: bool = False
+
+
+class ComparisonExpectationResults(BaseModel):
+    passed: int = 0
+    total: int = 0
+    pass_rate: float = 0.0
+    details: list[ComparisonExpectationDetail] = Field(default_factory=list)
+
+
+class ComparisonResult(BaseModel):
+    winner: str = ""
+    reasoning: str = ""
+    rubric: dict[str, ComparisonOutputRubric] = Field(default_factory=dict)
+    output_quality: dict[str, ComparisonOutputQuality] = Field(default_factory=dict)
+    expectation_results: dict[str, ComparisonExpectationResults] | None = None
+
+
+class AnalysisImprovementSuggestion(BaseModel):
+    priority: str = "medium"
+    category: str = ""
+    suggestion: str = ""
+    expected_impact: str = ""
+
+
+class AnalysisInstructionFollowing(BaseModel):
+    score: int = 0
+    issues: list[str] = Field(default_factory=list)
+
+
+class AnalysisResult(BaseModel):
+    winner_strengths: list[str] = Field(default_factory=list)
+    loser_weaknesses: list[str] = Field(default_factory=list)
+    instruction_following: dict[str, AnalysisInstructionFollowing] = Field(default_factory=dict)
+    improvement_suggestions: list[AnalysisImprovementSuggestion] = Field(default_factory=list)
+    transcript_insights: dict[str, str] = Field(default_factory=dict)
+
+
 class BenchmarkMetadata(BaseModel):
     skill_name: str
     skill_path: str = ""
     executor_model: str = ""
     analyzer_model: str = ""
+    comparator_model: str = ""
     timestamp: str = ""
     evals_run: list[int] = Field(default_factory=list)
     runs_per_configuration: int = 3
@@ -330,6 +397,8 @@ class BenchmarkData(BaseModel):
     runs: list[RunResultEntry] = Field(default_factory=list)
     run_summary: dict[str, Any] = Field(default_factory=dict)
     notes: list[Any] = Field(default_factory=list)
+    comparisons: list[ComparisonResult] = Field(default_factory=list)
+    analysis: AnalysisResult | None = None
 
 
 # ---------------------------------------------------------------------------

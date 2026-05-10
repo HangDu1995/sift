@@ -19,8 +19,8 @@ skill-creator（位于 `/Users/layne/codes/skills/skills/skill-creator`）是 Cl
 | `eval-viewer/generate_review.py` | `reporting/viewer.py` → `ReportGenerator` | 移植 `find_runs()`、`embed_file()`、HTTP server，新增历史对比 |
 | `eval-viewer/viewer.html` | `reporting/templates/viewer.html` | **直接复制**——自包含 HTML 评测结果查看器 |
 | `agents/grader.md` | `agents/grader.md` | **直接复制**——LLM 评分 prompt 模板 |
-| `agents/comparator.md` | `agents/comparator.md` | **直接复制**——盲评 prompt 模板 |
-| `agents/analyzer.md` | `agents/analyzer.md` | **直接复制**——benchmark 分析 prompt 模板 |
+| `agents/comparator.md` | `agents/comparator.md` | **直接复制并已实现**——盲评 prompt 模板，已实现为 BlindComparator 类（`scoring/comparator.py`），在 `BenchmarkAggregator._run_comparisons()` 中调用 |
+| `agents/analyzer.md` | `agents/analyzer.md` | **直接复制并已实现**——benchmark 分析 prompt 模板，已实现为 PosthocAnalyzer 类，在评测流程后自动调用 |
 | `references/schemas.md` | `models.py` → 30+ Pydantic 模型 | Markdown schema 定义转为可执行的数据模型 |
 | `scripts/quick_validate.py` | `static_analysis/checks.py` → 11 项检查 | 验证规则融入自动化检查函数 |
 
@@ -84,7 +84,7 @@ skill-eval 的 `MonitorImporter` 读取这种 JSONL，按 skill_name + 时间窗
 - **结构化输出**：要求 LLM 返回 JSON 数组 `[{"index": 0, "passed": true, "evidence": "..."}]`，可机械解析
 - **Evidence 强制**：每条判定必须附带证据引用，防止无理由的 PASS/FAIL
 
-skill-eval 在此基础上新增了**批量评估**（一次 `claude -p` 调用评估所有 checkpoint expectations）和**双通道交叉校准**（见下节）。
+skill-eval 在此基础上新增了**批量评估**（一次 `claude -p` 调用评估所有 checkpoint expectations）、**双通道交叉校准**（见下节）、**盲比较**（BlindComparator）和**深度分析**（PosthocAnalyzer）。
 
 ---
 
@@ -128,7 +128,7 @@ skill-eval 在此基础上新增了**批量评估**（一次 `claude -p` 调用�
 
 ---
 
-## 7. 可信评测的五个支柱
+## 7. 可信评测的六个支柱
 
 | 支柱 | 直接来源 | 防止的问题 |
 |------|----------|-----------|
@@ -137,6 +137,7 @@ skill-eval 在此基础上新增了**批量评估**（一次 `claude -p` 调用�
 | **评分校准** | skill-eval 原创，理论来自 Cohen's Kappa | 评分者不一致时盲目信任 |
 | **过程合规** | skill-eval 原创，理论来自 IFEval + ISO 19011 | 输出正确的假阳性 |
 | **级联归因** | skill-eval 原创，理论来自 Pinpoint RCA | 将上游失败误判为下游缺陷 |
+| **盲比较与深度分析** | skill-creator `comparator.md` + `analyzer.md`，实现为 BlindComparator + PosthocAnalyzer | 单一评分维度和缺乏深度根因分析 |
 
 ---
 

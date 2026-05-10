@@ -634,6 +634,9 @@ integration_scenarios:
 | `with_skill/run-1/calibration.json` | 评分可信度校准 |
 | `with_skill/run-1/run_debug.json` | claude 完整回复 + tool_calls + timing |
 | `with_skill/run-1/timing.json` | 执行耗时和 token 统计 |
+| `comparison-run{N}.json` | 每对 with/without run 的盲比较结果 |
+| `analysis-notes.json` | benchmark 分析笔记（字符串数组） |
+| `analysis-result.json` | 深度比较分析（AnalysisResult 模型） |
 
 ---
 
@@ -713,14 +716,16 @@ integration_scenarios:
 
 ```json
 {
-  "metadata": {"skill_name": "my-skill", "timestamp": "2026-01-15T10:30:00Z", "runs_per_configuration": 3},
+  "metadata": {"skill_name": "my-skill", "timestamp": "2026-01-15T10:30:00Z", "runs_per_configuration": 3, "analyzer_model": "claude-sonnet-4-20250514", "comparator_model": "claude-sonnet-4-20250514"},
   "runs": [...],
   "run_summary": {
     "with_skill": {"pass_rate": {"mean": 0.85, "stddev": 0.05}},
     "without_skill": {"pass_rate": {"mean": 0.35, "stddev": 0.08}},
     "delta": {"pass_rate": "+0.50", "time_seconds": "+13.0", "tokens": "+1700"}
   },
-  "notes": [{"eval_id": 1, "eval_name": "L1-...", "passed": 4, "total": 4, ...}]
+  "notes": [{"eval_id": 1, "eval_name": "L1-...", "passed": 4, "total": 4, ...}],
+  "comparisons": [{"run_pair": {"with_run": 1, "without_run": 1}, "winner": "with_skill", "confidence": "HIGH", "reasoning": "..."}],
+  "analysis": {"overall_verdict": "Skill provides significant improvement", "strengths": ["..."], "weaknesses": ["..."], "recommendations": ["..."]}
 }
 ```
 
@@ -747,7 +752,7 @@ skill-eval/
 │   ├── scanning/                  # L0 覆盖率扫描
 │   ├── evals/                     # evals.json 加载 + 生成
 │   ├── execution/                 # Claude 执行 + A/B 测试
-│   ├── scoring/                   # 评分引擎（9 种断言 + 插件 + 模板）
+│   ├── scoring/                   # 评分引擎（9 种断言 + 插件 + 模板 + 盲比较 + 分析）
 │   ├── compliance/                # 遵循性引擎
 │   ├── calibration/               # 评分校准
 │   ├── optimization/              # 触发优化
@@ -761,7 +766,7 @@ skill-eval/
 │   ├── android-minimal/           # 最小 Android 项目（~12 文件）
 │   ├── android-medium/            # 中等 Android 项目（~20 文件）
 │   └── README.md
-├── tests/                         # 216 个测试
+├── tests/                         # 242 个测试
 └── docs/
 ```
 
@@ -782,6 +787,9 @@ Skill-Eval 从 [skill-creator](https://github.com/user/skill-creator) 移植并�
 | `eval-viewer/viewer.html` | `reporting/templates/viewer.html` | 直接复制 |
 | `agents/grader.md` | `agents/grader.md` | 直接复制 |
 | `scripts/quick_validate.py` | `static_analysis/checks.py` | 验证逻辑融入 11 项检查 |
+| `scoring/comparator.py` | 新增（基于 `agents/comparator.md`） | BlindComparator 盲比较实现 |
+| `scoring/analyzer.py` | 新增（基于 `agents/analyzer.md`） | PosthocAnalyzer 深度分析实现 |
+| `tests/test_agents.py` | 新增 | 盲比较器 + 分析器 26 个单元测试 |
 
 新增模块（无对应源码）：
 
