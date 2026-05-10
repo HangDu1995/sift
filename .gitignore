@@ -18,6 +18,11 @@ output/
 batch-workspace*/
 *.benchmark.json
 
+*.validation-report.json
+*.validation_report.json
+*_report.json
+*_output.json
+
 .DS_Store
 *.swp
 *.swo
