@@ -108,6 +108,22 @@ def _build_run(root: Path, run_dir: Path) -> dict | None:
         except Exception:
             pass
 
+    compliance = None
+    compliance_path = run_dir / "compliance.json"
+    if compliance_path.exists():
+        try:
+            compliance = json.loads(compliance_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    calibration = None
+    calibration_path = run_dir / "calibration.json"
+    if calibration_path.exists():
+        try:
+            calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
     previous_output = None
     prev_dir = run_dir.parent.parent / "previous" / run_dir.name
     if prev_dir.is_dir() and (prev_dir / "outputs").is_dir():
@@ -123,6 +139,8 @@ def _build_run(root: Path, run_dir: Path) -> dict | None:
         "prompt": prompt,
         "outputs": embedded_files,
         "grading": grading,
+        "compliance": compliance,
+        "calibration": calibration,
         "previous_output": previous_output,
     }
 
@@ -177,6 +195,7 @@ class ReportGenerator:
         workspace: Path,
         benchmark: dict | None = None,
         previous: dict | None = None,
+        scorecard: dict | None = None,
     ) -> str:
         template_path = self.template_dir / "viewer.html"
         if not template_path.exists():
@@ -195,6 +214,7 @@ class ReportGenerator:
             "runs": runs,
             "previous": previous,
             "benchmark": benchmark,
+            "scorecard": scorecard,
         }
 
         json_data = json.dumps(data, ensure_ascii=False)
@@ -202,8 +222,8 @@ class ReportGenerator:
 
         return html
 
-    def write_static(self, workspace: Path, output_path: Path, benchmark: dict | None = None) -> None:
-        html = self.generate_html(workspace, benchmark)
+    def write_static(self, workspace: Path, output_path: Path, benchmark: dict | None = None, scorecard: dict | None = None) -> None:
+        html = self.generate_html(workspace, benchmark, scorecard=scorecard)
         output_path.write_text(html, encoding="utf-8")
 
     def serve(self, workspace: Path, port: int = 8080, benchmark: dict | None = None, open_browser: bool = False) -> None:

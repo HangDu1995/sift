@@ -656,6 +656,13 @@ def report(
     if benchmark and benchmark.exists():
         bench_data = json.loads(benchmark.read_text(encoding="utf-8"))
 
+    scorecard_data = None
+    if static and static.exists():
+        try:
+            scorecard_data = json.loads(static.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
     prev_data = None
     if previous and previous.exists():
         from skill_eval.reporting.viewer import load_previous_iteration
@@ -672,7 +679,7 @@ def report(
 
     if not open_browser:
         output_path = workspace / "report.html"
-        html = gen.generate_html(workspace, bench_data, previous=prev_data)
+        html = gen.generate_html(workspace, bench_data, previous=prev_data, scorecard=scorecard_data)
         output_path.write_text(html, encoding="utf-8")
         console.print(f"Report written to {output_path}")
     else:

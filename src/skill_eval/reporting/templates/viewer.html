@@ -860,46 +860,77 @@
       const section = document.getElementById("grades-section");
       const content = document.getElementById("grades-content");
 
-      if (!run.grading) {
+      if (!run.grading && !run.compliance && !run.calibration) {
         section.style.display = "none";
         return;
       }
 
-      const grading = run.grading;
       section.style.display = "block";
-      // Reset to collapsed
       content.classList.remove("open");
       document.getElementById("grades-arrow").classList.remove("open");
 
-      const summary = grading.summary || {};
-      const expectations = grading.expectations || [];
-
       let html = '<div style="padding: 1rem;">';
 
-      // Summary line
-      const passRate = summary.pass_rate != null
-        ? Math.round(summary.pass_rate * 100) + "%"
-        : "?";
-      const badgeClass = summary.pass_rate >= 0.8 ? "grade-pass" : summary.pass_rate >= 0.5 ? "" : "grade-fail";
-      html += '<div class="grades-summary">';
-      html += '<span class="grade-badge ' + badgeClass + '">' + passRate + '</span>';
-      html += '<span>' + (summary.passed || 0) + ' passed, ' + (summary.failed || 0) + ' failed of ' + (summary.total || 0) + '</span>';
-      html += '</div>';
-
-      // Assertions list
-      html += '<ul class="assertion-list">';
-      for (const exp of expectations) {
-        const statusClass = exp.passed ? "pass" : "fail";
-        const statusIcon = exp.passed ? "\u2713" : "\u2717";
-        html += '<li class="assertion-item">';
-        html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
-        html += '<span>' + escapeHtml(exp.text) + '</span>';
-        if (exp.evidence) {
-          html += '<div class="assertion-evidence">' + escapeHtml(exp.evidence) + '</div>';
+      // ── Compliance ──
+      if (run.compliance) {
+        const cr = run.compliance;
+        const rateColor = cr.compliance_rate >= 0.7 ? "var(--green)" : cr.compliance_rate >= 0.5 ? "var(--accent)" : "var(--red)";
+        html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
+        html += '<strong>Compliance:</strong> <span style="color:' + rateColor + ';font-weight:600;">' + (cr.compliance_rate != null ? (cr.compliance_rate * 100).toFixed(0) + '%' : '—') + '</span>';
+        html += ' (' + (cr.followed_count || 0) + '/' + (cr.total_instructions || 0) + ' instructions followed)';
+        if (cr.warnings && cr.warnings.length) {
+          html += '<ul style="font-size:0.75rem;color:var(--accent);margin:0.25rem 0 0 1.25rem;">';
+          for (const w of cr.warnings) html += '<li>' + escapeHtml(w) + '</li>';
+          html += '</ul>';
         }
-        html += '</li>';
+        html += '</div>';
       }
-      html += '</ul>';
+
+      // ── Calibration ──
+      if (run.calibration) {
+        const cal = run.calibration;
+        const gradeColor = cal.grade === "HIGH" ? "var(--green)" : cal.grade === "MEDIUM" ? "var(--accent)" : cal.grade === "LOW" ? "var(--text-muted)" : "var(--red)";
+        html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
+        html += '<strong>Calibration Grade:</strong> <span style="color:' + gradeColor + ';font-weight:600;">' + (cal.grade || "—") + '</span>';
+        html += ' (agreement: ' + (cal.agreement_rate != null ? (cal.agreement_rate * 100).toFixed(0) + '%' : '—') + ', overall confidence: ' + (cal.overall_confidence != null ? cal.overall_confidence.toFixed(2) : '—') + ')';
+        if (cal.recommendations && cal.recommendations.length) {
+          html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
+          for (const r of cal.recommendations) html += '<li>' + escapeHtml(r) + '</li>';
+          html += '</ul>';
+        }
+        html += '</div>';
+      }
+
+      // ── Grading ──
+      if (run.grading) {
+        const grading = run.grading;
+        const summary = grading.summary || {};
+        const expectations = grading.expectations || [];
+
+        // Summary line
+        const passRate = summary.pass_rate != null
+          ? Math.round(summary.pass_rate * 100) + "%"
+          : "?";
+        const badgeClass = summary.pass_rate >= 0.8 ? "grade-pass" : summary.pass_rate >= 0.5 ? "" : "grade-fail";
+        html += '<div class="grades-summary">';
+        html += '<span class="grade-badge ' + badgeClass + '">' + passRate + '</span>';
+        html += '<span>' + (summary.passed || 0) + ' passed, ' + (summary.failed || 0) + ' failed of ' + (summary.total || 0) + '</span>';
+        html += '</div>';
+
+        html += '<ul class="assertion-list">';
+        for (const exp of expectations) {
+          const statusClass = exp.passed ? "pass" : "fail";
+          const statusIcon = exp.passed ? "\u2713" : "\u2717";
+          html += '<li class="assertion-item">';
+          html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
+          html += '<span>' + escapeHtml(exp.text) + '</span>';
+          if (exp.evidence) {
+            html += '<div class="assertion-evidence">' + escapeHtml(exp.evidence) + '</div>';
+          }
+          html += '</li>';
+        }
+        html += '</ul>';
+      }
 
       html += '</div>';
       content.innerHTML = html;
@@ -1162,6 +1193,25 @@
         html += mkCard("Skill", metadata.skill_name, "", "var(--accent)");
       }
       html += "</div>";
+
+      // ── Scorecard (static analysis) ──
+      const scorecard = EMBEDDED_DATA.scorecard;
+      if (scorecard && (scorecard.checks || scorecard.score !== undefined)) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Static Analysis Scorecard</div>';
+        const scoreColor = scorecard.score >= 8 ? "var(--green)" : scorecard.score >= 5 ? "var(--accent)" : "var(--red)";
+        html += '<div style="text-align:center;margin-bottom:0.75rem;"><span style="font-size:2rem;font-family:Poppins,sans-serif;font-weight:600;color:' + scoreColor + ';">' + (scorecard.score || 0) + '/' + (scorecard.max_score || 11) + '</span>';
+        html += ' <span style="color:var(--text-muted);">' + (scorecard.category || "") + '</span></div>';
+        if (scorecard.checks) {
+          html += '<table class="benchmark-table"><thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead><tbody>';
+          for (const ck of scorecard.checks) {
+            const statusIcon = ck.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
+            html += '<tr><td>' + escapeHtml(ck.name || "") + '</td><td>' + statusIcon + '</td><td style="font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(ck.message || "") + '</td></tr>';
+          }
+          html += '</tbody></table>';
+        }
+        html += '</div>';
+      }
 
       // ── Pass rate bar chart ──
       if (configA && configB) {
