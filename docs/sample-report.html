@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600&family=Lora:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous"></script>
   <style>
     :root {
@@ -646,7 +647,7 @@
 
   <script>
     // ---- Embedded data (injected by generate_review.py) ----
-    const EMBEDDED_DATA = {"skill_name": "iteration-1", "runs": [{"id": "with_skill/run-1", "eval_id": 0, "config": "with_skill", "run_number": 1, "prompt": "", "outputs": [{"name": "input.json", "type": "text", "content": "[{\"id\": 1, \"name\": \"Alice\", \"type\": \"user\"}, {\"id\": 2, \"name\": \"Order1\", \"type\": \"order\"}, {\"id\": 3, \"name\": \"Bob\", \"type\": \"user\"}]"}, {"name": "transformed_filter.json", "type": "text", "content": "{\n  \"metadata\": {\n    \"source\": \"input.json\",\n    \"transform_type\": \"filter\",\n    \"record_count\": 2\n  },\n  \"records\": [\n    {\"id\": 1, \"name\": \"Alice\", \"type\": \"user\", \"transformed_at\": \"2026-05-10T00:00:00Z\"},\n    {\"id\": 3, \"name\": \"Bob\", \"type\": \"user\", \"transformed_at\": \"2026-05-10T00:00:00Z\"}\n  ]\n}\n"}, {"name": "transformed_flatten.json", "type": "text", "content": "{\n  \"metadata\": {\n    \"source\": \"input.json\",\n    \"transform_type\": \"flatten\",\n    \"record_count\": 3\n  },\n  \"records\": [\n    {\"id\": 1, \"name\": \"Alice\", \"type\": \"user\", \"transformed_at\": \"2026-05-10T00:00:00Z\"},\n    {\"id\": 2, \"name\": \"Order1\", \"type\": \"order\", \"transformed_at\": \"2026-05-10T00:00:00Z\"},\n    {\"id\": 3, \"name\": \"Bob\", \"type\": \"user\", \"transformed_at\": \"2026-05-10T00:00:00Z\"}\n  ]\n}\n"}], "grading": {"expectations": [{"text": "输出文件存在", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "包含 metadata", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "包含 records", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "metadata 包含 transform_type", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "输出文件存在", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "支持 flatten 转换", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "支持 nest 转换", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "支持 filter 转换", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "支持 rename-fields 转换", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "输出包含 metadata 头", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "address 被展开为 address.city 和 address.zip", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "包含 transformed_at 时间戳", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "只保留了 type 为 user 的记录", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "输出包含 metadata 头", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "原始字段被保留", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}], "summary": {"passed": 0, "failed": 15, "total": 15, "pass_rate": 0.0}, "execution_metrics": null, "timing": null, "claims": [], "user_notes_summary": null, "eval_feedback": null, "error": ""}, "previous_output": null}, {"id": "without_skill/run-1", "eval_id": 0, "config": "without_skill", "run_number": 1, "prompt": "", "outputs": [{"name": "filtered_users.json", "type": "text", "content": "[\n  {\n    \"id\": 1,\n    \"name\": \"Alice\",\n    \"type\": \"user\"\n  },\n  {\n    \"id\": 3,\n    \"name\": \"Bob\",\n    \"type\": \"user\"\n  }\n]"}, {"name": "flattened.jsonl", "type": "binary", "mime": "application/octet-stream", "content": "eyJpZCI6IDEsICJuYW1lIjogIkFsaWNlIiwgInR5cGUiOiAidXNlciJ9CnsiaWQiOiAyLCAibmFtZSI6ICJPcmRlcjEiLCAidHlwZSI6ICJvcmRlciJ9CnsiaWQiOiAzLCAibmFtZSI6ICJCb2IiLCAidHlwZSI6ICJ1c2VyIn0K"}, {"name": "input.json", "type": "text", "content": "[{\"id\": 1, \"name\": \"Alice\", \"type\": \"user\"}, {\"id\": 2, \"name\": \"Order1\", \"type\": \"order\"}, {\"id\": 3, \"name\": \"Bob\", \"type\": \"user\"}]"}], "grading": {"expectations": [{"text": "输出文件存在", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "包含 metadata", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "包含 records", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "metadata 包含 transform_type", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "输出文件存在", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "支持 flatten 转换", "passed": true, "evidence": "Transcript explicitly covers '展平 (Flatten)' as a supported transformation", "source": "llm_batch"}, {"text": "支持 nest 转换", "passed": false, "evidence": "Nest transformation is never mentioned in the transcript; only flatten, filter, and rename are covered", "source": "llm_batch"}, {"text": "支持 filter 转换", "passed": true, "evidence": "Transcript explicitly covers '过滤 (Filter)' as a supported transformation with examples", "source": "llm_batch"}, {"text": "支持 rename-fields 转换", "passed": true, "evidence": "'字段重命名' (rename-fields) is listed under '其他常见转换'", "source": "llm_batch"}, {"text": "输出包含 metadata 头", "passed": false, "evidence": "Transcript only mentions '3 records, one per line (JSON Lines format)' — no metadata header mentioned", "source": "llm_batch"}, {"text": "address 被展开为 address.city 和 address.zip", "passed": false, "evidence": "Transcript treats flattening as converting to JSON Lines format, not expanding nested address fields; no mention of address.city or address.zip in output", "source": "llm_batch"}, {"text": "包含 transformed_at 时间戳", "passed": false, "evidence": "No mention of transformed_at timestamp in the flatten output", "source": "llm_batch"}, {"text": "只保留了 type 为 user 的记录", "passed": true, "evidence": "Transcript explicitly states 'filtered_users.json: 2 records where type == \"user\" (Alice, Bob)'", "source": "llm_batch"}, {"text": "输出包含 metadata 头", "passed": false, "evidence": "No mention of a metadata header in the filtered output", "source": "llm_batch"}, {"text": "原始字段被保留", "passed": false, "evidence": "Transcript does not explicitly confirm original fields are preserved; only record count and filter condition are mentioned", "source": "llm_batch"}], "summary": {"passed": 4, "failed": 11, "total": 15, "pass_rate": 0.26666666666666666}, "execution_metrics": null, "timing": null, "claims": [], "user_notes_summary": null, "eval_feedback": null, "error": ""}, "previous_output": null}], "previous": null, "benchmark": {"metadata": {"skill_name": "", "skill_path": ".", "executor_model": "", "analyzer_model": "", "comparator_model": "default", "timestamp": "2026-05-10T08:35:40Z", "evals_run": [1, 2, 3], "runs_per_configuration": 1}, "runs": [{"eval_id": 0, "eval_name": "", "configuration": "with_skill", "run_number": 1, "result": {"pass_rate": 0.0, "passed": 0, "failed": 15, "total": 15, "time_seconds": 56.674, "tokens": 0, "tool_calls": 0, "errors": 0}, "expectations": [{"text": "输出文件存在", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "包含 metadata", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "包含 records", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "metadata 包含 transform_type", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "输出文件存在", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "支持 flatten 转换", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "支持 nest 转换", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "支持 filter 转换", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "支持 rename-fields 转换", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "输出包含 metadata 头", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "address 被展开为 address.city 和 address.zip", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "包含 transformed_at 时间戳", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "只保留了 type 为 user 的记录", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "输出包含 metadata 头", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "原始字段被保留", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}], "compliance": null, "calibration": null, "notes": []}, {"eval_id": 0, "eval_name": "", "configuration": "without_skill", "run_number": 1, "result": {"pass_rate": 0.26666666666666666, "passed": 4, "failed": 11, "total": 15, "time_seconds": 36.542, "tokens": 0, "tool_calls": 0, "errors": 0}, "expectations": [{"text": "输出文件存在", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "包含 metadata", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "包含 records", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "metadata 包含 transform_type", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "输出文件存在", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "支持 flatten 转换", "passed": true, "evidence": "Transcript explicitly covers '展平 (Flatten)' as a supported transformation", "source": "llm_batch"}, {"text": "支持 nest 转换", "passed": false, "evidence": "Nest transformation is never mentioned in the transcript; only flatten, filter, and rename are covered", "source": "llm_batch"}, {"text": "支持 filter 转换", "passed": true, "evidence": "Transcript explicitly covers '过滤 (Filter)' as a supported transformation with examples", "source": "llm_batch"}, {"text": "支持 rename-fields 转换", "passed": true, "evidence": "'字段重命名' (rename-fields) is listed under '其他常见转换'", "source": "llm_batch"}, {"text": "输出包含 metadata 头", "passed": false, "evidence": "Transcript only mentions '3 records, one per line (JSON Lines format)' — no metadata header mentioned", "source": "llm_batch"}, {"text": "address 被展开为 address.city 和 address.zip", "passed": false, "evidence": "Transcript treats flattening as converting to JSON Lines format, not expanding nested address fields; no mention of address.city or address.zip in output", "source": "llm_batch"}, {"text": "包含 transformed_at 时间戳", "passed": false, "evidence": "No mention of transformed_at timestamp in the flatten output", "source": "llm_batch"}, {"text": "只保留了 type 为 user 的记录", "passed": true, "evidence": "Transcript explicitly states 'filtered_users.json: 2 records where type == \"user\" (Alice, Bob)'", "source": "llm_batch"}, {"text": "输出包含 metadata 头", "passed": false, "evidence": "No mention of a metadata header in the filtered output", "source": "llm_batch"}, {"text": "原始字段被保留", "passed": false, "evidence": "Transcript does not explicitly confirm original fields are preserved; only record count and filter condition are mentioned", "source": "llm_batch"}], "compliance": null, "calibration": null, "notes": []}], "run_summary": {"with_skill": {"pass_rate": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0}, "time_seconds": {"mean": 56.674, "stddev": 0.0, "min": 56.674, "max": 56.674}, "tokens": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0}}, "without_skill": {"pass_rate": {"mean": 0.2667, "stddev": 0.0, "min": 0.2667, "max": 0.2667}, "time_seconds": {"mean": 36.542, "stddev": 0.0, "min": 36.542, "max": 36.542}, "tokens": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0}}, "delta": {"pass_rate": "-0.27", "time_seconds": "+20.1", "tokens": "+0"}}, "notes": [{"eval_id": 1, "eval_name": "L1-转换能力理解", "passed": 0, "failed": 4, "total": 4, "pass_rate": 0.0, "assertions": [], "expectations": [{"text": "支持 flatten 转换", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "支持 nest 转换", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "支持 filter 转换", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "支持 rename-fields 转换", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}]}, {"eval_id": 2, "eval_name": "L2-flatten转换", "passed": 0, "failed": 7, "total": 7, "pass_rate": 0.0, "assertions": [{"text": "输出文件存在", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "包含 metadata", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "包含 records", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}, {"text": "metadata 包含 transform_type", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}], "expectations": [{"text": "输出包含 metadata 头", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "address 被展开为 address.city 和 address.zip", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "包含 transformed_at 时间戳", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}]}, {"eval_id": 3, "eval_name": "L2-数据过滤", "passed": 0, "failed": 4, "total": 4, "pass_rate": 0.0, "assertions": [{"text": "输出文件存在", "passed": false, "evidence": "File not found: transformed.json", "source": "programmatic"}], "expectations": [{"text": "只保留了 type 为 user 的记录", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "输出包含 metadata 头", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}, {"text": "原始字段被保留", "passed": false, "evidence": "Not evaluated", "source": "llm_batch"}]}, "with_skill achieves 0% pass rate vs without_skill at 26.67% — the skill actively harms performance relative to the baseline", "All programmatic assertions fail in both configurations with 'File not found: transformed.json' — neither configuration produces the required output file", "All LLM-batch assertions for with_skill are marked 'Not evaluated', while without_skill's LLM-batch assertions do get evaluated — with_skill's execution path appears to halt before producing evaluable output", "with_skill takes 56.7s vs without_skill's 36.5s (+20.1s) while producing worse results — the skill adds latency without any benefit", "without_skill correctly handles 3 of 4 transformation types (flatten, filter, rename-fields) but fails on 'nest' — nest transformation is the only capability gap in the baseline", "without_skill fails all metadata-header checks across both flatten and filter evals — the output structure (metadata wrapper with transform_type, transformed_at) is not being produced in either configuration", "without_skill's flatten implementation misinterprets the task: it converts to JSON Lines format rather than expanding nested address fields (address.city, address.zip) as the eval expects", "without_skill correctly filters records by type='user' (Alice, Bob) but omits the metadata header from the filtered output, causing that assertion to fail", "eval_id is 0 with empty eval_name in both run records, but the notes section correctly identifies evals 1, 2, 3 with names — suggests a data recording inconsistency in run metadata", "Only 1 run per configuration was executed, so all stddev values are 0 — no variance data is available and single-run results may not be representative", "Token counts are 0 for all runs — token tracking appears to be disabled or broken in this benchmark run", "The comparator call failed entirely, producing a TIE with reasoning 'Comparator call failed' — no comparison analysis is available for this benchmark"], "comparisons": [{"winner": "TIE", "reasoning": "Comparator call failed", "rubric": {}, "output_quality": {}, "expectation_results": null}], "analysis": null}};
+    const EMBEDDED_DATA = {"skill_name": "iteration-1", "runs": [{"id": "with_skill/run-1", "eval_id": 0, "config": "with_skill", "run_number": 1, "prompt": "", "outputs": [{"name": "input.json", "type": "text", "content": "[{\"id\": -1, \"name\": \"\", \"type\": \"unknown\"}, {\"id\": 0, \"name\": \"test\"}]"}, {"name": "validation-report.json", "type": "text", "content": "{\n  \"valid_count\": 0,\n  \"invalid_count\": 2,\n  \"errors\": [\n    \"Record 1: 'id' is -1, must be a positive integer\",\n    \"Record 1: 'name' is empty, must be a non-empty string\",\n    \"Record 1: 'type' is 'unknown', must be one of: user, order, product\",\n    \"Record 2: 'id' is 0, must be a positive integer\",\n    \"Record 2: 'type' field is missing (required field)\"\n  ]\n}\n"}], "grading": {"expectations": [{"text": "报告文件存在", "passed": true, "evidence": "File exists: validation-report.json", "source": "programmatic"}, {"text": "报告包含 valid_count", "passed": true, "evidence": "Field 'valid_count' found in validation-report.json", "source": "programmatic"}, {"text": "报告包含 errors", "passed": true, "evidence": "Field 'errors' found in validation-report.json", "source": "programmatic"}, {"text": "报告文件存在", "passed": true, "evidence": "File exists: validation-report.json", "source": "programmatic"}, {"text": "有无效记录", "passed": true, "evidence": "Pattern 'invalid_count' found in validation-report.json", "source": "programmatic"}, {"text": "id 必须是正整数", "passed": true, "evidence": "Transcript explicitly states: 'id | Must be a positive integer (> 0)'", "source": "llm_batch"}, {"text": "name 必须是非空字符串", "passed": true, "evidence": "Transcript explicitly states: 'name | Must be a non-empty string'", "source": "llm_batch"}, {"text": "type 必须是 user/order/product 之一", "passed": true, "evidence": "Transcript explicitly states: 'type | Must be one of: \"user\", \"order\", \"product\"'", "source": "llm_batch"}, {"text": "需要检查 SQL 注入模式", "passed": true, "evidence": "Transcript states: 'String fields must not contain SQL injection patterns'", "source": "llm_batch"}, {"text": "所有记录验证通过", "passed": false, "evidence": "Transcript shows 'Valid records: 0' and 'Both records are invalid' — no valid records found", "source": "llm_batch"}, {"text": "验证报告显示 valid_count 为 2", "passed": false, "evidence": "Transcript reports valid_count as 0, not 2", "source": "llm_batch"}, {"text": "验证报告显示 invalid_count 为 0", "passed": false, "evidence": "Transcript reports invalid_count as 2, not 0", "source": "llm_batch"}, {"text": "检测到无效记录", "passed": true, "evidence": "Transcript states 'Both records are invalid' and 'Invalid records: 2'", "source": "llm_batch"}, {"text": "验证报告包含错误描述", "passed": true, "evidence": "Transcript lists specific errors: 'invalid id, empty/missing name, invalid/missing type' — 5 total errors described", "source": "llm_batch"}, {"text": "id 为负数被标记为错误", "passed": true, "evidence": "Record 1 with id=-1 is explicitly flagged: 'id is not positive; name is empty; type is not a valid value'", "source": "llm_batch"}], "summary": {"passed": 12, "failed": 3, "total": 15, "pass_rate": 0.8}, "execution_metrics": null, "timing": null, "claims": [], "user_notes_summary": null, "eval_feedback": null, "error": ""}, "previous_output": null}, {"id": "without_skill/run-1", "eval_id": 0, "config": "without_skill", "run_number": 1, "prompt": "", "outputs": [{"name": "input.json", "type": "text", "content": "[{\"id\": -1, \"name\": \"\", \"type\": \"unknown\"}, {\"id\": 0, \"name\": \"test\"}]"}, {"name": "validation_report.json", "type": "text", "content": "{\n  \"summary\": {\n    \"total_records\": 2,\n    \"passed\": 0,\n    \"failed\": 2,\n    \"validation_rules\": {\n      \"id\": \"required, integer, > 0\",\n      \"name\": \"required, non-empty string\",\n      \"type\": \"required, one of: admin, user, guest\"\n    }\n  },\n  \"records\": [\n    {\n      \"index\": 0,\n      \"record\": {\"id\": -1, \"name\": \"\", \"type\": \"unknown\"},\n      \"status\": \"FAIL\",\n      \"errors\": [\n        {\"field\": \"id\", \"value\": -1, \"reason\": \"Must be a positive integer (> 0)\"},\n        {\"field\": \"name\", \"value\": \"\", \"reason\": \"Must be a non-empty string\"},\n        {\"field\": \"type\", \"value\": \"unknown\", \"reason\": \"Not an accepted type value; allowed: admin, user, guest\"}\n      ]\n    },\n    {\n      \"index\": 1,\n      \"record\": {\"id\": 0, \"name\": \"test\"},\n      \"status\": \"FAIL\",\n      \"errors\": [\n        {\"field\": \"id\", \"value\": 0, \"reason\": \"Must be a positive integer (> 0)\"},\n        {\"field\": \"type\", \"value\": null, \"reason\": \"Required field is missing\"}\n      ]\n    }\n  ]\n}\n"}], "grading": {"expectations": [{"text": "报告文件存在", "passed": false, "evidence": "File not found: validation-report.json", "source": "programmatic"}, {"text": "报告包含 valid_count", "passed": false, "evidence": "File not found: validation-report.json", "source": "programmatic"}, {"text": "报告包含 errors", "passed": false, "evidence": "File not found: validation-report.json", "source": "programmatic"}, {"text": "报告文件存在", "passed": false, "evidence": "File not found: validation-report.json", "source": "programmatic"}, {"text": "有无效记录", "passed": false, "evidence": "Pattern 'invalid_count' not found in any file", "source": "programmatic"}, {"text": "id 必须是正整数", "passed": true, "evidence": "Transcript explicitly states 'id | Required; must be an integer; must be > 0 (positive)'", "source": "llm_batch"}, {"text": "name 必须是非空字符串", "passed": true, "evidence": "Transcript explicitly states 'name | Required; must be a non-empty string'", "source": "llm_batch"}, {"text": "type 必须是 user/order/product 之一", "passed": false, "evidence": "Transcript mentions enum validation for type but lists 'admin/user/guest' as examples, not the required 'user/order/product' values", "source": "llm_batch"}, {"text": "需要检查 SQL 注入模式", "passed": false, "evidence": "No mention of SQL injection pattern checking anywhere in the transcript", "source": "llm_batch"}, {"text": "所有记录验证通过", "passed": false, "evidence": "Transcript explicitly states 'All 2 records fail validation' — no records pass", "source": "llm_batch"}, {"text": "验证报告显示 valid_count 为 2", "passed": false, "evidence": "Transcript shows 0 valid records, not 2", "source": "llm_batch"}, {"text": "验证报告显示 invalid_count 为 0", "passed": false, "evidence": "Transcript shows invalid_count of 2, not 0", "source": "llm_batch"}, {"text": "检测到无效记录", "passed": true, "evidence": "Transcript detects both records as invalid with detailed per-field failure analysis", "source": "llm_batch"}, {"text": "验证报告包含错误描述", "passed": true, "evidence": "Transcript provides specific error reasons for each failure (e.g., 'Must be a positive integer (> 0)', 'Required field is absent')", "source": "llm_batch"}, {"text": "id 为负数被标记为错误", "passed": true, "evidence": "Record #1 with id=-1 is explicitly marked FAIL with reason 'Must be a positive integer (> 0)'", "source": "llm_batch"}], "summary": {"passed": 5, "failed": 10, "total": 15, "pass_rate": 0.3333333333333333}, "execution_metrics": null, "timing": null, "claims": [], "user_notes_summary": null, "eval_feedback": null, "error": ""}, "previous_output": null}], "previous": null, "benchmark": {"metadata": {"skill_name": "data-validator", "skill_path": "/Users/layne/codes/skill-eval/fixtures/test-skills/data-validator", "executor_model": "", "analyzer_model": "default", "comparator_model": "default", "timestamp": "2026-05-10T09:52:33Z", "evals_run": [1, 2, 3], "runs_per_configuration": 1}, "runs": [{"eval_id": 0, "eval_name": "data-validator", "configuration": "with_skill", "run_number": 1, "result": {"pass_rate": 0.8, "passed": 12, "failed": 3, "total": 15, "time_seconds": 29.9, "tokens": 0, "tool_calls": 0, "errors": 0}, "expectations": [{"text": "报告文件存在", "passed": true, "evidence": "File exists: validation-report.json", "source": "programmatic"}, {"text": "报告包含 valid_count", "passed": true, "evidence": "Field 'valid_count' found in validation-report.json", "source": "programmatic"}, {"text": "报告包含 errors", "passed": true, "evidence": "Field 'errors' found in validation-report.json", "source": "programmatic"}, {"text": "报告文件存在", "passed": true, "evidence": "File exists: validation-report.json", "source": "programmatic"}, {"text": "有无效记录", "passed": true, "evidence": "Pattern 'invalid_count' found in validation-report.json", "source": "programmatic"}, {"text": "id 必须是正整数", "passed": true, "evidence": "Transcript explicitly states: 'id | Must be a positive integer (> 0)'", "source": "llm_batch"}, {"text": "name 必须是非空字符串", "passed": true, "evidence": "Transcript explicitly states: 'name | Must be a non-empty string'", "source": "llm_batch"}, {"text": "type 必须是 user/order/product 之一", "passed": true, "evidence": "Transcript explicitly states: 'type | Must be one of: \"user\", \"order\", \"product\"'", "source": "llm_batch"}, {"text": "需要检查 SQL 注入模式", "passed": true, "evidence": "Transcript states: 'String fields must not contain SQL injection patterns'", "source": "llm_batch"}, {"text": "所有记录验证通过", "passed": false, "evidence": "Transcript shows 'Valid records: 0' and 'Both records are invalid' — no valid records found", "source": "llm_batch"}, {"text": "验证报告显示 valid_count 为 2", "passed": false, "evidence": "Transcript reports valid_count as 0, not 2", "source": "llm_batch"}, {"text": "验证报告显示 invalid_count 为 0", "passed": false, "evidence": "Transcript reports invalid_count as 2, not 0", "source": "llm_batch"}, {"text": "检测到无效记录", "passed": true, "evidence": "Transcript states 'Both records are invalid' and 'Invalid records: 2'", "source": "llm_batch"}, {"text": "验证报告包含错误描述", "passed": true, "evidence": "Transcript lists specific errors: 'invalid id, empty/missing name, invalid/missing type' — 5 total errors described", "source": "llm_batch"}, {"text": "id 为负数被标记为错误", "passed": true, "evidence": "Record 1 with id=-1 is explicitly flagged: 'id is not positive; name is empty; type is not a valid value'", "source": "llm_batch"}], "compliance": null, "calibration": null, "notes": []}, {"eval_id": 0, "eval_name": "data-validator", "configuration": "without_skill", "run_number": 1, "result": {"pass_rate": 0.3333333333333333, "passed": 5, "failed": 10, "total": 15, "time_seconds": 47.634, "tokens": 0, "tool_calls": 0, "errors": 0}, "expectations": [{"text": "报告文件存在", "passed": false, "evidence": "File not found: validation-report.json", "source": "programmatic"}, {"text": "报告包含 valid_count", "passed": false, "evidence": "File not found: validation-report.json", "source": "programmatic"}, {"text": "报告包含 errors", "passed": false, "evidence": "File not found: validation-report.json", "source": "programmatic"}, {"text": "报告文件存在", "passed": false, "evidence": "File not found: validation-report.json", "source": "programmatic"}, {"text": "有无效记录", "passed": false, "evidence": "Pattern 'invalid_count' not found in any file", "source": "programmatic"}, {"text": "id 必须是正整数", "passed": true, "evidence": "Transcript explicitly states 'id | Required; must be an integer; must be > 0 (positive)'", "source": "llm_batch"}, {"text": "name 必须是非空字符串", "passed": true, "evidence": "Transcript explicitly states 'name | Required; must be a non-empty string'", "source": "llm_batch"}, {"text": "type 必须是 user/order/product 之一", "passed": false, "evidence": "Transcript mentions enum validation for type but lists 'admin/user/guest' as examples, not the required 'user/order/product' values", "source": "llm_batch"}, {"text": "需要检查 SQL 注入模式", "passed": false, "evidence": "No mention of SQL injection pattern checking anywhere in the transcript", "source": "llm_batch"}, {"text": "所有记录验证通过", "passed": false, "evidence": "Transcript explicitly states 'All 2 records fail validation' — no records pass", "source": "llm_batch"}, {"text": "验证报告显示 valid_count 为 2", "passed": false, "evidence": "Transcript shows 0 valid records, not 2", "source": "llm_batch"}, {"text": "验证报告显示 invalid_count 为 0", "passed": false, "evidence": "Transcript shows invalid_count of 2, not 0", "source": "llm_batch"}, {"text": "检测到无效记录", "passed": true, "evidence": "Transcript detects both records as invalid with detailed per-field failure analysis", "source": "llm_batch"}, {"text": "验证报告包含错误描述", "passed": true, "evidence": "Transcript provides specific error reasons for each failure (e.g., 'Must be a positive integer (> 0)', 'Required field is absent')", "source": "llm_batch"}, {"text": "id 为负数被标记为错误", "passed": true, "evidence": "Record #1 with id=-1 is explicitly marked FAIL with reason 'Must be a positive integer (> 0)'", "source": "llm_batch"}], "compliance": null, "calibration": null, "notes": []}], "run_summary": {"with_skill": {"pass_rate": {"mean": 0.8, "stddev": 0.0, "min": 0.8, "max": 0.8}, "time_seconds": {"mean": 29.9, "stddev": 0.0, "min": 29.9, "max": 29.9}, "tokens": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0}}, "without_skill": {"pass_rate": {"mean": 0.3333, "stddev": 0.0, "min": 0.3333, "max": 0.3333}, "time_seconds": {"mean": 47.634, "stddev": 0.0, "min": 47.634, "max": 47.634}, "tokens": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0}}, "delta": {"pass_rate": "+0.47", "time_seconds": "-17.7", "tokens": "+0"}}, "notes": [{"eval_id": 1, "eval_name": "L1-验证规则理解", "passed": 4, "failed": 0, "total": 4, "pass_rate": 1.0, "assertions": [], "expectations": [{"text": "id 必须是正整数", "passed": true, "evidence": "Transcript explicitly states: 'id | Must be a positive integer (> 0)'", "source": "llm_batch"}, {"text": "name 必须是非空字符串", "passed": true, "evidence": "Transcript explicitly states: 'name | Must be a non-empty string'", "source": "llm_batch"}, {"text": "type 必须是 user/order/product 之一", "passed": true, "evidence": "Transcript explicitly states: 'type | Must be one of: \"user\", \"order\", \"product\"'", "source": "llm_batch"}, {"text": "需要检查 SQL 注入模式", "passed": true, "evidence": "Transcript states: 'String fields must not contain SQL injection patterns'", "source": "llm_batch"}]}, {"eval_id": 2, "eval_name": "L2-有效数据验证", "passed": 3, "failed": 3, "total": 6, "pass_rate": 0.5, "assertions": [{"text": "报告文件存在", "passed": true, "evidence": "File exists: validation-report.json", "source": "programmatic"}, {"text": "报告包含 valid_count", "passed": true, "evidence": "Field 'valid_count' found in validation-report.json", "source": "programmatic"}, {"text": "报告包含 errors", "passed": true, "evidence": "Field 'errors' found in validation-report.json", "source": "programmatic"}], "expectations": [{"text": "所有记录验证通过", "passed": false, "evidence": "Transcript shows 'Valid records: 0' and 'Both records are invalid' — no valid records found", "source": "llm_batch"}, {"text": "验证报告显示 valid_count 为 2", "passed": false, "evidence": "Transcript reports valid_count as 0, not 2", "source": "llm_batch"}, {"text": "验证报告显示 invalid_count 为 0", "passed": false, "evidence": "Transcript reports invalid_count as 2, not 0", "source": "llm_batch"}]}, {"eval_id": 3, "eval_name": "L2-无效数据验证", "passed": 5, "failed": 0, "total": 5, "pass_rate": 1.0, "assertions": [{"text": "报告文件存在", "passed": true, "evidence": "File exists: validation-report.json", "source": "programmatic"}, {"text": "有无效记录", "passed": true, "evidence": "Pattern 'invalid_count' found in validation-report.json", "source": "programmatic"}], "expectations": [{"text": "检测到无效记录", "passed": true, "evidence": "Transcript states 'Both records are invalid' and 'Invalid records: 2'", "source": "llm_batch"}, {"text": "验证报告包含错误描述", "passed": true, "evidence": "Transcript lists specific errors: 'invalid id, empty/missing name, invalid/missing type' — 5 total errors described", "source": "llm_batch"}, {"text": "id 为负数被标记为错误", "passed": true, "evidence": "Record 1 with id=-1 is explicitly flagged: 'id is not positive; name is empty; type is not a valid value'", "source": "llm_batch"}]}, "Only 1 run per configuration was executed (runs_per_configuration: 1), so all stddev values are 0 — pass rate variance and time variance cannot be assessed from this data", "Eval 2 (L2-有效数据验证) is the sole failing eval in the with_skill configuration, scoring 50% (3/6): the 3 programmatic checks pass but all 3 LLM expectations fail — the agent produced the report file but classified valid records as invalid", "The valid-record misclassification ('valid_count: 0, invalid_count: 2') occurs in both the with_skill and without_skill runs, suggesting this is not a skill-instruction gap but a validation logic issue common to both — possibly overly strict SQL injection detection triggering on clean data", "Eval 1 (L1-验证规则理解) and Eval 3 (L2-无效数据验证) both pass at 100% in the with_skill run — the skill reliably instills correct rule understanding and correctly identifies invalid records", "Without_skill fails all 5 programmatic assertions because validation-report.json is never created; with_skill passes all 5 — the skill provides the critical instruction to write output to that specific filename", "Without_skill uses wrong allowed type values ('admin/user/guest' instead of 'user/order/product'), failing the type-domain expectation; with_skill correctly applies the task-specific domain — this is a direct factual knowledge gap the skill fills", "SQL injection pattern checking ('需要检查 SQL 注入模式') passes in with_skill but fails in without_skill — the skill explicitly includes this requirement which the agent would not infer unaided", "With_skill runs 17.7 seconds faster than without_skill (29.9s vs 47.6s) despite producing a structured output file, suggesting the skill reduces exploratory reasoning and tool call overhead", "Token counts are 0 for all runs — token tracking appears not implemented or not captured in this benchmark, making cost comparison impossible", "Comparison data shows with_skill (A) at 73% expectation pass rate vs without_skill (B) at 60%, a smaller gap than the direct benchmark delta (80% vs 33%) — the comparison used a different prompt or data set than the main benchmark runs", "In the comparison, B (without_skill) scored higher on structure (5.0 vs 4.0) while A won on content correctness (4.7 vs 3.3) — without the skill, the agent produces better-organized output but with factually incorrect content"], "comparisons": [{"winner": "A", "reasoning": "Output A correctly applies the expected type domain (user, order, product) and explicitly includes the 'valid_count' field, satisfying two key expectations that Output B fails. Output B uses incorrect allowed type values (admin, user, guest instead of user/order/product) and substitutes 'passed' for 'valid_count', introducing factual inaccuracies despite its richer per-record structure. Content correctness outweighs structural sophistication.", "rubric": {"A": {"content": {"correctness": 5, "completeness": 4, "accuracy": 5}, "structure": {"organization": 4, "formatting": 4, "usability": 4}, "content_score": 4.7, "structure_score": 4.0, "overall_score": 8.7}, "B": {"content": {"correctness": 3, "completeness": 4, "accuracy": 3}, "structure": {"organization": 5, "formatting": 5, "usability": 5}, "content_score": 3.3, "structure_score": 5.0, "overall_score": 8.3}}, "output_quality": {"A": {"score": 9, "strengths": ["Correct type domain (user, order, product) matching task expectations", "Explicitly includes 'valid_count' and 'invalid_count' fields by expected names", "All five validation errors correctly identified across both records", "Concise, parseable error messages"], "weaknesses": ["Flat error list lacks per-record grouping or field-level context", "Does not include actual field values in error context", "L1 question (what validations to perform) not explicitly addressed in visible output"]}, "B": {"score": 7, "strengths": ["Rich per-record structure with field name, actual value, and human-readable reason", "Includes 'validation_rules' summary documenting the rules applied", "Clear PASS/FAIL status per record with structured error objects", "Excellent overall organization and formatting"], "weaknesses": ["Uses incorrect allowed type values (admin, user, guest) — task expects user/order/product", "Missing 'valid_count' field name — uses 'passed' instead, failing a named expectation", "L1 question not explicitly addressed in visible output"]}}, "expectation_results": {"A": {"passed": 11, "total": 15, "pass_rate": 0.73, "details": [{"text": "报告文件存在", "passed": true}, {"text": "报告包含 valid_count", "passed": true}, {"text": "报告包含 errors", "passed": true}, {"text": "报告文件存在", "passed": true}, {"text": "有无效记录", "passed": true}, {"text": "id 必须是正整数", "passed": true}, {"text": "name 必须是非空字符串", "passed": true}, {"text": "type 必须是 user/order/product 之一", "passed": true}, {"text": "需要检查 SQL 注入模式", "passed": false}, {"text": "所有记录验证通过", "passed": false}, {"text": "验证报告显示 valid_count 为 2", "passed": false}, {"text": "验证报告显示 invalid_count 为 0", "passed": false}, {"text": "检测到无效记录", "passed": true}, {"text": "验证报告包含错误描述", "passed": true}, {"text": "id 为负数被标记为错误", "passed": true}]}, "B": {"passed": 9, "total": 15, "pass_rate": 0.6, "details": [{"text": "报告文件存在", "passed": true}, {"text": "报告包含 valid_count", "passed": false}, {"text": "报告包含 errors", "passed": true}, {"text": "报告文件存在", "passed": true}, {"text": "有无效记录", "passed": true}, {"text": "id 必须是正整数", "passed": true}, {"text": "name 必须是非空字符串", "passed": true}, {"text": "type 必须是 user/order/product 之一", "passed": false}, {"text": "需要检查 SQL 注入模式", "passed": false}, {"text": "所有记录验证通过", "passed": false}, {"text": "验证报告显示 valid_count 为 2", "passed": false}, {"text": "验证报告显示 invalid_count 为 0", "passed": false}, {"text": "检测到无效记录", "passed": true}, {"text": "验证报告包含错误描述", "passed": true}, {"text": "id 为负数被标记为错误", "passed": true}]}}}], "analysis": {"winner_strengths": ["Skill explicitly enumerated the allowed 'type' values ('user', 'order', 'product'), eliminating any ambiguity — winner reproduced them verbatim and applied them correctly to the invalid record", "Skill provided a concrete output schema example with 'valid_count', 'invalid_count', and 'errors' fields, so winner produced a structurally conformant report without guessing field names", "Anti-fabrication rules in the skill ('NEVER invent validation errors') constrained the winner to only report what was in the actual data", "Step-by-step task structure (Steps 1–4) gave the winner a clear execution path that mapped directly to the three L1/L2 tasks"], "loser_weaknesses": ["No skill was provided, forcing the loser to hallucinate the allowed 'type' enum: it produced 'admin', 'user', 'guest' instead of the correct 'user', 'order', 'product' — a factual error that would cause downstream consumers of its output to misunderstand the schema", "Without an output format specification, the loser substituted 'passed' for 'valid_count', making its report incompatible with any system expecting the canonical field name", "Loser invented extra validation rules not grounded in any schema — specifically a duplicate-id cross-record check and an unknown-fields check — inflating scope beyond what was asked", "Loser wrote to 'validation_report.json' (underscore) rather than 'validation-report.json' (hyphen), a filename mismatch that would break any downstream file reader keyed to the correct path"], "instruction_following": {"winner": {"score": 9, "issues": ["Minor: did not explicitly mention checking for SQL injection patterns in the transcript (Step 3 content check), though this may have been evaluated implicitly"]}, "loser": {"score": 2, "issues": ["No skill was present to follow — all validation rules were improvised", "Invented type domain ('admin', 'user', 'guest') contradicts the correct schema", "Invented output field name 'passed' instead of 'valid_count'", "Added out-of-scope checks (duplicate ids, unknown fields) not present in any provided specification", "Used wrong output filename ('validation_report.json' vs 'validation-report.json')"]}}, "improvement_suggestions": [{"priority": "high", "category": "instructions", "suggestion": "Provide a skill. The loser operated with no skill at all — every factual error (wrong type values, wrong field name, wrong filename) is a direct consequence of having no authoritative specification to reference. The winning skill's Step 2 alone ('type is one of: user, order, product') would have prevented the most critical failure.", "expected_impact": "Would eliminate hallucinated type domain and output field name, directly resolving both reasons the comparator cited for the loser losing"}, {"priority": "high", "category": "tools", "suggestion": "Include a canonical output example in the skill (as the winner's skill does) with exact field names: 'valid_count', 'invalid_count', 'errors'. The winner's skill showed a JSON block with these field names explicitly; the loser had no such anchor and substituted 'passed'.", "expected_impact": "Would ensure the output report is structurally compatible with downstream consumers and match the graded expectations"}, {"priority": "medium", "category": "instructions", "suggestion": "Specify the output filename explicitly and literally in the skill instructions (e.g., 'Write output to validation-report.json using a hyphen, not an underscore'). The loser used 'validation_report.json', which indicates the agent defaulted to its own naming convention.", "expected_impact": "Would prevent filename mismatches that silently break file-path-dependent checks"}, {"priority": "medium", "category": "error_handling", "suggestion": "Add an anti-fabrication rule equivalent to the winner's ('NEVER invent validation errors that do not exist in the actual data') that also covers schema invention: 'NEVER define allowed field values or output fields that are not specified in this skill'. This guards against the specific failure mode seen in the loser.", "expected_impact": "Would prevent the agent from silently substituting invented enums or field names when it cannot locate an authoritative reference"}, {"priority": "low", "category": "structure", "suggestion": "Scope the validation checklist explicitly to the five checks defined in the skill (Steps 2–3) and include a note such as 'Do not add checks beyond what is listed here'. The loser added duplicate-id and unknown-field checks that are not in the winner's skill, adding noise to the output.", "expected_impact": "Would keep output focused and avoid introducing false positives from out-of-scope rules"}], "transcript_insights": {"winner_execution_pattern": "Read available files → Parsed skill's 4-step process → Applied skill's exact type enum and output schema → Produced structurally and factually correct report with correct filename", "loser_execution_pattern": "Checked memory and working directory → Found no skill → Improvised validation rules from general knowledge → Hallucinated type enum and output field names → Wrote report to wrong filename with incompatible schema"}}}};
 
     // ---- State ----
     let feedbackMap = {};  // run_id -> feedback text
@@ -1115,27 +1116,64 @@
       const data = EMBEDDED_DATA.benchmark;
       if (!data) return;
 
-      // Show the tabs
       document.getElementById("view-tabs").style.display = "flex";
 
       const container = document.getElementById("benchmark-content");
       const summary = data.run_summary || {};
       const metadata = data.metadata || {};
       const notes = data.notes || [];
+      const comparisons = data.comparisons || [];
+      const analysis = data.analysis || null;
 
       let html = "";
 
-      // Header
-      html += "<h2 style='font-family: Poppins, sans-serif; margin-bottom: 0.5rem;'>Benchmark Results</h2>";
-      html += "<p style='color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1.25rem;'>";
-      if (metadata.skill_name) html += "<strong>" + escapeHtml(metadata.skill_name) + "</strong> &mdash; ";
-      if (metadata.timestamp) html += metadata.timestamp + " &mdash; ";
-      if (metadata.evals_run) html += "Evals: " + metadata.evals_run.join(", ") + " &mdash; ";
-      html += (metadata.runs_per_configuration || "?") + " runs per configuration";
-      html += "</p>";
+      // ── Dashboard header ──
+      html += "<div style='display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.5rem;'>";
+      const configs = Object.keys(summary).filter(k => k !== "delta");
+      const configA = configs[0] || "";
+      const configB = configs[1] || "";
+      const delta = summary.delta || {};
+      const a = summary[configA] || {};
+      const b = summary[configB] || {};
 
-      // Summary table
+      const prDelta = delta.pass_rate || "—";
+      const prNum = parseFloat(prDelta);
+      const prGood = prNum > 0.05;
+
+      function mkCard(title, value, sub, color) {
+        return '<div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;text-align:center;">'
+          + '<div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem;">' + title + '</div>'
+          + '<div style="font-size:1.8rem;font-family:Poppins,sans-serif;font-weight:600;color:' + color + ';">' + value + '</div>'
+          + (sub ? '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">' + sub + '</div>' : '')
+          + '</div>';
+      }
+
+      html += mkCard("Delta (Pass Rate)", (prNum > 0 ? "+" : "") + prDelta,
+        prGood ? "Skill improves Claude" : prNum < -0.05 ? "Skill hurts Claude" : "Skill has little effect",
+        prGood ? "var(--green)" : prNum < -0.05 ? "var(--red)" : "var(--text-muted)");
+
+      if (metadata.runs_per_configuration) {
+        html += mkCard("Runs per Config", metadata.runs_per_configuration, "with_skill / without_skill", "var(--text)");
+      }
+      if (metadata.evals_run && metadata.evals_run.length) {
+        html += mkCard("Evals", metadata.evals_run.length, metadata.evals_run.join(", "), "var(--text)");
+      }
+      if (metadata.skill_name) {
+        html += mkCard("Skill", metadata.skill_name, "", "var(--accent)");
+      }
+      html += "</div>";
+
+      // ── Pass rate bar chart ──
+      if (configA && configB) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Pass Rate Comparison</div>';
+        html += '<div style="max-width:500px;margin:0 auto;"><canvas id="passRateChart" style="max-height:200px;"></canvas></div>';
+        html += '</div>';
+      }
+
+      // ── Delta table ──
       html += '<table class="benchmark-table">';
+      html += "<thead><tr><th>Metric</th><th>" + escapeHtml(configA.replace(/_/g, ' ')) + "</th><th>" + escapeHtml(configB.replace(/_/g, ' ')) + "</th><th>Delta</th></tr></thead><tbody>";
 
       function fmtStat(stat, pct) {
         if (!stat) return "—";
@@ -1144,7 +1182,6 @@
         const s = pct ? (stat.stddev * 100).toFixed(0) : stat.stddev.toFixed(1);
         return m + suffix + " ± " + s + suffix;
       }
-
       function deltaClass(val) {
         if (!val) return "";
         const n = parseFloat(val);
@@ -1153,168 +1190,273 @@
         return "";
       }
 
-      // Discover config names dynamically (everything except "delta")
-      const configs = Object.keys(summary).filter(k => k !== "delta");
-      const configA = configs[0] || "config_a";
-      const configB = configs[1] || "config_b";
-      const labelA = configA.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-      const labelB = configB.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-      const a = summary[configA] || {};
-      const b = summary[configB] || {};
-      const delta = summary.delta || {};
-
-      html += "<thead><tr><th>Metric</th><th>" + escapeHtml(labelA) + "</th><th>" + escapeHtml(labelB) + "</th><th>Delta</th></tr></thead>";
-      html += "<tbody>";
-
       html += "<tr><td><strong>Pass Rate</strong></td>";
       html += "<td>" + fmtStat(a.pass_rate, true) + "</td>";
       html += "<td>" + fmtStat(b.pass_rate, true) + "</td>";
       html += '<td class="' + deltaClass(delta.pass_rate) + '">' + (delta.pass_rate || "—") + "</td></tr>";
 
-      // Time (only show row if data exists)
       if (a.time_seconds || b.time_seconds) {
-        html += "<tr><td><strong>Time (s)</strong></td>";
-        html += "<td>" + fmtStat(a.time_seconds, false) + "</td>";
-        html += "<td>" + fmtStat(b.time_seconds, false) + "</td>";
+        html += "<tr><td><strong>Time (s)</strong></td><td>" + fmtStat(a.time_seconds, false) + "</td><td>" + fmtStat(b.time_seconds, false) + "</td>";
         html += '<td class="' + deltaClass(delta.time_seconds) + '">' + (delta.time_seconds ? delta.time_seconds + "s" : "—") + "</td></tr>";
       }
-
-      // Tokens (only show row if data exists)
       if (a.tokens || b.tokens) {
-        html += "<tr><td><strong>Tokens</strong></td>";
-        html += "<td>" + fmtStat(a.tokens, false) + "</td>";
-        html += "<td>" + fmtStat(b.tokens, false) + "</td>";
+        html += "<tr><td><strong>Tokens</strong></td><td>" + fmtStat(a.tokens, false) + "</td><td>" + fmtStat(b.tokens, false) + "</td>";
         html += '<td class="' + deltaClass(delta.tokens) + '">' + (delta.tokens || "—") + "</td></tr>";
       }
-
       html += "</tbody></table>";
 
-      // Per-eval breakdown (if runs data available)
+      // ── Blind Comparison section ──
+      if (comparisons.length > 0) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Blind Comparison</div>';
+
+        for (let ci = 0; ci < comparisons.length; ci++) {
+          const comp = comparisons[ci];
+          if (ci > 0) html += '<hr style="border:0;border-top:1px solid var(--border);margin:1rem 0;">';
+
+          const wBadge = comp.winner === "A" ? "With Skill" : comp.winner === "B" ? "Without Skill" : "Tie";
+          const wColor = comp.winner === "A" ? "var(--green)" : comp.winner === "B" ? "var(--red)" : "var(--text-muted)";
+          html += '<div style="margin-bottom:0.75rem;"><strong>Winner:</strong> <span style="color:' + wColor + ';font-weight:600;">' + wBadge + '</span></div>';
+          html += '<div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:0.75rem;">' + escapeHtml(comp.reasoning || "") + '</div>';
+
+          // Rubric scores
+          if (comp.rubric && (comp.rubric.A || comp.rubric.B)) {
+            html += '<div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem;">';
+            for (const side of ["A", "B"]) {
+              const r = comp.rubric[side] || {};
+              const label = side === "A" ? "With Skill" : "Without Skill";
+              const scoreColor = r.overall_score >= 8 ? "var(--green)" : r.overall_score >= 5 ? "var(--accent)" : "var(--red)";
+              html += '<div style="flex:1;min-width:180px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;">';
+              html += '<div style="font-weight:600;margin-bottom:0.5rem;">' + label + ' <span style="color:' + scoreColor + ';font-size:1.1rem;">' + (r.overall_score || "?").toFixed(1) + '</span>/10</div>';
+              if (r.content) {
+                html += '<div style="font-size:0.75rem;color:var(--text-muted);">Content: ' + r.content_score.toFixed(1) + '/5 · Structure: ' + r.structure_score.toFixed(1) + '/5</div>';
+              }
+              html += '</div>';
+            }
+            html += '</div>';
+          }
+
+          // Quality highlights
+          if (comp.output_quality && (comp.output_quality.A || comp.output_quality.B)) {
+            html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">';
+            for (const side of ["A", "B"]) {
+              const q = comp.output_quality[side] || {};
+              const label = side === "A" ? "A" : "B";
+              html += '<div style="flex:1;min-width:160px;font-size:0.75rem;">';
+              html += '<strong>' + label + '</strong>: ' + (q.score || "?") + '/10';
+              if (q.strengths && q.strengths.length) html += '<br><span style="color:var(--green);">+</span> ' + escapeHtml(q.strengths[0]);
+              if (q.weaknesses && q.weaknesses.length) html += '<br><span style="color:var(--red);">-</span> ' + escapeHtml(q.weaknesses[0]);
+              html += '</div>';
+            }
+            html += '</div>';
+          }
+        }
+        html += '</div>';
+      }
+
+      // ── Analysis section ──
+      if (analysis && (analysis.winner_strengths || analysis.improvement_suggestions)) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Deep Analysis</div>';
+
+        if (analysis.instruction_following) {
+          const fi = analysis.instruction_following;
+          const wsIf = fi.winner || fi.A || {};
+          const lsIf = fi.loser || fi.B || {};
+          html += '<div style="display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap;">';
+          html += '<div style="flex:1;min-width:150px;"><strong>Winner Instruction Following:</strong> ' + (wsIf.score || "?") + '/10</div>';
+          html += '<div style="flex:1;min-width:150px;"><strong>Loser Instruction Following:</strong> ' + (lsIf.score || "?") + '/10</div>';
+          html += '</div>';
+        }
+
+        if (analysis.winner_strengths && analysis.winner_strengths.length) {
+          html += '<div style="margin-bottom:0.75rem;"><strong style="color:var(--green);">Winner Strengths</strong><ul style="font-size:0.8125rem;margin:0.25rem 0 0 1.25rem;">';
+          for (const s of analysis.winner_strengths) html += '<li>' + escapeHtml(s) + '</li>';
+          html += '</ul></div>';
+        }
+
+        if (analysis.loser_weaknesses && analysis.loser_weaknesses.length) {
+          html += '<div style="margin-bottom:0.75rem;"><strong style="color:var(--red);">Loser Weaknesses</strong><ul style="font-size:0.8125rem;margin:0.25rem 0 0 1.25rem;">';
+          for (const w of analysis.loser_weaknesses) html += '<li>' + escapeHtml(w) + '</li>';
+          html += '</ul></div>';
+        }
+
+        if (analysis.improvement_suggestions && analysis.improvement_suggestions.length) {
+          html += '<strong>Improvement Suggestions</strong>';
+          html += '<table class="benchmark-table" style="margin-top:0.5rem;"><thead><tr><th>Priority</th><th>Category</th><th>Suggestion</th><th>Expected Impact</th></tr></thead><tbody>';
+          for (const s of analysis.improvement_suggestions) {
+            const prioColor = s.priority === "high" ? "var(--red)" : s.priority === "medium" ? "var(--accent)" : "var(--text-muted)";
+            html += '<tr><td><span style="color:' + prioColor + ';font-weight:600;text-transform:uppercase;font-size:0.7rem;">' + escapeHtml(s.priority) + '</span></td>';
+            html += '<td>' + escapeHtml(s.category || "") + '</td>';
+            html += '<td style="font-size:0.8125rem;">' + escapeHtml(s.suggestion || "") + '</td>';
+            html += '<td style="font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(s.expected_impact || "") + '</td></tr>';
+          }
+          html += '</tbody></table>';
+        }
+        html += '</div>';
+      }
+
+      // ── Checkpoint breakdowns (dict notes) ──
+      const checkpoints = notes.filter(n => typeof n === 'object' && n !== null);
+      if (checkpoints.length > 0) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Checkpoint Breakdown</div>';
+        for (const cp of checkpoints) {
+          const cpRate = cp.pass_rate || 0;
+          const cpColor = cpRate >= 0.8 ? "var(--green)" : cpRate >= 0.5 ? "var(--accent)" : "var(--red)";
+          const cpStatus = cpRate >= 0.8 ? "PASS" : cpRate >= 0.5 ? "PARTIAL" : "FAIL";
+          html += '<div style="margin-bottom:0.75rem;">';
+          html += '<span style="color:' + cpColor + ';font-weight:600;">' + cpStatus + '</span> ';
+          html += '<strong>' + escapeHtml(cp.eval_name || "Checkpoint") + '</strong>';
+          html += ' — ' + (cp.passed || 0) + '/' + (cp.total || 0) + ' (' + (cpRate * 100).toFixed(0) + '%)';
+          html += '</div>';
+
+          if (cp.expectations && cp.expectations.length) {
+            html += '<ul style="font-size:0.75rem;margin:0 0 0.5rem 1.25rem;">';
+            for (const e of cp.expectations) {
+              const icon = e.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
+              html += '<li>' + icon + ' ' + escapeHtml(e.text || "") + '</li>';
+            }
+            html += '</ul>';
+          }
+          if (cp.assertions && cp.assertions.length) {
+            html += '<ul style="font-size:0.75rem;margin:0 0 0.5rem 1.25rem;">';
+            for (const a of cp.assertions) {
+              const icon = a.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
+              html += '<li style="color:var(--text-muted);">' + icon + ' <em>(assertion)</em> ' + escapeHtml(a.text || "") + '</li>';
+            }
+            html += '</ul>';
+          }
+        }
+        html += '</div>';
+      }
+
+      // ── Per-eval breakdown table ──
       const runs = data.runs || [];
       if (runs.length > 0) {
         const evalIds = [...new Set(runs.map(r => r.eval_id))].sort((a, b) => a - b);
-
-        html += "<h3 style='font-family: Poppins, sans-serif; margin-bottom: 0.75rem;'>Per-Eval Breakdown</h3>";
-
+        html += '<div style="margin-top:1.5rem;"><h3 style="font-family:Poppins,sans-serif;margin-bottom:0.75rem;">Per-Eval Breakdown</h3>';
         const hasTime = runs.some(r => r.result && r.result.time_seconds != null);
-        const hasErrors = runs.some(r => r.result && r.result.errors > 0);
 
         for (const evalId of evalIds) {
           const evalRuns = runs.filter(r => r.eval_id === evalId);
           const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : "Eval " + evalId;
+          html += '<h4 style="font-family:Poppins,sans-serif;margin:1rem 0 0.5rem;">' + escapeHtml(evalName) + '</h4>';
+          html += '<table class="benchmark-table"><thead><tr><th>Config</th><th>Run</th><th>Pass Rate</th>';
+          if (hasTime) html += '<th>Time (s)</th>';
+          html += '</tr></thead><tbody>';
 
-          html += "<h4 style='font-family: Poppins, sans-serif; margin: 1rem 0 0.5rem; color: var(--text);'>" + escapeHtml(evalName) + "</h4>";
-          html += '<table class="benchmark-table">';
-          html += "<thead><tr><th>Config</th><th>Run</th><th>Pass Rate</th>";
-          if (hasTime) html += "<th>Time (s)</th>";
-          if (hasErrors) html += "<th>Crashes During Execution</th>";
-          html += "</tr></thead>";
-          html += "<tbody>";
-
-          // Group by config and render with average rows
           const configGroups = [...new Set(evalRuns.map(r => r.configuration))];
           for (let ci = 0; ci < configGroups.length; ci++) {
             const config = configGroups[ci];
             const configRuns = evalRuns.filter(r => r.configuration === config);
             if (configRuns.length === 0) continue;
-
             const rowClass = ci === 0 ? "benchmark-row-with" : "benchmark-row-without";
             const configLabel = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 
             for (const run of configRuns) {
               const r = run.result || {};
               const prClass = r.pass_rate >= 0.8 ? "benchmark-delta-positive" : r.pass_rate < 0.5 ? "benchmark-delta-negative" : "";
-              html += '<tr class="' + rowClass + '">';
-              html += "<td>" + configLabel + "</td>";
-              html += "<td>" + run.run_number + "</td>";
-              html += '<td class="' + prClass + '">' + ((r.pass_rate || 0) * 100).toFixed(0) + "% (" + (r.passed || 0) + "/" + (r.total || 0) + ")</td>";
-              if (hasTime) html += "<td>" + (r.time_seconds != null ? r.time_seconds.toFixed(1) : "—") + "</td>";
-              if (hasErrors) html += "<td>" + (r.errors || 0) + "</td>";
-              html += "</tr>";
+              html += '<tr class="' + rowClass + '"><td>' + configLabel + '</td><td>' + run.run_number + '</td>';
+              html += '<td class="' + prClass + '">' + ((r.pass_rate || 0) * 100).toFixed(0) + '% (' + (r.passed || 0) + '/' + (r.total || 0) + ')</td>';
+              if (hasTime) html += '<td>' + (r.time_seconds != null ? r.time_seconds.toFixed(1) : "—") + '</td>';
+              html += '</tr>';
             }
 
-            // Average row
             const rates = configRuns.map(r => (r.result || {}).pass_rate || 0);
             const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
             const avgPrClass = avgRate >= 0.8 ? "benchmark-delta-positive" : avgRate < 0.5 ? "benchmark-delta-negative" : "";
-            html += '<tr class="benchmark-row-avg ' + rowClass + '">';
-            html += "<td>" + configLabel + "</td>";
-            html += "<td>Avg</td>";
-            html += '<td class="' + avgPrClass + '">' + (avgRate * 100).toFixed(0) + "%</td>";
+            html += '<tr class="benchmark-row-avg ' + rowClass + '"><td>' + configLabel + '</td><td>Avg</td>';
+            html += '<td class="' + avgPrClass + '">' + (avgRate * 100).toFixed(0) + '%</td>';
             if (hasTime) {
               const times = configRuns.map(r => (r.result || {}).time_seconds).filter(t => t != null);
-              html += "<td>" + (times.length ? (times.reduce((a, b) => a + b, 0) / times.length).toFixed(1) : "—") + "</td>";
+              html += '<td>' + (times.length ? (times.reduce((a, b) => a + b, 0) / times.length).toFixed(1) : "—") + '</td>';
             }
-            if (hasErrors) html += "<td></td>";
-            html += "</tr>";
+            html += '</tr>';
           }
-          html += "</tbody></table>";
+          html += '</tbody></table>';
 
-          // Per-assertion detail for this eval
+          // Per-assertion detail
           const runsWithExpectations = {};
           for (const config of configGroups) {
             runsWithExpectations[config] = evalRuns.filter(r => r.configuration === config && r.expectations && r.expectations.length > 0);
           }
-          const hasAnyExpectations = Object.values(runsWithExpectations).some(runs => runs.length > 0);
-          if (hasAnyExpectations) {
-            // Collect all unique assertion texts across all configs
+          const hasAnyExp = Object.values(runsWithExpectations).some(runs => runs.length > 0);
+          if (hasAnyExp) {
             const allAssertions = [];
             const seen = new Set();
             for (const config of configGroups) {
               for (const run of runsWithExpectations[config]) {
                 for (const exp of (run.expectations || [])) {
-                  if (!seen.has(exp.text)) {
-                    seen.add(exp.text);
-                    allAssertions.push(exp.text);
-                  }
+                  if (!seen.has(exp.text)) { seen.add(exp.text); allAssertions.push(exp.text); }
                 }
               }
             }
-
-            html += '<table class="benchmark-table" style="margin-top: 0.5rem;">';
-            html += "<thead><tr><th>Assertion</th>";
+            html += '<table class="benchmark-table" style="margin-top:0.5rem;"><thead><tr><th>Assertion</th>';
             for (const config of configGroups) {
-              const label = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-              html += "<th>" + escapeHtml(label) + "</th>";
+              html += '<th>' + escapeHtml(config.replace(/_/g, " ")) + '</th>';
             }
-            html += "</tr></thead><tbody>";
-
+            html += '</tr></thead><tbody>';
             for (const assertionText of allAssertions) {
-              html += "<tr><td>" + escapeHtml(assertionText) + "</td>";
-
+              html += '<tr><td>' + escapeHtml(assertionText) + '</td>';
               for (const config of configGroups) {
-                html += "<td>";
+                html += '<td>';
                 for (const run of runsWithExpectations[config]) {
                   const exp = (run.expectations || []).find(e => e.text === assertionText);
                   if (exp) {
                     const cls = exp.passed ? "benchmark-delta-positive" : "benchmark-delta-negative";
-                    const icon = exp.passed ? "\u2713" : "\u2717";
-                    html += '<span class="' + cls + '" title="Run ' + run.run_number + ': ' + escapeHtml(exp.evidence || "") + '">' + icon + "</span> ";
+                    html += '<span class="' + cls + '">' + (exp.passed ? "✓" : "✗") + '</span> ';
                   } else {
-                    html += "— ";
+                    html += '— ';
                   }
                 }
-                html += "</td>";
+                html += '</td>';
               }
-              html += "</tr>";
+              html += '</tr>';
             }
-            html += "</tbody></table>";
+            html += '</tbody></table>';
           }
         }
+        html += '</div>';
       }
 
-      // Notes
-      if (notes.length > 0) {
-        html += '<div class="benchmark-notes">';
-        html += "<h3>Analysis Notes</h3>";
-        html += "<ul>";
-        for (const note of notes) {
-          html += "<li>" + escapeHtml(note) + "</li>";
-        }
-        html += "</ul></div>";
+      // ── Analysis notes (string notes) ──
+      const stringNotes = notes.filter(n => typeof n === 'string');
+      if (stringNotes.length > 0) {
+        html += '<div class="benchmark-notes" style="margin-top:1.5rem;">';
+        html += '<h3>Analysis Notes (' + stringNotes.length + ')</h3><ul>';
+        for (const note of stringNotes) html += '<li>' + escapeHtml(note) + '</li>';
+        html += '</ul></div>';
       }
 
       container.innerHTML = html;
+
+      // ── Chart.js pass rate bar chart ──
+      if (configA && configB) {
+        setTimeout(() => {
+          const canvas = document.getElementById("passRateChart");
+          if (!canvas) return;
+          const prA = a.pass_rate ? a.pass_rate.mean * 100 : 0;
+          const prB = b.pass_rate ? b.pass_rate.mean * 100 : 0;
+          new Chart(canvas, {
+            type: "bar",
+            data: {
+              labels: [configA.replace(/_/g, " "), configB.replace(/_/g, " ")],
+              datasets: [{
+                label: "Pass Rate (%)",
+                data: [prA, prB],
+                backgroundColor: [prA >= prB ? "#788c5d" : "#c44", prB >= prA ? "#788c5d" : "#c44"],
+                borderRadius: 4,
+              }]
+            },
+            options: {
+              responsive: true,
+              plugins: { legend: { display: false } },
+              scales: { y: { beginAtZero: true, max: 100, ticks: { callback: v => v + "%" } } }
+            }
+          });
+        }, 100);
+      }
     }
 
     // ---- Start ----

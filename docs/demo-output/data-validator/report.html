@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600&family=Lora:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous"></script>
   <style>
     :root {
@@ -1115,27 +1116,64 @@
       const data = EMBEDDED_DATA.benchmark;
       if (!data) return;
 
-      // Show the tabs
       document.getElementById("view-tabs").style.display = "flex";
 
       const container = document.getElementById("benchmark-content");
       const summary = data.run_summary || {};
       const metadata = data.metadata || {};
       const notes = data.notes || [];
+      const comparisons = data.comparisons || [];
+      const analysis = data.analysis || null;
 
       let html = "";
 
-      // Header
-      html += "<h2 style='font-family: Poppins, sans-serif; margin-bottom: 0.5rem;'>Benchmark Results</h2>";
-      html += "<p style='color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1.25rem;'>";
-      if (metadata.skill_name) html += "<strong>" + escapeHtml(metadata.skill_name) + "</strong> &mdash; ";
-      if (metadata.timestamp) html += metadata.timestamp + " &mdash; ";
-      if (metadata.evals_run) html += "Evals: " + metadata.evals_run.join(", ") + " &mdash; ";
-      html += (metadata.runs_per_configuration || "?") + " runs per configuration";
-      html += "</p>";
+      // ── Dashboard header ──
+      html += "<div style='display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.5rem;'>";
+      const configs = Object.keys(summary).filter(k => k !== "delta");
+      const configA = configs[0] || "";
+      const configB = configs[1] || "";
+      const delta = summary.delta || {};
+      const a = summary[configA] || {};
+      const b = summary[configB] || {};
 
-      // Summary table
+      const prDelta = delta.pass_rate || "—";
+      const prNum = parseFloat(prDelta);
+      const prGood = prNum > 0.05;
+
+      function mkCard(title, value, sub, color) {
+        return '<div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;text-align:center;">'
+          + '<div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem;">' + title + '</div>'
+          + '<div style="font-size:1.8rem;font-family:Poppins,sans-serif;font-weight:600;color:' + color + ';">' + value + '</div>'
+          + (sub ? '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">' + sub + '</div>' : '')
+          + '</div>';
+      }
+
+      html += mkCard("Delta (Pass Rate)", (prNum > 0 ? "+" : "") + prDelta,
+        prGood ? "Skill improves Claude" : prNum < -0.05 ? "Skill hurts Claude" : "Skill has little effect",
+        prGood ? "var(--green)" : prNum < -0.05 ? "var(--red)" : "var(--text-muted)");
+
+      if (metadata.runs_per_configuration) {
+        html += mkCard("Runs per Config", metadata.runs_per_configuration, "with_skill / without_skill", "var(--text)");
+      }
+      if (metadata.evals_run && metadata.evals_run.length) {
+        html += mkCard("Evals", metadata.evals_run.length, metadata.evals_run.join(", "), "var(--text)");
+      }
+      if (metadata.skill_name) {
+        html += mkCard("Skill", metadata.skill_name, "", "var(--accent)");
+      }
+      html += "</div>";
+
+      // ── Pass rate bar chart ──
+      if (configA && configB) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Pass Rate Comparison</div>';
+        html += '<div style="max-width:500px;margin:0 auto;"><canvas id="passRateChart" style="max-height:200px;"></canvas></div>';
+        html += '</div>';
+      }
+
+      // ── Delta table ──
       html += '<table class="benchmark-table">';
+      html += "<thead><tr><th>Metric</th><th>" + escapeHtml(configA.replace(/_/g, ' ')) + "</th><th>" + escapeHtml(configB.replace(/_/g, ' ')) + "</th><th>Delta</th></tr></thead><tbody>";
 
       function fmtStat(stat, pct) {
         if (!stat) return "—";
@@ -1144,7 +1182,6 @@
         const s = pct ? (stat.stddev * 100).toFixed(0) : stat.stddev.toFixed(1);
         return m + suffix + " ± " + s + suffix;
       }
-
       function deltaClass(val) {
         if (!val) return "";
         const n = parseFloat(val);
@@ -1153,168 +1190,273 @@
         return "";
       }
 
-      // Discover config names dynamically (everything except "delta")
-      const configs = Object.keys(summary).filter(k => k !== "delta");
-      const configA = configs[0] || "config_a";
-      const configB = configs[1] || "config_b";
-      const labelA = configA.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-      const labelB = configB.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-      const a = summary[configA] || {};
-      const b = summary[configB] || {};
-      const delta = summary.delta || {};
-
-      html += "<thead><tr><th>Metric</th><th>" + escapeHtml(labelA) + "</th><th>" + escapeHtml(labelB) + "</th><th>Delta</th></tr></thead>";
-      html += "<tbody>";
-
       html += "<tr><td><strong>Pass Rate</strong></td>";
       html += "<td>" + fmtStat(a.pass_rate, true) + "</td>";
       html += "<td>" + fmtStat(b.pass_rate, true) + "</td>";
       html += '<td class="' + deltaClass(delta.pass_rate) + '">' + (delta.pass_rate || "—") + "</td></tr>";
 
-      // Time (only show row if data exists)
       if (a.time_seconds || b.time_seconds) {
-        html += "<tr><td><strong>Time (s)</strong></td>";
-        html += "<td>" + fmtStat(a.time_seconds, false) + "</td>";
-        html += "<td>" + fmtStat(b.time_seconds, false) + "</td>";
+        html += "<tr><td><strong>Time (s)</strong></td><td>" + fmtStat(a.time_seconds, false) + "</td><td>" + fmtStat(b.time_seconds, false) + "</td>";
         html += '<td class="' + deltaClass(delta.time_seconds) + '">' + (delta.time_seconds ? delta.time_seconds + "s" : "—") + "</td></tr>";
       }
-
-      // Tokens (only show row if data exists)
       if (a.tokens || b.tokens) {
-        html += "<tr><td><strong>Tokens</strong></td>";
-        html += "<td>" + fmtStat(a.tokens, false) + "</td>";
-        html += "<td>" + fmtStat(b.tokens, false) + "</td>";
+        html += "<tr><td><strong>Tokens</strong></td><td>" + fmtStat(a.tokens, false) + "</td><td>" + fmtStat(b.tokens, false) + "</td>";
         html += '<td class="' + deltaClass(delta.tokens) + '">' + (delta.tokens || "—") + "</td></tr>";
       }
-
       html += "</tbody></table>";
 
-      // Per-eval breakdown (if runs data available)
+      // ── Blind Comparison section ──
+      if (comparisons.length > 0) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Blind Comparison</div>';
+
+        for (let ci = 0; ci < comparisons.length; ci++) {
+          const comp = comparisons[ci];
+          if (ci > 0) html += '<hr style="border:0;border-top:1px solid var(--border);margin:1rem 0;">';
+
+          const wBadge = comp.winner === "A" ? "With Skill" : comp.winner === "B" ? "Without Skill" : "Tie";
+          const wColor = comp.winner === "A" ? "var(--green)" : comp.winner === "B" ? "var(--red)" : "var(--text-muted)";
+          html += '<div style="margin-bottom:0.75rem;"><strong>Winner:</strong> <span style="color:' + wColor + ';font-weight:600;">' + wBadge + '</span></div>';
+          html += '<div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:0.75rem;">' + escapeHtml(comp.reasoning || "") + '</div>';
+
+          // Rubric scores
+          if (comp.rubric && (comp.rubric.A || comp.rubric.B)) {
+            html += '<div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem;">';
+            for (const side of ["A", "B"]) {
+              const r = comp.rubric[side] || {};
+              const label = side === "A" ? "With Skill" : "Without Skill";
+              const scoreColor = r.overall_score >= 8 ? "var(--green)" : r.overall_score >= 5 ? "var(--accent)" : "var(--red)";
+              html += '<div style="flex:1;min-width:180px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;">';
+              html += '<div style="font-weight:600;margin-bottom:0.5rem;">' + label + ' <span style="color:' + scoreColor + ';font-size:1.1rem;">' + (r.overall_score || "?").toFixed(1) + '</span>/10</div>';
+              if (r.content) {
+                html += '<div style="font-size:0.75rem;color:var(--text-muted);">Content: ' + r.content_score.toFixed(1) + '/5 · Structure: ' + r.structure_score.toFixed(1) + '/5</div>';
+              }
+              html += '</div>';
+            }
+            html += '</div>';
+          }
+
+          // Quality highlights
+          if (comp.output_quality && (comp.output_quality.A || comp.output_quality.B)) {
+            html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">';
+            for (const side of ["A", "B"]) {
+              const q = comp.output_quality[side] || {};
+              const label = side === "A" ? "A" : "B";
+              html += '<div style="flex:1;min-width:160px;font-size:0.75rem;">';
+              html += '<strong>' + label + '</strong>: ' + (q.score || "?") + '/10';
+              if (q.strengths && q.strengths.length) html += '<br><span style="color:var(--green);">+</span> ' + escapeHtml(q.strengths[0]);
+              if (q.weaknesses && q.weaknesses.length) html += '<br><span style="color:var(--red);">-</span> ' + escapeHtml(q.weaknesses[0]);
+              html += '</div>';
+            }
+            html += '</div>';
+          }
+        }
+        html += '</div>';
+      }
+
+      // ── Analysis section ──
+      if (analysis && (analysis.winner_strengths || analysis.improvement_suggestions)) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Deep Analysis</div>';
+
+        if (analysis.instruction_following) {
+          const fi = analysis.instruction_following;
+          const wsIf = fi.winner || fi.A || {};
+          const lsIf = fi.loser || fi.B || {};
+          html += '<div style="display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap;">';
+          html += '<div style="flex:1;min-width:150px;"><strong>Winner Instruction Following:</strong> ' + (wsIf.score || "?") + '/10</div>';
+          html += '<div style="flex:1;min-width:150px;"><strong>Loser Instruction Following:</strong> ' + (lsIf.score || "?") + '/10</div>';
+          html += '</div>';
+        }
+
+        if (analysis.winner_strengths && analysis.winner_strengths.length) {
+          html += '<div style="margin-bottom:0.75rem;"><strong style="color:var(--green);">Winner Strengths</strong><ul style="font-size:0.8125rem;margin:0.25rem 0 0 1.25rem;">';
+          for (const s of analysis.winner_strengths) html += '<li>' + escapeHtml(s) + '</li>';
+          html += '</ul></div>';
+        }
+
+        if (analysis.loser_weaknesses && analysis.loser_weaknesses.length) {
+          html += '<div style="margin-bottom:0.75rem;"><strong style="color:var(--red);">Loser Weaknesses</strong><ul style="font-size:0.8125rem;margin:0.25rem 0 0 1.25rem;">';
+          for (const w of analysis.loser_weaknesses) html += '<li>' + escapeHtml(w) + '</li>';
+          html += '</ul></div>';
+        }
+
+        if (analysis.improvement_suggestions && analysis.improvement_suggestions.length) {
+          html += '<strong>Improvement Suggestions</strong>';
+          html += '<table class="benchmark-table" style="margin-top:0.5rem;"><thead><tr><th>Priority</th><th>Category</th><th>Suggestion</th><th>Expected Impact</th></tr></thead><tbody>';
+          for (const s of analysis.improvement_suggestions) {
+            const prioColor = s.priority === "high" ? "var(--red)" : s.priority === "medium" ? "var(--accent)" : "var(--text-muted)";
+            html += '<tr><td><span style="color:' + prioColor + ';font-weight:600;text-transform:uppercase;font-size:0.7rem;">' + escapeHtml(s.priority) + '</span></td>';
+            html += '<td>' + escapeHtml(s.category || "") + '</td>';
+            html += '<td style="font-size:0.8125rem;">' + escapeHtml(s.suggestion || "") + '</td>';
+            html += '<td style="font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(s.expected_impact || "") + '</td></tr>';
+          }
+          html += '</tbody></table>';
+        }
+        html += '</div>';
+      }
+
+      // ── Checkpoint breakdowns (dict notes) ──
+      const checkpoints = notes.filter(n => typeof n === 'object' && n !== null);
+      if (checkpoints.length > 0) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Checkpoint Breakdown</div>';
+        for (const cp of checkpoints) {
+          const cpRate = cp.pass_rate || 0;
+          const cpColor = cpRate >= 0.8 ? "var(--green)" : cpRate >= 0.5 ? "var(--accent)" : "var(--red)";
+          const cpStatus = cpRate >= 0.8 ? "PASS" : cpRate >= 0.5 ? "PARTIAL" : "FAIL";
+          html += '<div style="margin-bottom:0.75rem;">';
+          html += '<span style="color:' + cpColor + ';font-weight:600;">' + cpStatus + '</span> ';
+          html += '<strong>' + escapeHtml(cp.eval_name || "Checkpoint") + '</strong>';
+          html += ' — ' + (cp.passed || 0) + '/' + (cp.total || 0) + ' (' + (cpRate * 100).toFixed(0) + '%)';
+          html += '</div>';
+
+          if (cp.expectations && cp.expectations.length) {
+            html += '<ul style="font-size:0.75rem;margin:0 0 0.5rem 1.25rem;">';
+            for (const e of cp.expectations) {
+              const icon = e.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
+              html += '<li>' + icon + ' ' + escapeHtml(e.text || "") + '</li>';
+            }
+            html += '</ul>';
+          }
+          if (cp.assertions && cp.assertions.length) {
+            html += '<ul style="font-size:0.75rem;margin:0 0 0.5rem 1.25rem;">';
+            for (const a of cp.assertions) {
+              const icon = a.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
+              html += '<li style="color:var(--text-muted);">' + icon + ' <em>(assertion)</em> ' + escapeHtml(a.text || "") + '</li>';
+            }
+            html += '</ul>';
+          }
+        }
+        html += '</div>';
+      }
+
+      // ── Per-eval breakdown table ──
       const runs = data.runs || [];
       if (runs.length > 0) {
         const evalIds = [...new Set(runs.map(r => r.eval_id))].sort((a, b) => a - b);
-
-        html += "<h3 style='font-family: Poppins, sans-serif; margin-bottom: 0.75rem;'>Per-Eval Breakdown</h3>";
-
+        html += '<div style="margin-top:1.5rem;"><h3 style="font-family:Poppins,sans-serif;margin-bottom:0.75rem;">Per-Eval Breakdown</h3>';
         const hasTime = runs.some(r => r.result && r.result.time_seconds != null);
-        const hasErrors = runs.some(r => r.result && r.result.errors > 0);
 
         for (const evalId of evalIds) {
           const evalRuns = runs.filter(r => r.eval_id === evalId);
           const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : "Eval " + evalId;
+          html += '<h4 style="font-family:Poppins,sans-serif;margin:1rem 0 0.5rem;">' + escapeHtml(evalName) + '</h4>';
+          html += '<table class="benchmark-table"><thead><tr><th>Config</th><th>Run</th><th>Pass Rate</th>';
+          if (hasTime) html += '<th>Time (s)</th>';
+          html += '</tr></thead><tbody>';
 
-          html += "<h4 style='font-family: Poppins, sans-serif; margin: 1rem 0 0.5rem; color: var(--text);'>" + escapeHtml(evalName) + "</h4>";
-          html += '<table class="benchmark-table">';
-          html += "<thead><tr><th>Config</th><th>Run</th><th>Pass Rate</th>";
-          if (hasTime) html += "<th>Time (s)</th>";
-          if (hasErrors) html += "<th>Crashes During Execution</th>";
-          html += "</tr></thead>";
-          html += "<tbody>";
-
-          // Group by config and render with average rows
           const configGroups = [...new Set(evalRuns.map(r => r.configuration))];
           for (let ci = 0; ci < configGroups.length; ci++) {
             const config = configGroups[ci];
             const configRuns = evalRuns.filter(r => r.configuration === config);
             if (configRuns.length === 0) continue;
-
             const rowClass = ci === 0 ? "benchmark-row-with" : "benchmark-row-without";
             const configLabel = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 
             for (const run of configRuns) {
               const r = run.result || {};
               const prClass = r.pass_rate >= 0.8 ? "benchmark-delta-positive" : r.pass_rate < 0.5 ? "benchmark-delta-negative" : "";
-              html += '<tr class="' + rowClass + '">';
-              html += "<td>" + configLabel + "</td>";
-              html += "<td>" + run.run_number + "</td>";
-              html += '<td class="' + prClass + '">' + ((r.pass_rate || 0) * 100).toFixed(0) + "% (" + (r.passed || 0) + "/" + (r.total || 0) + ")</td>";
-              if (hasTime) html += "<td>" + (r.time_seconds != null ? r.time_seconds.toFixed(1) : "—") + "</td>";
-              if (hasErrors) html += "<td>" + (r.errors || 0) + "</td>";
-              html += "</tr>";
+              html += '<tr class="' + rowClass + '"><td>' + configLabel + '</td><td>' + run.run_number + '</td>';
+              html += '<td class="' + prClass + '">' + ((r.pass_rate || 0) * 100).toFixed(0) + '% (' + (r.passed || 0) + '/' + (r.total || 0) + ')</td>';
+              if (hasTime) html += '<td>' + (r.time_seconds != null ? r.time_seconds.toFixed(1) : "—") + '</td>';
+              html += '</tr>';
             }
 
-            // Average row
             const rates = configRuns.map(r => (r.result || {}).pass_rate || 0);
             const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
             const avgPrClass = avgRate >= 0.8 ? "benchmark-delta-positive" : avgRate < 0.5 ? "benchmark-delta-negative" : "";
-            html += '<tr class="benchmark-row-avg ' + rowClass + '">';
-            html += "<td>" + configLabel + "</td>";
-            html += "<td>Avg</td>";
-            html += '<td class="' + avgPrClass + '">' + (avgRate * 100).toFixed(0) + "%</td>";
+            html += '<tr class="benchmark-row-avg ' + rowClass + '"><td>' + configLabel + '</td><td>Avg</td>';
+            html += '<td class="' + avgPrClass + '">' + (avgRate * 100).toFixed(0) + '%</td>';
             if (hasTime) {
               const times = configRuns.map(r => (r.result || {}).time_seconds).filter(t => t != null);
-              html += "<td>" + (times.length ? (times.reduce((a, b) => a + b, 0) / times.length).toFixed(1) : "—") + "</td>";
+              html += '<td>' + (times.length ? (times.reduce((a, b) => a + b, 0) / times.length).toFixed(1) : "—") + '</td>';
             }
-            if (hasErrors) html += "<td></td>";
-            html += "</tr>";
+            html += '</tr>';
           }
-          html += "</tbody></table>";
+          html += '</tbody></table>';
 
-          // Per-assertion detail for this eval
+          // Per-assertion detail
           const runsWithExpectations = {};
           for (const config of configGroups) {
             runsWithExpectations[config] = evalRuns.filter(r => r.configuration === config && r.expectations && r.expectations.length > 0);
           }
-          const hasAnyExpectations = Object.values(runsWithExpectations).some(runs => runs.length > 0);
-          if (hasAnyExpectations) {
-            // Collect all unique assertion texts across all configs
+          const hasAnyExp = Object.values(runsWithExpectations).some(runs => runs.length > 0);
+          if (hasAnyExp) {
             const allAssertions = [];
             const seen = new Set();
             for (const config of configGroups) {
               for (const run of runsWithExpectations[config]) {
                 for (const exp of (run.expectations || [])) {
-                  if (!seen.has(exp.text)) {
-                    seen.add(exp.text);
-                    allAssertions.push(exp.text);
-                  }
+                  if (!seen.has(exp.text)) { seen.add(exp.text); allAssertions.push(exp.text); }
                 }
               }
             }
-
-            html += '<table class="benchmark-table" style="margin-top: 0.5rem;">';
-            html += "<thead><tr><th>Assertion</th>";
+            html += '<table class="benchmark-table" style="margin-top:0.5rem;"><thead><tr><th>Assertion</th>';
             for (const config of configGroups) {
-              const label = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-              html += "<th>" + escapeHtml(label) + "</th>";
+              html += '<th>' + escapeHtml(config.replace(/_/g, " ")) + '</th>';
             }
-            html += "</tr></thead><tbody>";
-
+            html += '</tr></thead><tbody>';
             for (const assertionText of allAssertions) {
-              html += "<tr><td>" + escapeHtml(assertionText) + "</td>";
-
+              html += '<tr><td>' + escapeHtml(assertionText) + '</td>';
               for (const config of configGroups) {
-                html += "<td>";
+                html += '<td>';
                 for (const run of runsWithExpectations[config]) {
                   const exp = (run.expectations || []).find(e => e.text === assertionText);
                   if (exp) {
                     const cls = exp.passed ? "benchmark-delta-positive" : "benchmark-delta-negative";
-                    const icon = exp.passed ? "\u2713" : "\u2717";
-                    html += '<span class="' + cls + '" title="Run ' + run.run_number + ': ' + escapeHtml(exp.evidence || "") + '">' + icon + "</span> ";
+                    html += '<span class="' + cls + '">' + (exp.passed ? "✓" : "✗") + '</span> ';
                   } else {
-                    html += "— ";
+                    html += '— ';
                   }
                 }
-                html += "</td>";
+                html += '</td>';
               }
-              html += "</tr>";
+              html += '</tr>';
             }
-            html += "</tbody></table>";
+            html += '</tbody></table>';
           }
         }
+        html += '</div>';
       }
 
-      // Notes
-      if (notes.length > 0) {
-        html += '<div class="benchmark-notes">';
-        html += "<h3>Analysis Notes</h3>";
-        html += "<ul>";
-        for (const note of notes) {
-          html += "<li>" + escapeHtml(note) + "</li>";
-        }
-        html += "</ul></div>";
+      // ── Analysis notes (string notes) ──
+      const stringNotes = notes.filter(n => typeof n === 'string');
+      if (stringNotes.length > 0) {
+        html += '<div class="benchmark-notes" style="margin-top:1.5rem;">';
+        html += '<h3>Analysis Notes (' + stringNotes.length + ')</h3><ul>';
+        for (const note of stringNotes) html += '<li>' + escapeHtml(note) + '</li>';
+        html += '</ul></div>';
       }
 
       container.innerHTML = html;
+
+      // ── Chart.js pass rate bar chart ──
+      if (configA && configB) {
+        setTimeout(() => {
+          const canvas = document.getElementById("passRateChart");
+          if (!canvas) return;
+          const prA = a.pass_rate ? a.pass_rate.mean * 100 : 0;
+          const prB = b.pass_rate ? b.pass_rate.mean * 100 : 0;
+          new Chart(canvas, {
+            type: "bar",
+            data: {
+              labels: [configA.replace(/_/g, " "), configB.replace(/_/g, " ")],
+              datasets: [{
+                label: "Pass Rate (%)",
+                data: [prA, prB],
+                backgroundColor: [prA >= prB ? "#788c5d" : "#c44", prB >= prA ? "#788c5d" : "#c44"],
+                borderRadius: 4,
+              }]
+            },
+            options: {
+              responsive: true,
+              plugins: { legend: { display: false } },
+              scales: { y: { beginAtZero: true, max: 100, ticks: { callback: v => v + "%" } } }
+            }
+          });
+        }, 100);
+      }
     }
 
     // ---- Start ----
