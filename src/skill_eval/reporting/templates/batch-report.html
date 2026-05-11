@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Batch Evaluation Report</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600&family=Lora:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #faf9f5;
+      --surface: #ffffff;
+      --border: #e8e6dc;
+      --text: #141413;
+      --text-muted: #b0aea5;
+      --accent: #d97757;
+      --green: #788c5d;
+      --green-bg: #eef2e8;
+      --red: #c44;
+      --red-bg: #fceaea;
+      --blue: #1976d2;
+      --blue-bg: rgba(33,150,243,0.08);
+      --header-bg: #141413;
+      --header-text: #faf9f5;
+      --radius: 6px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Lora', Georgia, serif; background: var(--bg); color: var(--text); padding: 1.5rem; }
+    .header { background: var(--header-bg); color: var(--header-text); padding: 1.25rem 1.5rem; border-radius: var(--radius); margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-family: 'Poppins', sans-serif; font-size: 1.25rem; }
+    .header .sub { font-size: 0.8rem; opacity: 0.7; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; }
+    .card h2 { font-family: 'Poppins', sans-serif; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 0.75rem; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.8125rem; }
+    table th { font-family: 'Poppins', sans-serif; background: var(--header-bg); color: var(--header-text); padding: 0.5rem 0.75rem; text-align: left; font-weight: 500; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    table td { padding: 0.5rem 0.75rem; border: 1px solid var(--border); }
+    table tr:hover { background: var(--bg); }
+    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 9999px; font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+    .badge-passed { background: var(--green-bg); color: var(--green); }
+    .badge-failed { background: var(--red-bg); color: var(--red); }
+    .badge-cascade { background: rgba(255,193,7,0.15); color: #f57f17; }
+    .badge-skipped { background: var(--bg); color: var(--text-muted); }
+    .delta-positive { color: var(--green); font-weight: 600; }
+    .delta-negative { color: var(--red); font-weight: 600; }
+    .dag-container { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1rem; }
+    .dag-node { background: var(--surface); border: 2px solid var(--border); border-radius: var(--radius); padding: 0.75rem 1.5rem; min-width: 180px; text-align: center; cursor: pointer; transition: all 0.2s; }
+    .dag-node:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    .dag-node .name { font-family: 'Poppins', sans-serif; font-weight: 600; font-size: 0.875rem; }
+    .dag-node .info { font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem; }
+    .dag-arrow { font-size: 1.5rem; color: var(--text-muted); line-height: 1; }
+    .dag-row { display: flex; justify-content: center; gap: 2rem; flex-wrap: wrap; }
+    .drilldown { display: none; margin-top: 1rem; }
+    .drilldown.open { display: block; }
+    .section-label { font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; margin: 1rem 0 0.5rem; }
+    .bar-container { display: flex; align-items: center; gap: 0.5rem; margin: 0.25rem 0; }
+    .bar-label { width: 100px; font-size: 0.7rem; text-align: right; flex-shrink: 0; }
+    .bar-track { flex: 1; height: 20px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
+    .attribution-table td { font-size: 0.75rem; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>Batch Evaluation: <span id="batch-name"></span></h1>
+      <div class="sub" id="batch-stats"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Dependency DAG</h2>
+    <div id="dag"></div>
+  </div>
+
+  <div class="card">
+    <h2>Summary</h2>
+    <table id="summary-table"></table>
+  </div>
+
+  <div class="card">
+    <h2>Pass Rate Comparison</h2>
+    <div style="max-width: 600px; margin: 0 auto;"><canvas id="comparison-chart" style="max-height: 250px;"></canvas></div>
+  </div>
+
+  <div class="card" id="cascade-card" style="display:none;">
+    <h2>Cascade Attribution</h2>
+    <div id="cascade-content"></div>
+  </div>
+
+  <div class="card">
+    <h2>Per-Skill Detail</h2>
+    <div id="drilldowns"></div>
+  </div>
+
+  <script>
+    /*__EMBEDDED_DATA__*/
+
+    let allSkills = EMBEDDED_DATA.skills || [];
+    let cascade = EMBEDDED_DATA.cascade || null;
+
+    function init() {
+      const batchName = EMBEDDED_DATA.manifest ? EMBEDDED_DATA.manifest.name : "batch";
+      document.getElementById("batch-name").textContent = batchName;
+
+      const passed = allSkills.filter(s => s.status === "PASSED").length;
+      const failed = allSkills.filter(s => s.status === "FAILED" || s.status === "ROOT_CAUSE" || s.status === "DEPENDENCY_MISSING").length;
+      const cascadeCount = allSkills.filter(s => s.status === "CASCADE").length;
+      const skipped = allSkills.filter(s => s.status === "SKIPPED").length;
+
+      document.getElementById("batch-stats").textContent =
+        allSkills.length + " skills | " + passed + " passed, " + failed + " failed, " + cascadeCount + " cascade, " + skipped + " skipped";
+
+      renderDAG();
+      renderSummary();
+      renderChart();
+      renderCascade();
+      renderDrilldowns();
+    }
+
+    function renderDAG() {
+      const container = document.getElementById("dag");
+      const roots = allSkills.filter(s => !s.dependencies || s.dependencies.length === 0);
+      const nonRoots = allSkills.filter(s => s.dependencies && s.dependencies.length > 0);
+
+      if (nonRoots.length === 0) {
+        // No dependencies — show flat list
+        container.innerHTML = '<div class="dag-row">' +
+          allSkills.map(s => renderDAGNode(s)).join("") + '</div>';
+        return;
+      }
+
+      // Build levels by BFS from roots
+      const levels = [];
+      const visited = new Set();
+
+      function bfs(startNodes) {
+        const queue = [...startNodes];
+        while (queue.length > 0) {
+          const level = [...queue];
+          queue.length = 0;
+          const levelNodes = [];
+          for (const name of level) {
+            if (visited.has(name)) continue;
+            visited.add(name);
+            const skill = allSkills.find(s => s.name === name);
+            if (skill) {
+              levelNodes.push(skill);
+              for (const child of (skill.depended_by || [])) {
+                if (!visited.has(child)) queue.push(child);
+              }
+            }
+          }
+          if (levelNodes.length > 0) levels.push(levelNodes);
+        }
+      }
+
+      const rootNames = roots.map(s => s.name);
+      bfs(rootNames);
+
+      // Also include any skills not in the DAG
+      for (const s of allSkills) {
+        if (!visited.has(s.name)) {
+          if (levels.length === 0) levels.push([]);
+          levels[levels.length - 1].push(s);
+          visited.add(s.name);
+        }
+      }
+
+      let html = "";
+      for (let i = 0; i < levels.length; i++) {
+        html += '<div class="dag-row">';
+        for (const s of levels[i]) {
+          html += renderDAGNode(s);
+        }
+        html += '</div>';
+        if (i < levels.length - 1) {
+          html += '<div class="dag-arrow" style="text-align:center;">↓</div>';
+        }
+      }
+
+      container.innerHTML = html;
+    }
+
+    function renderDAGNode(s) {
+      const statusClass = s.status === "PASSED" ? "badge-passed" :
+        s.status === "FAILED" || s.status === "ROOT_CAUSE" || s.status === "DEPENDENCY_MISSING" ? "badge-failed" :
+        s.status === "CASCADE" ? "badge-cascade" : "badge-skipped";
+      const statusLabel = s.status === "ROOT_CAUSE" ? "FAILED (root)" :
+        s.status === "CASCADE" ? "CASCADE" :
+        s.status === "DEPENDENCY_MISSING" ? "DEP MISSING" : s.status;
+      const delta = s.delta ? parseFloat(s.delta) : 0;
+      const deltaClass = delta > 0.05 ? "delta-positive" : delta < -0.05 ? "delta-negative" : "";
+      const deltaStr = s.delta ? (delta > 0 ? "+" : "") + s.delta : "—";
+
+      return '<div class="dag-node" onclick="toggleDrilldown(\'' + s.name.replace(/'/g, "\\'") + '\')">' +
+        '<div class="name">' + escapeHtml(s.name) + '</div>' +
+        '<div class="info">' +
+        '<span class="badge ' + statusClass + '">' + statusLabel + '</span> ' +
+        'Δ <span class="' + deltaClass + '">' + deltaStr + '</span>' +
+        (s.pass_rate_with != null ? ' · ' + (s.pass_rate_with * 100).toFixed(0) + '%' : '') +
+        '</div></div>';
+    }
+
+    function renderSummary() {
+      const table = document.getElementById("summary-table");
+      const hasTime = allSkills.some(s => s.delta_time != null);
+      const hasTokens = allSkills.some(s => s.delta_tokens != null);
+      const hasComps = allSkills.some(s => s.has_comparisons);
+      const hasAnalysis = allSkills.some(s => s.has_analysis);
+
+      let html = "<thead><tr><th>Skill</th><th>Status</th><th>with_skill</th><th>without_skill</th><th>Delta</th>";
+      if (hasTime) html += "<th>Δ Time</th>";
+      if (hasTokens) html += "<th>Δ Tokens</th>";
+      if (hasComps) html += "<th>Comparison</th>";
+      if (hasAnalysis) html += "<th>Analysis</th>";
+      html += "</tr></thead><tbody>";
+
+      for (const s of allSkills) {
+        const statusClass = s.status === "PASSED" ? "badge-passed" :
+          s.status === "FAILED" || s.status === "ROOT_CAUSE" || s.status === "DEPENDENCY_MISSING" ? "badge-failed" :
+          s.status === "CASCADE" ? "badge-cascade" : "badge-skipped";
+        const delta = s.delta ? parseFloat(s.delta) : 0;
+        const deltaClass = delta > 0.05 ? "delta-positive" : delta < -0.05 ? "delta-negative" : "";
+        const wr = s.pass_rate_with != null ? (s.pass_rate_with * 100).toFixed(0) + "%" : "—";
+        const wo = s.pass_rate_without != null ? (s.pass_rate_without * 100).toFixed(0) + "%" : "—";
+        const dd = s.delta ? (delta > 0 ? "+" : "") + s.delta : "—";
+
+        html += "<tr>" +
+          "<td><strong>" + escapeHtml(s.name) + "</strong></td>" +
+          "<td><span class='badge " + statusClass + "'>" + s.status + "</span></td>" +
+          "<td>" + wr + "</td>" +
+          "<td>" + wo + "</td>" +
+          "<td class='" + deltaClass + "'>" + dd + "</td>";
+        if (hasTime) html += "<td>" + (s.delta_time || "—") + "</td>";
+        if (hasTokens) html += "<td>" + (s.delta_tokens || "—") + "</td>";
+        if (hasComps) html += "<td>" + (s.has_comparisons ? "✓" : "—") + "</td>";
+        if (hasAnalysis) html += "<td>" + (s.has_analysis ? "✓" : "—") + "</td>";
+        html += "</tr>";
+      }
+      html += "</tbody>";
+      table.innerHTML = html;
+    }
+
+    function renderChart() {
+      setTimeout(() => {
+        const canvas = document.getElementById("comparison-chart");
+        if (!canvas || allSkills.length === 0) return;
+        new Chart(canvas, {
+          type: "bar",
+          data: {
+            labels: allSkills.map(s => s.name),
+            datasets: [
+              { label: "With Skill", data: allSkills.map(s => s.pass_rate_with != null ? s.pass_rate_with * 100 : 0), backgroundColor: "#788c5d", borderRadius: 4 },
+              { label: "Without Skill", data: allSkills.map(s => s.pass_rate_without != null ? s.pass_rate_without * 100 : 0), backgroundColor: "#c44", borderRadius: 4 },
+            ]
+          },
+          options: {
+            responsive: true,
+            scales: { y: { beginAtZero: true, max: 100, ticks: { callback: v => v + "%" } } },
+            plugins: { legend: { position: "bottom" } }
+          }
+        });
+      }, 100);
+    }
+
+    function renderCascade() {
+      const card = document.getElementById("cascade-card");
+      if (!cascade || !cascade.attributions) return;
+
+      const attributions = cascade.attributions;
+      const types = {};
+      for (const [name, attr] of Object.entries(attributions)) {
+        types[attr] = (types[attr] || 0) + 1;
+      }
+
+      card.style.display = "block";
+      let html = '<table class="attribution-table"><thead><tr><th>Skill</th><th>Attribution</th><th>Meaning</th></tr></thead><tbody>';
+      for (const [name, attr] of Object.entries(attributions)) {
+        const color = attr === "ROOT_CAUSE" ? "var(--red)" : attr === "CASCADE" ? "#f57f17" :
+          attr === "DEPENDENCY_MISSING" ? "var(--accent)" : "var(--green)";
+        const meaning = attr === "ROOT_CAUSE" ? "该 Skill 自身导致失败" :
+          attr === "CASCADE" ? "上游 Skill 失败引发的连锁失败" :
+          attr === "DEPENDENCY_MISSING" ? "依赖的 Skill 不存在" : "正常通过";
+        html += '<tr><td><strong>' + escapeHtml(name) + '</strong></td>' +
+          '<td style="color:' + color + ';font-weight:600;">' + attr + '</td>' +
+          '<td style="font-size:0.75rem;color:var(--text-muted);">' + meaning + '</td></tr>';
+      }
+      html += '</tbody></table>';
+      document.getElementById("cascade-content").innerHTML = html;
+    }
+
+    function renderDrilldowns() {
+      const container = document.getElementById("drilldowns");
+      let html = "";
+
+      for (const s of allSkills) {
+        const bench = s.benchmark;
+        if (!bench) continue;
+        const runs = bench.runs || [];
+        const comps = bench.comparisons || [];
+        const analysis = bench.analysis;
+
+        html += '<div class="section-label">' + escapeHtml(s.name) + '</div>';
+        html += '<div class="drilldown" id="drilldown-' + s.name.replace(/'/g, "\\'").replace(/\W/g, "_") + '">';
+
+        // Quick stats
+        const names = s.dependencies || [];
+        if (names.length > 0 || (s.depended_by || []).length > 0) {
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">';
+          if (names.length > 0) html += 'Depends on: ' + names.join(", ") + ' · ';
+          if (s.depended_by && s.depended_by.length > 0) html += 'Used by: ' + s.depended_by.join(", ");
+          html += '</div>';
+        }
+
+        // Comparison details
+        if (comps.length > 0) {
+          for (const comp of comps) {
+            const wBadge = comp.winner === "A" ? "With Skill" : comp.winner === "B" ? "Without Skill" : "Tie";
+            const wColor = comp.winner === "A" ? "var(--green)" : comp.winner === "B" ? "var(--red)" : "var(--text-muted)";
+            html += '<div style="font-size:0.75rem;margin-bottom:0.5rem;"><strong>Comparison:</strong> Winner <span style="color:' + wColor + ';">' + wBadge + '</span>';
+            if (comp.rubric && comp.rubric.A) html += ' (A: ' + (comp.rubric.A.overall_score || "?").toFixed(1) + '/10, B: ' + (comp.rubric.B ? comp.rubric.B.overall_score : "?").toFixed(1) + '/10)';
+            html += '</div>';
+          }
+        }
+
+        // Improvement suggestions from analysis
+        if (analysis && analysis.improvement_suggestions) {
+          html += '<div style="font-size:0.75rem;"><strong>Top Suggestions:</strong><ul style="margin:0.25rem 0 0 1rem;">';
+          for (const sug of analysis.improvement_suggestions.slice(0, 3)) {
+            const prioColor = sug.priority === "high" ? "var(--red)" : sug.priority === "medium" ? "var(--accent)" : "var(--text-muted)";
+            html += '<li><span style="color:' + prioColor + ';">[' + (sug.priority || "?") + ']</span> ' + escapeHtml(sug.suggestion || "").substring(0, 120) + '</li>';
+          }
+          html += '</ul></div>';
+        }
+
+        // Link to full report
+        html += '<div style="margin-top:0.5rem;"><a href="javascript:void(0)" onclick="event.stopPropagation()">📄 View full report</a></div>';
+
+        html += '</div>';
+      }
+
+      container.innerHTML = html;
+    }
+
+    function toggleDrilldown(name) {
+      const el = document.getElementById("drilldown-" + name.replace(/'/g, "\\'").replace(/\W/g, "_"));
+      if (!el) return;
+      el.classList.toggle("open");
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    init();
+  </script>
+</body>
+</html>

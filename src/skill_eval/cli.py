@@ -686,6 +686,28 @@ def report(
         gen.serve(workspace, port, bench_data, open_browser=True)
 
 
+@app.command(name="batch-report")
+def batch_report(
+    workspace: Path = typer.Argument(..., help="Path to batch workspace directory"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output HTML file path"),
+    open_browser: bool = typer.Option(False, "--open", help="Open report in browser"),
+):
+    """Generate HTML report from batch evaluation results."""
+    from skill_eval.reporting.batch_viewer import generate_batch_html
+
+    html = generate_batch_html(workspace)
+
+    if not output:
+        output = workspace / "batch-report.html"
+
+    output.write_text(html, encoding="utf-8")
+    console.print(f"Batch report written to {output}")
+
+    if open_browser:
+        import webbrowser
+        webbrowser.open(f"file://{output.resolve()}")
+
+
 @app.command(name="import")
 def import_data(
     jsonl_path: Path = typer.Argument(..., help="Path to skill-monitor JSONL file"),
