@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 
-def collect_batch_data(workspace: Path) -> dict:
+def collect_batch_data(workspace: Path, manifest: dict | None = None) -> dict:
     """Collect all benchmark data from a batch workspace."""
     skills: list[dict] = []
 
@@ -18,13 +18,12 @@ def collect_batch_data(workspace: Path) -> dict:
         except Exception:
             pass
 
-    manifest_path = workspace.parent / "manifest.json"
-    manifest = None
-    if manifest_path.exists():
+    if manifest is None:
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            cascade_data = json.loads(cascade_path.read_text(encoding="utf-8")) if cascade_path.exists() else {}
         except Exception:
-            pass
+            cascade_data = {}
+        manifest = cascade_data.get("manifest") if cascade_data else None
 
     unit_dir = workspace / "unit"
     if unit_dir.is_dir():
@@ -98,13 +97,13 @@ def collect_batch_data(workspace: Path) -> dict:
     }
 
 
-def generate_batch_html(workspace: Path) -> str:
+def generate_batch_html(workspace: Path, manifest: dict | None = None) -> str:
     template_path = Path(__file__).parent / "templates" / "batch-report.html"
     if not template_path.exists():
         return "<html><body><h1>Error: batch-report.html template not found</h1></body></html>"
 
     template = template_path.read_text(encoding="utf-8")
-    data = collect_batch_data(workspace)
+    data = collect_batch_data(workspace, manifest)
     json_data = json.dumps(data, ensure_ascii=False)
     html = template.replace("/*__EMBEDDED_DATA__*/", f"const EMBEDDED_DATA = {json_data};")
     return html
