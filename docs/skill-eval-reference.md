@@ -16,6 +16,8 @@
   - [full — 一键完整流程](#full--一键完整流程)
   - [batch — 批量评测](#batch--批量评测)
   - [Pipeline — 流水线评测](#pipeline--流水线评测)
+  - [split-evals — 评测集切分](#split-evals--评测集切分)
+  - [vet-overfit — 过拟合检测](#vet-overfit--过拟合检测)
 - [配置驱动架构](#配置驱动架构)
 - [评测体系](#评测体系)
 - [JSON 输出格式](#json-输出格式)
@@ -420,6 +422,24 @@ pipelines = ConfigGenerator.build_pipeline_from_deps(
 
 ---
 
+### `split-evals` — 评测集切分
+
+```bash
+skill-eval split-evals path/to/evals.json --holdout-fraction 0.3
+```
+
+将评测集按比例随机切分为训练集和留出集，用于过拟合检测。
+
+### `vet-overfit` — 过拟合检测
+
+```bash
+skill-eval vet-overfit --train-bench train.json --holdout-bench holdout.json --skill path/to/skill/
+```
+
+对比训练集和留出集上的表现差异，检测 Skill 是否对训练集过拟合。
+
+---
+
 ## 配置驱动架构
 
 Skill-Eval 是**通用框架**，不包含任何领域特定的断言模板、domain 定义或 skill 关键词。所有项目特定内容通过 `eval-config.yaml` 注入。
@@ -766,7 +786,7 @@ skill-eval/
 │   ├── android-minimal/           # 最小 Android 项目（~12 文件）
 │   ├── android-medium/            # 中等 Android 项目（~20 文件）
 │   └── README.md
-├── tests/                         # 242 个测试
+├── tests/                         # 261 个测试
 └── docs/
 ```
 

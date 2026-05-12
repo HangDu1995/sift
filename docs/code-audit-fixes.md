@@ -15,7 +15,8 @@
 | **第五轮** | **Agent 审计 + 实现（comparator/analyzer/grader 重写）** | **8（审计发现）** | **CRITICAL 1 / HIGH 2 / LOW 5** |
 | **第六轮** | **实现后 bug 审查** | **6** | **CRITICAL 1 / HIGH 1 / LOW 4** |
 | **第七轮** | **E2E CLI 全流程测试（fixtures/test-skills）** | **4** | **HIGH 3 / LOW 1** |
-| **合计** | | **68** | |
+| **第八轮** | **过拟合检测实现 + CLI + 报告集成** | — | — |
+| **合计** | | **69** | |
 
 ---
 
@@ -307,7 +308,55 @@
 | `benchmark.json` 含 comparisons/analysis 字段 | PASS — comparisons 1 条, notes 15 条 |
 | 盲比较器有效区分 with/without skill | PASS — winner A (with_skill score 9.0) vs B (without_skill score 7.0) |
 | batch 调度器正确处理 phase/substep 参数 | PASS — 3 skills 全部完成 |
-| 242 项测试通过 | PASS |
+| 261 项测试通过 | PASS |
+
+---
+
+## 第八轮：过拟合检测实现
+
+### 新增模块
+
+`src/skill_eval/overfitting/` 新增 3 个模块：
+
+| 文件 | 职责 |
+|------|------|
+| `splitter.py` | 将 eval 集按比例拆分为训练集和 holdout 集 |
+| `gap.py` | 计算训练集与 holdout 集之间的泛化差距 |
+| `detector.py` | LLM 驱动的可疑指令检测器，分析技能文档中的过拟合指标 |
+
+### 新增 CLI 命令
+
+| 命令 | 功能 |
+|------|------|
+| `skill-eval split-evals` | 将 evals.json 拆分为 train/holdout 两部分，支持 `--holdout-ratio` 参数 |
+| `skill-eval vet-overfit` | 对技能文档执行 LLM 过拟合检测，输出详细的过拟合报告 |
+
+### 新增 Pydantic 模型
+
+- `SuspiciousInstruction` — 包含 instruction 文本、严重度（HIGH/MEDIUM/LOW）、检测原因和行号
+- `GeneralizationGap` — 训练集 vs holdout 集的 pass rate 差距及 significance 标记
+- `OverfittingReport` — 聚合所有过拟合检测结果，包含可疑指令列表和泛化差距数据
+
+### 报告集成
+
+- `viewer.html` — 单次运行报告新增 `## Overfitting Detection` 章节，展示可疑指令列表和泛化差距
+- `batch-report.html` — 批量报告新增过拟合汇总表，每个技能显示 suspicious count 和 gap 值
+
+### 测试数据
+
+`fixtures/negative-skills/overfitted-skill/` 新增过拟合测试技能，包含 10 个可疑指令，用于验证检测器效果。
+
+### 检测结果
+
+对过拟合测试技能执行 `vet-overfit`，LLM 检测器识别出 10 个可疑指令：
+- 7 HIGH — 直接提及特定 eval case 或期望值
+- 2 MEDIUM — 隐含对训练集特定格式的依赖
+- 1 LOW — 风格上的过拟合指示
+
+### 健壮性处理
+
+- 缺少 holdout 文件时：`gap.py` 返回 `GeneralizationGap(gap=None, label="N/A")`，检测继续
+- 缺少 LLM 数据时：`detector.py` 返回空的 `OverfittingReport`，报告渲染对应的 "数据不可用" fallback
 
 ---
 
@@ -315,8 +364,8 @@
 
 | 指标 | 值 |
 |------|-----|
-| 总修复数 | 67 |
+| 总变更数 | 69 |
 | 修改文件数 | 27 |
 | 新增文件 | 5 (`utils.py`, `comparator.py`, `analyzer.py`, `test_agents.py`, `code-audit-fixes.md`) |
 | 删除重复代码 | ~150 行 (cli.py 中 run/full 命令合并) |
-| 测试通过 | 242/242 |
+| 测试通过 | 261/261 |

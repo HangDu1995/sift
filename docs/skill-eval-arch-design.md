@@ -14,7 +14,7 @@
 | 边界 | 内容 |
 |------|------|
 | **输入** | 一个或多个 `SKILL.md` 所在目录 + 可选的 `evals.json` 评测定义 |
-| **输出** | `benchmark.json`（含 `comparisons` + `analysis` 字段）+ `grading.json` + `compliance.json` + `comparison-run*.json` + `analysis-result.json` + `run_debug.json` + HTML 报告 + CLI exit code |
+| **输出** | `benchmark.json`（含 `comparisons` + `analysis` 字段）+ `grading.json` + `compliance.json` + `overfitting_report.json` + `comparison-run*.json` + `analysis-result.json` + `run_debug.json` + HTML 报告 + CLI exit code |
 | **外部依赖** | 本地安装的 `claude` CLI >= 2.1.0, < 2.2.0（通过 subprocess 调用 `claude -p`） |
 | **不依赖** | Claude Code 运行时、OpenCode 运行时、任何第三方 API Key |
 
@@ -177,6 +177,7 @@ package "核心模块" {
     [L2集成测试\nChain/Routing\n/Contract] as inttest #LightYellow
     [插件机制\n领域断言注册\nCUSTOM_PLUGIN] as plug #LightBlue
     [断言模板库\n配置驱动\ndomain/type] as tmpl #LightBlue
+    [过拟合检测\nEvalSplitter\nGapCalculator\nOverfittingDetector\nLLM审查SKILL.md] as overfit #LightYellow
 }
 
 rectangle "Claude CLI\nclaude -p (subprocess)\n--dangerously-skip-permissions\n--bare / --max-turns N" as claude #LightCoral
@@ -216,6 +217,8 @@ cfg --> inttest : integration_scenarios
 scr --> plug : CUSTOM_PLUGIN
 ed --> tmpl : get_default_assertions
 cfg --> claude : generate-config
+overfit --> claude : LLM审查
+overfit --> agg : overfitting_report.json
 @enduml
 ```
 
@@ -530,7 +533,49 @@ overall_confidence = 0.7 (baseline)
 - `_run_comparisons()` 产出 → `benchmark.json` 中 `comparisons` 字段
 - `_run_analysis()` + `_run_comparison_analysis()` 产出 → `benchmark.json` 中 `analysis` 字段
 
-### 5.9 报告可视化 (`reporting/`)
+### 5.9 过拟合检测 (`overfitting/`)
+
+| 属性 | 值 |
+|------|------|
+| **职责** | 检测 Skill 的评测用例是否对训练集过拟合——即 SKILL.md 中的指令是否针对特定 eval 做了过度特化，导致在 holdout 集上泛化能力差 |
+| **输入** | Skill 路径 + 已产出的 grading.json（多个 run） |
+| **输出** | `overfitting_report.json`（含 GeneralizationGap 列表 + SuspiciousInstruction + 总体判决 + 改进建议） |
+| **外部调用** | `claude -p`（subprocess，OverfittingDetector LLM 审查 SKILL.md） |
+| **关键契约** | 流程分三步：EvalSplitter 分层 split → GapCalculator 计算 delta → OverfittingDetector LLM 审查。两个 CLI 命令：`split-evals` 和 `vet-overfit` |
+
+**EvalSplitter**：将 evals.json 中的评测用例按 `should_trigger` 标签或 checkpoint 期望进行分层采样，分为训练集和 holdout 集（默认 70/30 分割）。保证两个集合在难度、类型、领域上分布一致。
+
+**GapCalculator**：对训练集和 holdout 集分别计算 pass_rate，计算 delta = train_pass_rate - holdout_pass_rate。根据 delta 大小判定间隙严重度：
+
+| gap_severity | delta 范围 | 含义 |
+|-------------|-----------|------|
+| NONE | delta ≤ 0.05 | 无明显过拟合 |
+| SLIGHT | 0.05 < delta ≤ 0.10 | 轻微过拟合迹象 |
+| MODERATE | 0.10 < delta ≤ 0.20 | 中度过拟合 |
+| SIGNIFICANT | 0.20 < delta ≤ 0.35 | 显著过拟合 |
+| SEVERE | delta > 0.35 | 严重过拟合，Skill 几乎只在训练集上有效 |
+
+**OverfittingDetector**：当 gap_severity ≥ MODERATE 时，调用 `claude -p` 对 SKILL.md 进行 LLM 审查。审查维度包括：
+- 指令是否过于具体地对应某个 eval prompt
+- 是否存在"作弊"类指令（如"当用户问 X 时，输出 Y"的硬编码映射）
+- 是否有过约束（如只允许特定工具、特定格式）导致泛化受阻
+- 产出 `SuspiciousInstruction` 列表，标注 risk 等级和修改建议
+
+**CLI 命令**：
+
+```bash
+skill-eval split-evals SKILL_PATH [--train-ratio 0.7] [--seed 42]
+    → 输出 train-evals.json + holdout-evals.json
+
+skill-eval vet-overfit SKILL_PATH --train PATH --holdout PATH [--model MODEL]
+    → 依次对 train 和 holdout 运行评测 → EvalSplitter + GapCalculator
+    → if gap ≥ MODERATE → OverfittingDetector LLM 审查
+    → 输出 overfitting_report.json
+```
+
+**Report 集成**：`overfitting_report.json` 被聚合到 `benchmark.json` 的 `overfitting` 字段中，并在 HTML 报告中展示泛化间隙和可疑指令。
+
+### 5.10 报告可视化 (`reporting/`)
 
 | 属性 | 值 |
 |------|------|
@@ -547,7 +592,7 @@ overall_confidence = 0.7 (baseline)
 
 **ScorecardRenderer**：将静态分析结果渲染为独立的 HTML 表格。
 
-### 5.10 外部数据集成 (`integration/`)
+### 5.11 外部数据集成 (`integration/`)
 
 | 属性 | 值 |
 |------|------|
@@ -558,7 +603,7 @@ overall_confidence = 0.7 (baseline)
 
 **匹配补充逻辑**：对每条 JSONL 记录，按 skill_name 匹配 + 时间窗口 ±24h，将真实世界的 token 统计（input + output + reasoning）和耗时数据补充到对应 run 中。
 
-### 5.11 配置驱动架构 (`config/`) — v0.2 新增
+### 5.12 配置驱动架构 (`config/`) — v0.2 新增
 
 | 属性 | 值 |
 |------|------|
@@ -582,7 +627,7 @@ config/defaults.yaml          ← 框架内置，通用默认值
 
 **LLM 配置生成**：`scan_skills_metadata()` → `ConfigGenerator.build_prompt()` → `claude -p` → `eval-config.yaml`。
 
-### 5.12 L0 覆盖率扫描 (`scanning/`) — v0.2 新增
+### 5.13 L0 覆盖率扫描 (`scanning/`) — v0.2 新增
 
 | 属性 | 值 |
 |------|------|
@@ -594,7 +639,7 @@ config/defaults.yaml          ← 框架内置，通用默认值
 
 **CLI 命令**：`skill-eval scan <skills-dir> [--config-prefix PREFIX] [--domain DOMAIN] [--type TYPE]`
 
-### 5.13 L2 集成测试 (`integration/runner.py`) — v0.2 新增
+### 5.14 L2 集成测试 (`integration/runner.py`) — v0.2 新增
 
 | 属性 | 值 |
 |------|------|
@@ -605,7 +650,7 @@ config/defaults.yaml          ← 框架内置，通用默认值
 
 **与 batch 的集成**：`BatchScheduler.run_integration_tests()` 从 `EvalConfig` 读取 `integration_scenarios`，`batch --layers integration` 执行。
 
-### 5.14 影响分析 (`integration/impact.py`) — v0.2 新增
+### 5.15 影响分析 (`integration/impact.py`) — v0.2 新增
 
 | 属性 | 值 |
 |------|------|
@@ -614,7 +659,7 @@ config/defaults.yaml          ← 框架内置，通用默认值
 | **输出** | `ImpactReport`：connections（上下游关联）、risk_level（low/medium/high） |
 | **关键契约** | 纯分析逻辑，不调用 LLM |
 
-### 5.15 插件机制 (`scoring/plugins.py`) — v0.2 新增
+### 5.16 插件机制 (`scoring/plugins.py`) — v0.2 新增
 
 | 属性 | 值 |
 |------|------|
@@ -623,7 +668,7 @@ config/defaults.yaml          ← 框架内置，通用默认值
 | **输出** | 注册表，被 `ProgrammaticChecker` 消费 |
 | **关键契约** | `CUSTOM_PLUGIN` 类型断言通过 registry 调用对应检查函数，未知插件名返回 FAIL |
 
-### 5.16 断言模板库 (`scoring/templates.py`) — v0.2 新增
+### 5.17 断言模板库 (`scoring/templates.py`) — v0.2 新增
 
 | 属性 | 值 |
 |------|------|
@@ -632,7 +677,7 @@ config/defaults.yaml          ← 框架内置，通用默认值
 | **输出** | `list[Assertion]`（去重后的断言列表） |
 | **关键契约** | 纯数据查询，不调用 LLM。domain 和 type 模板取并集后去重 |
 
-### 5.17 批量关联评测 (`batch/`)
+### 5.18 批量关联评测 (`batch/`)
 
 | 属性 | 值 |
 |------|------|
@@ -681,6 +726,12 @@ start
 :Calibration Checker\n评分可信度;
 :→ calibration.json;
 
+|过拟合检测 (vet-overfit, 可选)|
+:EvalSplitter\n分层train/holdout split;
+:GapCalculator\ntrain vs holdout delta;
+:OverfittingDetector\nLLM审查SKILL.md;
+:→ overfitting_report.json;
+
 |聚合与输出|
 :Benchmark Aggregator\nmean/stddev/delta\n+盲比较+分析;
 :→ benchmark.json\n含compliance+calibration\n+comparisons+analysis;
@@ -692,7 +743,7 @@ stop
 
 ### 主流水线
 
-输入（SKILL.md + evals.json）→ 解析/加载 → 安全审查（可选门控，`--security-gate`）→ 静态分析（旁路）→ A/B 执行（一体化引擎：执行 + 评分 + 遵循性检查 + 评分校准 + 诊断，with_skill × N, without_skill × N）→ 产出（grading.json + compliance.json + calibration.json + run_debug.json + timing.json）→ Benchmark 聚合（含 BlindComparator 盲比较 + PosthocAnalyzer 深度分析）→ 输出（benchmark.json 含 comparisons + analysis + report.html + CI exit code）。
+输入（SKILL.md + evals.json）→ 解析/加载 → 安全审查（可选门控，`--security-gate`）→ 静态分析（旁路）→ A/B 执行（一体化引擎：执行 + 评分 + 遵循性检查 + 评分校准 + 诊断，with_skill × N, without_skill × N）→ 产出（grading.json + compliance.json + calibration.json + run_debug.json + timing.json）→ 过拟合检测（可选，`vet-overfit`：分层 split → gap 计算 → LLM 审查）→ Benchmark 聚合（含 BlindComparator 盲比较 + PosthocAnalyzer 深度分析）→ 输出（benchmark.json 含 comparisons + analysis + report.html + CI exit code）。
 
 静态分析是独立的旁路分支：SKILL.md → 解析 → 11 项评分 → scorecard.json → 直接汇入报告。
 
@@ -710,6 +761,7 @@ stop
 | 聚合 | `benchmark.json` | 所有 run 的汇总 + with/without delta + calibration_grade + comparisons + analysis |
 | 比较 | `comparison-run{N}.json` | 每对 with/without run 的盲比较结果 |
 | 分析 | `analysis-result.json` | PosthocAnalyzer 深度分析结果（benchmark 分析 + 比较分析） |
+| 过拟合检测 | `overfitting_report.json` | 泛化间隙分析结果 + 可疑指令列表 + 总体判决 |
 | 报告 | `report.html` | 自包含 HTML，数据内嵌 |
 
 ### `skill-eval full` 完整流程编排
@@ -863,6 +915,8 @@ batch-workspace-{timestamp}/
 | `init` | <1s~30s | 仅生成 prompt 时 | 生成评测用例模板 |
 | `scan` | <1s | 否 | L0 覆盖率扫描（evals 验证 + 断言覆盖率） |
 | `generate-config` | ~30s | 是 | LLM 生成 eval-config.yaml |
+| `split-evals` | <1s | 否 | 分层采样，将 evals.json 拆分为 train 和 holdout |
+| `vet-overfit` | 10-25min | 是 | 过拟合检测（train vs holdout delta + LLM 审查） |
 | `run` | 5-30min | 是 | 执行 A/B 评测 + 评分 + 遵循性 + 校准 |
 | `optimize-trigger` | 10-60min | 是 | 迭代优化触发描述 |
 | `report` | <1s | 否 | 生成/展示 HTML 报告 |

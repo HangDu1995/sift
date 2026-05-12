@@ -163,6 +163,18 @@ skill-eval report output/ --benchmark benchmark.json --open  # HTML 报告
 skill-eval optimize-trigger path/to/skill/ --eval-set triggers.json  # 触发优化
 ```
 
+### `split-evals` — 评测集切分
+
+```bash
+skill-eval split-evals path/to/evals.json --holdout-fraction 0.3
+```
+
+### `vet-overfit` — 过拟合检测
+
+```bash
+skill-eval vet-overfit --train-bench train.json --holdout-bench holdout.json --skill path/to/skill/
+```
+
 ---
 
 ## Pipeline 流水线评测
@@ -203,7 +215,7 @@ pipelines:
 ## 测试
 
 ```bash
-pytest tests/ -v           # 242 个测试
+pytest tests/ -v           # 261 个测试
 pytest tests/ --cov=skill_eval
 ```
 
@@ -220,7 +232,7 @@ pytest tests/ --cov=skill_eval
 | [原理](docs/skill-eval-principles.md) | 底层原理、参考出处 |
 | [测试指南](docs/cli-test-results.md) | 测试 Skill 介绍、指标解读、如何编写测试 |
 | [示例报告](docs/demo-output/data-validator/report.html) | data-validator 的完整 HTML 报告示例 |
-| [代码审查修复记录](docs/code-audit-fixes.md) | 七轮代码审查与修复记录（67 个问题） |
+| [代码审查修复记录](docs/code-audit-fixes.md) | 七轮代码审查与修复记录（68 个变更） |
 
 ---
 

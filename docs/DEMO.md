@@ -461,6 +461,126 @@ skill-eval batch fixtures/negative-skills/manifest-broken-deps.json --runs 1
 - `CASCADE` 状态说明 cascade-victim 本身没问题，不应该被惩罚
 - `DEPENDENCY_MISSING` 帮你发现 manifest 配置错误
 
+### 2.7 过拟合型：overfitted-skill
+
+**什么是过拟合**：Skill 的指令被"逆向适配"以通过特定 eval 用例，但无法泛化到未见过的场景。就像学生背了考试答案但不会举一反三。
+
+**SKILL.md 关键内容**：
+
+```markdown
+## Instructions
+1. When processing data, always output a JSON object with the following metadata fields:
+   id, name, status, and timestamp.
+2. NEVER modify the original data. Always create a new output file.
+3. For validation, ALWAYS check that id is a positive integer and name is non-empty.
+4. For type field, only allow values: user, order, product.
+5. When writing output files, always use output/ directory.
+6. For any SQL-related checks, scan for: DROP, DELETE, INSERT, UNION, --.
+7. Step 1: Read the input file. Step 2: Validate each field. Step 3: Write results.
+8. Always sort output alphabetically by the name field.
+9. NEVER fabricate validation errors—only flag what you actually find.
+10. If the input is empty, return an error object with code: 400.
+11. When in doubt, consult the references/schema.json file.
+12. Always escape special characters in string fields.
+13. Record all validation results in a results.json file.
+14. For metadata, include created_at, updated_at, and author fields.
+15. Process records in batches of 100 for large files.
+```
+
+注意：第 14 行的 metadata 字段要求与 eval-1 的 expectation 完全一致——
+这是"按题写指令"的典型特征。
+
+**拆分评测集**：
+
+```bash
+skill-eval split-evals fixtures/negative-skills/overfitted-skill/evals/evals-train.json
+```
+
+`split-evals` 将评测集随机拆分为 train（80%）和 holdout（20%），其中 holdout 对于
+评测者不可见——它才是真正检验泛化能力的"盲测题"。
+
+**过拟合检测**：
+
+```bash
+skill-eval vet-overfit \
+  --train-bench output/train/iteration-1/benchmark.json \
+  --holdout-bench output/holdout/iteration-1/benchmark.json \
+  --skill fixtures/negative-skills/overfitted-skill/ \
+  --train-evals fixtures/negative-skills/overfitted-skill/evals/evals-train.json
+```
+
+**检测结果（实际运行）**：
+
+```
+🔍 Overfitting Detection Report
+────────────────────────────────────────────
+  overfitting_score:    0.78 (HIGH)
+  generalization_gap:   -0.52
+  suspicious_instructions: 10 (7 HIGH + 2 MEDIUM + 1 LOW)
+  train_pass_rate:      0.85
+  holdout_pass_rate:    0.33
+
+🧩 Detected Patterns (Top 3):
+  • Instruction line 14 directly mirrors eval-1 expectation about
+    metadata fields (created_at, updated_at, author)
+  • Instruction line 4 matches eval-3 type field validation exactly
+    (user, order, product)
+  • Instruction line 3 parrots eval-2 id validation wording verbatim
+    ("positive integer" and "non-empty")
+```
+
+train 上有 85% 通过率，但 holdout 只有 33%——泛化差距高达 0.52。
+7 条 HIGH 级别可疑指令表明 SKILL.md 中超过一半的指令都是"背答案"式的。
+
+**指标解读**：
+
+| 指标 | 含义 | 判断标准 |
+|------|------|----------|
+| **overfitting_score** (0-1) | Skill 对训练集过拟合的总体程度 | > 0.6 高度过拟合，< 0.3 良好泛化 |
+| **generalization_gap** | train 与 holdout pass_rate 之差 | < -0.3 严重退化，≈ 0 泛化良好 |
+| **suspicious_instructions** | 被判定为与 eval 高度耦合的指令数 | HIGH 越多越危险 |
+| **anomaly_detail** | 逐条指令的相似度 + 证据 | 看 detail 定位具体是哪些 eval 被"背"了 |
+
+`generalization_gap` 是核心指标——train 高出 holdout 越多，说明 Skill 越"只会做见过的题"。
+如果 train 和 holdout 的 pass_rate 都低（比如都 < 0.4），那只是 Skill 质量差，不一定是过拟合。
+
+#### 防过拟合工作流
+
+最佳的 Skill 开发流程应引入过拟合检测：
+
+```
+Step 1: split  → skill-eval split-evals evals/evals-train.json
+                 ↓ 产出 evals-train.json（80%）+ evals-holdout.json（20%）
+
+Step 2: run    → skill-eval full my-skill/ \
+                 --evals evals-train.json --output output/train/
+                 ↓
+                 skill-eval full my-skill/ \
+                 --evals evals-holdout.json --output output/holdout/
+
+Step 3: vet    → skill-eval vet-overfit \
+                 --train-bench output/train/iteration-1/benchmark.json \
+                 --holdout-bench output/holdout/iteration-1/benchmark.json \
+                 --skill my-skill/ \
+                 --train-evals evals-train.json
+                 ↓ 产出 overfitting_score + generalization_gap + 可疑指令清单
+```
+
+| 阶段 | 目的 | 产出 |
+|------|------|------|
+| **split** | 将评测集划分为可见（train）和不可见（holdout） | 两个评测文件 |
+| **run** | 分别在 train 和 holdout 上跑完整 A/B 评测 | 两组 benchmark.json |
+| **vet** | 对比两组结果，检测过拟合信号 | 过拟合报告 |
+
+**核心理念**：holdout 评分才是真实水平的无偏估计。不要让 Skill 的作者看到 holdout
+的内容——否则过拟合检测失去意义。
+
+**教训**：
+- 在 train 上表现好 ≠ Skill 真的好——可能是"背答案"
+- 7+ 条 HIGH 级别可疑指令强烈建议重写 SKILL.md，去除与 eval 的机械对应
+- `generalization_gap` < -0.3 时，建议用更大的 holdout 集重新验证
+- 理想状态：train 和 holdout 的 pass_rate 都在高位且差距 < 0.1
+
 ---
 
 ## 第三幕：批量评测（正面 DAG）

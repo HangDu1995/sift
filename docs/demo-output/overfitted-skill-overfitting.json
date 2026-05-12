@@ -1,0 +1,97 @@
+{
+  "skill_name": "overfitted-skill",
+  "generalization_gap": {
+    "train_pass_rate_with": 0.8,
+    "train_pass_rate_without": 0.3333,
+    "train_delta": 0.47,
+    "holdout_pass_rate_with": 0.8,
+    "holdout_pass_rate_without": 0.3333,
+    "holdout_delta": 0.47,
+    "gap": 0.0,
+    "verdict": "good"
+  },
+  "suspicious_instructions": [
+    {
+      "line": 14,
+      "snippet": "Output MUST include a `metadata` field containing `transform_type`, `source`, `record_count`, and `transformed_at`",
+      "matched_eval_id": 1,
+      "matched_expectation": "输出必须包含 metadata 字段 / 输出需要 transform_type 字段",
+      "reason": "Rule directly encodes the exact fields (metadata, transform_type) that evals 1 and 2 check for. The specific sub-fields (source, record_count, transformed_at) go beyond any stated business need and appear tailored to satisfy assertion JSON_HAS_FIELD checks.",
+      "severity": "high"
+    },
+    {
+      "line": 15,
+      "snippet": "Output MUST wrap records in a `records` array under the root object",
+      "matched_eval_id": 1,
+      "matched_expectation": "输出必须包含 records 数组",
+      "reason": "Mandating a top-level 'records' key mirrors the exact field name and structure asserted by evals 1 and 2 (JSON_HAS_FIELD: 'records'). The field name matches verbatim.",
+      "severity": "high"
+    },
+    {
+      "line": 20,
+      "snippet": "ALWAYS validate that `id` fields are positive integers",
+      "matched_eval_id": 3,
+      "matched_expectation": "验证 id 为正整数",
+      "reason": "Directly mirrors eval 3 expectation wording. Eval 3 fixture also injects id=-1 specifically to trigger this check, suggesting the rule was written to pass that fixture rather than capture a general domain invariant.",
+      "severity": "high"
+    },
+    {
+      "line": 21,
+      "snippet": "ALWAYS validate that `name` fields are non-empty strings",
+      "matched_eval_id": 3,
+      "matched_expectation": "验证 name 为非空",
+      "reason": "Matches eval 3 expectation verbatim. Eval 3 fixture supplies name=\"\" to exercise exactly this check, indicating fixture-driven rule insertion.",
+      "severity": "high"
+    },
+    {
+      "line": 22,
+      "snippet": "ALWAYS check for the `type` field and ensure it is one of: user, order, product",
+      "matched_eval_id": 3,
+      "matched_expectation": "验证 type 为 user/order/product 之一",
+      "reason": "The allowed-value enumeration (user, order, product) is identical to the eval expectation phrasing. Eval 3 fixture uses type='invalid' to trigger a failure, and the fixture data in eval 2 contains type='user', confirming the enum was sourced from fixture content.",
+      "severity": "high"
+    },
+    {
+      "line": 23,
+      "snippet": "ALWAYS include anti-SQL-injection validation",
+      "matched_eval_id": 3,
+      "matched_expectation": "包含 SQL 注入检测",
+      "reason": "SQL injection validation is unusual for a local JSON file transformer with no database interaction. The rule exists solely to satisfy eval 3's '包含 SQL 注入检测' expectation.",
+      "severity": "high"
+    },
+    {
+      "line": 24,
+      "snippet": "Report generation MUST produce both `report.md` and `report-summary.json`",
+      "matched_eval_id": 4,
+      "matched_expectation": "报告文件存在 (FILE_EXISTS: report.md)",
+      "reason": "Hardcodes the exact filename 'report.md' that eval 4's FILE_EXISTS assertion checks. The second file 'report-summary.json' has no eval backing it, suggesting it was added to appear non-overfitted while the primary driver is the eval assertion.",
+      "severity": "high"
+    },
+    {
+      "line": 25,
+      "snippet": "All output files MUST be encoded in UTF-8 without BOM",
+      "matched_eval_id": 2,
+      "matched_expectation": "输出文件使用 UTF-8 编码",
+      "reason": "UTF-8 encoding is reasonable in general, but 'without BOM' is a highly specific detail that matches eval 2's encoding expectation precisely, suggesting the rule was tuned to the test rather than being a pre-existing standard.",
+      "severity": "medium"
+    },
+    {
+      "line": 3,
+      "snippet": "generate reports from data sources",
+      "matched_eval_id": 4,
+      "matched_expectation": "根据 transformed.json 生成汇总报告",
+      "reason": "The description specifically calls out 'generate reports from data sources', mirroring eval 4's prompt about generating a summary report. Description tuning to trigger on test queries is a description-leakage pattern.",
+      "severity": "medium"
+    },
+    {
+      "line": 19,
+      "snippet": "NEVER use `List` type — always use array literal syntax",
+      "matched_eval_id": null,
+      "matched_expectation": "No direct eval match",
+      "reason": "This rule references a programming-language-level type annotation ('List' vs array literal) that is irrelevant to a skill describing data processing behavior. Its presence with no corresponding eval suggests it was added to pad specificity or mask overfitting of other rules, and it leaks implementation details (likely Python List type) inappropriate for a skill description.",
+      "severity": "low"
+    }
+  ],
+  "overfitting_score": 1.0,
+  "recommendation": "Found 10 suspicious instructions that may be overfitted to evals. Review flagged items and consider replacing specific rules with general principles."
+}

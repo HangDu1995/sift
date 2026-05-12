@@ -383,6 +383,12 @@ skill-eval/
 │       │   ├── runner.py              # L2 集成测试 (chain/routing/contract) (v0.2)
 │       │   └── impact.py              # 影响分析/爆炸半径 (v0.2)
 │       │
+│       ├── overfitting/
+│       │   ├── __init__.py
+│       │   ├── splitter.py            # EvalSplitter
+│       │   ├── gap.py                 # GapCalculator
+│       │   └── detector.py            # OverfittingDetector (LLM)
+│       │
 │       └── batch/
 │           ├── __init__.py
 │           ├── manifest.py            # SkillsManifest + DependencyDiscovery
@@ -425,6 +431,7 @@ skill-eval/
     ├── test_scanner.py                  # v0.2: L0 覆盖率
     ├── test_integration.py              # v0.2: L2 集成测试
     ├── test_impact.py                   # v0.2: 影响分析
+    ├── test_overfitting.py              # 过拟合检测 (split + gap + detector)
     └── test_agents.py                   # 盲比较器 + 深度分析器（26 个测试）
 ```
 
@@ -2271,6 +2278,176 @@ class _ProgressState:
 
 ---
 
+### 3.12 过拟合检测 (Overfitting Detection)
+
+#### 3.12.1 模块职责
+
+检测 Skill 是否对评测用例过拟合——即 SKILL.md 中的指令是否针对特定 eval 做了过度优化，导致在未见过的 holdout 集上泛化能力差。通过分层采样 + train/holdout delta 对比 + LLM 审查三步流程完成检测。
+
+#### 3.12.2 类图
+
+```mermaid
+classDiagram
+    class EvalSplitter {
+        +train_ratio: float
+        +seed: int
+        +split(evals: EvalSet) tuple~EvalSet, EvalSet~
+        -_stratified_sample(evals: list~EvalCase~) tuple~list, list~
+    }
+
+    class GapCalculator {
+        +calculate(train_results: list~GradingResult~, holdout_results: list~GradingResult~) GeneralizationGap
+        -_compute_pass_rate(results: list~GradingResult~) float
+    }
+
+    class OverfittingDetector {
+        +model: str | None
+        +timeout: int
+        +detect(skill_path: Path, gap: GeneralizationGap) list~SuspiciousInstruction~
+        -_build_prompt(skill_body: str, gap: GeneralizationGap) str
+        -_parse_response(raw: str) list~SuspiciousInstruction~
+    }
+
+    class GeneralizationGap {
+        +skill_name: str
+        +train_pass_rate: float
+        +holdout_pass_rate: float
+        +delta: float
+        +gap_severity: str
+        +suspicious_instructions: list~SuspiciousInstruction~
+    }
+
+    class SuspiciousInstruction {
+        +instruction_text: str
+        +section: str
+        +risk: str
+        +reason: str
+        +suggestion: str
+    }
+
+    class OverfittingReport {
+        +skill_name: str
+        +skill_path: str
+        +train_count: int
+        +holdout_count: int
+        +results: list~GeneralizationGap~
+        +overall_verdict: str
+        +summary: str
+        +recommendations: list~str~
+    }
+
+    EvalSplitter --> EvalSet
+    GapCalculator --> GeneralizationGap
+    OverfittingDetector --> SuspiciousInstruction
+    GeneralizationGap --> SuspiciousInstruction
+```
+
+#### 3.12.3 EvalSplitter
+
+```python
+class EvalSplitter:
+    def __init__(self, train_ratio: float = 0.7, seed: int = 42): ...
+
+    def split(self, evals: EvalSet) -> tuple[EvalSet, EvalSet]:
+        """
+        按 train_ratio 将 evals 分层拆分为训练集和 holdout 集。
+        分层依据：EvalCase 的 level（L1/L2/L3）和 expectations 数量。
+        使用 seed 保证可复现。
+        """
+```
+
+#### 3.12.4 GapCalculator
+
+```python
+class GapCalculator:
+    def calculate(
+        self,
+        train_results: list[GradingResult],
+        holdout_results: list[GradingResult],
+    ) -> GeneralizationGap:
+        """
+        计算训练集和 holdout 集的 pass_rate 及 delta。
+        根据 delta 大小判定 gap_severity：
+        - NONE:       delta ≤ 0.05
+        - SLIGHT:     0.05 < delta ≤ 0.10
+        - MODERATE:   0.10 < delta ≤ 0.20
+        - SIGNIFICANT: 0.20 < delta ≤ 0.35
+        - SEVERE:     delta > 0.35
+        """
+```
+
+#### 3.12.5 OverfittingDetector
+
+```python
+class OverfittingDetector:
+    def __init__(self, model: str | None = None, timeout: int = 120): ...
+
+    def detect(self, skill_path: Path, gap: GeneralizationGap) -> list[SuspiciousInstruction]:
+        """
+        调用 claude -p 对 SKILL.md 进行 LLM 审查，检测过拟合特征。
+        仅在 gap_severity ≥ MODERATE 时调用 LLM，否则返回空列表。
+        LLM 审查维度：
+        - 指令是否过于具体地对应某个 eval prompt
+        - 是否存在硬编码映射（当用户问 X 时输出 Y）
+        - 是否有过约束导致泛化受阻
+        - 是否缺失通用性指导而过度依赖特例
+        返回 suspicious_instructions 列表，含 risk 等级和建议。
+        """
+```
+
+#### 3.12.6 CLI 命令
+
+```bash
+skill-eval split-evals SKILL_PATH [--train-ratio 0.7] [--seed 42]
+    → 输出 train-evals.json + holdout-evals.json
+
+skill-eval vet-overfit SKILL_PATH --train PATH --holdout PATH [--model MODEL] [--runs N]
+    → 依次对 train 和 holdout 运行评测
+    → EvalSplitter + GapCalculator 计算泛化间隙
+    → if gap ≥ MODERATE → OverfittingDetector LLM 审查
+    → 输出 overfitting_report.json
+```
+
+#### 3.12.7 输出格式
+
+`overfitting_report.json` 格式：
+
+```json
+{
+  "skill_name": "my-skill",
+  "skill_path": "/path/to/skill",
+  "train_count": 7,
+  "holdout_count": 3,
+  "results": [
+    {
+      "skill_name": "my-skill",
+      "train_pass_rate": 0.95,
+      "holdout_pass_rate": 0.60,
+      "delta": 0.35,
+      "gap_severity": "SIGNIFICANT",
+      "suspicious_instructions": [
+        {
+          "instruction_text": "ALWAYS use the exact template from eval-3",
+          "section": "## Output Format",
+          "risk": "HIGH",
+          "reason": "指令直接引用了 eval-3 的模板，在 holdout 上不适用",
+          "suggestion": "将硬编码模板替换为通用输出格式要求"
+        }
+      ]
+    }
+  ],
+  "overall_verdict": "severe_overfitting",
+  "summary": "Skill shows significant generalization gap: train=0.95, holdout=0.60, delta=0.35",
+  "recommendations": [
+    "移除对特定 eval 的直接引用",
+    "将输出格式要求从硬编码模板改为通用规范",
+    "增加更多样化的 eval 用例减少偏差"
+  ]
+}
+```
+
+---
+
 ## 4. 批量关联评测 (Batch Evaluation)
 
 ### 4.1 模块职责
@@ -3551,6 +3728,33 @@ class CalibrationSummary(BaseModel):
     overall_confidence: float
     agreement_rate: float
     disagreement_count: int
+
+# --- Overfitting 模型 ---
+
+class SuspiciousInstruction(BaseModel):
+    instruction_text: str
+    section: str
+    risk: str  # "HIGH" | "MEDIUM" | "LOW"
+    reason: str
+    suggestion: str
+
+class GeneralizationGap(BaseModel):
+    skill_name: str
+    train_pass_rate: float
+    holdout_pass_rate: float
+    delta: float
+    gap_severity: str  # "NONE" | "SLIGHT" | "MODERATE" | "SIGNIFICANT" | "SEVERE"
+    suspicious_instructions: list[SuspiciousInstruction] = []
+
+class OverfittingReport(BaseModel):
+    skill_name: str
+    skill_path: str
+    train_count: int
+    holdout_count: int
+    results: list[GeneralizationGap] = []
+    overall_verdict: str  # "no_overfitting" | "mild_overfitting" | "moderate_overfitting" | "severe_overfitting"
+    summary: str
+    recommendations: list[str] = []
 ```
 
 ---

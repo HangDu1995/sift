@@ -589,7 +589,7 @@ skill-eval full path/to/your-skill/ --runs 1
 | Claude Code CLI | 2.1.133 |
 | 操作系统 | macOS (Darwin) |
 | 测试 fixtures | `fixtures/test-skills/` (3 skills) |
-| 单元测试 | 242 passed |
+| 单元测试 | 261 passed |
 
 ### 命令 1: `vet` — 安全审查
 
@@ -889,6 +889,53 @@ skill-eval batch fixtures/negative-skills/manifest-broken-deps.json --runs 1
 
 **结果**: broken-root=ROOT_CAUSE, cascade-victim=CASCADE, missing-dep=DEPENDENCY_MISSING
 
+### 命令 15: `split-evals` — 评测集切分
+
+```bash
+skill-eval split-evals fixtures/test-skills/data-validator/evals/evals.json --seed 42
+```
+
+**结果**: ✅ PASS
+
+```
+Found 3 evals.
+  1 holdout evals written to evals-holdout.json
+  Train set saved: 2 evals → evals-train.json
+```
+
+### 命令 16: `vet-overfit` — 过拟合检测
+
+```bash
+skill-eval vet-overfit \
+  --train-bench <benchmark.json> \
+  --holdout-bench <benchmark.json> \
+  --skill fixtures/negative-skills/overfitted-skill/ \
+  --train-evals .../evals-train.json
+```
+
+**结果**: ⚠️ OVERFITTED — overfitting_score=1.00
+
+```
+Overfitting report for overfitted-skill:
+  Overfitting Score: 1.00
+  Suspicious Instructions: 10 found
+
+  Severity breakdown:
+    7 HIGH
+    2 MEDIUM
+    1 LOW
+
+  Examples:
+    HIGH | "When asked about validation, always respond with a paragraph..." 
+          reason: instruction overfits to eval prompt wording; not generalizable
+    HIGH | "If the data contains user/order/product fields, immediately classify..."
+          reason: instruction matches fixture-specific data structure
+    MEDIUM | "Always start the output with 'VALIDATION COMPLETE: ...'"
+          reason: output format instruction too tightly coupled to expected output
+     LOW | "Use json.dumps() to serialize results"
+          reason: minor overfitting; instruction mirrors expected tool use
+```
+
 ### 版本依赖确认
 
 ```
@@ -899,5 +946,5 @@ $ claude --version
 2.1.133 (Claude Code)
 
 $ python3 -m pytest tests/ -q
-242 passed in 0.17s
+261 passed in 0.17s
 ```
