@@ -170,6 +170,16 @@ def _embed_file(path: Path) -> dict:
         return {"name": path.name, "type": "error", "content": "Could not read file"}
 
 
+def _load_overfitting(workspace: Path) -> dict | None:
+    path = workspace / "overfitting_report.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return None
+
+
 def load_previous_iteration(workspace: Path) -> dict | None:
     for name in ("previous", "previous_iteration"):
         prev_dir = workspace / name
@@ -215,6 +225,7 @@ class ReportGenerator:
             "previous": previous,
             "benchmark": benchmark,
             "scorecard": scorecard,
+            "overfitting": _load_overfitting(workspace),
         }
 
         json_data = json.dumps(data, ensure_ascii=False)

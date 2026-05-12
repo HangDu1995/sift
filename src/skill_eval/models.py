@@ -601,3 +601,36 @@ class SecurityReport(BaseModel):
     scanners: list[ScannerResult] = Field(default_factory=list)
     findings: list[SecurityFinding] = Field(default_factory=list)
     summary: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Overfitting detection
+# ---------------------------------------------------------------------------
+
+
+class SuspiciousInstruction(BaseModel):
+    line: int = 0
+    snippet: str = ""
+    matched_eval_id: int | None = None
+    matched_expectation: str = ""
+    reason: str = ""
+    severity: str = "medium"
+
+
+class GeneralizationGap(BaseModel):
+    train_pass_rate_with: float = 0.0
+    train_pass_rate_without: float = 0.0
+    train_delta: float = 0.0
+    holdout_pass_rate_with: float = 0.0
+    holdout_pass_rate_without: float = 0.0
+    holdout_delta: float = 0.0
+    gap: float = 0.0
+    verdict: str = ""
+
+
+class OverfittingReport(BaseModel):
+    skill_name: str = ""
+    generalization_gap: GeneralizationGap | None = None
+    suspicious_instructions: list[SuspiciousInstruction] = Field(default_factory=list)
+    overfitting_score: float = 0.0
+    recommendation: str = ""

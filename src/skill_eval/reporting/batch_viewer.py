@@ -64,6 +64,7 @@ def collect_batch_data(workspace: Path, manifest: dict | None = None) -> dict:
                 "notes_count": len(bench.get("notes", [])),
                 "dependencies": [],
                 "depended_by": [],
+                "overfitting": _load_overfitting_report(iteration),
             }
             skills.append(skill_data)
 
@@ -95,6 +96,18 @@ def collect_batch_data(workspace: Path, manifest: dict | None = None) -> dict:
         "cascade": cascade,
         "manifest": manifest,
     }
+
+
+
+
+def _load_overfitting_report(iteration_dir: Path) -> dict | None:
+    path = iteration_dir / "overfitting_report.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return None
 
 
 def generate_batch_html(workspace: Path, manifest: dict | None = None) -> str:

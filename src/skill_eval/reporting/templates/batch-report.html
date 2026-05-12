@@ -217,6 +217,7 @@
       if (hasTokens) html += "<th>Δ Tokens</th>";
       if (hasComps) html += "<th>Comparison</th>";
       if (hasAnalysis) html += "<th>Analysis</th>";
+      html += "<th>Overfitting</th>";
       html += "</tr></thead><tbody>";
 
       for (const s of allSkills) {
@@ -239,6 +240,23 @@
         if (hasTokens) html += "<td>" + (s.delta_tokens || "—") + "</td>";
         if (hasComps) html += "<td>" + (s.has_comparisons ? "✓" : "—") + "</td>";
         if (hasAnalysis) html += "<td>" + (s.has_analysis ? "✓" : "—") + "</td>";
+
+        const of = s.overfitting;
+        if (of) {
+          const gap = of.generalization_gap;
+          if (gap) {
+            const oColor = gap.verdict === "good" ? "var(--green)" : gap.verdict === "warn" ? "var(--accent)" : "var(--red)";
+            html += '<td style="font-size:0.7rem;"><span style="color:' + oColor + ';">gap ' + gap.gap.toFixed(2) + '</span>';
+            html += ' <span style="font-size:0.6rem;color:var(--text-muted);">score ' + (of.overfitting_score * 100).toFixed(0) + '%</span></td>';
+          } else if (of.overfitting_score > 0) {
+            html += '<td style="font-size:0.7rem;">score ' + (of.overfitting_score * 100).toFixed(0) + '%</td>';
+          } else {
+            html += '<td style="font-size:0.7rem;color:var(--text-muted);">—</td>';
+          }
+        } else {
+          html += '<td style="font-size:0.7rem;color:var(--text-muted);">—</td>';
+        }
+
         html += "</tr>";
       }
       html += "</tbody>";
@@ -325,6 +343,23 @@
             if (comp.rubric && comp.rubric.A) html += ' (A: ' + (comp.rubric.A.overall_score || "?").toFixed(1) + '/10, B: ' + (comp.rubric.B ? comp.rubric.B.overall_score : "?").toFixed(1) + '/10)';
             html += '</div>';
           }
+        }
+
+        // Overfitting info
+        const of = s.overfitting;
+        if (of && (of.generalization_gap || of.overfitting_score > 0)) {
+          const gap = of.generalization_gap;
+          const oColor = of.overfitting_score >= 0.7 ? "var(--red)" : of.overfitting_score >= 0.4 ? "var(--accent)" : "var(--green)";
+          html += '<div style="font-size:0.75rem;margin:0.5rem 0;padding:0.5rem;background:var(--bg);border-radius:var(--radius);">';
+          html += '<strong>Overfitting:</strong> ';
+          if (gap) {
+            html += 'gap <span style="color:' + (gap.verdict === "good" ? "var(--green)" : gap.verdict === "warn" ? "var(--accent)" : "var(--red)") + ';">' + gap.gap.toFixed(2) + '</span> (' + gap.verdict + ') · ';
+          }
+          html += 'score <span style="color:' + oColor + ';">' + (of.overfitting_score * 100).toFixed(0) + '%</span>';
+          if (of.suspicious_instructions && of.suspicious_instructions.length) {
+            html += ' · ' + of.suspicious_instructions.length + ' suspicious';
+          }
+          html += '</div>';
         }
 
         // Improvement suggestions from analysis

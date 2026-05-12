@@ -1213,6 +1213,57 @@
         html += '</div>';
       }
 
+      // ── Overfitting ──
+      const overfit = EMBEDDED_DATA.overfitting;
+      if (overfit) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Overfitting Analysis</div>';
+
+        const gap = overfit.generalization_gap;
+        if (gap) {
+          const gapColor = gap.verdict === "good" ? "var(--green)" : gap.verdict === "warn" ? "var(--accent)" : "var(--red)";
+          html += '<div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem;">';
+          html += '<div style="flex:1;min-width:150px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;text-align:center;">';
+          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">Train Δ</div>';
+          html += '<div style="font-size:1.3rem;font-family:Poppins,sans-serif;font-weight:600;">' + (gap.train_delta > 0 ? '+' : '') + gap.train_delta.toFixed(2) + '</div>';
+          html += '<div style="font-size:0.7rem;color:var(--text-muted);">ws ' + (gap.train_pass_rate_with * 100).toFixed(0) + '% / wos ' + (gap.train_pass_rate_without * 100).toFixed(0) + '%</div>';
+          html += '</div>';
+          html += '<div style="flex:1;min-width:150px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;text-align:center;">';
+          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">Holdout Δ</div>';
+          html += '<div style="font-size:1.3rem;font-family:Poppins,sans-serif;font-weight:600;">' + (gap.holdout_delta > 0 ? '+' : '') + gap.holdout_delta.toFixed(2) + '</div>';
+          html += '<div style="font-size:0.7rem;color:var(--text-muted);">ws ' + (gap.holdout_pass_rate_with * 100).toFixed(0) + '% / wos ' + (gap.holdout_pass_rate_without * 100).toFixed(0) + '%</div>';
+          html += '</div>';
+          html += '<div style="flex:1;min-width:120px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;text-align:center;">';
+          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">Gap</div>';
+          html += '<div style="font-size:1.3rem;font-family:Poppins,sans-serif;font-weight:600;color:' + gapColor + ';">' + gap.gap.toFixed(2) + '</div>';
+          html += '<div style="font-size:0.7rem;color:' + gapColor + ';text-transform:uppercase;">' + gap.verdict + '</div>';
+          html += '</div></div>';
+        }
+
+        html += '<div style="font-size:1.1rem;font-family:Poppins,sans-serif;margin-bottom:0.5rem;">Overfitting Score: <span style="color:' + (overfit.overfitting_score >= 0.7 ? 'var(--red)' : overfit.overfitting_score >= 0.4 ? 'var(--accent)' : 'var(--green)') + ';">' + (overfit.overfitting_score * 100).toFixed(0) + '%</span></div>';
+
+        if (overfit.suspicious_instructions && overfit.suspicious_instructions.length > 0) {
+          html += '<table class="benchmark-table"><thead><tr><th>Severity</th><th>Line</th><th>Snippet</th><th>Reason</th><th>Matches</th></tr></thead><tbody>';
+          for (const si of overfit.suspicious_instructions) {
+            const sevColor = si.severity === "high" ? "var(--red)" : "var(--accent)";
+            html += '<tr><td style="color:' + sevColor + ';font-weight:600;">' + (si.severity || "?").toUpperCase() + '</td>';
+            html += '<td>' + (si.line || "") + '</td>';
+            html += '<td style="font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(si.snippet || "") + '</td>';
+            html += '<td style="font-size:0.75rem;">' + escapeHtml(si.reason || "") + '</td>';
+            html += '<td style="font-size:0.75rem;color:var(--text-muted);">' + (si.matched_expectation || (si.matched_eval_id ? 'eval-' + si.matched_eval_id : "—")) + '</td></tr>';
+          }
+          html += '</tbody></table>';
+        } else if (overfit.overfitting_score > 0) {
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);">LLM review not available — score derived from generalization gap only</div>';
+        }
+
+        if (overfit.recommendation) {
+          html += '<div style="margin-top:0.75rem;padding:0.5rem 0.75rem;background:var(--bg);border-radius:var(--radius);font-size:0.8125rem;">' + escapeHtml(overfit.recommendation) + '</div>';
+        }
+
+        html += '</div>';
+      }
+
       // ── Pass rate bar chart ──
       if (configA && configB) {
         html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';

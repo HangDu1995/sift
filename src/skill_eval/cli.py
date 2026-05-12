@@ -1097,3 +1097,137 @@ def generate_config(
         console.print(f"  Integration scenarios: {len(result.get('integration_scenarios', []))}")
         console.print(f"  Skill keywords: {len(result.get('skill_keywords', {}))}")
         console.print(f"  Pipelines: {len(result.get('pipelines', []))}")
+
+
+@app.command(name="split-evals")
+def split_evals(
+    evals_path: Path = typer.Argument(..., help="Path to evals.json", exists=True),
+    holdout_fraction: float = typer.Option(0.3, "--holdout-fraction", help="Fraction of evals to hold out (0.0-1.0)"),
+    seed: int = typer.Option(42, "--seed", help="Random seed for reproducible splits"),
+    output_dir: Optional[Path] = typer.Option(None, "--output-dir", "-o", help="Output directory for split files"),
+):
+    """Split evals.json into train and holdout sets."""
+    from skill_eval.overfitting.splitter import EvalSplitter
+
+    try:
+        eval_set = EvalSplitter.load(evals_path)
+    except Exception as exc:
+        console.print(f"[red]Error:[/red] Failed to load evals: {exc}")
+        raise typer.Exit(code=2)
+
+    if not output_dir:
+        output_dir = evals_path.parent
+
+    try:
+        splitter = EvalSplitter()
+        train_set, holdout_set = splitter.split(eval_set, holdout_fraction, seed)
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=2)
+
+    train_path = output_dir / "evals-train.json"
+    holdout_path = output_dir / "evals-holdout.json"
+    splitter.save(train_set, train_path)
+    splitter.save(holdout_set, holdout_path)
+
+    console.print(f"Split {len(eval_set.evals)} evals:")
+    console.print(f"  Train:   [green]{len(train_set.evals)}[/green] cases → {train_path}")
+    console.print(f"  Holdout: [yellow]{len(holdout_set.evals)}[/yellow] cases → {holdout_path}")
+    console.print(f"  Fraction: {holdout_fraction:.0%}")
+    console.print(f"  Seed: {seed}")
+
+
+@app.command(name="vet-overfit")
+def vet_overfit(
+    train_bench: Path = typer.Option(..., "--train-bench", help="Path to train benchmark.json"),
+    holdout_bench: Optional[Path] = typer.Option(None, "--holdout-bench", help="Path to holdout benchmark.json"),
+    skill_path: Optional[Path] = typer.Option(None, "--skill", help="Path to skill directory for LLM review"),
+    train_evals: Optional[Path] = typer.Option(None, "--train-evals", help="Path to train evals for LLM review"),
+    model: Optional[str] = typer.Option(None, "--model", help="Model for LLM review"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output path for overfitting report"),
+    format: str = typer.Option("table", "--format", help="Output format: table or json"),
+):
+    """Detect overfitting by comparing train vs holdout benchmarks."""
+    from skill_eval.overfitting.gap import GapCalculator
+    from skill_eval.overfitting.detector import OverfittingDetector
+    from skill_eval.models import OverfittingReport
+
+    gap_data = None
+    suspicious = []
+
+    if holdout_bench and holdout_bench.exists():
+        try:
+            train_data = json.loads(train_bench.read_text(encoding="utf-8"))
+            holdout_data = json.loads(holdout_bench.read_text(encoding="utf-8"))
+            calc = GapCalculator()
+            gap = calc.calculate(train_data, holdout_data)
+            gap_data = gap.model_dump()
+        except Exception as exc:
+            console.print(f"[yellow]Warning:[/yellow] Could not calculate generalization gap: {exc}")
+
+    if skill_path and skill_path.exists():
+        detector = OverfittingDetector(model=model)
+        evals_content = ""
+        if train_evals and train_evals.exists():
+            evals_content = train_evals.read_text(encoding="utf-8", errors="replace")
+        suspicious = detector.detect(
+            skill_path=skill_path,
+            train_evals=evals_content,
+        )
+
+    skill_name = ""
+    if skill_path and skill_path.exists():
+        skill_name = skill_path.name
+    elif train_bench.exists():
+        try:
+            train_data = json.loads(train_bench.read_text(encoding="utf-8"))
+            skill_name = train_data.get("metadata", {}).get("skill_name", "")
+        except Exception:
+            pass
+
+    detector = OverfittingDetector()
+    report = detector.build_report(
+        skill_name=skill_name,
+        suspicious=suspicious if suspicious else None,
+        gap_data=gap_data,
+    )
+
+    if not output:
+        output = train_bench.parent / "overfitting_report.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    if format == "json":
+        console.print(json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False))
+    else:
+        gap = report.generalization_gap
+        if gap:
+            gap_color = "green" if gap.verdict == "good" else "yellow" if gap.verdict == "warn" else "red"
+            console.print(f"\n[bold]Generalization Gap:[/bold]")
+            console.print(f"  Train:   +{gap.train_delta:.2f} (ws={gap.train_pass_rate_with:.0%}, wos={gap.train_pass_rate_without:.0%})")
+            console.print(f"  Holdout: +{gap.holdout_delta:.2f} (ws={gap.holdout_pass_rate_with:.0%}, wos={gap.holdout_pass_rate_without:.0%})")
+            console.print(f"  Gap:     [{gap_color}]{gap.gap:.2f}[/{gap_color}] → [{gap_color}]{gap.verdict.upper()}[/{gap_color}]")
+
+        console.print(f"\n[bold]Overfitting Score:[/bold] {report.overfitting_score:.2f}/1.0")
+
+        if report.suspicious_instructions:
+            console.print(f"\n[bold]Suspicious Instructions ({len(report.suspicious_instructions)}):[/bold]")
+            for si in report.suspicious_instructions:
+                sev_color = "red" if si.severity == "high" else "yellow"
+                console.print(f"  [{sev_color}]{si.severity.upper()}[/{sev_color}] Line {si.line}: {si.snippet[:80]}")
+                if si.matched_expectation:
+                    console.print(f"    ↳ Matches expectation: {si.matched_expectation[:80]}")
+                console.print(f"    ↳ {si.reason}")
+        elif skill_path:
+            console.print(f"\n  [dim]No suspicious instructions found — LLM review clean[/dim]")
+        else:
+            console.print(f"\n  [dim]LLM review not run (pass --skill to enable)[/dim]")
+
+        console.print(f"\n[bold]Recommendation:[/bold] {report.recommendation}")
+        console.print(f"\nReport written to: {output}")
+
+    if report.overfitting_score >= 0.7:
+        raise typer.Exit(code=1)
