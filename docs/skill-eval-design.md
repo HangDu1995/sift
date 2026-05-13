@@ -385,9 +385,9 @@ skill-eval/
 │       │
 │       ├── overfitting/
 │       │   ├── __init__.py
-│       │   ├── splitter.py            # EvalSplitter
 │       │   ├── gap.py                 # GapCalculator
-│       │   └── detector.py            # OverfittingDetector (LLM)
+│       │   ├── detector.py            # OverfittingDetector (纯统计)
+│       │   └── source_analyzer.py     # SourceAnalyzer (项目特征扫描)
 │       │
 │       └── batch/
 │           ├── __init__.py
@@ -2282,167 +2282,192 @@ class _ProgressState:
 
 #### 3.12.1 模块职责
 
-检测 Skill 是否对评测用例过拟合——即 SKILL.md 中的指令是否针对特定 eval 做了过度优化，导致在未见过的 holdout 集上泛化能力差。通过分层采样 + train/holdout delta 对比 + LLM 审查三步流程完成检测。
+检测 Skill 是否对特定项目数据过拟合——即 Skill 在某个域（domain）上反复优化后，在另一个不相关的通用场景（general）上泛化能力是否下降。通过双域对比（domain delta vs general delta）做出统计判定，**不做 LLM 审查**（Skill 带强制要求是正常特征，不是过拟合信号）。
 
 #### 3.12.2 类图
 
 ```mermaid
 classDiagram
-    class EvalSplitter {
-        +train_ratio: float
-        +seed: int
-        +split(evals: EvalSet) tuple~EvalSet, EvalSet~
-        -_stratified_sample(evals: list~EvalCase~) tuple~list, list~
-    }
-
     class GapCalculator {
-        +calculate(train_results: list~GradingResult~, holdout_results: list~GradingResult~) GeneralizationGap
-        -_compute_pass_rate(results: list~GradingResult~) float
+        +calculate(domain_benchmark: dict, general_benchmark: dict) GeneralizationGap
     }
 
     class OverfittingDetector {
-        +model: str | None
-        +timeout: int
-        +detect(skill_path: Path, gap: GeneralizationGap) list~SuspiciousInstruction~
-        -_build_prompt(skill_body: str, gap: GeneralizationGap) str
-        -_parse_response(raw: str) list~SuspiciousInstruction~
+        +build_report(skill_name: str, gap_data: dict) OverfittingReport
+    }
+
+    class SourceAnalyzer {
+        +analyze(source_dir: Path, skill_hints: list) SourceProfile
+    }
+
+    class DiverseEvalGenerator {
+        +generate(skill_path: Path, source_profile: SourceProfile, domains: list) EvalSet
     }
 
     class GeneralizationGap {
-        +skill_name: str
-        +train_pass_rate: float
-        +holdout_pass_rate: float
-        +delta: float
-        +gap_severity: str
-        +suspicious_instructions: list~SuspiciousInstruction~
-    }
-
-    class SuspiciousInstruction {
-        +instruction_text: str
-        +section: str
-        +risk: str
-        +reason: str
-        +suggestion: str
+        +domain_pass_rate_with: float
+        +domain_pass_rate_without: float
+        +domain_delta: float
+        +general_pass_rate_with: float
+        +general_pass_rate_without: float
+        +general_delta: float
+        +gap: float
+        +verdict: str
     }
 
     class OverfittingReport {
         +skill_name: str
-        +skill_path: str
-        +train_count: int
-        +holdout_count: int
-        +results: list~GeneralizationGap~
-        +overall_verdict: str
-        +summary: str
-        +recommendations: list~str~
+        +generalization_gap: GeneralizationGap | None
+        +overfitting_score: float
+        +recommendation: str
     }
 
-    EvalSplitter --> EvalSet
+    class SourceProfile {
+        +project_path: str
+        +file_type_distribution: dict
+        +directory_structure_summary: str
+        +domain_keywords: list
+        +sample_files: list
+        +project_summary: str
+    }
+
     GapCalculator --> GeneralizationGap
-    OverfittingDetector --> SuspiciousInstruction
-    GeneralizationGap --> SuspiciousInstruction
+    OverfittingDetector --> GeneralizationGap
+    OverfittingDetector --> OverfittingReport
+    DiverseEvalGenerator --> SourceProfile
 ```
 
-#### 3.12.3 EvalSplitter
+#### 3.12.3 核心流程
+
+```
+源项目(source-dir) → SourceAnalyzer → SourceProfile
+                     (文件扫描+采样)    (特征摘要)
+
+SKILL.md + SourceProfile ───→ DiverseEvalGenerator → evals-general.json
+                               (LLM 生成跨领域eval)    (通用eval，独立于源项目)
+
+evals-domain.json ──→ skill-eval run → domain_benchmark.json
+evals-general.json ─→ skill-eval run → general_benchmark.json
+                           │
+                           ▼
+                    GapCalculator → GeneralizationGap
+                    (gap = domain_delta - general_delta)
+                           │
+                           ▼
+                    OverfittingDetector → OverfittingReport
+                    (纯统计评分，无LLM)
+```
+
+#### 3.12.4 SourceAnalyzer
 
 ```python
-class EvalSplitter:
-    def __init__(self, train_ratio: float = 0.7, seed: int = 42): ...
+class SourceAnalyzer:
+    def __init__(self, exclude_dirs: list[str] | None = None): ...
 
-    def split(self, evals: EvalSet) -> tuple[EvalSet, EvalSet]:
+    def analyze(self, source_dir: Path, skill_hints: list[str] | None = None) -> SourceProfile:
         """
-        按 train_ratio 将 evals 分层拆分为训练集和 holdout 集。
-        分层依据：EvalCase 的 level（L1/L2/L3）和 expectations 数量。
-        使用 seed 保证可复现。
+        扫描源项目目录：
+        - 统计文件类型分布
+        - 提取目录结构摘要
+        - 按 skill 类型关键词采样代表性文件（最多15个，每个最多8000字节）
+        - 提取领域关键词
+        - 忽略图片、二进制、依赖等无关文件
         """
 ```
 
-#### 3.12.4 GapCalculator
+#### 3.12.5 DiverseEvalGenerator
+
+```python
+class DiverseEvalGenerator:
+    def __init__(self, model: str | None = None, timeout: int = 120): ...
+
+    def generate(
+        self,
+        skill_path: Path,
+        source_profile: SourceProfile,
+        domains: list[str] | None = None,
+    ) -> EvalSet:
+        """
+        基于 SourceProfile + SKILL.md，调用 LLM 生成跨领域 eval 用例。
+        - 用例的 fixture 数据、领域上下文、代码模式必须与源项目 STRICTLY 不同
+        - 覆盖用户指定的领域，或由 LLM 自行判定
+        - 生成 L1（规则理解）+ L2（文件执行）用例
+        - LLM 失败时回退到兜底用例
+        """
+```
+
+#### 3.12.6 GapCalculator
 
 ```python
 class GapCalculator:
     def calculate(
         self,
-        train_results: list[GradingResult],
-        holdout_results: list[GradingResult],
+        domain_benchmark: dict,
+        general_benchmark: dict,
     ) -> GeneralizationGap:
         """
-        计算训练集和 holdout 集的 pass_rate 及 delta。
-        根据 delta 大小判定 gap_severity：
-        - NONE:       delta ≤ 0.05
-        - SLIGHT:     0.05 < delta ≤ 0.10
-        - MODERATE:   0.10 < delta ≤ 0.20
-        - SIGNIFICANT: 0.20 < delta ≤ 0.35
-        - SEVERE:     delta > 0.35
+        计算 domain 和 general 的 pass_rate 及 delta。
+        gap = domain_delta - general_delta。
+        判定阈值：
+        - good:    gap < 0.10
+        - warn:    0.10 ≤ gap < 0.20
+        - overfit: gap ≥ 0.20
         """
 ```
 
-#### 3.12.5 OverfittingDetector
+#### 3.12.7 OverfittingDetector
 
 ```python
 class OverfittingDetector:
-    def __init__(self, model: str | None = None, timeout: int = 120): ...
+    def __init__(self): ...
 
-    def detect(self, skill_path: Path, gap: GeneralizationGap) -> list[SuspiciousInstruction]:
+    def build_report(
+        self,
+        skill_name: str = "",
+        gap_data: dict | None = None,
+    ) -> OverfittingReport:
         """
-        调用 claude -p 对 SKILL.md 进行 LLM 审查，检测过拟合特征。
-        仅在 gap_severity ≥ MODERATE 时调用 LLM，否则返回空列表。
-        LLM 审查维度：
-        - 指令是否过于具体地对应某个 eval prompt
-        - 是否存在硬编码映射（当用户问 X 时输出 Y）
-        - 是否有过约束导致泛化受阻
-        - 是否缺失通用性指导而过度依赖特例
-        返回 suspicious_instructions 列表，含 risk 等级和建议。
+        纯统计评分，不调用 LLM。
+        评分映射：good→0.1, warn→0.4, overfit→0.7
+        score ≥ 0.7 时 exit code 1（CI 门禁）
         """
 ```
 
-#### 3.12.6 CLI 命令
+#### 3.12.8 CLI 命令
 
 ```bash
-skill-eval split-evals SKILL_PATH [--train-ratio 0.7] [--seed 42]
-    → 输出 train-evals.json + holdout-evals.json
+# 1. 为已有 skill + 团队源项目生成通用 eval
+skill-eval init <skill-path> --source-dir <project> [--domains web,cli,data-science]
+    → 输出 evals/evals-general.json
 
-skill-eval vet-overfit SKILL_PATH --train PATH --holdout PATH [--model MODEL] [--runs N]
-    → 依次对 train 和 holdout 运行评测
-    → EvalSplitter + GapCalculator 计算泛化间隙
-    → if gap ≥ MODERATE → OverfittingDetector LLM 审查
-    → 输出 overfitting_report.json
+# 2. 分别在 domain eval 和 general eval 上跑 benchmark
+skill-eval run <skill-path> --evals evals-domain.json -o domain/
+skill-eval run <skill-path> --evals evals-general.json -o general/
+
+# 3. 检测过拟合
+skill-eval vet-overfit --domain-bench domain/benchmark.json --general-bench general/benchmark.json
+    → GapCalculator 计算 gap → OverfittingDetector 统计评分 → overfitting_report.json
 ```
 
-#### 3.12.7 输出格式
+#### 3.12.9 输出格式
 
 `overfitting_report.json` 格式：
 
 ```json
 {
   "skill_name": "my-skill",
-  "skill_path": "/path/to/skill",
-  "train_count": 7,
-  "holdout_count": 3,
-  "results": [
-    {
-      "skill_name": "my-skill",
-      "train_pass_rate": 0.95,
-      "holdout_pass_rate": 0.60,
-      "delta": 0.35,
-      "gap_severity": "SIGNIFICANT",
-      "suspicious_instructions": [
-        {
-          "instruction_text": "ALWAYS use the exact template from eval-3",
-          "section": "## Output Format",
-          "risk": "HIGH",
-          "reason": "指令直接引用了 eval-3 的模板，在 holdout 上不适用",
-          "suggestion": "将硬编码模板替换为通用输出格式要求"
-        }
-      ]
-    }
-  ],
-  "overall_verdict": "severe_overfitting",
-  "summary": "Skill shows significant generalization gap: train=0.95, holdout=0.60, delta=0.35",
-  "recommendations": [
-    "移除对特定 eval 的直接引用",
-    "将输出格式要求从硬编码模板改为通用规范",
-    "增加更多样化的 eval 用例减少偏差"
-  ]
+  "generalization_gap": {
+    "domain_pass_rate_with": 0.8,
+    "domain_pass_rate_without": 0.3,
+    "domain_delta": 0.50,
+    "general_pass_rate_with": 0.7,
+    "general_pass_rate_without": 0.35,
+    "general_delta": 0.35,
+    "gap": 0.15,
+    "verdict": "warn"
+  },
+  "overfitting_score": 0.4,
+  "recommendation": "Moderate generalization gap (0.15). The skill may be starting to overfit to the domain. Review skill modifications for domain-specific rules."
 }
 ```
 
@@ -3739,22 +3764,28 @@ class SuspiciousInstruction(BaseModel):
     suggestion: str
 
 class GeneralizationGap(BaseModel):
-    skill_name: str
-    train_pass_rate: float
-    holdout_pass_rate: float
-    delta: float
-    gap_severity: str  # "NONE" | "SLIGHT" | "MODERATE" | "SIGNIFICANT" | "SEVERE"
-    suspicious_instructions: list[SuspiciousInstruction] = []
+    domain_pass_rate_with: float = 0.0
+    domain_pass_rate_without: float = 0.0
+    domain_delta: float = 0.0
+    general_pass_rate_with: float = 0.0
+    general_pass_rate_without: float = 0.0
+    general_delta: float = 0.0
+    gap: float = 0.0
+    verdict: str = ""
 
 class OverfittingReport(BaseModel):
-    skill_name: str
-    skill_path: str
-    train_count: int
-    holdout_count: int
-    results: list[GeneralizationGap] = []
-    overall_verdict: str  # "no_overfitting" | "mild_overfitting" | "moderate_overfitting" | "severe_overfitting"
-    summary: str
-    recommendations: list[str] = []
+    skill_name: str = ""
+    generalization_gap: GeneralizationGap | None = None
+    overfitting_score: float = 0.0
+    recommendation: str = ""
+
+class SourceProfile(BaseModel):
+    project_path: str = ""
+    file_type_distribution: dict[str, int] = {}
+    directory_structure_summary: str = ""
+    domain_keywords: list[str] = []
+    sample_files: list[dict] = []
+    project_summary: str = ""
 ```
 
 ---

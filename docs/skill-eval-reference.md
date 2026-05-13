@@ -422,21 +422,22 @@ pipelines = ConfigGenerator.build_pipeline_from_deps(
 
 ---
 
-### `split-evals` — 评测集切分
+### `init --source-dir` — 生成通用评测用例
 
 ```bash
-skill-eval split-evals path/to/evals.json --holdout-fraction 0.3
+skill-eval init <skill-path> --source-dir <project> [--domains web,cli,data-science]
 ```
 
-将评测集按比例随机切分为训练集和留出集，用于过拟合检测。
+扫描源项目目录，提取特征摘要（文件类型分布、目录结构、采样代码片段），然后调用 LLM 生成与源项目领域严格不同的 eval 用例。用于过拟合检测的 general eval。输出 `evals/evals-general.json`。
 
 ### `vet-overfit` — 过拟合检测
 
 ```bash
-skill-eval vet-overfit --train-bench train.json --holdout-bench holdout.json --skill path/to/skill/
+skill-eval vet-overfit --domain-bench domain/benchmark.json --general-bench general/benchmark.json
 ```
 
-对比训练集和留出集上的表现差异，检测 Skill 是否对训练集过拟合。
+对比 domain eval 和 general eval 上的 benchmark 结果，计算泛化间隙（gap = domain_delta - general_delta）。
+纯统计评分，不调用 LLM。gap >= 0.20 时判定过拟合，score >= 0.7 时 exit code 1。
 
 ---
 
@@ -879,8 +880,42 @@ claude update
 skill-eval vet path/to/skill/ --format json
 skill-eval analyze path/to/skill/ --format json -o scorecard.json
 skill-eval full path/to/skill/ --format json --runs 1 --security-gate
-# exit code: 0=通过, 1=失败, 2=输入错误, 3=执行错误
+skill-eval vet-overfit --domain-bench domain/benchmark.json --general-bench general/benchmark.json --format json
+# exit code: 0=通过, 1=失败(过拟合 score >= 0.7), 2=输入错误
 ```
+
+### 输出格式对比（新旧 vet-overfit）
+
+旧格式（已废弃）：
+```json
+{
+  "suspicious_instructions": [
+    {"line": 14, "severity": "high", "snippet": "...", "reason": "matches eval expectation", ...}
+  ],
+  "overfitting_score": 1.0
+}
+```
+- 15 行，含 10 个可疑指令（大部分为正常 Skill 约束的误报）
+
+新格式：
+```json
+{
+  "skill_name": "data-validator",
+  "generalization_gap": {
+    "domain_pass_rate_with": 0.8,
+    "domain_pass_rate_without": 0.3333,
+    "domain_delta": 0.47,
+    "general_pass_rate_with": 0.8,
+    "general_pass_rate_without": 0.3333,
+    "general_delta": 0.47,
+    "gap": 0.0,
+    "verdict": "good"
+  },
+  "overfitting_score": 0.1,
+  "recommendation": "No overfitting detected. Generalization gap is within acceptable range."
+}
+```
+- 15 行，纯统计数据，无 LLM 误报
 
 ### viewer.html 的字段名可以改吗？
 

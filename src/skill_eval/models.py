@@ -608,22 +608,13 @@ class SecurityReport(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class SuspiciousInstruction(BaseModel):
-    line: int = 0
-    snippet: str = ""
-    matched_eval_id: int | None = None
-    matched_expectation: str = ""
-    reason: str = ""
-    severity: str = "medium"
-
-
 class GeneralizationGap(BaseModel):
-    train_pass_rate_with: float = 0.0
-    train_pass_rate_without: float = 0.0
-    train_delta: float = 0.0
-    holdout_pass_rate_with: float = 0.0
-    holdout_pass_rate_without: float = 0.0
-    holdout_delta: float = 0.0
+    domain_pass_rate_with: float = 0.0
+    domain_pass_rate_without: float = 0.0
+    domain_delta: float = 0.0
+    general_pass_rate_with: float = 0.0
+    general_pass_rate_without: float = 0.0
+    general_delta: float = 0.0
     gap: float = 0.0
     verdict: str = ""
 
@@ -631,6 +622,14 @@ class GeneralizationGap(BaseModel):
 class OverfittingReport(BaseModel):
     skill_name: str = ""
     generalization_gap: GeneralizationGap | None = None
-    suspicious_instructions: list[SuspiciousInstruction] = Field(default_factory=list)
     overfitting_score: float = 0.0
     recommendation: str = ""
+
+
+class SourceProfile(BaseModel):
+    project_path: str = ""
+    file_type_distribution: dict[str, int] = Field(default_factory=dict)
+    directory_structure_summary: str = ""
+    domain_keywords: list[str] = Field(default_factory=list)
+    sample_files: list[dict] = Field(default_factory=list)
+    project_summary: str = ""

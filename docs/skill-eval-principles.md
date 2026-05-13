@@ -84,7 +84,7 @@ skill-eval 的 `MonitorImporter` 读取这种 JSONL，按 skill_name + 时间窗
 - **结构化输出**：要求 LLM 返回 JSON 数组 `[{"index": 0, "passed": true, "evidence": "..."}]`，可机械解析
 - **Evidence 强制**：每条判定必须附带证据引用，防止无理由的 PASS/FAIL
 
-skill-eval 在此基础上新增了**批量评估**（一次 `claude -p` 调用评估所有 checkpoint expectations）、**双通道交叉校准**（见下节）、**盲比较**（BlindComparator）和**深度分析**（PosthocAnalyzer），以及**过拟合检测**（`vet-overfit`）。
+skill-eval 在此基础上新增了**批量评估**（一次 `claude -p` 调用评估所有 checkpoint expectations）、**双通道交叉校准**（见下节）、**盲比较**（BlindComparator）和**深度分析**（PosthocAnalyzer），以及**过拟合检测**（`vet-overfit`，通过双域 delta 对比检测泛化衰减）。
 
 ---
 
@@ -138,7 +138,7 @@ skill-eval 在此基础上新增了**批量评估**（一次 `claude -p` 调用�
 | **过程合规** | skill-eval 原创，理论来自 IFEval + ISO 19011 | 输出正确的假阳性 |
 | **级联归因** | skill-eval 原创，理论来自 Pinpoint RCA | 将上游失败误判为下游缺陷 |
 | **盲比较与深度分析** | skill-creator `comparator.md` + `analyzer.md`，实现为 BlindComparator + PosthocAnalyzer | 单一评分维度和缺乏深度根因分析 |
-| **过拟合检测** | `vet-overfit` 命令 | 检测 Skill 是否被过度优化到特定 eval case 而非真正变好 |
+| **过拟合检测** | `vet-overfit` 命令，双域 delta 对比 | 检测 Skill 是否在特定项目上优化后失去了通用场景的泛化能力 |
 
 ---
 

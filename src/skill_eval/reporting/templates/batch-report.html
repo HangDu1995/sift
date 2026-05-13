@@ -356,9 +356,6 @@
             html += 'gap <span style="color:' + (gap.verdict === "good" ? "var(--green)" : gap.verdict === "warn" ? "var(--accent)" : "var(--red)") + ';">' + gap.gap.toFixed(2) + '</span> (' + gap.verdict + ') · ';
           }
           html += 'score <span style="color:' + oColor + ';">' + (of.overfitting_score * 100).toFixed(0) + '%</span>';
-          if (of.suspicious_instructions && of.suspicious_instructions.length) {
-            html += ' · ' + of.suspicious_instructions.length + ' suspicious';
-          }
           html += '</div>';
         }
 

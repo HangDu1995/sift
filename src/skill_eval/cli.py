@@ -507,8 +507,67 @@ def init(
     skill_path: Path = typer.Argument(..., help="Path to skill directory"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory for evals.json"),
     generate_prompts: bool = typer.Option(True, "--generate-prompts/--no-generate-prompts", help="Use LLM to generate L1 unit-level evals"),
+    source_dir: Optional[Path] = typer.Option(None, "--source-dir", help="Path to source project directory for diverse eval generation"),
+    domains: Optional[str] = typer.Option(None, "--domains", help="Comma-separated target domains for diverse eval generation"),
+    model: Optional[str] = typer.Option(None, "--model", help="Model for LLM generation"),
 ):
-    """Initialize evals.json for a Skill."""
+    """Initialize evals.json for a Skill.
+
+    Without --source-dir: generates L1 unit test cases from SKILL.md content.
+    With --source-dir: generates diverse eval cases from domains distinct from the source project,
+    suitable for overfitting detection.
+    """
+    if source_dir:
+        if not source_dir.is_dir():
+            console.print(f"[red]Error:[/red] source-dir not found: {source_dir}")
+            raise typer.Exit(code=2)
+
+        from skill_eval.overfitting.source_analyzer import SourceAnalyzer
+        from skill_eval.evals.diverse_generator import DiverseEvalGenerator
+
+        skill_md = skill_path / "SKILL.md"
+        if not skill_md.exists():
+            console.print(f"[red]Error:[/red] SKILL.md not found in {skill_path}")
+            raise typer.Exit(code=2)
+
+        console.print(f"Scanning source project: {source_dir} ...")
+        analyzer = SourceAnalyzer()
+        skill_hints = [skill_path.name] if skill_path.is_dir() else [skill_path.stem]
+        source_profile = analyzer.analyze(source_dir, skill_hints=skill_hints)
+        console.print(f"  {source_profile.project_summary}")
+
+        domain_list = [d.strip() for d in domains.split(",") if d.strip()] if domains else None
+        if domain_list:
+            console.print(f"Target domains: {', '.join(domain_list)}")
+
+        console.print("Generating diverse eval cases with LLM ...")
+        gen = DiverseEvalGenerator(model=model)
+        eval_set = gen.generate(skill_path, source_profile, domains=domain_list)
+
+        if output is None:
+            evals_dir = skill_path / "evals"
+            evals_dir.mkdir(exist_ok=True)
+            output = evals_dir / "evals-general.json"
+        elif output.is_dir():
+            output = output / "evals-general.json"
+
+        data = eval_set.model_dump(mode="json")
+        output.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        console.print(f"Generated [green]{len(eval_set.evals)}[/green] diverse eval cases for [bold]{eval_set.skill_name}[/bold]")
+        for e in eval_set.evals:
+            level = getattr(e, 'level', 'L1')
+            extras = []
+            if e.fixtures:
+                extras.append(f"{len(e.fixtures)} fixtures")
+            console.print(f"  [{level}] {e.name}: {len(e.expectations)} expectations" +
+                          (f", {', '.join(extras)}" if extras else ""))
+        console.print(f"Written to {output}")
+        return
+
     from skill_eval.evals.generator import EvalInitGenerator
 
     try:
@@ -1099,133 +1158,63 @@ def generate_config(
         console.print(f"  Pipelines: {len(result.get('pipelines', []))}")
 
 
-@app.command(name="split-evals")
-def split_evals(
-    evals_path: Path = typer.Argument(..., help="Path to evals.json", exists=True),
-    holdout_fraction: float = typer.Option(0.3, "--holdout-fraction", help="Fraction of evals to hold out (0.0-1.0)"),
-    seed: int = typer.Option(42, "--seed", help="Random seed for reproducible splits"),
-    output_dir: Optional[Path] = typer.Option(None, "--output-dir", "-o", help="Output directory for split files"),
-):
-    """Split evals.json into train and holdout sets."""
-    from skill_eval.overfitting.splitter import EvalSplitter
-
-    try:
-        eval_set = EvalSplitter.load(evals_path)
-    except Exception as exc:
-        console.print(f"[red]Error:[/red] Failed to load evals: {exc}")
-        raise typer.Exit(code=2)
-
-    if not output_dir:
-        output_dir = evals_path.parent
-
-    try:
-        splitter = EvalSplitter()
-        train_set, holdout_set = splitter.split(eval_set, holdout_fraction, seed)
-    except ValueError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(code=2)
-
-    train_path = output_dir / "evals-train.json"
-    holdout_path = output_dir / "evals-holdout.json"
-    splitter.save(train_set, train_path)
-    splitter.save(holdout_set, holdout_path)
-
-    console.print(f"Split {len(eval_set.evals)} evals:")
-    console.print(f"  Train:   [green]{len(train_set.evals)}[/green] cases → {train_path}")
-    console.print(f"  Holdout: [yellow]{len(holdout_set.evals)}[/yellow] cases → {holdout_path}")
-    console.print(f"  Fraction: {holdout_fraction:.0%}")
-    console.print(f"  Seed: {seed}")
-
-
 @app.command(name="vet-overfit")
 def vet_overfit(
-    train_bench: Path = typer.Option(..., "--train-bench", help="Path to train benchmark.json"),
-    holdout_bench: Optional[Path] = typer.Option(None, "--holdout-bench", help="Path to holdout benchmark.json"),
-    skill_path: Optional[Path] = typer.Option(None, "--skill", help="Path to skill directory for LLM review"),
-    train_evals: Optional[Path] = typer.Option(None, "--train-evals", help="Path to train evals for LLM review"),
-    model: Optional[str] = typer.Option(None, "--model", help="Model for LLM review"),
+    domain_bench: Path = typer.Option(..., "--domain-bench", help="Path to domain benchmark.json"),
+    general_bench: Optional[Path] = typer.Option(None, "--general-bench", help="Path to general benchmark.json"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output path for overfitting report"),
-    format: str = typer.Option("table", "--format", help="Output format: table or json"),
+    fmt: str = typer.Option("table", "--format", help="Output format: table or json"),
 ):
-    """Detect overfitting by comparing train vs holdout benchmarks."""
+    """Detect overfitting by comparing domain vs general benchmarks."""
     from skill_eval.overfitting.gap import GapCalculator
     from skill_eval.overfitting.detector import OverfittingDetector
-    from skill_eval.models import OverfittingReport
 
     gap_data = None
-    suspicious = []
 
-    if holdout_bench and holdout_bench.exists():
+    if general_bench and general_bench.exists():
         try:
-            train_data = json.loads(train_bench.read_text(encoding="utf-8"))
-            holdout_data = json.loads(holdout_bench.read_text(encoding="utf-8"))
+            domain_data = json.loads(domain_bench.read_text(encoding="utf-8"))
+            general_data = json.loads(general_bench.read_text(encoding="utf-8"))
             calc = GapCalculator()
-            gap = calc.calculate(train_data, holdout_data)
+            gap = calc.calculate(domain_data, general_data)
             gap_data = gap.model_dump()
         except Exception as exc:
             console.print(f"[yellow]Warning:[/yellow] Could not calculate generalization gap: {exc}")
 
-    if skill_path and skill_path.exists():
-        detector = OverfittingDetector(model=model)
-        evals_content = ""
-        if train_evals and train_evals.exists():
-            evals_content = train_evals.read_text(encoding="utf-8", errors="replace")
-        suspicious = detector.detect(
-            skill_path=skill_path,
-            train_evals=evals_content,
-        )
-
     skill_name = ""
-    if skill_path and skill_path.exists():
-        skill_name = skill_path.name
-    elif train_bench.exists():
+    if domain_bench.exists():
         try:
-            train_data = json.loads(train_bench.read_text(encoding="utf-8"))
-            skill_name = train_data.get("metadata", {}).get("skill_name", "")
+            domain_data = json.loads(domain_bench.read_text(encoding="utf-8"))
+            skill_name = domain_data.get("metadata", {}).get("skill_name", "")
         except Exception:
             pass
 
     detector = OverfittingDetector()
     report = detector.build_report(
         skill_name=skill_name,
-        suspicious=suspicious if suspicious else None,
         gap_data=gap_data,
     )
 
     if not output:
-        output = train_bench.parent / "overfitting_report.json"
+        output = domain_bench.parent / "overfitting_report.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
 
-    if format == "json":
+    if fmt == "json":
         console.print(json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False))
     else:
         gap = report.generalization_gap
         if gap:
             gap_color = "green" if gap.verdict == "good" else "yellow" if gap.verdict == "warn" else "red"
-            console.print(f"\n[bold]Generalization Gap:[/bold]")
-            console.print(f"  Train:   +{gap.train_delta:.2f} (ws={gap.train_pass_rate_with:.0%}, wos={gap.train_pass_rate_without:.0%})")
-            console.print(f"  Holdout: +{gap.holdout_delta:.2f} (ws={gap.holdout_pass_rate_with:.0%}, wos={gap.holdout_pass_rate_without:.0%})")
+            console.print("\n[bold]Generalization Gap:[/bold]")
+            console.print(f"  Domain:  +{gap.domain_delta:.2f} (ws={gap.domain_pass_rate_with:.0%}, wos={gap.domain_pass_rate_without:.0%})")
+            console.print(f"  General: +{gap.general_delta:.2f} (ws={gap.general_pass_rate_with:.0%}, wos={gap.general_pass_rate_without:.0%})")
             console.print(f"  Gap:     [{gap_color}]{gap.gap:.2f}[/{gap_color}] → [{gap_color}]{gap.verdict.upper()}[/{gap_color}]")
 
         console.print(f"\n[bold]Overfitting Score:[/bold] {report.overfitting_score:.2f}/1.0")
-
-        if report.suspicious_instructions:
-            console.print(f"\n[bold]Suspicious Instructions ({len(report.suspicious_instructions)}):[/bold]")
-            for si in report.suspicious_instructions:
-                sev_color = "red" if si.severity == "high" else "yellow"
-                console.print(f"  [{sev_color}]{si.severity.upper()}[/{sev_color}] Line {si.line}: {si.snippet[:80]}")
-                if si.matched_expectation:
-                    console.print(f"    ↳ Matches expectation: {si.matched_expectation[:80]}")
-                console.print(f"    ↳ {si.reason}")
-        elif skill_path:
-            console.print(f"\n  [dim]No suspicious instructions found — LLM review clean[/dim]")
-        else:
-            console.print(f"\n  [dim]LLM review not run (pass --skill to enable)[/dim]")
-
         console.print(f"\n[bold]Recommendation:[/bold] {report.recommendation}")
         console.print(f"\nReport written to: {output}")
 

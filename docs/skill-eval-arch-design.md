@@ -537,43 +537,43 @@ overall_confidence = 0.7 (baseline)
 
 | 属性 | 值 |
 |------|------|
-| **职责** | 检测 Skill 的评测用例是否对训练集过拟合——即 SKILL.md 中的指令是否针对特定 eval 做了过度特化，导致在 holdout 集上泛化能力差 |
-| **输入** | Skill 路径 + 已产出的 grading.json（多个 run） |
-| **输出** | `overfitting_report.json`（含 GeneralizationGap 列表 + SuspiciousInstruction + 总体判决 + 改进建议） |
-| **外部调用** | `claude -p`（subprocess，OverfittingDetector LLM 审查 SKILL.md） |
-| **关键契约** | 流程分三步：EvalSplitter 分层 split → GapCalculator 计算 delta → OverfittingDetector LLM 审查。两个 CLI 命令：`split-evals` 和 `vet-overfit` |
+| **职责** | 检测 Skill 是否对特定项目数据过拟合——在源项目（domain）上反复优化后，在通用场景（general）上是否泛化能力下降。纯统计检测，不调用 LLM |
+| **输入** | domain benchmark.json + general benchmark.json；源项目路径（用于 eval 生成） |
+| **输出** | `overfitting_report.json`（含 GeneralizationGap + overfitting_score + recommendation） |
+| **外部调用** | `claude -p`（仅在 eval 生成阶段由 DiverseEvalGenerator 调用，检测本身不调用 LLM） |
+| **关键契约** | `init --source-dir` 生成通用 eval → `vet-overfit --domain-bench --general-bench` 对比双域 benchmark。一个 CLI 命令：`vet-overfit`
 
-**EvalSplitter**：将 evals.json 中的评测用例按 `should_trigger` 标签或 checkpoint 期望进行分层采样，分为训练集和 holdout 集（默认 70/30 分割）。保证两个集合在难度、类型、领域上分布一致。
+**SourceAnalyzer**：扫描源项目目录，统计文件类型分布、提取目录结构摘要、按 skill 类型关键词采样代表性代码片段（最多15文件，每个最多8000字节）、提取领域关键词。输出 `SourceProfile` 供 DiverseEvalGenerator 使用。
 
-**GapCalculator**：对训练集和 holdout 集分别计算 pass_rate，计算 delta = train_pass_rate - holdout_pass_rate。根据 delta 大小判定间隙严重度：
+**DiverseEvalGenerator**：基于 SourceProfile + SKILL.md，调用 LLM 生成跨领域 eval 用例。核心原则：生成的用例必须与源项目领域严格不同——fixture 数据、代码模式、上下文都来自不同领域。输出 `evals-general.json`。
 
-| gap_severity | delta 范围 | 含义 |
-|-------------|-----------|------|
-| NONE | delta ≤ 0.05 | 无明显过拟合 |
-| SLIGHT | 0.05 < delta ≤ 0.10 | 轻微过拟合迹象 |
-| MODERATE | 0.10 < delta ≤ 0.20 | 中度过拟合 |
-| SIGNIFICANT | 0.20 < delta ≤ 0.35 | 显著过拟合 |
-| SEVERE | delta > 0.35 | 严重过拟合，Skill 几乎只在训练集上有效 |
+**GapCalculator**：对 domain 和 general 的 benchmark.json 分别提取 pass_rate 和 delta，计算 gap = domain_delta - general_delta。判定阈值：
 
-**OverfittingDetector**：当 gap_severity ≥ MODERATE 时，调用 `claude -p` 对 SKILL.md 进行 LLM 审查。审查维度包括：
-- 指令是否过于具体地对应某个 eval prompt
-- 是否存在"作弊"类指令（如"当用户问 X 时，输出 Y"的硬编码映射）
-- 是否有过约束（如只允许特定工具、特定格式）导致泛化受阻
-- 产出 `SuspiciousInstruction` 列表，标注 risk 等级和修改建议
+| verdict | gap 范围 | 含义 |
+|---------|---------|------|
+| good | gap < 0.10 | 无明显过拟合 |
+| warn | 0.10 <= gap < 0.20 | 轻微过拟合迹象 |
+| overfit | gap >= 0.20 | 显著过拟合，Skill 在一般场景上泛化差 |
+
+**OverfittingDetector**：纯统计评分，不调用 LLM。评分映射：good→0.1, warn→0.4, overfit→0.7。score >= 0.7 时 exit code 1（CI 门禁）。
 
 **CLI 命令**：
 
 ```bash
-skill-eval split-evals SKILL_PATH [--train-ratio 0.7] [--seed 42]
-    → 输出 train-evals.json + holdout-evals.json
+# 1. 为 skill + 源项目生成通用 eval
+skill-eval init <skill-path> --source-dir <project> [--domains web,cli]
+    -> evals/evals-general.json
 
-skill-eval vet-overfit SKILL_PATH --train PATH --holdout PATH [--model MODEL]
-    → 依次对 train 和 holdout 运行评测 → EvalSplitter + GapCalculator
-    → if gap ≥ MODERATE → OverfittingDetector LLM 审查
-    → 输出 overfitting_report.json
+# 2. 分别在两个 eval 上跑 benchmark
+skill-eval run <skill-path> --evals evals-domain.json -o domain/
+skill-eval run <skill-path> --evals evals-general.json -o general/
+
+# 3. 对比检测
+skill-eval vet-overfit --domain-bench domain/benchmark.json --general-bench general/benchmark.json
+    -> GapCalculator -> OverfittingDetector -> overfitting_report.json
 ```
 
-**Report 集成**：`overfitting_report.json` 被聚合到 `benchmark.json` 的 `overfitting` 字段中，并在 HTML 报告中展示泛化间隙和可疑指令。
+**Report 集成**：`overfitting_report.json` 被加载到 HTML 报告中展示泛化间隙和评分（viewer.html / batch-report.html）。
 
 ### 5.10 报告可视化 (`reporting/`)
 

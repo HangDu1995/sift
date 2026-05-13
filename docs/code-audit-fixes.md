@@ -316,47 +316,52 @@
 
 ### 新增模块
 
-`src/skill_eval/overfitting/` 新增 3 个模块：
+`src/skill_eval/overfitting/` 新增模块：
 
 | 文件 | 职责 |
 |------|------|
-| `splitter.py` | 将 eval 集按比例拆分为训练集和 holdout 集 |
-| `gap.py` | 计算训练集与 holdout 集之间的泛化差距 |
-| `detector.py` | LLM 驱动的可疑指令检测器，分析技能文档中的过拟合指标 |
+| `gap.py` | 计算 domain 与 general 之间的泛化差距 |
+| `detector.py` | 纯统计评分，根据 gap 生成 overfitting_report.json |
+| `source_analyzer.py` | 扫描源项目目录，提取项目特征摘要和代码采样 |
 
-### 新增 CLI 命令
+`src/skill_eval/evals/` 新增：
+
+| 文件 | 职责 |
+|------|------|
+| `diverse_generator.py` | 基于 SourceProfile + SKILL.md 调用 LLM 生成跨领域 eval |
+
+### 新增 CLI 命令 / 参数
 
 | 命令 | 功能 |
 |------|------|
-| `skill-eval split-evals` | 将 evals.json 拆分为 train/holdout 两部分，支持 `--holdout-ratio` 参数 |
-| `skill-eval vet-overfit` | 对技能文档执行 LLM 过拟合检测，输出详细的过拟合报告 |
+| `skill-eval init <path> --source-dir <dir> [--domains ...]` | 扫描源项目，生成与训练域不重叠的通用 eval 用例 |
+| `skill-eval vet-overfit --domain-bench <path> --general-bench <path>` | 纯统计对比双域 benchmark，计算泛化间隙 |
+
+### 删除
+
+| 项目 | 原因 |
+|------|------|
+| `split-evals` 命令 + `EvalSplitter` 类 | 不再随机拆分 eval，两组 eval 来源独立 |
+| `SuspiciousInstruction` 模型 | LLM 指令匹配检测已移除（Skill 的强制要求是正常特征） |
+| `OverfittingDetector.detect()` LLM 检测逻辑 | 误报太多，改为纯统计 |
+| `fixtures/negative-skills/overfitted-skill/` | 基于 SuspiciousInstruction 概念，已过时 |
 
 ### 新增 Pydantic 模型
 
-- `SuspiciousInstruction` — 包含 instruction 文本、严重度（HIGH/MEDIUM/LOW）、检测原因和行号
-- `GeneralizationGap` — 训练集 vs holdout 集的 pass rate 差距及 significance 标记
-- `OverfittingReport` — 聚合所有过拟合检测结果，包含可疑指令列表和泛化差距数据
+- `GeneralizationGap` — 字段从 train/holdout 重命名为 domain/general
+- `OverfittingReport` — 移除 suspicious_instructions 字段，纯统计
+- `SourceProfile` — 项目特征摘要（文件类型分布、目录结构、领域关键词、采样代码）
 
 ### 报告集成
 
-- `viewer.html` — 单次运行报告新增 `## Overfitting Detection` 章节，展示可疑指令列表和泛化差距
-- `batch-report.html` — 批量报告新增过拟合汇总表，每个技能显示 suspicious count 和 gap 值
+- `viewer.html` / `batch-report.html` — 移除 suspicious instructions 表格，保留 gap 展示和 scoring
 
-### 测试数据
+### 检测逻辑
 
-`fixtures/negative-skills/overfitted-skill/` 新增过拟合测试技能，包含 10 个可疑指令，用于验证检测器效果。
-
-### 检测结果
-
-对过拟合测试技能执行 `vet-overfit`，LLM 检测器识别出 10 个可疑指令：
-- 7 HIGH — 直接提及特定 eval case 或期望值
-- 2 MEDIUM — 隐含对训练集特定格式的依赖
-- 1 LOW — 风格上的过拟合指示
-
-### 健壮性处理
-
-- 缺少 holdout 文件时：`gap.py` 返回 `GeneralizationGap(gap=None, label="N/A")`，检测继续
-- 缺少 LLM 数据时：`detector.py` 返回空的 `OverfittingReport`，报告渲染对应的 "数据不可用" fallback
+过拟合检测简化为纯统计：gap = domain_delta - general_delta。
+- gap < 0.10 → good (score 0.1)
+- 0.10 ≤ gap < 0.20 → warn (score 0.4)
+- gap ≥ 0.20 → overfit (score 0.7, exit code 1)
 
 ---
 
