@@ -79,7 +79,7 @@ class ScoringOrchestrator:
                     merged.append(ExpectationResult(
                         text=lr.text,
                         passed=lr.passed,
-                        evidence=f"[merged] prog={pr.passed} llm={lr.passed}. {lr.evidence}",
+                        evidence=f"[合并] 程序化={pr.passed} LLM={lr.passed}. {lr.evidence}",
                         source="merged",
                     ))
                 else:

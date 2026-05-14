@@ -59,7 +59,7 @@ class PosthocAnalyzer:
         parts.append("--- BENCHMARK DATA ---")
         parts.append(benchmark_json[:12000])
         parts.append("")
-        parts.append("Generate analysis notes as a JSON array of strings.")
+        parts.append("Generate analysis notes as a JSON array of strings. All string values must be in Chinese (中文).")
         return "\n".join(parts)
 
     def _build_comparison_prompt(
@@ -91,7 +91,7 @@ class PosthocAnalyzer:
             "--- LOSER TRANSCRIPT ---",
             loser_transcript[:4000],
             "",
-            "Write your analysis as JSON matching the analysis schema.",
+            "Write your analysis as JSON matching the analysis schema. All string values (strengths, weaknesses, suggestions, etc.) must be in Chinese (中文).",
         ]
         return "\n".join(parts)
 

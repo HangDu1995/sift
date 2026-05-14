@@ -883,7 +883,13 @@ def full(
 
     gen = ReportGenerator()
     report_path = iteration_dir / "report.html"
-    gen.write_static(iteration_dir, report_path, benchmark.model_dump(mode="json"))
+    scorecard_data = None
+    if scorecard:
+        try:
+            scorecard_data = scorecard.model_dump(mode="json")
+        except Exception:
+            scorecard_data = None
+    gen.write_static(iteration_dir, report_path, benchmark.model_dump(mode="json"), scorecard=scorecard_data)
 
     if format != "json":
         all_notes = benchmark.notes if isinstance(benchmark.notes, list) else []

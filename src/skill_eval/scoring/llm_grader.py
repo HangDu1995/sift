@@ -52,7 +52,7 @@ class LLMGrader:
             + "\n".join(f"- {e}" for e in eval_case.expectations)
             + "\n\n--- ASSERTIONS ---\n"
             + "\n".join(f"- {a.name} ({a.type}): {a.params}" for a in eval_case.assertions)
-            + "\n\nWrite your grading as JSON matching the grading.json schema."
+            + "\n\nWrite your grading as JSON matching the grading.json schema. All string values (evidence, suggestions, reasons, etc.) must be in Chinese (中文)."
         )
 
     def _collect_outputs(self, output_dir: Path) -> str:
@@ -87,7 +87,7 @@ class LLMGrader:
         from skill_eval.models import ExpectationResult, GradingSummary
         return GradingResult(
             expectations=[
-                ExpectationResult(text=e, passed=False, evidence="LLM response could not be parsed", source="llm")
+                ExpectationResult(text=e, passed=False, evidence="无法解析 LLM 响应", source="llm")
                 for e in eval_case.expectations
             ],
             summary=GradingSummary(passed=0, failed=len(eval_case.expectations), total=len(eval_case.expectations), pass_rate=0.0),

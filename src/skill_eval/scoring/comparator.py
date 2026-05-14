@@ -58,7 +58,7 @@ class BlindComparator:
             for e in expectations:
                 parts.append(f"- {e}")
         parts.append("")
-        parts.append("Write your comparison as JSON matching the comparison schema.")
+        parts.append("Write your comparison as JSON matching the comparison schema. All string values (reasoning, strengths, weaknesses, etc.) must be in Chinese (中文).")
         return "\n".join(parts)
 
     def _call(self, prompt: str) -> str:
@@ -69,7 +69,7 @@ class BlindComparator:
 
     def _parse(self, response: str) -> ComparisonResult:
         if not response:
-            return ComparisonResult(winner="TIE", reasoning="Comparator call failed")
+            return ComparisonResult(winner="TIE", reasoning="对比调用失败")
         try:
             data = json.loads(response)
             return ComparisonResult.model_validate(data)
@@ -81,4 +81,4 @@ class BlindComparator:
                     return ComparisonResult.model_validate(json.loads(match.group()))
                 except Exception:
                     pass
-            return ComparisonResult(winner="TIE", reasoning="Failed to parse comparator response")
+            return ComparisonResult(winner="TIE", reasoning="无法解析对比响应")

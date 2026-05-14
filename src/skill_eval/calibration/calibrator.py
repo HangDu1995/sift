@@ -111,13 +111,13 @@ class CalibrationChecker:
         if agreement_rate >= 0.9 and both_evaluated > 0:
             signals.append(ConfidenceSignal(
                 signal_type=SignalType.HIGH_AGREEMENT_RATE,
-                description=f"Agreement rate {agreement_rate:.0%}",
+                description=f"一致性比率 {agreement_rate:.0%}",
                 impact=0.1,
             ))
         elif agreement_rate < 0.6 and both_evaluated > 0:
             signals.append(ConfidenceSignal(
                 signal_type=SignalType.LOW_AGREEMENT_RATE,
-                description=f"Low agreement rate {agreement_rate:.0%}",
+                description=f"一致性比率偏低 {agreement_rate:.0%}",
                 impact=-0.2,
             ))
 
@@ -125,13 +125,13 @@ class CalibrationChecker:
             if compliance.compliance_rate >= 0.8:
                 signals.append(ConfidenceSignal(
                     signal_type=SignalType.COMPLIANCE_BACKS_SCORING,
-                    description=f"Compliance rate {compliance.compliance_rate:.0%}",
+                    description=f"合规比率 {compliance.compliance_rate:.0%}",
                     impact=0.1,
                 ))
             elif compliance.compliance_rate < 0.5:
                 signals.append(ConfidenceSignal(
                     signal_type=SignalType.COMPLIANCE_CONTRADICTS_SCORING,
-                    description=f"Low compliance {compliance.compliance_rate:.0%}",
+                    description=f"合规性偏低 {compliance.compliance_rate:.0%}",
                     impact=-0.3,
                 ))
 
@@ -139,7 +139,7 @@ class CalibrationChecker:
         if weak > total * 0.5:
             signals.append(ConfidenceSignal(
                 signal_type=SignalType.WEAK_EVIDENCE,
-                description=f"{weak}/{total} expectations have weak evidence",
+                description=f"{weak}/{total} 项期望的证据不足",
                 impact=-0.1,
             ))
 
@@ -147,7 +147,7 @@ class CalibrationChecker:
         if single_source > total * 0.5:
             signals.append(ConfidenceSignal(
                 signal_type=SignalType.GRADER_SKIPPED_CHECKS,
-                description=f"{single_source}/{total} single-source evaluations",
+                description=f"{single_source}/{total} 项为单一来源评测",
                 impact=-0.1,
             ))
 
@@ -174,18 +174,18 @@ class CalibrationChecker:
         signal_types = {s.signal_type for s in signals}
 
         if SignalType.LOW_AGREEMENT_RATE in signal_types:
-            recs.append("Low agreement rate — consider increasing runs_per_config for statistical stability")
+            recs.append("一致性比率偏低——建议增加 runs_per_config 以提高统计稳定性")
 
         if SignalType.COMPLIANCE_CONTRADICTS_SCORING in signal_types:
-            recs.append("Compliance contradicts scoring — output correctness may not be due to Skill")
+            recs.append("合规性与评分矛盾——输出正确性可能并非由 Skill 导致")
 
         if SignalType.WEAK_EVIDENCE in signal_types:
-            recs.append("Weak evidence in grading — consider adding more specific expectations")
+            recs.append("评分证据不足——建议添加更具体的期望条件")
 
         if SignalType.GRADER_SKIPPED_CHECKS in signal_types:
-            recs.append("Many single-source evaluations — enable both programmatic and LLM scoring")
+            recs.append("多项为单一来源评测——建议同时启用程序化评分和 LLM 评分")
 
         for d in disagreements[:3]:
-            recs.append(f"Disagreement on '{d.expectation_text[:50]}...': resolved as {d.resolution.value}")
+            recs.append(f"对 '{d.expectation_text[:50]}...' 存在分歧：已判定为 {d.resolution.value}")
 
         return recs

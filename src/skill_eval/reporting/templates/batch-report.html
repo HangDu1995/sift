@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Batch Evaluation Report</title>
+  <title>批量评测报告</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600&family=Lora:wght@400;500&display=swap" rel="stylesheet">
@@ -66,33 +66,39 @@
 <body>
   <div class="header">
     <div>
-      <h1>Batch Evaluation: <span id="batch-name"></span></h1>
+      <h1>批量评测：<span id="batch-name"></span></h1>
       <div class="sub" id="batch-stats"></div>
     </div>
   </div>
 
   <div class="card">
-    <h2>Dependency DAG</h2>
+    <h2>依赖关系图</h2>
     <div id="dag"></div>
   </div>
 
   <div class="card">
-    <h2>Summary</h2>
+    <h2>概览</h2>
     <table id="summary-table"></table>
   </div>
 
   <div class="card">
-    <h2>Pass Rate Comparison</h2>
+    <h2>通过率对比</h2>
     <div style="max-width: 600px; margin: 0 auto;"><canvas id="comparison-chart" style="max-height: 250px;"></canvas></div>
   </div>
 
   <div class="card" id="cascade-card" style="display:none;">
-    <h2>Cascade Attribution</h2>
+    <h2>级联归因</h2>
     <div id="cascade-content"></div>
   </div>
 
+  <div class="card" id="integration-card" style="display:none;">
+    <h2>集成测试</h2>
+    <div id="integration-summary"></div>
+    <div id="integration-details"></div>
+  </div>
+
   <div class="card">
-    <h2>Per-Skill Detail</h2>
+    <h2>各 Skill 详情</h2>
     <div id="drilldowns"></div>
   </div>
 
@@ -101,6 +107,7 @@
 
     let allSkills = EMBEDDED_DATA.skills || [];
     let cascade = EMBEDDED_DATA.cascade || null;
+    let integration = EMBEDDED_DATA.integration || null;
 
     function init() {
       const batchName = EMBEDDED_DATA.manifest ? EMBEDDED_DATA.manifest.name : "batch";
@@ -112,12 +119,13 @@
       const skipped = allSkills.filter(s => s.status === "SKIPPED").length;
 
       document.getElementById("batch-stats").textContent =
-        allSkills.length + " skills | " + passed + " passed, " + failed + " failed, " + cascadeCount + " cascade, " + skipped + " skipped";
+        allSkills.length + " 个 Skill | " + passed + " 通过，" + failed + " 失败，" + cascadeCount + " 级联，" + skipped + " 跳过";
 
       renderDAG();
       renderSummary();
       renderChart();
       renderCascade();
+      renderIntegration();
       renderDrilldowns();
     }
 
@@ -212,12 +220,12 @@
       const hasComps = allSkills.some(s => s.has_comparisons);
       const hasAnalysis = allSkills.some(s => s.has_analysis);
 
-      let html = "<thead><tr><th>Skill</th><th>Status</th><th>with_skill</th><th>without_skill</th><th>Delta</th>";
-      if (hasTime) html += "<th>Δ Time</th>";
-      if (hasTokens) html += "<th>Δ Tokens</th>";
-      if (hasComps) html += "<th>Comparison</th>";
-      if (hasAnalysis) html += "<th>Analysis</th>";
-      html += "<th>Overfitting</th>";
+      let html = "<thead><tr><th>Skill</th><th>状态</th><th>with_skill</th><th>without_skill</th><th>变化</th>";
+      if (hasTime) html += "<th>Δ 耗时</th>";
+      if (hasTokens) html += "<th>Δ 令牌数</th>";
+      if (hasComps) html += "<th>对比</th>";
+      if (hasAnalysis) html += "<th>分析</th>";
+      html += "<th>过拟合</th>";
       html += "</tr></thead><tbody>";
 
       for (const s of allSkills) {
@@ -296,7 +304,7 @@
       }
 
       card.style.display = "block";
-      let html = '<table class="attribution-table"><thead><tr><th>Skill</th><th>Attribution</th><th>Meaning</th></tr></thead><tbody>';
+      let html = '<table class="attribution-table"><thead><tr><th>Skill</th><th>归因</th><th>含义</th></tr></thead><tbody>';
       for (const [name, attr] of Object.entries(attributions)) {
         const color = attr === "ROOT_CAUSE" ? "var(--red)" : attr === "CASCADE" ? "#f57f17" :
           attr === "DEPENDENCY_MISSING" ? "var(--accent)" : "var(--green)";
@@ -309,6 +317,88 @@
       }
       html += '</tbody></table>';
       document.getElementById("cascade-content").innerHTML = html;
+    }
+
+    function renderIntegration() {
+      const card = document.getElementById("integration-card");
+      if (!integration || !integration.scenarios || integration.scenarios.length === 0) return;
+
+      card.style.display = "block";
+
+      const summaryEl = document.getElementById("integration-summary");
+      summaryEl.innerHTML = '<div style="font-size:0.8rem;">' +
+        '<strong>' + integration.passed + '/' + integration.total + '</strong> 个场景通过' +
+        (integration.failed > 0 ? ' <span style="color:var(--red);">（' + integration.failed + ' 个失败）</span>' : ' <span style="color:var(--green);">✓</span>') +
+        '</div>';
+
+      const detailsEl = document.getElementById("integration-details");
+      let html = '<table style="margin-top:0.75rem;"><thead><tr><th>场景</th><th>类型</th><th>结果</th><th>详情</th></tr></thead><tbody>';
+
+      for (const sc of integration.scenarios) {
+        const icon = sc.passed ? "✓" : "✗";
+        const color = sc.passed ? "var(--green)" : "var(--red)";
+        const badge = sc.passed ? "badge-passed" : "badge-failed";
+        let detail = "";
+
+        if (sc.type === "routing" && sc.results) {
+          const total = sc.results.length;
+          const ok = sc.results.filter(r => r.correct).length;
+          detail = ok + '/' + total + ' 个提示词正确';
+        } else if (sc.type === "chain" && sc.steps) {
+          const ok = sc.steps.filter(s => s.status === "PASSED").length;
+          detail = ok + '/' + sc.steps.length + ' 个步骤通过';
+        } else if (sc.type === "contract" && sc.checks) {
+          const ok = sc.checks.filter(c => c.passed).length;
+          detail = ok + '/' + sc.checks.length + ' 个检查通过';
+          if (!sc.passed) {
+            const failed = sc.checks.filter(c => !c.passed);
+            detail += ' — ' + failed.map(c => c.evidence || c.type).join('; ');
+          }
+        }
+
+        html += '<tr>' +
+          '<td><strong>' + escapeHtml(sc.name || "?") + '</strong></td>' +
+          '<td>' + escapeHtml(sc.type || "?") + '</td>' +
+          '<td><span class="badge ' + badge + '">' + icon + '</span></td>' +
+          '<td style="font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(detail) + '</td>' +
+          '</tr>';
+      }
+
+      html += '</tbody></table>';
+
+      // Expanded routing details
+      for (const sc of integration.scenarios) {
+        if (sc.type === "routing" && sc.results) {
+          html += '<div style="margin-top:0.5rem;padding:0.5rem;background:var(--bg);border-radius:var(--radius);">';
+          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">路由：' + escapeHtml(sc.name) + '</div>';
+          html += '<table><thead><tr><th>提示词</th><th>实际触发</th><th>期望触发</th><th>正确</th></tr></thead><tbody>';
+          for (const r of sc.results) {
+            const ok = r.correct;
+            html += '<tr>' +
+              '<td style="font-size:0.75rem;">' + escapeHtml(r.prompt) + '</td>' +
+              '<td style="font-size:0.75rem;">' + (r.triggered || []).join(", ") || "—" + '</td>' +
+              '<td style="font-size:0.75rem;">' + (r.should_trigger || []).join(", ") || "—" + '</td>' +
+              '<td style="color:' + (ok ? "var(--green)" : "var(--red)") + ';">' + (ok ? "✓" : "✗") + '</td>' +
+              '</tr>';
+          }
+          html += '</tbody></table></div>';
+        }
+        if (sc.type === "contract" && sc.checks) {
+          html += '<div style="margin-top:0.5rem;padding:0.5rem;background:var(--bg);border-radius:var(--radius);">';
+          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">契约：' + escapeHtml(sc.name) + '</div>';
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);">生产者：' + escapeHtml(sc.producer || "?") + ' → 消费者：' + escapeHtml(sc.consumer || "?") + ' | 产物：' + escapeHtml(sc.artifact || "?") + '</div>';
+          for (const c of sc.checks) {
+            const ok = c.passed;
+            html += '<div style="font-size:0.75rem;margin-top:0.15rem;">' +
+              '<span style="color:' + (ok ? "var(--green)" : "var(--red)") + ';">' + (ok ? "✓" : "✗") + '</span> ' +
+              escapeHtml(c.type) + (c.evidence ? ' — ' + escapeHtml(c.evidence) : '') +
+              '</div>';
+          }
+          html += '</div>';
+        }
+      }
+
+      detailsEl.innerHTML = html;
     }
 
     function renderDrilldowns() {
@@ -329,17 +419,17 @@
         const names = s.dependencies || [];
         if (names.length > 0 || (s.depended_by || []).length > 0) {
           html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">';
-          if (names.length > 0) html += 'Depends on: ' + names.join(", ") + ' · ';
-          if (s.depended_by && s.depended_by.length > 0) html += 'Used by: ' + s.depended_by.join(", ");
+          if (names.length > 0) html += '依赖：' + names.join(", ") + ' · ';
+          if (s.depended_by && s.depended_by.length > 0) html += '被依赖：' + s.depended_by.join(", ");
           html += '</div>';
         }
 
         // Comparison details
         if (comps.length > 0) {
           for (const comp of comps) {
-            const wBadge = comp.winner === "A" ? "With Skill" : comp.winner === "B" ? "Without Skill" : "Tie";
+            const wBadge = comp.winner === "A" ? "With Skill" : comp.winner === "B" ? "Without Skill" : "平局";
             const wColor = comp.winner === "A" ? "var(--green)" : comp.winner === "B" ? "var(--red)" : "var(--text-muted)";
-            html += '<div style="font-size:0.75rem;margin-bottom:0.5rem;"><strong>Comparison:</strong> Winner <span style="color:' + wColor + ';">' + wBadge + '</span>';
+            html += '<div style="font-size:0.75rem;margin-bottom:0.5rem;"><strong>对比：</strong>胜者 <span style="color:' + wColor + ';">' + wBadge + '</span>';
             if (comp.rubric && comp.rubric.A) html += ' (A: ' + (comp.rubric.A.overall_score || "?").toFixed(1) + '/10, B: ' + (comp.rubric.B ? comp.rubric.B.overall_score : "?").toFixed(1) + '/10)';
             html += '</div>';
           }
@@ -351,17 +441,17 @@
           const gap = of.generalization_gap;
           const oColor = of.overfitting_score >= 0.7 ? "var(--red)" : of.overfitting_score >= 0.4 ? "var(--accent)" : "var(--green)";
           html += '<div style="font-size:0.75rem;margin:0.5rem 0;padding:0.5rem;background:var(--bg);border-radius:var(--radius);">';
-          html += '<strong>Overfitting:</strong> ';
+          html += '<strong>过拟合：</strong> ';
           if (gap) {
-            html += 'gap <span style="color:' + (gap.verdict === "good" ? "var(--green)" : gap.verdict === "warn" ? "var(--accent)" : "var(--red)") + ';">' + gap.gap.toFixed(2) + '</span> (' + gap.verdict + ') · ';
+            html += '差距 <span style="color:' + (gap.verdict === "good" ? "var(--green)" : gap.verdict === "warn" ? "var(--accent)" : "var(--red)") + ';">' + gap.gap.toFixed(2) + '</span>（' + gap.verdict + '） · ';
           }
-          html += 'score <span style="color:' + oColor + ';">' + (of.overfitting_score * 100).toFixed(0) + '%</span>';
+          html += '得分 <span style="color:' + oColor + ';">' + (of.overfitting_score * 100).toFixed(0) + '%</span>';
           html += '</div>';
         }
 
         // Improvement suggestions from analysis
         if (analysis && analysis.improvement_suggestions) {
-          html += '<div style="font-size:0.75rem;"><strong>Top Suggestions:</strong><ul style="margin:0.25rem 0 0 1rem;">';
+          html += '<div style="font-size:0.75rem;"><strong>首要建议：</strong><ul style="margin:0.25rem 0 0 1rem;">';
           for (const sug of analysis.improvement_suggestions.slice(0, 3)) {
             const prioColor = sug.priority === "high" ? "var(--red)" : sug.priority === "medium" ? "var(--accent)" : "var(--text-muted)";
             html += '<li><span style="color:' + prioColor + ';">[' + (sug.priority || "?") + ']</span> ' + escapeHtml(sug.suggestion || "").substring(0, 120) + '</li>';
@@ -370,7 +460,7 @@
         }
 
         // Link to full report
-        html += '<div style="margin-top:0.5rem;"><a href="javascript:void(0)" onclick="event.stopPropagation()">📄 View full report</a></div>';
+        html += '<div style="margin-top:0.5rem;"><a href="javascript:void(0)" onclick="event.stopPropagation()">📄 查看完整报告</a></div>';
 
         html += '</div>';
       }

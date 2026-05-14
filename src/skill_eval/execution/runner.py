@@ -57,6 +57,14 @@ class ClaudeRunner:
                     f"<skill name=\"{name}\">\n"
                     f"{skill_body}\n"
                     f"</skill>\n\n"
+                    f"<non_interactive_mode>\n"
+                    f"This is a NON-INTERACTIVE automated evaluation. You MUST:\n"
+                    f"- Skip ALL steps that ask the user for input, confirmation, or choices\n"
+                    f"- Make reasonable default assumptions for any user decisions\n"
+                    f"- Execute ALL phases/stages of the skill pipeline in a single run\n"
+                    f"- Never output questions or wait for user response\n"
+                    f"- If the skill says 'ask the user', assume the most common/recommended option and proceed\n"
+                    f"</non_interactive_mode>\n\n"
                     f"---\n\n"
                     f"{prompt}"
                 )
@@ -95,10 +103,12 @@ class ClaudeRunner:
                 raise ClaudeRunnerError("'claude' CLI not found — ensure it is installed and in PATH")
             duration_ms = int((time.time() - start) * 1000)
 
-            if returncode != 0:
-                raise ClaudeRunnerError(f"claude -p exited with code {returncode}: {stderr[:500]}")
-
             transcript, total_tokens, tool_calls, result_text, num_turns, stop_reason, tool_trace = self._parse_stream_json(stdout)
+
+            has_output = bool(transcript or result_text or total_tokens > 0)
+
+            if returncode != 0 and not has_output:
+                raise ClaudeRunnerError(f"claude -p exited with code {returncode}: {stderr[:500]}")
 
             return RunOutput(
                 exit_code=returncode,
@@ -110,7 +120,7 @@ class ClaudeRunner:
                 tool_trace=tool_trace,
                 result_text=result_text,
                 num_turns=num_turns,
-                stop_reason=stop_reason,
+                stop_reason=stop_reason or (f"exit_{returncode}" if returncode != 0 else ""),
             )
         except ClaudeRunnerError:
             raise
@@ -378,7 +388,8 @@ class ABTestRunner:
         for eval_case in eval_set.evals:
             sections.append(f"## {eval_case.get_name()}\n{eval_case.prompt}")
         return (
-            f"Please complete ALL of the following tasks in sequence:\n\n"
+            f"Please complete ALL of the following tasks in sequence.\n"
+            f"Produce all outputs in a single response without asking for clarification.\n\n"
             + "\n\n".join(sections)
         )
 
@@ -423,7 +434,8 @@ class ABTestRunner:
             f"## Output Format\n\n"
             f"Respond with ONLY a JSON array:\n"
             f'[{{"index": 0, "passed": true, "evidence": "brief reason"}}]\n\n'
-            f"Judge each independently. passed=true only if there is clear evidence in the transcript."
+            f"Judge each independently. passed=true only if there is clear evidence in the transcript.\n"
+            f"All evidence strings must be in Chinese (中文)."
         )
 
         from skill_eval.scoring.llm_grader import LLMGrader

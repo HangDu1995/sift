@@ -91,10 +91,19 @@ def collect_batch_data(workspace: Path, manifest: dict | None = None) -> dict:
                         other.setdefault("depended_by", []).append(s["name"])
                         break
 
+    integration_path = workspace / "integration-report.json"
+    integration = None
+    if integration_path.exists():
+        try:
+            integration = json.loads(integration_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
     return {
         "skills": skills,
         "cascade": cascade,
         "manifest": manifest,
+        "integration": integration,
     }
 
 

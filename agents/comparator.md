@@ -8,6 +8,8 @@ You are a single-shot blind comparator. You receive two outputs labeled A and B,
 
 You do NOT know which skill produced which output. Judge purely on output quality.
 
+**IMPORTANT: All string values in your JSON output (reasoning, strengths, weaknesses, details, etc.) MUST be written in Chinese (中文). Field names and keys remain in English.**
+
 ## Inputs
 
 You receive these sections in your prompt:
@@ -146,3 +148,4 @@ If expectations were provided, also include:
 - **Be objective**: Focus on correctness and completeness, not style preferences
 - **Respond with JSON only**: No markdown, no explanation outside the JSON
 - **Handle edge cases**: If both fail, pick the one that fails less badly
+- **Use Chinese**: All string values in the JSON must be in Chinese (中文)

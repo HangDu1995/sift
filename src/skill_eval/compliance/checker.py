@@ -208,7 +208,8 @@ class ComplianceChecker:
             f"## Output Format\n\n"
             f"Respond with ONLY a JSON array. Each element:\n"
             f'{{"index": 0, "followed": true/false, "evidence": "brief explanation", "confidence": 0.0-1.0}}\n\n'
-            f"Judge each instruction independently. Be strict: if no clear evidence, mark followed=false."
+            f"Judge each instruction independently. Be strict: if no clear evidence, mark followed=false.\n"
+            f"All evidence strings must be in Chinese (中文)."
         )
 
         try:
@@ -219,7 +220,7 @@ class ComplianceChecker:
                 ComplianceResultItem(
                     instruction=inst,
                     followed=False,
-                    evidence="LLM batch check unavailable",
+                    evidence="LLM 批量检查不可用",
                     confidence=0.0,
                     source="llm",
                 )
@@ -234,7 +235,7 @@ class ComplianceChecker:
             ComplianceResultItem(
                 instruction=inst,
                 followed=False,
-                evidence="LLM did not evaluate this instruction",
+                evidence="LLM 未评估此指令",
                 confidence=0.0,
                 source="llm",
             )
@@ -283,7 +284,8 @@ class ComplianceChecker:
             f"Section: {instruction.section}\n"
             f"Priority: {instruction.priority}\n\n"
             f"Transcript excerpt:\n{transcript[:4000]}\n\n"
-            f"Respond with JSON: {{\"followed\": true/false, \"evidence\": \"explanation\", \"confidence\": 0.0-1.0}}"
+            f"Respond with JSON: {{\"followed\": true/false, \"evidence\": \"explanation\", \"confidence\": 0.0-1.0}}\n"
+            f"All evidence strings must be in Chinese (中文)."
         )
 
         try:
@@ -304,7 +306,7 @@ class ComplianceChecker:
         return ComplianceResultItem(
             instruction=instruction,
             followed=False,
-            evidence="LLM check unavailable",
+            evidence="LLM 检查不可用",
             confidence=0.0,
             source="llm",
         )

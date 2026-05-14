@@ -31,3 +31,5 @@ batch-workspace*/
 .env
 .venv/
 venv/
+
+test-results/

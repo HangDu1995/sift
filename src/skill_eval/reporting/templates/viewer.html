@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Eval Review</title>
+  <title>评测回顾</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600&family=Lora:wght@400;500&display=swap" rel="stylesheet">
@@ -545,16 +545,16 @@
   <div id="app" style="height:100vh; display:flex; flex-direction:column;">
     <div class="header">
       <div>
-        <h1>Eval Review: <span id="skill-name"></span></h1>
-        <div class="instructions">Review each output and leave feedback below. Navigate with arrow keys or buttons. When done, copy feedback and paste into Claude Code.</div>
+        <h1>评测回顾：<span id="skill-name"></span></h1>
+        <div class="instructions">查看每条输出并在下方留下反馈。使用方向键或按钮导航。完成后，复制反馈并粘贴到 Claude Code。</div>
       </div>
       <div class="progress" id="progress"></div>
     </div>
 
     <!-- View tabs (only shown when benchmark data exists) -->
     <div class="view-tabs" id="view-tabs" style="display:none;">
-      <button class="view-tab active" onclick="switchView('outputs')">Outputs</button>
-      <button class="view-tab" onclick="switchView('benchmark')">Benchmark</button>
+      <button class="view-tab active" onclick="switchView('outputs')">输出</button>
+      <button class="view-tab" onclick="switchView('benchmark')">基准测试</button>
     </div>
 
     <!-- Outputs panel (qualitative review) -->
@@ -562,7 +562,7 @@
     <div class="main">
       <!-- Prompt -->
       <div class="section">
-        <div class="section-header">Prompt <span class="config-badge" id="config-badge" style="display:none;"></span></div>
+        <div class="section-header">提示词 <span class="config-badge" id="config-badge" style="display:none;"></span></div>
         <div class="section-body">
           <div class="prompt-text" id="prompt-text"></div>
         </div>
@@ -570,9 +570,9 @@
 
       <!-- Outputs -->
       <div class="section">
-        <div class="section-header">Output</div>
+        <div class="section-header">输出</div>
         <div class="section-body" id="outputs-body">
-          <div class="empty-state">No output files found</div>
+          <div class="empty-state">未找到输出文件</div>
         </div>
       </div>
 
@@ -581,7 +581,7 @@
         <div class="section-header">
           <div class="grades-toggle" onclick="togglePrevOutputs()">
             <span class="arrow" id="prev-outputs-arrow">&#9654;</span>
-            Previous Output
+            上次输出
           </div>
         </div>
         <div class="grades-content" id="prev-outputs-content"></div>
@@ -592,7 +592,7 @@
         <div class="section-header">
           <div class="grades-toggle" onclick="toggleGrades()">
             <span class="arrow" id="grades-arrow">&#9654;</span>
-            Formal Grades
+            评分详情
           </div>
         </div>
         <div class="grades-content" id="grades-content"></div>
@@ -600,16 +600,16 @@
 
       <!-- Feedback -->
       <div class="section">
-        <div class="section-header">Your Feedback</div>
+        <div class="section-header">你的反馈</div>
         <div class="section-body">
           <textarea
             class="feedback-textarea"
             id="feedback"
-            placeholder="What do you think of this output? Any issues, suggestions, or things that look great?"
+            placeholder="你对这个输出有什么看法？有什么问题、建议或做得好的地方？"
           ></textarea>
           <div class="feedback-status" id="feedback-status"></div>
           <div class="prev-feedback" id="prev-feedback" style="display:none;">
-            <div class="prev-feedback-label">Previous feedback</div>
+            <div class="prev-feedback-label">上次反馈</div>
             <div id="prev-feedback-text"></div>
           </div>
         </div>
@@ -617,16 +617,16 @@
     </div>
 
     <div class="nav" id="outputs-nav">
-      <button class="nav-btn" id="prev-btn" onclick="navigate(-1)">&#8592; Previous</button>
-      <button class="done-btn" id="done-btn" onclick="showDoneDialog()">Submit All Reviews</button>
-      <button class="nav-btn" id="next-btn" onclick="navigate(1)">Next &#8594;</button>
+      <button class="nav-btn" id="prev-btn" onclick="navigate(-1)">&#8592; 上一个</button>
+      <button class="done-btn" id="done-btn" onclick="showDoneDialog()">提交所有评审</button>
+      <button class="nav-btn" id="next-btn" onclick="navigate(1)">下一个 &#8594;</button>
     </div>
     </div><!-- end panel-outputs -->
 
     <!-- Benchmark panel (quantitative stats) -->
     <div class="view-panel" id="panel-benchmark">
       <div class="benchmark-view" id="benchmark-content">
-        <div class="benchmark-empty">No benchmark data available. Run a benchmark to see quantitative results here.</div>
+        <div class="benchmark-empty">暂无基准测试数据。请先运行基准测试以查看量化结果。</div>
       </div>
     </div>
   </div>
@@ -634,10 +634,10 @@
   <!-- Done overlay -->
   <div class="done-overlay" id="done-overlay">
     <div class="done-card">
-      <h2>Review Complete</h2>
-      <p>Your feedback has been saved. Go back to your Claude Code session and tell Claude you're done reviewing.</p>
+      <h2>评审完成</h2>
+      <p>你的反馈已保存。返回 Claude Code 会话并告诉 Claude 你已完成评审。</p>
       <div class="btn-row">
-        <button onclick="closeDoneDialog()">OK</button>
+        <button onclick="closeDoneDialog()">确定</button>
       </div>
     </div>
   </div>
@@ -768,7 +768,7 @@
 
       const outputs = run.outputs || [];
       if (outputs.length === 0) {
-        container.innerHTML = '<div class="empty-state">No output files</div>';
+        container.innerHTML = '<div class="empty-state">无输出文件</div>';
         return;
       }
 
@@ -784,7 +784,7 @@
         header.appendChild(nameSpan);
         const dlBtn = document.createElement("a");
         dlBtn.className = "dl-btn";
-        dlBtn.textContent = "Download";
+        dlBtn.textContent = "下载";
         dlBtn.download = file.name;
         dlBtn.href = getDownloadUri(file);
         header.appendChild(dlBtn);
@@ -813,7 +813,7 @@
           a.className = "download-link";
           a.href = file.data_uri;
           a.download = file.name;
-          a.textContent = "Download " + file.name;
+          a.textContent = "下载 " + file.name;
           content.appendChild(a);
         } else if (file.type === "error") {
           const pre = document.createElement("pre");
@@ -841,7 +841,7 @@
             const sheetLabel = document.createElement("div");
             sheetLabel.style.cssText =
               "font-weight:600; font-size:0.8rem; color:#b0aea5; margin-top:0.5rem; margin-bottom:0.25rem;";
-            sheetLabel.textContent = "Sheet: " + sheetName;
+            sheetLabel.textContent = "工作表：" + sheetName;
             container.appendChild(sheetLabel);
           }
 
@@ -851,7 +851,7 @@
           container.appendChild(wrapper);
         }
       } catch (err) {
-        container.textContent = "Error rendering spreadsheet: " + err.message;
+        container.textContent = "渲染表格出错：" + err.message;
       }
     }
 
@@ -876,8 +876,8 @@
         const cr = run.compliance;
         const rateColor = cr.compliance_rate >= 0.7 ? "var(--green)" : cr.compliance_rate >= 0.5 ? "var(--accent)" : "var(--red)";
         html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
-        html += '<strong>Compliance:</strong> <span style="color:' + rateColor + ';font-weight:600;">' + (cr.compliance_rate != null ? (cr.compliance_rate * 100).toFixed(0) + '%' : '—') + '</span>';
-        html += ' (' + (cr.followed_count || 0) + '/' + (cr.total_instructions || 0) + ' instructions followed)';
+        html += '<strong>合规性：</strong> <span style="color:' + rateColor + ';font-weight:600;">' + (cr.compliance_rate != null ? (cr.compliance_rate * 100).toFixed(0) + '%' : '—') + '</span>';
+        html += '（' + (cr.followed_count || 0) + '/' + (cr.total_instructions || 0) + ' 条指令已遵循）';
         if (cr.warnings && cr.warnings.length) {
           html += '<ul style="font-size:0.75rem;color:var(--accent);margin:0.25rem 0 0 1.25rem;">';
           for (const w of cr.warnings) html += '<li>' + escapeHtml(w) + '</li>';
@@ -891,8 +891,8 @@
         const cal = run.calibration;
         const gradeColor = cal.grade === "HIGH" ? "var(--green)" : cal.grade === "MEDIUM" ? "var(--accent)" : cal.grade === "LOW" ? "var(--text-muted)" : "var(--red)";
         html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
-        html += '<strong>Calibration Grade:</strong> <span style="color:' + gradeColor + ';font-weight:600;">' + (cal.grade || "—") + '</span>';
-        html += ' (agreement: ' + (cal.agreement_rate != null ? (cal.agreement_rate * 100).toFixed(0) + '%' : '—') + ', overall confidence: ' + (cal.overall_confidence != null ? cal.overall_confidence.toFixed(2) : '—') + ')';
+        html += '<strong>校准等级：</strong> <span style="color:' + gradeColor + ';font-weight:600;">' + (cal.grade || "—") + '</span>';
+        html += '（一致性：' + (cal.agreement_rate != null ? (cal.agreement_rate * 100).toFixed(0) + '%' : '—') + '，整体置信度：' + (cal.overall_confidence != null ? cal.overall_confidence.toFixed(2) : '—') + '）';
         if (cal.recommendations && cal.recommendations.length) {
           html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
           for (const r of cal.recommendations) html += '<li>' + escapeHtml(r) + '</li>';
@@ -914,7 +914,7 @@
         const badgeClass = summary.pass_rate >= 0.8 ? "grade-pass" : summary.pass_rate >= 0.5 ? "" : "grade-fail";
         html += '<div class="grades-summary">';
         html += '<span class="grade-badge ' + badgeClass + '">' + passRate + '</span>';
-        html += '<span>' + (summary.passed || 0) + ' passed, ' + (summary.failed || 0) + ' failed of ' + (summary.total || 0) + '</span>';
+        html += '<span>' + (summary.passed || 0) + ' 通过，' + (summary.failed || 0) + ' 失败，共 ' + (summary.total || 0) + ' 项</span>';
         html += '</div>';
 
         html += '<ul class="assertion-list">';
@@ -975,7 +975,7 @@
         header.appendChild(nameSpan);
         const dlBtn = document.createElement("a");
         dlBtn.className = "dl-btn";
-        dlBtn.textContent = "Download";
+        dlBtn.textContent = "下载";
         dlBtn.download = file.name;
         dlBtn.href = getDownloadUri(file);
         header.appendChild(dlBtn);
@@ -1004,7 +1004,7 @@
           a.className = "download-link";
           a.href = file.data_uri;
           a.download = file.name;
-          a.textContent = "Download " + file.name;
+          a.textContent = "下载 " + file.name;
           fc.appendChild(a);
         }
 
@@ -1046,11 +1046,11 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reviews, status: "in_progress" }),
       }).then(() => {
-        document.getElementById("feedback-status").textContent = "Saved";
+        document.getElementById("feedback-status").textContent = "已保存";
       }).catch(() => {
         // Static mode or server unavailable — no-op on auto-save,
         // feedback will be downloaded on final submit
-        document.getElementById("feedback-status").textContent = "Will download on submit";
+        document.getElementById("feedback-status").textContent = "提交时下载";
       });
     }
 
@@ -1179,15 +1179,15 @@
           + '</div>';
       }
 
-      html += mkCard("Delta (Pass Rate)", (prNum > 0 ? "+" : "") + prDelta,
-        prGood ? "Skill improves Claude" : prNum < -0.05 ? "Skill hurts Claude" : "Skill has little effect",
+      html += mkCard("通过率变化 (Δ)", (prNum > 0 ? "+" : "") + prDelta,
+        prGood ? "Skill 提升了 Claude" : prNum < -0.05 ? "Skill 拖累了 Claude" : "Skill 效果不明显",
         prGood ? "var(--green)" : prNum < -0.05 ? "var(--red)" : "var(--text-muted)");
 
       if (metadata.runs_per_configuration) {
-        html += mkCard("Runs per Config", metadata.runs_per_configuration, "with_skill / without_skill", "var(--text)");
+        html += mkCard("每组运行次数", metadata.runs_per_configuration, "with_skill / without_skill", "var(--text)");
       }
       if (metadata.evals_run && metadata.evals_run.length) {
-        html += mkCard("Evals", metadata.evals_run.length, metadata.evals_run.join(", "), "var(--text)");
+        html += mkCard("评测数", metadata.evals_run.length, metadata.evals_run.join(", "), "var(--text)");
       }
       if (metadata.skill_name) {
         html += mkCard("Skill", metadata.skill_name, "", "var(--accent)");
@@ -1198,12 +1198,12 @@
       const scorecard = EMBEDDED_DATA.scorecard;
       if (scorecard && (scorecard.checks || scorecard.score !== undefined)) {
         html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
-        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Static Analysis Scorecard</div>';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">静态分析记分卡</div>';
         const scoreColor = scorecard.score >= 8 ? "var(--green)" : scorecard.score >= 5 ? "var(--accent)" : "var(--red)";
         html += '<div style="text-align:center;margin-bottom:0.75rem;"><span style="font-size:2rem;font-family:Poppins,sans-serif;font-weight:600;color:' + scoreColor + ';">' + (scorecard.score || 0) + '/' + (scorecard.max_score || 11) + '</span>';
         html += ' <span style="color:var(--text-muted);">' + (scorecard.category || "") + '</span></div>';
         if (scorecard.checks) {
-          html += '<table class="benchmark-table"><thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead><tbody>';
+          html += '<table class="benchmark-table"><thead><tr><th>检查项</th><th>状态</th><th>详情</th></tr></thead><tbody>';
           for (const ck of scorecard.checks) {
             const statusIcon = ck.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
             html += '<tr><td>' + escapeHtml(ck.name || "") + '</td><td>' + statusIcon + '</td><td style="font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(ck.message || "") + '</td></tr>';
@@ -1217,30 +1217,30 @@
       const overfit = EMBEDDED_DATA.overfitting;
       if (overfit) {
         html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
-        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Overfitting Analysis</div>';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">过拟合分析</div>';
 
         const gap = overfit.generalization_gap;
         if (gap) {
           const gapColor = gap.verdict === "good" ? "var(--green)" : gap.verdict === "warn" ? "var(--accent)" : "var(--red)";
           html += '<div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem;">';
           html += '<div style="flex:1;min-width:150px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;text-align:center;">';
-          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">Domain Δ</div>';
+          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">领域 Δ</div>';
           html += '<div style="font-size:1.3rem;font-family:Poppins,sans-serif;font-weight:600;">' + (gap.domain_delta > 0 ? '+' : '') + gap.domain_delta.toFixed(2) + '</div>';
           html += '<div style="font-size:0.7rem;color:var(--text-muted);">ws ' + (gap.domain_pass_rate_with * 100).toFixed(0) + '% / wos ' + (gap.domain_pass_rate_without * 100).toFixed(0) + '%</div>';
           html += '</div>';
           html += '<div style="flex:1;min-width:150px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;text-align:center;">';
-          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">General Δ</div>';
+          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">通用 Δ</div>';
           html += '<div style="font-size:1.3rem;font-family:Poppins,sans-serif;font-weight:600;">' + (gap.general_delta > 0 ? '+' : '') + gap.general_delta.toFixed(2) + '</div>';
           html += '<div style="font-size:0.7rem;color:var(--text-muted);">ws ' + (gap.general_pass_rate_with * 100).toFixed(0) + '% / wos ' + (gap.general_pass_rate_without * 100).toFixed(0) + '%</div>';
           html += '</div>';
           html += '<div style="flex:1;min-width:120px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;text-align:center;">';
-          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">Gap</div>';
+          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">差距</div>';
           html += '<div style="font-size:1.3rem;font-family:Poppins,sans-serif;font-weight:600;color:' + gapColor + ';">' + gap.gap.toFixed(2) + '</div>';
           html += '<div style="font-size:0.7rem;color:' + gapColor + ';text-transform:uppercase;">' + gap.verdict + '</div>';
           html += '</div></div>';
         }
 
-        html += '<div style="font-size:1.1rem;font-family:Poppins,sans-serif;margin-bottom:0.5rem;">Overfitting Score: <span style="color:' + (overfit.overfitting_score >= 0.7 ? 'var(--red)' : overfit.overfitting_score >= 0.4 ? 'var(--accent)' : 'var(--green)') + ';">' + (overfit.overfitting_score * 100).toFixed(0) + '%</span></div>';
+        html += '<div style="font-size:1.1rem;font-family:Poppins,sans-serif;margin-bottom:0.5rem;">过拟合得分：<span style="color:' + (overfit.overfitting_score >= 0.7 ? 'var(--red)' : overfit.overfitting_score >= 0.4 ? 'var(--accent)' : 'var(--green)') + ';">' + (overfit.overfitting_score * 100).toFixed(0) + '%</span></div>';
 
         if (overfit.recommendation) {
           html += '<div style="margin-top:0.75rem;padding:0.5rem 0.75rem;background:var(--bg);border-radius:var(--radius);font-size:0.8125rem;">' + escapeHtml(overfit.recommendation) + '</div>';
@@ -1252,14 +1252,14 @@
       // ── Pass rate bar chart ──
       if (configA && configB) {
         html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
-        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Pass Rate Comparison</div>';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">通过率对比</div>';
         html += '<div style="max-width:500px;margin:0 auto;"><canvas id="passRateChart" style="max-height:200px;"></canvas></div>';
         html += '</div>';
       }
 
       // ── Delta table ──
       html += '<table class="benchmark-table">';
-      html += "<thead><tr><th>Metric</th><th>" + escapeHtml(configA.replace(/_/g, ' ')) + "</th><th>" + escapeHtml(configB.replace(/_/g, ' ')) + "</th><th>Delta</th></tr></thead><tbody>";
+      html += "<thead><tr><th>指标</th><th>" + escapeHtml(configA.replace(/_/g, ' ')) + "</th><th>" + escapeHtml(configB.replace(/_/g, ' ')) + "</th><th>变化</th></tr></thead><tbody>";
 
       function fmtStat(stat, pct) {
         if (!stat) return "—";
@@ -1276,17 +1276,17 @@
         return "";
       }
 
-      html += "<tr><td><strong>Pass Rate</strong></td>";
+      html += "<tr><td><strong>通过率</strong></td>";
       html += "<td>" + fmtStat(a.pass_rate, true) + "</td>";
       html += "<td>" + fmtStat(b.pass_rate, true) + "</td>";
       html += '<td class="' + deltaClass(delta.pass_rate) + '">' + (delta.pass_rate || "—") + "</td></tr>";
 
       if (a.time_seconds || b.time_seconds) {
-        html += "<tr><td><strong>Time (s)</strong></td><td>" + fmtStat(a.time_seconds, false) + "</td><td>" + fmtStat(b.time_seconds, false) + "</td>";
-        html += '<td class="' + deltaClass(delta.time_seconds) + '">' + (delta.time_seconds ? delta.time_seconds + "s" : "—") + "</td></tr>";
+        html += "<tr><td><strong>耗时 (秒)</strong></td><td>" + fmtStat(a.time_seconds, false) + "</td><td>" + fmtStat(b.time_seconds, false) + "</td>";
+        html += '<td class="' + deltaClass(delta.time_seconds) + '">' + (delta.time_seconds ? delta.time_seconds + "秒" : "—") + "</td></tr>";
       }
       if (a.tokens || b.tokens) {
-        html += "<tr><td><strong>Tokens</strong></td><td>" + fmtStat(a.tokens, false) + "</td><td>" + fmtStat(b.tokens, false) + "</td>";
+        html += "<tr><td><strong>令牌数</strong></td><td>" + fmtStat(a.tokens, false) + "</td><td>" + fmtStat(b.tokens, false) + "</td>";
         html += '<td class="' + deltaClass(delta.tokens) + '">' + (delta.tokens || "—") + "</td></tr>";
       }
       html += "</tbody></table>";
@@ -1294,15 +1294,15 @@
       // ── Blind Comparison section ──
       if (comparisons.length > 0) {
         html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
-        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Blind Comparison</div>';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">盲评对比</div>';
 
         for (let ci = 0; ci < comparisons.length; ci++) {
           const comp = comparisons[ci];
           if (ci > 0) html += '<hr style="border:0;border-top:1px solid var(--border);margin:1rem 0;">';
 
-          const wBadge = comp.winner === "A" ? "With Skill" : comp.winner === "B" ? "Without Skill" : "Tie";
+          const wBadge = comp.winner === "A" ? "With Skill" : comp.winner === "B" ? "Without Skill" : "平局";
           const wColor = comp.winner === "A" ? "var(--green)" : comp.winner === "B" ? "var(--red)" : "var(--text-muted)";
-          html += '<div style="margin-bottom:0.75rem;"><strong>Winner:</strong> <span style="color:' + wColor + ';font-weight:600;">' + wBadge + '</span></div>';
+          html += '<div style="margin-bottom:0.75rem;"><strong>胜者：</strong> <span style="color:' + wColor + ';font-weight:600;">' + wBadge + '</span></div>';
           html += '<div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:0.75rem;">' + escapeHtml(comp.reasoning || "") + '</div>';
 
           // Rubric scores
@@ -1315,7 +1315,7 @@
               html += '<div style="flex:1;min-width:180px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;">';
               html += '<div style="font-weight:600;margin-bottom:0.5rem;">' + label + ' <span style="color:' + scoreColor + ';font-size:1.1rem;">' + (r.overall_score || "?").toFixed(1) + '</span>/10</div>';
               if (r.content) {
-                html += '<div style="font-size:0.75rem;color:var(--text-muted);">Content: ' + r.content_score.toFixed(1) + '/5 · Structure: ' + r.structure_score.toFixed(1) + '/5</div>';
+              html += '<div style="font-size:0.75rem;color:var(--text-muted);">内容：' + r.content_score.toFixed(1) + '/5 · 结构：' + r.structure_score.toFixed(1) + '/5</div>';
               }
               html += '</div>';
             }
@@ -1343,33 +1343,33 @@
       // ── Analysis section ──
       if (analysis && (analysis.winner_strengths || analysis.improvement_suggestions)) {
         html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
-        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Deep Analysis</div>';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">深度分析</div>';
 
         if (analysis.instruction_following) {
           const fi = analysis.instruction_following;
           const wsIf = fi.winner || fi.A || {};
           const lsIf = fi.loser || fi.B || {};
           html += '<div style="display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap;">';
-          html += '<div style="flex:1;min-width:150px;"><strong>Winner Instruction Following:</strong> ' + (wsIf.score || "?") + '/10</div>';
-          html += '<div style="flex:1;min-width:150px;"><strong>Loser Instruction Following:</strong> ' + (lsIf.score || "?") + '/10</div>';
+          html += '<div style="flex:1;min-width:150px;"><strong>胜者指令遵循度：</strong> ' + (wsIf.score || "?") + '/10</div>';
+          html += '<div style="flex:1;min-width:150px;"><strong>败者指令遵循度：</strong> ' + (lsIf.score || "?") + '/10</div>';
           html += '</div>';
         }
 
         if (analysis.winner_strengths && analysis.winner_strengths.length) {
-          html += '<div style="margin-bottom:0.75rem;"><strong style="color:var(--green);">Winner Strengths</strong><ul style="font-size:0.8125rem;margin:0.25rem 0 0 1.25rem;">';
+          html += '<div style="margin-bottom:0.75rem;"><strong style="color:var(--green);">胜者优势</strong><ul style="font-size:0.8125rem;margin:0.25rem 0 0 1.25rem;">';
           for (const s of analysis.winner_strengths) html += '<li>' + escapeHtml(s) + '</li>';
           html += '</ul></div>';
         }
 
         if (analysis.loser_weaknesses && analysis.loser_weaknesses.length) {
-          html += '<div style="margin-bottom:0.75rem;"><strong style="color:var(--red);">Loser Weaknesses</strong><ul style="font-size:0.8125rem;margin:0.25rem 0 0 1.25rem;">';
+          html += '<div style="margin-bottom:0.75rem;"><strong style="color:var(--red);">败者弱点</strong><ul style="font-size:0.8125rem;margin:0.25rem 0 0 1.25rem;">';
           for (const w of analysis.loser_weaknesses) html += '<li>' + escapeHtml(w) + '</li>';
           html += '</ul></div>';
         }
 
         if (analysis.improvement_suggestions && analysis.improvement_suggestions.length) {
-          html += '<strong>Improvement Suggestions</strong>';
-          html += '<table class="benchmark-table" style="margin-top:0.5rem;"><thead><tr><th>Priority</th><th>Category</th><th>Suggestion</th><th>Expected Impact</th></tr></thead><tbody>';
+          html += '<strong>改进建议</strong>';
+          html += '<table class="benchmark-table" style="margin-top:0.5rem;"><thead><tr><th>优先级</th><th>类别</th><th>建议</th><th>预期影响</th></tr></thead><tbody>';
           for (const s of analysis.improvement_suggestions) {
             const prioColor = s.priority === "high" ? "var(--red)" : s.priority === "medium" ? "var(--accent)" : "var(--text-muted)";
             html += '<tr><td><span style="color:' + prioColor + ';font-weight:600;text-transform:uppercase;font-size:0.7rem;">' + escapeHtml(s.priority) + '</span></td>';
@@ -1386,7 +1386,7 @@
       const checkpoints = notes.filter(n => typeof n === 'object' && n !== null);
       if (checkpoints.length > 0) {
         html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
-        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">Checkpoint Breakdown</div>';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">检查点明细</div>';
         for (const cp of checkpoints) {
           const cpRate = cp.pass_rate || 0;
           const cpColor = cpRate >= 0.8 ? "var(--green)" : cpRate >= 0.5 ? "var(--accent)" : "var(--red)";
@@ -1421,15 +1421,15 @@
       const runs = data.runs || [];
       if (runs.length > 0) {
         const evalIds = [...new Set(runs.map(r => r.eval_id))].sort((a, b) => a - b);
-        html += '<div style="margin-top:1.5rem;"><h3 style="font-family:Poppins,sans-serif;margin-bottom:0.75rem;">Per-Eval Breakdown</h3>';
+        html += '<div style="margin-top:1.5rem;"><h3 style="font-family:Poppins,sans-serif;margin-bottom:0.75rem;">逐项评测明细</h3>';
         const hasTime = runs.some(r => r.result && r.result.time_seconds != null);
 
         for (const evalId of evalIds) {
           const evalRuns = runs.filter(r => r.eval_id === evalId);
           const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : "Eval " + evalId;
           html += '<h4 style="font-family:Poppins,sans-serif;margin:1rem 0 0.5rem;">' + escapeHtml(evalName) + '</h4>';
-          html += '<table class="benchmark-table"><thead><tr><th>Config</th><th>Run</th><th>Pass Rate</th>';
-          if (hasTime) html += '<th>Time (s)</th>';
+          html += '<table class="benchmark-table"><thead><tr><th>配置</th><th>运行</th><th>通过率</th>';
+          if (hasTime) html += '<th>耗时 (秒)</th>';
           html += '</tr></thead><tbody>';
 
           const configGroups = [...new Set(evalRuns.map(r => r.configuration))];
@@ -1452,7 +1452,7 @@
             const rates = configRuns.map(r => (r.result || {}).pass_rate || 0);
             const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
             const avgPrClass = avgRate >= 0.8 ? "benchmark-delta-positive" : avgRate < 0.5 ? "benchmark-delta-negative" : "";
-            html += '<tr class="benchmark-row-avg ' + rowClass + '"><td>' + configLabel + '</td><td>Avg</td>';
+            html += '<tr class="benchmark-row-avg ' + rowClass + '"><td>' + configLabel + '</td><td>平均</td>';
             html += '<td class="' + avgPrClass + '">' + (avgRate * 100).toFixed(0) + '%</td>';
             if (hasTime) {
               const times = configRuns.map(r => (r.result || {}).time_seconds).filter(t => t != null);
@@ -1478,7 +1478,7 @@
                 }
               }
             }
-            html += '<table class="benchmark-table" style="margin-top:0.5rem;"><thead><tr><th>Assertion</th>';
+            html += '<table class="benchmark-table" style="margin-top:0.5rem;"><thead><tr><th>断言</th>';
             for (const config of configGroups) {
               html += '<th>' + escapeHtml(config.replace(/_/g, " ")) + '</th>';
             }
@@ -1510,7 +1510,7 @@
       const stringNotes = notes.filter(n => typeof n === 'string');
       if (stringNotes.length > 0) {
         html += '<div class="benchmark-notes" style="margin-top:1.5rem;">';
-        html += '<h3>Analysis Notes (' + stringNotes.length + ')</h3><ul>';
+        html += '<h3>分析备注（' + stringNotes.length + '）</h3><ul>';
         for (const note of stringNotes) html += '<li>' + escapeHtml(note) + '</li>';
         html += '</ul></div>';
       }
@@ -1529,7 +1529,7 @@
             data: {
               labels: [configA.replace(/_/g, " "), configB.replace(/_/g, " ")],
               datasets: [{
-                label: "Pass Rate (%)",
+                label: "通过率 (%)",
                 data: [prA, prB],
                 backgroundColor: [prA >= prB ? "#788c5d" : "#c44", prB >= prA ? "#788c5d" : "#c44"],
                 borderRadius: 4,
