@@ -285,10 +285,10 @@ overfit --> agg : overfitting_report.json
 | 属性 | 值 |
 |------|------|
 | **职责** | A/B 测试编排 + 内联评分 + 遵循性检查 + 诊断输出 |
-| **输入** | Skill 路径 + EvalSet + RunConfig（runs_per_config, model, timeout, max_workers, output_dir, max_turns, **skip_calibration**）+ ScoringConfig + on_progress 回调 |
+| **输入** | Skill 路径 + EvalSet + RunConfig（runs_per_config, model, timeout, max_workers, output_dir, max_turns, **skip_calibration**, **eval_samples**, **per_eval_mode**）+ ScoringConfig + on_progress 回调 |
 | **输出** | 结构化输出目录（with_skill/run-{n}/ 和 without_skill/run-{n}/ 含 grading.json + checkpoints.json + calibration.json + run_debug.json + compliance.json） |
 | **外部调用** | `claude -p <prompt> --output-format stream-json --verbose --dangerously-skip-permissions --max-turns <N>`（subprocess.Popen + communicate(timeout) + proc.kill()） |
-| **关键契约** | **一体化引擎 + 单次 AB 测试**。evals.json 中的 EvalCase 作为 checkpoint，整个 skill 只跑 2 次 `claude -p`（with/without），然后批量检查所有 checkpoint 覆盖率 |
+| **关键契约** | **一体化引擎 + Per-Eval 模式（默认）**。默认每个 EvalCase 独立作为 `claude -p` 调用（per-eval mode），使用 `--workers` 并发执行。旧版合并模式（所有 eval 合并为一次 `claude -p`）通过 `--merged` flag 启用 |
 
 **执行机制**：
 - `with_skill` 模式：将 SKILL.md 内容临时写入 `.claude/commands/<name>-skill-<uuid>.md`，使 `claude -p` 能发现该 Skill。执行后清理临时文件。
@@ -299,7 +299,27 @@ overfit --> agg : overfitting_report.json
 - **`--dangerously-skip-permissions`**：所有 `claude -p` 调用统一加此 flag，跳过 workspace trust 确认和权限提示。
 - **`--max-turns`**：限制 agentic 循环轮数（默认 10），防止无限 tool calls 导致超时。
 
-**一体化流程（单次 AB + Checkpoint）**：
+**一体化流程（Per-Eval 模式 + Merged 回退）**：
+
+**默认路径（per_eval_mode=True）**：每个 EvalCase 独立运行 `claude -p`，通过 ThreadPoolExecutor 并发：
+```
+for eval_case in eval_set.evals[:eval_samples]:  # eval_samples 默认 None = 全部
+    submit to ThreadPoolExecutor(max_workers=workers):
+        for config_name in ("with_skill", "without_skill"):
+            for run_number in 1..runs_per_config:
+                0. eval_case.setup_fixtures(outputs_dir)
+                1. ClaudeRunner.run(eval_case.prompt, skill_path?, model, timeout, max_turns) → RunOutput
+                   catch ClaudeRunnerError → error.txt, grading=0, continue
+                2. ScoringOrchestrator.grade(run_dir, eval_case) → grading.json
+                3. if with_skill:
+                       InstructionExtractor.extract(skill_body) → instructions
+                       ComplianceChecker.check(instructions, transcript, output_dir, ...) → compliance.json
+                4. CalibrationChecker.calibrate(grading, compliance_report?) → calibration.json
+                5. save run_debug.json
+                6. emit on_progress(phase, substep)
+```
+
+**回退路径（--merged flag，per_eval_mode=False）**：所有 eval 合并为一次 `claude -p`，checkpoint 覆盖率模式：
 ```
 merged_prompt = _build_merged_prompt(eval_set)  # 合并所有 eval prompt
 
@@ -375,15 +395,17 @@ for config_name in ("with_skill", "without_skill"):
 - **claims**：从输出中提取并验证的隐含声明（factual/process/quality 三类）
 - **eval_feedback**：对评测用例本身的改进建议（断言太弱、遗漏关键检查等）
 
-**`_score_checkpoints` 批量评分**（ABTestRunner 内部方法）：
+**`_score_checkpoints` 批量评分**（ABTestRunner 内部方法，仅 merged 模式使用）：
 
-在单次 AB 测试模式下，所有 checkpoint 的 expectations 通过一次批量 `claude -p` 调用评估：
+在 merged 模式下，所有 checkpoint 的 expectations 通过一次批量 `claude -p` 调用评估：
 1. 收集所有 EvalCase 的 expectations，构建全局索引
 2. 构建 batch prompt："You are a checkpoint evaluator. Determine which expectations are covered..."
 3. 一次 `claude -p` 调用（通过 LLMGrader._call_claude），LLM 返回 JSON 数组
 4. 按 index 对齐结果，拆分回各 checkpoint
 5. 同时对有 assertions 的 checkpoint 运行 ProgrammaticChecker
 6. 输出：`grading.json`（总体）+ `checkpoints.json`（per-checkpoint breakdown）
+
+**Per-Eval 模式评分**：每个 EvalCase 独立调用 ScoringOrchestrator.grade()，产出独立的 grading.json，无 checkpoint 批量合并。BenchmarkAggregator 聚合时汇总所有 per-eval 的 grading 结果。
 
 ### 5.5 遵循性引擎 (`compliance/`)
 
@@ -776,7 +798,11 @@ stop
 2. EvalLoader.load("evals/evals.json")
    if not found: exit code 2
 
-3. ABTestRunner.run_ab_test(skill_path, eval_set)  ← 一体化引擎
+3. ABTestRunner.run_ab_test(skill_path, eval_set,
+        eval_samples=N, per_eval_mode=True/False)  ← 一体化引擎
+   默认 per_eval_mode=True: 每个 EvalCase 独立 claude -p，ThreadPoolExecutor 并发
+   --merged: 回退到合并 prompt 模式（checkpoint 覆盖率）
+   --eval-samples N: 仅运行前 N 个 eval（默认全部）
    内部完成：执行 + 评分 + 遵循性检查 + 评分校准 + 诊断保存
    Rich Live 进度显示
 
@@ -927,8 +953,10 @@ batch-workspace-{timestamp}/
 **关键 flags**：
 - `--compliance-gate`：compliance_rate < 0.5 时强制判失败
 - `--security-gate`：安全审查 BLOCKED/REVIEW_NEEDED 时强制判失败
-- `- `--no-calibration`：跳过评分校准（通过 RunConfig.skip_calibration 传递）
+- `--no-calibration`：跳过评分校准（通过 RunConfig.skip_calibration 传递）
 - `--format json`：非交互 JSON 输出（CI 模式）
+- `--eval-samples N`：仅运行前 N 个 eval（通过 RunConfig.eval_samples 传递，默认 None = 全部）
+- `--merged`：使用合并 prompt 模式（通过 RunConfig.per_eval_mode=False 传递，默认 per-eval 独立执行）
 
 **Exit code**：0 = 通过，1 = 失败/回归，2 = 输入错误，3 = 执行错误
 

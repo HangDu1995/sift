@@ -476,27 +476,71 @@ Checkpoint Breakdown:
 
 ## 输出文件结构
 
-`full` 命令完成后，输出目录结构如下：
+### 默认模式（per-eval，每个 eval 独立运行）
+
+`full` 命令默认使用 per-eval mode——每个 eval case 独立并发运行，结果按 `eval-<id>/run-<n>/` 组织：
 
 ```
 output/iteration-1/
 ├── benchmark.json                  # 聚合结果（含 run_summary、delta、comparisons、analysis）
 ├── report.html                     # 自包含 HTML 可视化报告（~62KB）
-├── merged_prompt.txt               # 合并后的完整 prompt
 ├── comparison-run1.json            # 盲比较结果（ComparisonResult 模型）
 ├── analysis-notes.json             # LLM 生成的 benchmark 分析笔记（字符串数组）
 ├── analysis-result.json            # 深度比较分析（AnalysisResult 模型，可选）
+│
+├── with_skill/
+│   ├── eval-1/
+│   │   └── run-1/
+│   │       ├── grading.json        # 该 eval 的 expectations + assertions 的 pass/fail
+│   │       ├── checkpoints.json    # 该 eval 的独立覆盖率
+│   │       ├── compliance.json     # SKILL.md 指令遵循性检查
+│   │       ├── calibration.json    # 评分可信度校准
+│   │       ├── run_debug.json      # Claude 完整回复 + tool_calls + timing
+│   │       └── timing.json         # 执行耗时和 token 统计
+│   ├── eval-2/
+│   │   └── run-1/ ...
+│   └── eval-3/
+│       └── run-1/ ...
+│
+└── without_skill/
+    ├── eval-1/
+    │   └── run-1/
+    │       ├── grading.json
+    │       ├── checkpoints.json
+    │       ├── calibration.json
+    │       ├── run_debug.json
+    │       └── timing.json
+    ├── eval-2/
+    │   └── run-1/ ...
+    └── eval-3/
+        └── run-1/ ...
+```
 
-├── with_skill/                     # 注入 SKILL.md 的测试结果
+> 各 eval 独立并发运行，互不阻塞。`benchmark.json` 在聚合阶段汇总所有 eval 的结果。
+
+### 合并模式（--merged flag）
+
+使用 `--merged` 时，所有 eval 合并为一个 prompt 一起运行，结果结构与上述相同，但所有 eval 共享同一个 run：
+
+```
+output/iteration-1/
+├── benchmark.json
+├── report.html
+├── merged_prompt.txt               # 合并后的完整 prompt（仅 merged 模式）
+├── comparison-run1.json
+├── analysis-notes.json
+├── analysis-result.json
+│
+├── with_skill/
 │   └── run-1/
-│       ├── grading.json            # 所有 expectations + assertions 的 pass/fail
-│       ├── checkpoints.json        # 每个 eval case 的独立覆盖率
-│       ├── compliance.json         # SKILL.md 指令遵循性检查
-│       ├── calibration.json        # 评分可信度校准
-│       ├── run_debug.json          # Claude 完整回复 + tool_calls + timing
-│       └── timing.json             # 执行耗时和 token 统计
-
-└── without_skill/                  # 不注入 SKILL.md 的基线结果
+│       ├── grading.json
+│       ├── checkpoints.json
+│       ├── compliance.json
+│       ├── calibration.json
+│       ├── run_debug.json
+│       └── timing.json
+│
+└── without_skill/
     └── run-1/
         ├── grading.json
         ├── checkpoints.json

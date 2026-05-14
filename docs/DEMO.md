@@ -98,9 +98,13 @@ Total: 3  With evals: 3  Missing: 0
 
 ```bash
 skill-eval full fixtures/test-skills/data-validator/ --runs 1
+# 注：该 Skill 只有 3 个 eval，无需 --eval-samples。
+# 当 eval 数量较多（>10）时，可加 --eval-samples 10 限制每个 eval 的采样轮数以节省时间。
 ```
 
 这一步是核心——对 with_skill（注入 SKILL.md）和 without_skill（不注入）分别运行相同的评测，量化 Skill 的**因果贡献**。
+
+> **默认运行模式**：per-eval mode（每个 eval 独立并发运行），各 eval 互不阻塞。使用 `--merged` 可切换为合并模式（所有 eval 合并为一个 prompt）。
 
 **实际结果**（data-validator）：
 
@@ -309,6 +313,7 @@ Score = StaticAnalysis(0-11)
 
 ```bash
 skill-eval full fixtures/negative-skills/bad-instruction/ --runs 1
+# 可选：--eval-samples <N> 限制每个 eval 的采样轮数（eval 数量多时有用）
 ```
 
 **教训**：
@@ -654,7 +659,7 @@ pass_rate 高但 calibration UNRELIABLE
 ## 附录 C：从零开始的 6 步流程
 
 ```bash
-# 1. 初始化 evals
+# 1. 初始化 evals（可选：--num-evals 5 指定生成数量）
 skill-eval init my-skill/ --no-generate-prompts
 
 # 2. 编辑 evals/evals.json，补充 L2 用例 + assertions + fixtures
@@ -664,6 +669,7 @@ skill-eval analyze my-skill/
 skill-eval vet my-skill/
 
 # 4. 快速验证（1 run，快速反馈）
+#    可选：--eval-samples 10 限制每个 eval 的采样轮数
 skill-eval full my-skill/ --runs 1
 
 # 5. 正式评测（3 runs，统计稳定）
@@ -672,3 +678,5 @@ skill-eval full my-skill/ --runs 3
 # 6. 批量回归
 skill-eval batch manifest.json --runs 3 --baseline baseline.json
 ```
+
+> **运行模式**：默认 per-eval mode，每个 eval 独立并发运行。加 `--merged` 切换为合并模式。

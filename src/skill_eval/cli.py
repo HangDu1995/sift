@@ -33,6 +33,17 @@ def _log_console(fmt: str) -> Console:
     return Console(stderr=True) if fmt == "json" else console
 
 
+def _parse_eval_samples(val: str | None) -> int | float | None:
+    if not val:
+        return None
+    try:
+        if "." in val:
+            return float(val)
+        return int(val)
+    except ValueError:
+        return None
+
+
 def _run_ab_eval(
     skill_path: Path,
     eval_set,
@@ -45,13 +56,22 @@ def _run_ab_eval(
     no_calibration: bool,
     output_dir: Path,
     fmt: str = "table",
+    eval_samples: int | float | None = None,
+    per_eval_mode: bool = True,
 ) -> tuple:
     from skill_eval.execution.runner import ABTestRunner
     from skill_eval.execution.benchmark import BenchmarkAggregator
     from skill_eval.models import RunConfig, ScoringConfig
 
     lc = _log_console(fmt)
-    lc.print(f"Running A/B test: {eval_set.skill_name} ({len(eval_set.evals)} evals × {runs} runs)")
+    total_evals = len(eval_set.evals)
+    sampled = ""
+    if eval_samples:
+        if isinstance(eval_samples, float) and eval_samples <= 1.0:
+            sampled = f" (sampled {int(eval_samples * 100)}%)"
+        else:
+            sampled = f" (sampled {eval_samples}/{total_evals})"
+    lc.print(f"Running A/B test: {eval_set.skill_name} ({total_evals} evals{sampled} × {runs} runs, {'per-eval' if per_eval_mode else 'merged'} mode)")
 
     scoring_config = ScoringConfig(
         enable_programmatic=scoring in ("hybrid", "programmatic"),
@@ -67,6 +87,8 @@ def _run_ab_eval(
         max_turns=max_turns,
         output_dir=output_dir,
         skip_calibration=no_calibration,
+        eval_samples=eval_samples,
+        per_eval_mode=per_eval_mode,
     )
 
     quiet_console = Console(stderr=True) if fmt == "json" else console
@@ -510,6 +532,7 @@ def init(
     source_dir: Optional[Path] = typer.Option(None, "--source-dir", help="Path to source project directory for diverse eval generation"),
     domains: Optional[str] = typer.Option(None, "--domains", help="Comma-separated target domains for diverse eval generation"),
     model: Optional[str] = typer.Option(None, "--model", help="Model for LLM generation"),
+    num_evals: Optional[int] = typer.Option(None, "--num-evals", help="Max number of eval cases to generate"),
 ):
     """Initialize evals.json for a Skill.
 
@@ -580,6 +603,10 @@ def init(
             console.print("Generating template evals...")
             eval_set = gen.generate_template(skill_path)
 
+        if num_evals and num_evals < len(eval_set.evals):
+            console.print(f"  Trimming to {num_evals} evals (from {len(eval_set.evals)})")
+            eval_set.evals = eval_set.evals[:num_evals]
+
         if output is None:
             evals_dir = skill_path / "evals"
             evals_dir.mkdir(exist_ok=True)
@@ -619,6 +646,8 @@ def run(
     security_gate: bool = typer.Option(False, "--security-gate", help="Fail if security vetting returns BLOCKED or REVIEW_NEEDED"),
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
     format: str = typer.Option("table", "--format", help="Output format"),
+    eval_samples: Optional[str] = typer.Option(None, "--eval-samples", help="Number or pct of evals to run (e.g. 10 or 0.25)"),
+    merged: bool = typer.Option(False, "--merged", help="Use merged-prompt mode instead of per-eval"),
 ):
     """Run A/B evaluation of a Skill."""
     from skill_eval.evals.loader import EvalLoader
@@ -657,6 +686,8 @@ def run(
         no_calibration=no_calibration,
         output_dir=output_dir,
         fmt=format,
+        eval_samples=_parse_eval_samples(eval_samples),
+        per_eval_mode=not merged,
     )
 
 
@@ -821,6 +852,8 @@ def full(
     open_browser: bool = typer.Option(False, "--open", help="Open report in browser"),
     format: str = typer.Option("table", "--format", help="Output format"),
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
+    eval_samples: Optional[str] = typer.Option(None, "--eval-samples", help="Number or pct of evals to run (e.g. 10 or 0.25)"),
+    merged: bool = typer.Option(False, "--merged", help="Use merged-prompt mode instead of per-eval"),
 ):
     """One-click full evaluation pipeline."""
     from skill_eval.evals.loader import EvalLoader
@@ -876,6 +909,8 @@ def full(
         no_calibration=False,
         output_dir=output_dir,
         fmt=format,
+        eval_samples=_parse_eval_samples(eval_samples),
+        per_eval_mode=not merged,
     )
 
     step += 1

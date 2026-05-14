@@ -904,6 +904,8 @@ classDiagram
         +output_dir: Path
         +max_turns: int
         +skip_calibration: bool
+        +eval_samples: int | None
+        +per_eval_mode: bool
     }
 
     class ClaudeRunner {
@@ -1007,9 +1009,36 @@ classDiagram
 
 `ABTestRunner.__init__(config: RunConfig, scoring_config: ScoringConfig, on_progress: ProgressCallback | None = None)`
 
-**单次 AB 测试 + Checkpoint 覆盖率模型**：
+**Per-Eval 独立执行模型（默认，per_eval_mode=True）**：
 
-evals.json 中的每个 EvalCase 不再独立执行，而是作为 **checkpoint**。整个 skill 只跑一次 `claude -p`（with_skill 和 without_skill 各一次），然后用所有 checkpoint 的 expectations 检查 transcript 覆盖率。
+默认每个 EvalCase 作为独立的 `claude -p` 调用执行。使用 `ThreadPoolExecutor(max_workers=config.max_workers)` 并发调度。每个 eval 独立产出 grading.json、compliance.json、calibration.json。`eval_samples` 控制运行的 eval 数量（None = 全部）。
+
+```
+for eval_case in eval_set.evals[:eval_samples]:
+    submit to ThreadPoolExecutor(max_workers):
+        for config_name in ("with_skill", "without_skill"):
+            for run_number in 1..runs_per_config:
+                1. eval_case.setup_fixtures(outputs_dir)  # 预置 fixture 文件
+                2. emit_progress(phase="executing")
+                   ClaudeRunner.run(eval_case.prompt, skill_path or None, model, timeout, max_turns)
+                   catch ClaudeRunnerError → save error.txt, grading=0, continue
+                3. save timing.json
+                4. emit_progress(phase="scoring")
+                   ScoringOrchestrator.grade(run_dir, eval_case) → grading.json
+                5. if with_skill:
+                       emit_progress(phase="compliance")
+                       InstructionExtractor.extract(skill_body) → instructions
+                       ComplianceChecker.check(instructions, transcript, output_dir, ...)
+                       save compliance.json
+                6. emit_progress(phase="calibration")
+                   CalibrationChecker.calibrate(grading, compliance_report?) → save calibration.json
+                7. save run_debug.json
+                8. emit_progress(grading, run_duration, run_output)
+```
+
+**合并模式（per_eval_mode=False，通过 `--merged` 启用）**：
+
+所有 eval 合并为一次 `claude -p`，使用 checkpoint 覆盖率模型：
 
 ```
 merged_prompt = _build_merged_prompt(eval_set)  # 合并所有 eval prompt
@@ -1042,7 +1071,7 @@ for config_name in ("with_skill", "without_skill"):
 
 **ABTestRunner 是一体化引擎：执行 → 评分 → 遵循性检查 → 评分校准 → 诊断输出，全部在内部完成。** CLI 层只需调用 `run_ab_test()` 一次即可获得完整结果。
 
-**`_build_merged_prompt(eval_set)`**：将所有 eval case 的 prompt 合并为一个完整 prompt，格式为 "Please complete ALL of the following tasks in sequence: ## {name}\n{prompt}..."。
+**`_build_merged_prompt(eval_set)`**：将所有 eval case 的 prompt 合并为一个完整 prompt，格式为 "Please complete ALL of the following tasks in sequence: ## {name}\n{prompt}..."。仅 `--merged` 模式（per_eval_mode=False）下使用。
 
 **`_score_checkpoints(eval_cases, transcript, outputs_dir)`**：
 - 收集所有 checkpoint 的 expectations，构建全局索引
@@ -2177,14 +2206,14 @@ class RuntimeCacheUsage(BaseModel):
 |------|------|------|----------------|
 | `vet` | `skill-eval vet SKILL_PATH [--format FORMAT] [--output FILE] [--skip-external]` | <1s | 否 |
 | `analyze` | `skill-eval analyze SKILL_PATH [--format FORMAT] [--output FILE]` | <1s | 否 |
-| `init` | `skill-eval init SKILL_PATH [--output DIR] [--generate-prompts]` | <1s（无 --generate-prompts）/ ~30s（有） | 仅 --generate-prompts |
+| `init` | `skill-eval init SKILL_PATH [--output DIR] [--generate-prompts] [--num-evals N]` | <1s（无 --generate-prompts）/ ~30s（有） | 仅 --generate-prompts |
 | `scan` | `skill-eval scan SKILLS_DIR [--config-prefix PREFIX] [--domain DOMAIN] [--type TYPE] [--format FORMAT]` | <1s | 否 |
 | `generate-config` | `skill-eval generate-config SKILLS_DIR [--output FILE] [--model MODEL]` | ~30s | 是 |
-| `run` | `skill-eval run SKILL_PATH [--evals PATH] [--runs N] [--model MODEL] [--workers N] [--timeout N] [--scoring MODE] [--compliance-gate] [--security-gate] [--no-calibration] [--output DIR]` | 5-30min | 是 |
+| `run` | `skill-eval run SKILL_PATH [--evals PATH] [--runs N] [--model MODEL] [--workers N] [--timeout N] [--scoring MODE] [--compliance-gate] [--security-gate] [--no-calibration] [--eval-samples N] [--merged] [--output DIR]` | 5-30min | 是 |
 | `optimize-trigger` | `skill-eval optimize-trigger SKILL_PATH --eval-set PATH [--max-iterations N] [--model MODEL]` | 10-60min | 是 |
 | `report` | `skill-eval report WORKSPACE [--benchmark PATH] [--previous PATH] [--static FILE] [--port PORT] [--open]` | <1s | 否 |
 | `import` | `skill-eval import JSONL_PATH --benchmark PATH` | <1s | 否 |
-| `full` | `skill-eval full SKILL_PATH [--runs N] [--model MODEL] [--compliance-gate] [--security-gate] [--open]` | 5-30min | 是 |
+| `full` | `skill-eval full SKILL_PATH [--runs N] [--model MODEL] [--eval-samples N] [--merged] [--compliance-gate] [--security-gate] [--open]` | 5-30min | 是 |
 | `batch` | `skill-eval batch MANIFEST_OR_DIR [--runs N] [--model MODEL] [--layers LAYERS] [--baseline PATH] [--fail-fast] [--workers N] [--output DIR]` | 30-120min | 是 |
 
 #### 3.10.2 通用参数
@@ -2197,6 +2226,9 @@ class RuntimeCacheUsage(BaseModel):
 | `--compliance-gate` | flag | 启用遵循性门控（compliance_rate < 0.5 时强制判定为失败） |
 | `--security-gate` | flag | 启用安全门控（BLOCKED/REVIEW_NEEDED 时强制判定为失败） |
 | `--no-calibration` | flag | 跳过评分校准（节省 LLM 调用成本） |
+| `--num-evals` | int | `init` 命令生成 eval 的数量（默认 6） |
+| `--eval-samples` | int | `run`/`full` 命令运行的 eval 数量（默认 None = 全部） |
+| `--merged` | flag | 使用合并 prompt 模式（默认 per-eval 独立执行） |
 
 #### 3.10.3 Exit Code 规则
 
@@ -2220,8 +2252,15 @@ class RuntimeCacheUsage(BaseModel):
 2. EvalLoader.load(skill_path / "evals/evals.json")
    if not found: exit code 2
 
-3. ABTestRunner.run_ab_test(skill_path, eval_set)  ← 一体化引擎
-   内部完成（单次 AB + checkpoint 覆盖率）：
+3. ABTestRunner.run_ab_test(skill_path, eval_set,
+       eval_samples=N, per_eval_mode=True/False)  ← 一体化引擎
+   默认 per_eval_mode=True（per-eval 独立执行）：
+   - 每个 EvalCase 独立 claude -p 调用
+   - ThreadPoolExecutor(max_workers=workers) 并发
+   - ScoringOrchestrator.grade() per eval → grading.json
+   - ComplianceChecker.check() per eval → compliance.json + compliance.log
+   - CalibrationChecker.calibrate() per eval → calibration.json
+   --merged (per_eval_mode=False) 回退路径：
    - _build_merged_prompt(eval_set) → 合并所有 eval prompt
    - ClaudeRunner.run() × 2 configs × N runs
    - _score_checkpoints() → 批量 checkpoint 评分 → grading.json + checkpoints.json
@@ -2236,7 +2275,7 @@ class RuntimeCacheUsage(BaseModel):
    ReportGenerator.write_static() → report.html
 ```
 
-**CLI flags**: `--runs`, `--model`, `--workers`, `--timeout`, `--max-turns`, `--compliance-gate`, `--security-gate`, `--open`, `--format`, `--output`
+**CLI flags**: `--runs`, `--model`, `--workers`, `--timeout`, `--max-turns`, `--compliance-gate`, `--security-gate`, `--open`, `--format`, `--output`, `--eval-samples`, `--merged`
 
 ### 3.11 实时进度显示
 

@@ -101,6 +101,7 @@ skill-eval analyze path/to/skill/ --format json  # JSON 输出
 ```bash
 skill-eval init path/to/skill/                  # 自动生成 evals.json
 skill-eval init path/to/skill/ --generate-prompts  # LLM 生成 prompt
+skill-eval init path/to/skill/ --num-evals 10   # 指定生成评测数量
 ```
 
 ### `scan` — L0 覆盖率扫描
@@ -125,6 +126,9 @@ skill-eval generate-config path/to/skills-dir/ --dry-run  # 仅扫描，不调 L
 skill-eval run path/to/skill/ --runs 3
 skill-eval run path/to/skill/ --scoring programmatic  # 仅程序化评分
 skill-eval run path/to/skill/ --compliance-gate       # 遵循性门控
+skill-eval run path/to/skill/ --eval-samples 10       # 运行 10 条评测（或 0.25 即 25%）
+skill-eval run path/to/skill/ --merged                # 使用 merged-prompt 模式
+skill-eval run path/to/skill/ --workers 4             # 并发 worker 数
 ```
 
 ### `full` — 一键完整流程
@@ -132,9 +136,12 @@ skill-eval run path/to/skill/ --compliance-gate       # 遵循性门控
 ```bash
 skill-eval full path/to/skill/ --runs 3
 skill-eval full path/to/skill/ --security-gate --open
+skill-eval full path/to/skill/ --eval-samples 10       # 运行 10 条评测（或 0.25 即 25%）
+skill-eval full path/to/skill/ --merged                # 使用 merged-prompt 模式
+skill-eval full path/to/skill/ --workers 4             # 并发 worker 数
 ```
 
-安全审查 → 静态分析 → 加载 evals → A/B 测试 → 聚合 → HTML 报告。
+安全审查 → 静态分析 → 加载 evals → A/B 测试 → 聚合 → HTML 报告。默认执行模式为 **per-eval**（每条 eval 独立运行，支持并发），使用 `--merged` 可回退到旧的 merged-prompt 模式。
 
 ### `batch` — 批量评测
 

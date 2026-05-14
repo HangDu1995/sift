@@ -206,6 +206,8 @@ class RunConfig(BaseModel):
     output_dir: Path = Path("output")
     max_turns: int = 10
     skip_calibration: bool = False
+    eval_samples: int | float | None = None
+    per_eval_mode: bool = True
 
 
 class ToolCallRecord(BaseModel):

@@ -106,6 +106,12 @@ VERDICT: SAFE — All scanners passed
 
 生成的 `evals.json` 可以手动编辑——调整 prompt、增删 expectations、添加 assertions，然后再运行 `run` 或 `full`。
 
+**参数**：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--num-evals` | 无 | 最多生成的 eval case 数量 |
+
 ### `analyze` — 静态分析
 
 对 SKILL.md 做 11 项自动化体检，**零 API 成本，<1s 完成**。
@@ -223,37 +229,40 @@ pipelines:
 | `--security-gate` | 关闭 | 安全审查 BLOCKED/REVIEW_NEEDED 时强制失败（在评测前运行） |
 | `--no-calibration` | 关闭 | 跳过评分校准 |
 | `--output` | output/ | 输出目录 |
+| `--eval-samples` | 无 | 运行 eval 的数量或比例（如 10 或 0.25） |
+| `--merged` | 关闭 | 使用 merged-prompt 模式而非 per-eval 模式 |
 | `--format` | table | 输出格式：table / json |
 
-**输出目录结构**：
+**输出目录结构**（per-eval 模式，默认）：
 
 ```
 output/iteration-1/
-  merged_prompt.txt
   with_skill/
-    run-1/
-      outputs/        ← Claude 产生的文件
-      grading.json
-      checkpoints.json
-      compliance.json
-      calibration.json
-      run_debug.json
-      timing.json
-    run-2/...
+    eval-<id>/
+      run-1/
+        outputs/        ← Claude 产生的文件
+        grading.json
+        compliance.json
+        calibration.json
+        run_debug.json
+        timing.json
+      run-2/...
+    eval-<id>/...
   without_skill/
-    run-1/
-      outputs/
-      grading.json
-      checkpoints.json
-      calibration.json
-      run_debug.json
-      timing.json
-    run-2/...
+    eval-<id>/
+      run-1/
+        outputs/
+        grading.json
+        calibration.json
+        run_debug.json
+        timing.json
+      run-2/...
+    eval-<id>/...
   benchmark.json
   report.html
 ```
 
-> 所有 eval case 合并为一个 prompt，通过 checkpoint 机制逐个评估，无 per-eval 子目录。`compliance.json` 仅在 `with_skill` 配置中生成。
+> **Per-eval 模式（默认）**：每个 eval case 独立通过 `claude -p` 运行，并发由 `--workers` 控制，产出 `with_skill/eval-<id>/run-<n>/` 子目录。旧版 merged-prompt 模式（所有 eval 合并为一个 prompt，通过 checkpoint 机制逐个评估）可通过 `--merged` 标志启用。`compliance.json` 仅在 `with_skill` 配置中生成。
 
 ### `full` — 一键完整流程
 
@@ -265,6 +274,8 @@ output/iteration-1/
 |------|------|
 | `--security-gate` | 在评测前运行安全审查，BLOCKED 或 REVIEW_NEEDED 时立即失败（exit code 1） |
 | `--compliance-gate` | 遵循性率 < 0.5 时强制失败 |
+| `--eval-samples` | 运行 eval 的数量或比例（如 10 或 0.25） |
+| `--merged` | 使用 merged-prompt 模式而非 per-eval 模式 |
 | `--open` | 运行完成后在浏览器中打开报告 |
 
 ### `batch` — 批量评测
@@ -646,15 +657,13 @@ integration_scenarios:
 
 | 文件 | 内容 |
 |------|------|
-| `merged_prompt.txt` | 合并后的完整 prompt |
-| `benchmark.json` | 聚合结果（含 checkpoints 数据） |
+| `benchmark.json` | 聚合结果 |
 | `report.html` | 自包含 HTML 报告 |
-| `with_skill/run-1/grading.json` | 所有 expectations + assertions 的 pass/fail |
-| `with_skill/run-1/checkpoints.json` | 每个 checkpoint 独立覆盖率 |
-| `with_skill/run-1/compliance.json` | SKILL.md 指令遵循性检查 |
-| `with_skill/run-1/calibration.json` | 评分可信度校准 |
-| `with_skill/run-1/run_debug.json` | claude 完整回复 + tool_calls + timing |
-| `with_skill/run-1/timing.json` | 执行耗时和 token 统计 |
+| `with_skill/eval-<id>/run-1/grading.json` | 所有 expectations + assertions 的 pass/fail |
+| `with_skill/eval-<id>/run-1/compliance.json` | SKILL.md 指令遵循性检查 |
+| `with_skill/eval-<id>/run-1/calibration.json` | 评分可信度校准 |
+| `with_skill/eval-<id>/run-1/run_debug.json` | claude 完整回复 + tool_calls + timing |
+| `with_skill/eval-<id>/run-1/timing.json` | 执行耗时和 token 统计 |
 | `comparison-run{N}.json` | 每对 with/without run 的盲比较结果 |
 | `analysis-notes.json` | benchmark 分析笔记（字符串数组） |
 | `analysis-result.json` | 深度比较分析（AnalysisResult 模型） |

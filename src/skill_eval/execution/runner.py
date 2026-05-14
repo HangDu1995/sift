@@ -9,6 +9,8 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 from skill_eval.errors import ClaudeRunnerError
 from skill_eval.models import (
@@ -92,7 +94,24 @@ class ClaudeRunner:
                     stdout_bytes, stderr_bytes = proc.communicate(timeout=timeout)
                 except subprocess.TimeoutExpired:
                     proc.kill()
-                    proc.wait(timeout=5)
+                    stdout_bytes, stderr_bytes = proc.communicate(timeout=5)
+                    stdout = stdout_bytes.decode("utf-8", errors="replace")
+                    if stdout.strip():
+                        transcript, total_tokens, tool_calls, result_text, num_turns, stop_reason, tool_trace = self._parse_stream_json(stdout)
+                        if transcript or result_text or total_tokens > 0:
+                            duration_ms = int((time.time() - start) * 1000)
+                            return RunOutput(
+                                exit_code=-1,
+                                stdout=stdout,
+                                duration_ms=duration_ms,
+                                total_tokens=total_tokens,
+                                transcript=transcript,
+                                tool_calls=tool_calls,
+                                tool_trace=tool_trace,
+                                result_text=result_text,
+                                num_turns=num_turns,
+                                stop_reason=f"timed_out_after_{timeout}s",
+                            )
                     raise ClaudeRunnerError(f"claude -p timed out after {timeout}s (killed process tree)")
                 stdout = stdout_bytes.decode("utf-8", errors="replace")
                 stderr = stderr_bytes.decode("utf-8", errors="replace")
@@ -182,12 +201,213 @@ class ABTestRunner:
         self.on_progress = on_progress
 
     def run_ab_test(self, skill_path: Path, eval_set: EvalSet) -> Path:
+        evals_to_run = self._sample_evals(eval_set.evals)
+
+        if self.config.per_eval_mode and len(evals_to_run) > 1:
+            return self._run_per_eval(skill_path, eval_set, evals_to_run)
+
+        return self._run_merged(skill_path, eval_set, evals_to_run)
+
+    def _sample_evals(self, evals: list[EvalCase]) -> list[EvalCase]:
+        if not self.config.eval_samples:
+            return evals
+        n = len(evals)
+        if isinstance(self.config.eval_samples, float) and self.config.eval_samples <= 1.0:
+            count = max(1, int(n * self.config.eval_samples))
+        else:
+            count = min(int(self.config.eval_samples), n)
+        import random
+        return random.sample(evals, count)
+
+    def _run_per_eval(self, skill_path: Path, eval_set: EvalSet, evals: list[EvalCase]) -> Path:
         output_dir = self.config.output_dir
         iteration_dir = output_dir / "iteration-1"
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
-        merged_prompt = self._build_merged_prompt(eval_set)
-        num_checkpoints = len(eval_set.evals)
+        total_jobs = len(evals) * 2 * self.config.runs_per_config
+        completed = [0]
+        lock = threading.Lock()
+
+        def run_single_eval(eval_case: EvalCase, config_name: str, run_num: int) -> str:
+            run_label = f"{eval_case.get_name()}::{config_name}::run-{run_num}"
+            config_dir = iteration_dir / config_name / f"eval-{eval_case.id}" / f"run-{run_num}"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            outputs_dir = config_dir / "outputs"
+            outputs_dir.mkdir(exist_ok=True)
+            eval_case.setup_fixtures(outputs_dir)
+
+            run_start = time.time()
+            use_skill = skill_path if config_name == "with_skill" else None
+            prompt = eval_case.prompt
+            if eval_case.expected_output:
+                prompt += f"\n\nExpected output:\n{eval_case.expected_output}"
+
+            self._emit_progress(
+                eval_case.get_name(), config_name,
+                eval_case.id, len(evals),
+                completed[0], total_jobs,
+                None, 0.0, None, phase="executing",
+            )
+
+            try:
+                run_output = self.runner.run(
+                    prompt=prompt,
+                    skill_path=use_skill,
+                    model=self.config.model,
+                    timeout=self.config.timeout_seconds,
+                    max_turns=self.config.max_turns,
+                    cwd=outputs_dir,
+                )
+            except ClaudeRunnerError as exc:
+                run_duration = time.time() - run_start
+                (config_dir / "error.txt").write_text(str(exc), encoding="utf-8")
+                grading = GradingResult(
+                    summary=GradingSummary(pass_rate=0.0, passed=0, failed=0, total=0),
+                    expectations=[ExpectationResult(text=e, passed=False, evidence=str(exc), source="error")
+                                  for e in eval_case.expectations],
+                    error=str(exc),
+                )
+                (config_dir / "grading.json").write_text(grading.model_dump_json(indent=2), encoding="utf-8")
+                with lock:
+                    completed[0] += 1
+                self._emit_progress(
+                    eval_case.get_name(), config_name,
+                    eval_case.id, len(evals),
+                    completed[0], total_jobs,
+                    grading, run_duration, None,
+                )
+                return run_label
+
+            timing = TimingData(
+                total_tokens=run_output.total_tokens,
+                duration_ms=run_output.duration_ms,
+                total_duration_seconds=run_output.duration_ms / 1000.0,
+            )
+            (config_dir / "timing.json").write_text(timing.model_dump_json(indent=2), encoding="utf-8")
+
+            self._emit_progress(
+                eval_case.get_name(), config_name,
+                eval_case.id, len(evals),
+                completed[0], total_jobs,
+                None, 0.0, None, phase="scoring",
+            )
+
+            all_expectations, per_checkpoint = self._score_checkpoints(
+                [eval_case], run_output.transcript, outputs_dir,
+            )
+
+            passed = sum(1 for e in all_expectations if e.passed)
+            total_exp = len(all_expectations)
+            overall_grading = GradingResult(
+                expectations=all_expectations,
+                summary=GradingSummary(
+                    passed=passed,
+                    failed=total_exp - passed,
+                    total=total_exp,
+                    pass_rate=passed / total_exp if total_exp > 0 else 0.0,
+                ),
+            )
+            (config_dir / "grading.json").write_text(overall_grading.model_dump_json(indent=2), encoding="utf-8")
+            (config_dir / "checkpoints.json").write_text(
+                json.dumps(per_checkpoint, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+
+            compliance_report = None
+            if config_name == "with_skill" and skill_path:
+                self._emit_progress(
+                    eval_case.get_name(), config_name,
+                    eval_case.id, len(evals),
+                    completed[0], total_jobs,
+                    None, 0.0, None, phase="compliance",
+                )
+                from skill_eval.compliance.extractor import InstructionExtractor
+                from skill_eval.compliance.checker import ComplianceChecker
+
+                extractor = InstructionExtractor()
+                _, _, _, _, skill_body = parse_skill_md(skill_path)
+                instructions = extractor.extract(skill_body)
+                if instructions:
+                    log_path = config_dir / "compliance.log"
+                    log_path.write_text("", encoding="utf-8")
+                    checker = ComplianceChecker()
+                    compliance_report = checker.check(
+                        instructions=instructions,
+                        transcript=run_output.transcript,
+                        output_dir=outputs_dir,
+                        model=self.config.model,
+                        timeout=self.scoring_config.llm_timeout,
+                        tool_trace=list(run_output.tool_trace),
+                        log_path=log_path,
+                    )
+                    compliance_report.skill_name = eval_set.skill_name
+                    (config_dir / "compliance.json").write_text(
+                        compliance_report.model_dump_json(indent=2), encoding="utf-8"
+                    )
+
+            if not self.config.skip_calibration:
+                from skill_eval.calibration.calibrator import CalibrationChecker
+                calibrator = CalibrationChecker()
+                calibration_report = calibrator.calibrate(overall_grading, compliance=compliance_report)
+                (config_dir / "calibration.json").write_text(
+                    calibration_report.model_dump_json(indent=2), encoding="utf-8"
+                )
+
+            run_debug = {
+                "config": config_name,
+                "eval_name": eval_case.get_name(),
+                "eval_id": eval_case.id,
+                "run_num": run_num,
+                "prompt": prompt[:500],
+                "duration_ms": run_output.duration_ms,
+                "total_tokens": run_output.total_tokens,
+                "num_turns": run_output.num_turns,
+                "stop_reason": run_output.stop_reason,
+                "tool_calls": run_output.tool_calls,
+                "tool_trace": [t.model_dump() for t in run_output.tool_trace],
+                "result_text": run_output.result_text[:2000] if run_output.result_text else "",
+                "transcript_preview": run_output.transcript[:2000] if run_output.transcript else "",
+                "grading_summary": overall_grading.summary.model_dump(),
+            }
+            (config_dir / "run_debug.json").write_text(
+                json.dumps(run_debug, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+
+            run_duration = time.time() - run_start
+            with lock:
+                completed[0] += 1
+            self._emit_progress(
+                eval_case.get_name(), config_name,
+                eval_case.id, len(evals),
+                completed[0], total_jobs,
+                overall_grading, run_duration, run_output,
+            )
+            return run_label
+
+        jobs = []
+        for eval_case in evals:
+            for config_name in ("with_skill", "without_skill"):
+                for run_num in range(1, self.config.runs_per_config + 1):
+                    jobs.append((eval_case, config_name, run_num))
+
+        with ThreadPoolExecutor(max_workers=self.config.max_workers) as pool:
+            futures = {pool.submit(run_single_eval, *job): job for job in jobs}
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as exc:
+                    job = futures[future]
+                    with lock:
+                        completed[0] += 1
+
+        return iteration_dir
+
+    def _run_merged(self, skill_path: Path, eval_set: EvalSet, evals: list[EvalCase]) -> Path:
+        output_dir = self.config.output_dir
+        iteration_dir = output_dir / "iteration-1"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+
+        merged_prompt = self._build_merged_prompt_from_evals(evals)
+        num_checkpoints = len(evals)
 
         (iteration_dir / "merged_prompt.txt").write_text(merged_prompt, encoding="utf-8")
 
@@ -204,7 +424,7 @@ class ABTestRunner:
                 outputs_dir = run_dir / "outputs"
                 outputs_dir.mkdir(exist_ok=True)
 
-                for eval_case in eval_set.evals:
+                for eval_case in evals:
                     eval_case.setup_fixtures(outputs_dir)
 
                 run_start = time.time()
@@ -263,7 +483,7 @@ class ABTestRunner:
                 )
 
                 all_expectations, per_checkpoint = self._score_checkpoints(
-                    eval_set.evals, run_output.transcript, outputs_dir,
+                    evals, run_output.transcript, outputs_dir,
                 )
 
                 passed = sum(1 for e in all_expectations if e.passed)
@@ -384,8 +604,12 @@ class ABTestRunner:
 
     @staticmethod
     def _build_merged_prompt(eval_set: EvalSet) -> str:
+        return ABTestRunner._build_merged_prompt_from_evals(eval_set.evals)
+
+    @staticmethod
+    def _build_merged_prompt_from_evals(evals: list[EvalCase]) -> str:
         sections = []
-        for eval_case in eval_set.evals:
+        for eval_case in evals:
             sections.append(f"## {eval_case.get_name()}\n{eval_case.prompt}")
         return (
             f"Please complete ALL of the following tasks in sequence.\n"
