@@ -1249,6 +1249,52 @@
         html += '</div>';
       }
 
+      // ── Security vet report ──
+      const vetReport = EMBEDDED_DATA.vet_report;
+      if (vetReport) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">安全审查</div>';
+
+        const verdictColor = vetReport.verdict === "SAFE" ? "var(--green)" : vetReport.verdict === "BLOCKED" ? "var(--red)" : "var(--accent)";
+        html += '<div style="text-align:center;margin-bottom:1rem;">';
+        html += '<span style="font-size:1.5rem;font-family:Poppins,sans-serif;font-weight:600;color:' + verdictColor + ';">' + escapeHtml(vetReport.verdict || "—") + '</span>';
+        if (vetReport.summary) {
+          html += '<div style="font-size:0.8125rem;color:var(--text-muted);margin-top:0.25rem;">' + escapeHtml(vetReport.summary) + '</div>';
+        }
+        html += '</div>';
+
+        if (vetReport.scanners && vetReport.scanners.length > 0) {
+          html += '<table style="width:100%;border-collapse:collapse;font-size:0.8125rem;">';
+          html += '<thead><tr style="border-bottom:1px solid var(--border);"><th style="text-align:left;padding:0.5rem;">扫描器</th><th style="text-align:center;padding:0.5rem;">状态</th><th style="text-align:left;padding:0.5rem;">详情</th></tr></thead><tbody>';
+          for (const s of vetReport.scanners) {
+            const statusIcon = s.status === "PASS" ? "✓" : s.status === "FAIL" ? "✗" : "—";
+            const statusColor = s.status === "PASS" ? "var(--green)" : s.status === "FAIL" ? "var(--red)" : s.status === "WARN" ? "var(--accent)" : "var(--text-muted)";
+            html += '<tr style="border-bottom:1px solid var(--border);">';
+            html += '<td style="padding:0.5rem;font-weight:500;">' + escapeHtml(s.name || "") + '</td>';
+            html += '<td style="text-align:center;padding:0.5rem;color:' + statusColor + ';font-weight:600;">' + statusIcon + ' ' + escapeHtml(s.status || "") + '</td>';
+            html += '<td style="padding:0.5rem;color:var(--text-muted);">' + escapeHtml(s.message || "") + '</td>';
+            html += '</tr>';
+          }
+          html += '</tbody></table>';
+        }
+
+        if (vetReport.findings && vetReport.findings.length > 0) {
+          html += '<div style="margin-top:0.75rem;font-size:0.8125rem;">';
+          html += '<div style="font-weight:600;margin-bottom:0.25rem;">发现的问题：</div>';
+          for (const f of vetReport.findings) {
+            const sevColor = (f.severity === "CRITICAL" || f.severity === "HIGH") ? "var(--red)" : f.severity === "MEDIUM" ? "var(--accent)" : "var(--text-muted)";
+            html += '<div style="padding:0.25rem 0.5rem;margin:0.25rem 0;background:var(--bg);border-radius:var(--radius);">';
+            html += '<span style="color:' + sevColor + ';font-weight:500;">[' + escapeHtml(f.severity || "") + ']</span> ';
+            html += escapeHtml(f.description || "");
+            if (f.file_path) html += ' <span style="color:var(--text-muted);">(' + escapeHtml(f.file_path) + (f.line ? ':' + f.line : '') + ')</span>';
+            html += '</div>';
+          }
+          html += '</div>';
+        }
+
+        html += '</div>';
+      }
+
       // ── Pass rate bar chart ──
       if (configA && configB) {
         html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';

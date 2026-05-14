@@ -47,14 +47,30 @@ class BenchmarkAggregator:
         configs_data: dict[str, list[dict]] = {}
 
         for config_dir in sorted(iteration_dir.iterdir()):
-            if not config_dir.is_dir() or not list(config_dir.glob("run-*")):
+            if not config_dir.is_dir():
                 continue
             config_name = config_dir.name
+
+            run_dirs = sorted(config_dir.glob("run-*"))
+            nested = sorted(p for p in config_dir.glob("eval-*/run-*") if p.is_dir())
+            if nested:
+                run_dirs = nested
+            if not run_dirs:
+                continue
+
             if config_name not in configs_data:
                 configs_data[config_name] = []
 
-            for run_dir in sorted(config_dir.glob("run-*")):
+            for run_dir in run_dirs:
                 run_number = int(run_dir.name.split("-")[1])
+                eval_id = 0
+                parent_name = run_dir.parent.name
+                if parent_name.startswith("eval-"):
+                    try:
+                        eval_id = int(parent_name.split("-")[1])
+                    except (ValueError, IndexError):
+                        pass
+
                 grading_path = run_dir / "grading.json"
                 if not grading_path.exists():
                     continue
@@ -90,7 +106,7 @@ class BenchmarkAggregator:
                 }
 
                 entry = RunResultEntry(
-                    eval_id=0,
+                    eval_id=eval_id,
                     eval_name=name,
                     configuration=config_name,
                     run_number=run_number,
@@ -158,7 +174,11 @@ class BenchmarkAggregator:
         for config_dir in sorted(iteration_dir.iterdir()):
             if not config_dir.is_dir():
                 continue
-            for run_dir in sorted(config_dir.glob("run-*")):
+            run_dirs = sorted(config_dir.glob("run-*"))
+            nested = sorted(p for p in config_dir.glob("eval-*/run-*") if p.is_dir())
+            if nested:
+                run_dirs = nested
+            for run_dir in run_dirs:
                 cp_path = run_dir / "checkpoints.json"
                 if cp_path.exists():
                     try:
@@ -225,7 +245,13 @@ class BenchmarkAggregator:
         comparisons: list[ComparisonResult] = []
 
         ws_runs = sorted(p for p in with_skill_dir.glob("run-*") if p.is_dir())
+        ws_nested = sorted(p for p in with_skill_dir.glob("eval-*/run-*") if p.is_dir())
+        if ws_nested:
+            ws_runs = ws_nested
         wos_runs = sorted(p for p in without_skill_dir.glob("run-*") if p.is_dir())
+        wos_nested = sorted(p for p in without_skill_dir.glob("eval-*/run-*") if p.is_dir())
+        if wos_nested:
+            wos_runs = wos_nested
 
         for ws_run, wos_run in zip(ws_runs, wos_runs):
             ws_output = self._collect_run_output(ws_run)
@@ -301,7 +327,13 @@ class BenchmarkAggregator:
         with_skill_dir = iteration_dir / "with_skill"
         without_skill_dir = iteration_dir / "without_skill"
         ws_runs = sorted(with_skill_dir.glob("run-*"))
+        ws_nested = sorted(with_skill_dir.glob("eval-*/run-*"))
+        if ws_nested:
+            ws_runs = ws_nested
         wos_runs = sorted(without_skill_dir.glob("run-*"))
+        wos_nested = sorted(without_skill_dir.glob("eval-*/run-*"))
+        if wos_nested:
+            wos_runs = wos_nested
         if not ws_runs or not wos_runs:
             return None
 

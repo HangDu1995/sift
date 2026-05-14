@@ -107,7 +107,19 @@ def _run_ab_eval(
         raise typer.Exit(code=exc.exit_code)
 
     agg = BenchmarkAggregator(model=model)
-    benchmark = agg.aggregate(iteration_dir, skill_path)
+    try:
+        benchmark = agg.aggregate(iteration_dir, skill_path)
+    except Exception as exc:
+        console.print(f"[red]Error:[/red] Benchmark aggregation failed: {exc}")
+        console.print(f"  iteration_dir: {iteration_dir}")
+        configs = [d.name for d in iteration_dir.iterdir() if d.is_dir()]
+        console.print(f"  config dirs found: {configs}")
+        for c in configs:
+            cd = iteration_dir / c
+            runs_direct = list(cd.glob("run-*"))
+            runs_nested = list(cd.glob("eval-*/run-*"))
+            console.print(f"    {c}/: {len(runs_direct)} direct runs, {len(runs_nested)} nested runs")
+        raise typer.Exit(code=1)
 
     benchmark_path = iteration_dir / "benchmark.json"
     benchmark_path.write_text(
@@ -472,6 +484,16 @@ def vet(
     else:
         _render_security_report(report, console)
 
+    vet_output = output or skill_path / "vet-report.json"
+    if not vet_output.suffix == ".json":
+        vet_output = vet_output / "vet-report.json"
+    vet_output.parent.mkdir(parents=True, exist_ok=True)
+    vet_output.write_text(
+        json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    if format != "json":
+        console.print(f"  Report: {vet_output}")
+
     if report.verdict in ("BLOCKED", "REVIEW_NEEDED"):
         raise typer.Exit(code=1)
 
@@ -638,7 +660,7 @@ def run(
     runs: int = typer.Option(3, "--runs", help="Number of runs per configuration"),
     model: Optional[str] = typer.Option(None, "--model", help="Model for claude -p"),
     workers: int = typer.Option(4, "--workers", help="Max parallel workers"),
-    timeout: int = typer.Option(120, "--timeout", help="Timeout per run in seconds"),
+    timeout: int = typer.Option(300, "--timeout", help="Timeout per run in seconds"),
     max_turns: int = typer.Option(10, "--max-turns", help="Max agentic turns per claude -p run"),
     scoring: str = typer.Option("hybrid", "--scoring", help="Scoring mode: hybrid, programmatic, or llm"),
     compliance_gate: bool = typer.Option(False, "--compliance-gate", help="Force-fail if compliance_rate < 0.5"),
@@ -743,13 +765,25 @@ def report(
     from skill_eval.reporting.viewer import ReportGenerator
 
     bench_data = None
-    if benchmark and benchmark.exists():
-        bench_data = json.loads(benchmark.read_text(encoding="utf-8"))
+    bench_path = benchmark
+    if not bench_path or not bench_path.exists():
+        for candidate in [workspace / "benchmark.json", workspace / "iteration-1" / "benchmark.json"]:
+            if candidate.exists():
+                bench_path = candidate
+                break
+    if bench_path and bench_path.exists():
+        bench_data = json.loads(bench_path.read_text(encoding="utf-8"))
 
+    scorecard_path = static
+    if not scorecard_path or not scorecard_path.exists():
+        for candidate in [workspace / "scorecard.json", workspace / "iteration-1" / "scorecard.json"]:
+            if candidate.exists():
+                scorecard_path = candidate
+                break
     scorecard_data = None
-    if static and static.exists():
+    if scorecard_path and scorecard_path.exists():
         try:
-            scorecard_data = json.loads(static.read_text(encoding="utf-8"))
+            scorecard_data = json.loads(scorecard_path.read_text(encoding="utf-8"))
         except Exception:
             pass
 
@@ -845,8 +879,8 @@ def full(
     runs: int = typer.Option(3, "--runs", help="Number of runs per configuration"),
     model: Optional[str] = typer.Option(None, "--model", help="Model for claude -p"),
     workers: int = typer.Option(4, "--workers", help="Max parallel workers"),
-    timeout: int = typer.Option(120, "--timeout", help="Timeout per run in seconds"),
-    max_turns: int = typer.Option(10, "--max-turns", help="Max agentic turns per claude -p run"),
+    timeout: int = typer.Option(600, "--timeout", help="Timeout per run in seconds"),
+    max_turns: int = typer.Option(20, "--max-turns", help="Max agentic turns per claude -p run"),
     compliance_gate: bool = typer.Option(False, "--compliance-gate", help="Force-fail if compliance_rate < 0.5"),
     security_gate: bool = typer.Option(False, "--security-gate", help="Fail if security vetting returns BLOCKED or REVIEW_NEEDED"),
     open_browser: bool = typer.Option(False, "--open", help="Open report in browser"),
@@ -864,17 +898,21 @@ def full(
     if not output_dir:
         output_dir = Path("output")
 
-    total_steps = 5 if security_gate else 4
+    total_steps = 6
     step = 0
 
-    if security_gate:
-        step += 1
-        console.print(f"[bold]Step {step}/{total_steps}:[/bold] Security vetting...")
+    step += 1
+    console.print(f"[bold]Step {step}/{total_steps}:[/bold] Security vetting...")
+    vet_report_data = None
+    try:
         from skill_eval.security.vetter import SecurityVetter
         vet_report = SecurityVetter(skip_external=False).vet(skill_path)
         _render_security_report(vet_report, console)
-        if vet_report.verdict in ("BLOCKED", "REVIEW_NEEDED"):
+        vet_report_data = vet_report.model_dump(mode="json")
+        if security_gate and vet_report.verdict in ("BLOCKED", "REVIEW_NEEDED"):
             raise typer.Exit(code=1)
+    except SkillEvalError:
+        pass
 
     step += 1
     console.print(f"[bold]Step {step}/{total_steps}:[/bold] Static analysis...")
@@ -883,8 +921,14 @@ def full(
         analyzer = StaticAnalyzer()
         scorecard = analyzer.analyze(skill_path)
         console.print(f"  Score: {scorecard.score}/{scorecard.max_score}")
+        try:
+            scorecard_data = scorecard.model_dump(mode="json")
+        except Exception:
+            scorecard_data = None
     except SkillEvalError as exc:
         console.print(f"  [yellow]Warning:[/yellow] {exc}")
+        scorecard = None
+        scorecard_data = None
 
     step += 1
     console.print(f"[bold]Step {step}/{total_steps}:[/bold] Loading evals...")
@@ -915,7 +959,25 @@ def full(
 
     step += 1
     lc = _log_console(format)
-    lc.print(f"[bold]Step {step}/{total_steps}:[/bold] Aggregating and generating report...")
+    lc.print(f"[bold]Step {step}/{total_steps}:[/bold] Overfitting detection...")
+    try:
+        from skill_eval.overfitting.detector import OverfittingDetector
+        bench_path = iteration_dir / "benchmark.json"
+        if bench_path.exists():
+            det = OverfittingDetector()
+            bench_data_for_of = json.loads(bench_path.read_text(encoding="utf-8"))
+            of_skill_name = bench_data_for_of.get("metadata", {}).get("skill_name", "")
+            of_report = det.build_report(skill_name=of_skill_name)
+            (iteration_dir / "overfitting_report.json").write_text(
+                json.dumps(of_report.model_dump(mode="json"), indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            console.print(f"  Overfitting score: {of_report.overfitting_score:.2f}")
+    except Exception as exc:
+        console.print(f"  [yellow]Warning:[/yellow] Overfitting detection failed: {exc}")
+
+    step += 1
+    lc = _log_console(format)
+    lc.print(f"[bold]Step {step}/{total_steps}:[/bold] Generating report...")
 
     gen = ReportGenerator()
     report_path = iteration_dir / "report.html"
@@ -928,7 +990,22 @@ def full(
             )
         except Exception:
             scorecard_data = None
-    gen.write_static(iteration_dir, report_path, benchmark.model_dump(mode="json"), scorecard=scorecard_data)
+
+    if vet_report_data:
+        (iteration_dir / "vet-report.json").write_text(
+            json.dumps(vet_report_data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+    bench_dict = None
+    try:
+        bench_dict = benchmark.model_dump(mode="json")
+    except Exception as exc:
+        console.print(f"[red]Error:[/red] Failed to serialize benchmark data: {exc}")
+
+    if bench_dict is not None:
+        gen.write_static(iteration_dir, report_path, bench_dict, scorecard=scorecard_data)
+    else:
+        console.print("[yellow]Warning:[/yellow] Skipping report generation due to benchmark serialization failure")
 
     if format != "json":
         all_notes = benchmark.notes if isinstance(benchmark.notes, list) else []
@@ -954,7 +1031,11 @@ def full(
     for config_dir in iteration_dir.iterdir():
         if not config_dir.is_dir():
             continue
-        for run_dir in config_dir.glob("run-*"):
+        run_dirs = list(config_dir.glob("run-*"))
+        nested = list(config_dir.glob("eval-*/run-*"))
+        if nested:
+            run_dirs = nested
+        for run_dir in run_dirs:
             cal_file = run_dir / "calibration.json"
             if cal_file.exists():
                 try:

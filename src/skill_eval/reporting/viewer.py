@@ -94,8 +94,19 @@ def _build_run(root: Path, run_dir: Path) -> dict | None:
         except Exception:
             pass
 
+    if not prompt:
+        debug_path = run_dir / "run_debug.json"
+        if debug_path.exists():
+            try:
+                debug = json.loads(debug_path.read_text(encoding="utf-8"))
+                prompt = debug.get("prompt", "")
+            except Exception:
+                pass
+
     embedded_files: list[dict] = []
-    for f in sorted(outputs_dir.iterdir()):
+    for f in sorted(outputs_dir.rglob("*")):
+        if not f.is_file():
+            continue
         if f.name.startswith(".") or f.name in METADATA_FILES:
             continue
         embedded_files.append(_embed_file(f))
@@ -180,6 +191,16 @@ def _load_overfitting(workspace: Path) -> dict | None:
     return None
 
 
+def _load_vet_report(workspace: Path) -> dict | None:
+    for candidate in [workspace / "vet-report.json", workspace / "iteration-1" / "vet-report.json"]:
+        if candidate.exists():
+            try:
+                return json.loads(candidate.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+    return None
+
+
 def load_previous_iteration(workspace: Path) -> dict | None:
     for name in ("previous", "previous_iteration"):
         prev_dir = workspace / name
@@ -226,6 +247,7 @@ class ReportGenerator:
             "benchmark": benchmark,
             "scorecard": scorecard,
             "overfitting": _load_overfitting(workspace),
+            "vet_report": _load_vet_report(workspace),
         }
 
         json_data = json.dumps(data, ensure_ascii=False)
