@@ -845,6 +845,7 @@ def full(
 
     step += 1
     console.print(f"[bold]Step {step}/{total_steps}:[/bold] Static analysis...")
+    scorecard = None
     try:
         analyzer = StaticAnalyzer()
         scorecard = analyzer.analyze(skill_path)
@@ -887,6 +888,9 @@ def full(
     if scorecard:
         try:
             scorecard_data = scorecard.model_dump(mode="json")
+            (iteration_dir / "scorecard.json").write_text(
+                json.dumps(scorecard_data, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
         except Exception:
             scorecard_data = None
     gen.write_static(iteration_dir, report_path, benchmark.model_dump(mode="json"), scorecard=scorecard_data)

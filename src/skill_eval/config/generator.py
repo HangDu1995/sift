@@ -22,13 +22,19 @@ def scan_skills_metadata(root_dir: Path | str) -> dict:
     if not root.is_dir():
         return {"total_skills": 0, "collection_prefixes": [], "domains": [], "types": [], "skills": skills}
 
+    candidate_dirs: list[tuple[str, Path]] = []
+
+    if (root / "skills").is_dir():
+        candidate_dirs.append((root.name, root / "skills"))
+
     for entry in sorted(root.iterdir()):
         skills_dir = entry / "skills"
-        if not skills_dir.is_dir():
-            continue
-        parts = entry.name.split("-")
-        collection_prefixes.add(parts[0] + "-*" if parts else entry.name)
+        if skills_dir.is_dir() and (entry / "skills") not in [d for _, d in candidate_dirs]:
+            parts = entry.name.split("-")
+            collection_prefixes.add(parts[0] + "-*" if parts else entry.name)
+            candidate_dirs.append((entry.name, skills_dir))
 
+    for col_name, skills_dir in candidate_dirs:
         for skill_entry in sorted(skills_dir.iterdir()):
             skill_dir = skill_entry
             if not skill_dir.is_dir():
