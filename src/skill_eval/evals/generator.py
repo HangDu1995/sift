@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from skill_eval.models import Assertion, AssertionType, EvalCase, EvalSet
+from skill_eval.models import Assertion, AssertionTier, AssertionType, EvalCase, EvalSet
 from skill_eval.parser import parse_skill_md
 from skill_eval.utils import call_claude
 
@@ -259,7 +259,7 @@ class EvalInitGenerator:
             return f"The response follows the rule: {item[:80]}"
 
         if '→' in item or '->' in item:
-            parts = re.split(r'[→->]+', item, maxsplit=1)
+            parts = re.split(r'[→\-]+|->+', item, maxsplit=1)
             if len(parts) == 2 and parts[1].strip():
                 return f"When {parts[0].strip()[:60]}, the output should {parts[1].strip()[:60]}"
 
@@ -362,26 +362,35 @@ class EvalInitGenerator:
                 seen.add(key)
                 assertions.append(a)
 
-        # From fixtures: every fixture file → FILE_EXISTS
+        # From fixtures: every fixture file → FILE_EXISTS (Tier 1)
         for f in eval_case.fixtures:
             if f.path:
-                _add(Assertion(name=f"文件 {f.path} 存在", type=AssertionType.FILE_EXISTS, params={"filename": f.path}))
+                _add(Assertion(
+                    name=f"文件 {f.path} 存在",
+                    type=AssertionType.FILE_EXISTS,
+                    params={"filename": f.path},
+                    tier=AssertionTier.TIER1,
+                ))
 
         # From expectations: extract file names, patterns, negative patterns
         for exp in eval_case.expectations:
             exp_lower = exp.lower()
 
-            # File references: "生成 X.md", "写入 Y.json", "输出 Z.txt"
+            # File references: "生成 X.md", "写入 Y.json", "输出 Z.txt" → Tier 1
             file_refs = re.findall(r'[\w/\-]+\.(?:md|json|yaml|yml|xml|txt|ets|ts|py|js|csv|html)', exp)
             for fr in file_refs[:2]:
-                _add(Assertion(name=f"产出文件 {fr}", type=AssertionType.FILE_EXISTS, params={"filename": fr}))
+                _add(Assertion(
+                    name=f"产出文件 {fr}",
+                    type=AssertionType.FILE_EXISTS,
+                    params={"filename": fr},
+                    tier=AssertionTier.TIER1,
+                ))
 
-            # "包含 X" / "提到 Y" → CONTAINS_PATTERN
+            # "包含 X" / "提到 Y" → Tier 1
             contains_patterns = re.findall(r'[包含提及展示输出写出].{0,3}["「《]([^"」》]{3,40})["」》]', exp)
             if not contains_patterns:
                 contains_patterns = re.findall(r'(?:includes|contains|mentions|shows|outputs)\s+["\u201c]([^"\u201d]{3,40})["\u201d]', exp_lower)
             if not contains_patterns:
-                # "检查 X", "验证 Y" → CONTAINS_PATTERN on keywords
                 keywords = re.findall(r'(?:验证|检查|确认).{0,3}([A-Za-z_\./]{3,40})', exp)
                 if not keywords:
                     keywords = re.findall(r'([A-Z][a-z]+(?:[A-Z][a-z]+){2,})', exp)
@@ -391,12 +400,43 @@ class EvalInitGenerator:
                     contains_patterns = keywords
             for kw in contains_patterns[:2]:
                 if len(kw) >= 3:
-                    _add(Assertion(name=f"输出包含: {kw}", type=AssertionType.CONTAINS_PATTERN, params={"pattern": re.escape(kw)}))
+                    _add(Assertion(
+                        name=f"输出包含: {kw}",
+                        type=AssertionType.CONTAINS_PATTERN,
+                        params={"pattern": re.escape(kw)},
+                        tier=AssertionTier.TIER1,
+                    ))
 
-            # "不应 X" / "不能 Y" → NOT_CONTAINS
+            # "不应 X" / "不能 Y" → Tier 1
             not_patterns = re.findall(r'(?:不应|不能|禁止|避免|不可|不得).{0,5}["\u201c]([^"\u201d]{3,40})["\u201d]', exp)
             for kw in not_patterns[:1]:
-                _add(Assertion(name=f"输出不应包含: {kw}", type=AssertionType.NOT_CONTAINS, params={"pattern": re.escape(kw)}))
+                _add(Assertion(
+                    name=f"输出不应包含: {kw}",
+                    type=AssertionType.NOT_CONTAINS,
+                    params={"pattern": re.escape(kw)},
+                    tier=AssertionTier.TIER1,
+                ))
+
+            # "委托" / "delegate" → Tier 3 LLM_NOT_DELEGATE
+            if any(kw in exp_lower for kw in ['委托', 'delegate', '调度', 'dispatch']):
+                target_match = re.search(r'(?:委托|调度).{0,5}["\u201c]?([a-zA-Z][a-zA-Z0-9_-]{2,30})', exp, re.IGNORECASE)
+                if target_match:
+                    _add(Assertion(
+                        name=f"未委托给 {target_match.group(1)}",
+                        type=AssertionType.LLM_NOT_DELEGATE,
+                        params={"target_skill": target_match.group(1)},
+                        tier=AssertionTier.TIER3,
+                        retry_on_uneval=True,
+                    ))
+
+            # Gate-related → Tier 2
+            if any(kw in exp_lower for kw in ['审批', '确认', 'gate', '门禁', '等待']):
+                _add(Assertion(
+                    name="请求用户确认",
+                    type=AssertionType.GATE_REQUESTED,
+                    params={},
+                    tier=AssertionTier.TIER2,
+                ))
 
         return assertions
 
@@ -456,15 +496,26 @@ class EvalInitGenerator:
             "'produces a file named W', 'lists at least N items'\n"
             "- For pipeline skills with multiple phases, test ONE phase per eval case\n\n"
             "## Critical Rules for Assertions\n\n"
-            "Generate 2-5 programmatic assertions for EVERY eval case. These are machine-checkable, "
-            "deterministic, and require NO LLM. Available types and examples:\n"
-            '- FILE_EXISTS: {"name": "spec file exists", "type": "FILE_EXISTS", "params": {"filename": "spec/baseline/ui-manifest.md"}}\n'
-            '- CONTAINS_PATTERN: {"name": "mentions page_id", "type": "CONTAINS_PATTERN", "params": {"pattern": "page_id"}}\n'
-            '- NOT_CONTAINS: {"name": "no skip suggestion", "type": "NOT_CONTAINS", "params": {"pattern": "skip this step"}}\n'
-            '- JSON_HAS_FIELD: {"name": "meta has confidence", "type": "JSON_HAS_FIELD", "params": {"filename": "meta.json", "field": "confidence"}}\n'
-            '- LINE_COUNT: {"name": "min 3 lines", "type": "LINE_COUNT", "params": {"path": "output.md", "min": 3}}\n\n'
-            "For every output file mentioned, add FILE_EXISTS. For every 'contains/mentions' expectation, "
-            "add CONTAINS_PATTERN. NEVER leave assertions empty — always include at least 1.\n\n"
+            "Generate 2-5 tiered assertions for EVERY eval case. Assertions are organized into three tiers:\n\n"
+            "**Tier 1 (Deterministic)**: FILE_EXISTS, CONTAINS_PATTERN, NOT_CONTAINS, JSON_HAS_FIELD, "
+            "LINE_COUNT, TOOL_CALLED, STEP_COUNT. Always include at least 1 Tier 1.\n"
+            "  - FILE_EXISTS: {\"name\": \"spec file exists\", \"type\": \"FILE_EXISTS\", \"tier\": \"TIER1\", "
+            "\"params\": {\"filename\": \"spec/baseline/ui-manifest.md\"}}\n"
+            "  - CONTAINS_PATTERN: {\"name\": \"mentions page_id\", \"type\": \"CONTAINS_PATTERN\", "
+            "\"tier\": \"TIER1\", \"params\": {\"pattern\": \"page_id\"}}\n\n"
+            "**Tier 2 (Behavioral)**: GATE_REQUESTED, GATE_NOT_SKIPPED, PHASE_ORDERED, FILE_NOT_WRITTEN. "
+            "Use when testing procedural gates and ordering.\n"
+            "  - GATE_REQUESTED: {\"name\": \"gate B requested\", \"type\": \"GATE_REQUESTED\", "
+            "\"tier\": \"TIER2\", \"params\": {\"gate\": \"Phase B\"}}\n\n"
+            "**Tier 3 (Semantic)**: LLM_GRADE, LLM_FACT, LLM_NOT_DELEGATE. "
+            "For quality judgments and delegation checks. Always use retry_on_uneval: true.\n"
+            "  - LLM_NOT_DELEGATE: {\"name\": \"no <TARGET_SKILL> delegation\", "
+            "\"type\": \"LLM_NOT_DELEGATE\", \"tier\": \"TIER3\", \"retry_on_uneval\": true, "
+            "\"params\": {\"target_skill\": \"<TARGET_SKILL>\"}}\n"
+            "**CRITICAL**: NEVER put a CONTAINS_PATTERN/NOT_CONTAINS and an expectation "
+            "checking the same semantic thing. If you need to verify delegation to a skill, "
+            "use LLM_NOT_DELEGATE (Tier 3) — NOT CONTAINS_PATTERN or NOT_CONTAINS. "
+            "Programmatic assertions and expectations must not overlap.\n\n"
             "## Other Guidelines\n\n"
             "- **Prompt specificity**: Each prompt should target ONE specific rule or behavior, not the entire skill\n"
             "- **Fixtures**: Only include fixtures when the test requires Claude to check file existence/content. "

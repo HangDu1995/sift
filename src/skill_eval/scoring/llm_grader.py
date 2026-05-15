@@ -6,7 +6,13 @@ import json
 import re
 from pathlib import Path
 
-from skill_eval.models import EvalCase, GradingResult
+from skill_eval.models import (
+    AssertionVerdict,
+    EvalCase,
+    ExpectationResult,
+    GradingResult,
+    GradingSummary,
+)
 from skill_eval.utils import call_claude
 
 
@@ -31,11 +37,152 @@ class LLMGrader:
         prompt = self._build_prompt(eval_case, transcript, output_dir)
         response = self._call_claude(prompt)
 
+        if not response or not response.strip():
+            return self._build_uneval_result(eval_case, "LLM grading returned empty response")
+
         try:
             data = json.loads(response)
-            return GradingResult.model_validate(data)
+            result = GradingResult.model_validate(data)
+            self._normalize_verdicts(result, eval_case)
+            return result
         except (json.JSONDecodeError, Exception):
             return self._parse_response(response, eval_case)
+
+    def grade_tier3(
+        self,
+        tier3_assertions: list,
+        transcript: str,
+        output_dir: Path,
+    ) -> list[ExpectationResult]:
+        """Grade Tier 3 assertions specifically with evidence/citation requirements."""
+        if not tier3_assertions:
+            return []
+
+        outputs = self._collect_outputs(output_dir)
+        prompt = self._build_tier3_prompt(tier3_assertions, transcript, outputs)
+        response = self._call_claude(prompt)
+
+        if not response or not response.strip():
+            return [
+                ExpectationResult(
+                    text=a.name,
+                    passed=False,
+                    evidence="Grading returned empty response",
+                    source="llm",
+                    verdict=AssertionVerdict.UNEVAL,
+                )
+                for a in tier3_assertions
+            ]
+
+        return self._parse_tier3_response(response, tier3_assertions)
+
+    def _build_tier3_prompt(
+        self, assertions: list, transcript: str, outputs: str
+    ) -> str:
+        lines = []
+        for i, a in enumerate(assertions):
+            lines.append(f"### Assertion {i}: {a.name}")
+            lines.append(f"Type: {a.type.value}")
+            lines.append(f"Params: {json.dumps(a.params, ensure_ascii=False)}")
+            lines.append("")
+        return (
+            f"{self._prompt_template}\n\n"
+            f"--- TIER 3 GRADING TASK ---\n\n"
+            f"You are grading ONLY Tier 3 (semantic quality) assertions. "
+            f"For each assertion, determine whether the agent's output satisfies it.\n\n"
+            f"## Assertions to Grade\n\n"
+            + "\n".join(lines)
+            + f"\n## Transcript\n{transcript[:12000]}\n\n"
+            f"## Outputs\n{outputs[:8000]}\n\n"
+            f"## Response Format\n\n"
+            f"Respond with ONLY a JSON array:\n"
+            f'[{{"index": 0, "verdict": "PASS", "evidence": "specific citation from transcript or output", "confidence": 0.9}}]\n\n'
+            f"## Verdict Values\n"
+            f"- PASS: Clear evidence the assertion is satisfied. REQUIRED: cite the exact text.\n"
+            f"- FAIL: No evidence or contradictory evidence.\n"
+            f"- UNEVAL: Cannot determine from available information (e.g. truncated transcript). "
+            f"Use this sparingly — only when genuinely unable to judge.\n\n"
+            f"All evidence strings must be in Chinese (中文)."
+        )
+
+    def _parse_tier3_response(
+        self, response: str, assertions: list
+    ) -> list[ExpectationResult]:
+        results: list[ExpectationResult] = []
+        items = self._extract_json_array(response)
+        if not items:
+            for a in assertions:
+                results.append(
+                    ExpectationResult(
+                        text=a.name,
+                        passed=False,
+                        evidence="Failed to parse LLM grading response",
+                        source="llm",
+                        verdict=AssertionVerdict.UNEVAL,
+                    )
+                )
+            return results
+
+        results_by_index: dict[int, dict] = {}
+        for item in items:
+            if isinstance(item, dict):
+                idx = item.get("index")
+                if isinstance(idx, int):
+                    results_by_index[idx] = item
+
+        for i, a in enumerate(assertions):
+            entry = results_by_index.get(i, {})
+            verdict_str = entry.get("verdict", "FAIL").upper()
+            try:
+                verdict = AssertionVerdict(verdict_str)
+            except ValueError:
+                verdict = AssertionVerdict.UNEVAL
+
+            evidence = str(entry.get("evidence", ""))
+            if verdict == AssertionVerdict.UNEVAL:
+                evidence = evidence or "Grading incomplete: could not determine"
+            elif verdict == AssertionVerdict.PASS and not evidence:
+                verdict = AssertionVerdict.UNEVAL
+                evidence = "PASS verdict but no evidence provided"
+
+            results.append(
+                ExpectationResult(
+                    text=a.name,
+                    passed=(verdict == AssertionVerdict.PASS),
+                    evidence=evidence,
+                    source="llm",
+                    verdict=verdict,
+                )
+            )
+
+        return results
+
+    def _normalize_verdicts(self, result: GradingResult, eval_case: EvalCase) -> None:
+        for exp in result.expectations:
+            if exp.evidence and exp.evidence.startswith("Not evaluated"):
+                exp.verdict = AssertionVerdict.UNEVAL
+                exp.passed = False
+
+    def _build_uneval_result(self, eval_case: EvalCase, reason: str) -> GradingResult:
+        from skill_eval.models import ExpectationResult, GradingSummary
+        return GradingResult(
+            expectations=[
+                ExpectationResult(
+                    text=e,
+                    passed=False,
+                    evidence=reason,
+                    source="llm",
+                    verdict=AssertionVerdict.UNEVAL,
+                )
+                for e in eval_case.expectations
+            ],
+            summary=GradingSummary(
+                passed=0,
+                failed=len(eval_case.expectations),
+                total=len(eval_case.expectations),
+                pass_rate=0.0,
+            ),
+        )
 
     def _build_prompt(self, eval_case: EvalCase, transcript: str, output_dir: Path) -> str:
         outputs = self._collect_outputs(output_dir)
@@ -50,9 +197,16 @@ class LLMGrader:
             f"--- OUTPUTS ---\n{outputs[:8000]}\n\n"
             f"--- EXPECTATIONS ---\n"
             + "\n".join(f"- {e}" for e in eval_case.expectations)
-            + "\n\n--- ASSERTIONS ---\n"
-            + "\n".join(f"- {a.name} ({a.type}): {a.params}" for a in eval_case.assertions)
-            + "\n\nWrite your grading as JSON matching the grading.json schema. All string values (evidence, suggestions, reasons, etc.) must be in Chinese (中文)."
+            + "\n\n--- TIER 3 ASSERTIONS ---\n"
+            + "\n".join(
+                f"- {a.name} ({a.type.value}): {a.params}"
+                for a in eval_case.assertions
+                if a.tier == "TIER3"
+            )
+            + "\n\nWrite your grading as JSON matching the grading.json schema. "
+            "All string values (evidence, suggestions, reasons, etc.) must be in Chinese (中文).\n"
+            "IMPORTANT: If you cannot determine the verdict for any expectation, "
+            'use "evidence": "Not evaluated: <reason>". Do NOT silently mark FAIL.'
         )
 
     def _collect_outputs(self, output_dir: Path) -> str:
@@ -74,21 +228,42 @@ class LLMGrader:
         except RuntimeError:
             return ""
 
+    @staticmethod
+    def _extract_json_array(response: str) -> list:
+        match = re.search(r"\[[\s\S]*\]", response)
+        if not match:
+            return []
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            return []
+
     def _parse_response(self, response: str, eval_case: EvalCase) -> GradingResult:
-        json_match = None
-        import re
         match = re.search(r"\{.*\}", response, re.DOTALL)
         if match:
             try:
-                return GradingResult.model_validate(json.loads(match.group()))
+                result = GradingResult.model_validate(json.loads(match.group()))
+                self._normalize_verdicts(result, eval_case)
+                return result
             except Exception:
                 pass
 
         from skill_eval.models import ExpectationResult, GradingSummary
         return GradingResult(
             expectations=[
-                ExpectationResult(text=e, passed=False, evidence="无法解析 LLM 响应", source="llm")
+                ExpectationResult(
+                    text=e,
+                    passed=False,
+                    evidence="Unable to parse LLM grading response",
+                    source="llm",
+                    verdict=AssertionVerdict.UNEVAL,
+                )
                 for e in eval_case.expectations
             ],
-            summary=GradingSummary(passed=0, failed=len(eval_case.expectations), total=len(eval_case.expectations), pass_rate=0.0),
+            summary=GradingSummary(
+                passed=0,
+                failed=len(eval_case.expectations),
+                total=len(eval_case.expectations),
+                pass_rate=0.0,
+            ),
         )

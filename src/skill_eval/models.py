@@ -14,8 +14,16 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 
+class AssertionTier(str, Enum):
+    TIER1 = "TIER1"  # Deterministic: file/regex checks, always trustworthy
+    TIER2 = "TIER2"  # Behavioral: gates, ordering, file access patterns
+    TIER3 = "TIER3"  # Semantic: LLM-judged quality/fact checks
+
+
 class AssertionType(str, Enum):
+    # Tier 1 — Deterministic
     FILE_EXISTS = "FILE_EXISTS"
+    FILE_CONTAINS = "FILE_CONTAINS"
     CONTAINS_PATTERN = "CONTAINS_PATTERN"
     JSON_HAS_FIELD = "JSON_HAS_FIELD"
     LINE_COUNT = "LINE_COUNT"
@@ -24,6 +32,25 @@ class AssertionType(str, Enum):
     CROSS_FILE_CONSISTENCY = "CROSS_FILE_CONSISTENCY"
     CODE_COMPILES = "CODE_COMPILES"
     CUSTOM_PLUGIN = "CUSTOM_PLUGIN"
+    TOOL_CALLED = "TOOL_CALLED"
+    STEP_COUNT = "STEP_COUNT"
+    # Tier 2 — Behavioral
+    GATE_REQUESTED = "GATE_REQUESTED"
+    GATE_NOT_SKIPPED = "GATE_NOT_SKIPPED"
+    PHASE_ORDERED = "PHASE_ORDERED"
+    FILE_NOT_WRITTEN = "FILE_NOT_WRITTEN"
+    # Tier 3 — Semantic (LLM-judged)
+    LLM_GRADE = "LLM_GRADE"
+    LLM_FACT = "LLM_FACT"
+    LLM_NOT_DELEGATE = "LLM_NOT_DELEGATE"
+
+
+class AssertionVerdict(str, Enum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    UNEVAL = "UNEVAL"
+    ERROR = "ERROR"
+    TIMEOUT = "TIMEOUT"
 
 
 class InstructionSource(str, Enum):
@@ -85,6 +112,9 @@ class Assertion(BaseModel):
     name: str
     type: AssertionType
     params: dict[str, Any] = Field(default_factory=dict)
+    tier: AssertionTier = AssertionTier.TIER1
+    retry_on_uneval: bool = True
+    retry_max: int = 2
 
 
 class FixtureFile(BaseModel):
@@ -157,6 +187,8 @@ class ExpectationResult(BaseModel):
     passed: bool
     evidence: str
     source: str = "llm"
+    verdict: AssertionVerdict = AssertionVerdict.PASS
+    retry_count: int = 0
 
 
 class Claim(BaseModel):
@@ -208,6 +240,10 @@ class RunConfig(BaseModel):
     skip_calibration: bool = False
     eval_samples: int | float | None = None
     per_eval_mode: bool = True
+    per_eval_timeout: int = 300  # Per-eval timeout for outlier detection
+    outlier_threshold_multiplier: float = 3.0  # > N×MAD → anomaly
+    min_runs_for_stats: int = 3  # Minimum runs before statistical checks kick in
+    max_retries_per_eval: int = 2  # Max retries for UNEVAL/TIMEOUT
 
 
 class ToolCallRecord(BaseModel):
@@ -302,6 +338,28 @@ class RunResultEntry(BaseModel):
     compliance: ComplianceSummary | None = None
     calibration: CalibrationSummary | None = None
     notes: list[str] = Field(default_factory=list)
+    is_anomaly: bool = False
+    anomaly_reason: str = ""
+    retry_count: int = 0
+
+
+class RunAnomaly(BaseModel):
+    eval_id: int
+    eval_name: str
+    configuration: str
+    run_number: int
+    anomaly_type: str  # "timeout", "outlier", "uneval", "error", "retry_exhausted"
+    detail: str
+    value: float = 0.0
+    threshold: float = 0.0
+
+
+class AnomalyReport(BaseModel):
+    anomalies: list[RunAnomaly] = Field(default_factory=list)
+    total_runs: int = 0
+    anomaly_count: int = 0
+    retried_count: int = 0
+    unresolved_count: int = 0
 
 
 class StatsValue(BaseModel):
@@ -401,6 +459,7 @@ class BenchmarkData(BaseModel):
     notes: list[Any] = Field(default_factory=list)
     comparisons: list[ComparisonResult] = Field(default_factory=list)
     analysis: AnalysisResult | None = None
+    anomaly_report: AnomalyReport | None = None
 
 
 # ---------------------------------------------------------------------------

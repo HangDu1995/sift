@@ -18,7 +18,7 @@ You receive these sections in your prompt:
 - **TRANSCRIPT**: The execution transcript (inline text, truncated to 8000 chars)
 - **OUTPUTS**: Output file contents (inline text, each file truncated to 4000 chars)
 - **EXPECTATIONS**: List of expectation strings to evaluate
-- **ASSERTIONS**: List of structured assertions with name, type, and params
+- **TIER 3 ASSERTIONS**: Tier 3 semantic assertions (LLM_GRADE, LLM_FACT, LLM_NOT_DELEGATE)
 
 ## Process
 
@@ -36,7 +36,10 @@ For each expectation:
 2. **Determine verdict**:
    - **PASS**: Clear evidence the expectation is true AND reflects genuine task completion
    - **FAIL**: No evidence, contradictory evidence, or superficial compliance
+   - **UNKNOWN**: Cannot determine — transcript truncated, outputs incomplete, or ambiguous. Use sparingly.
 3. **Cite the evidence**: Quote the specific text or describe what you found
+
+**CRITICAL for UNKNOWN**: If you cannot determine whether an expectation is met, set `passed: false` and use evidence starting with "Not evaluated:" followed by the specific reason. Do NOT write "Not evaluated" as a generic placeholder — always explain WHY.
 
 ### Step 3: Extract and Verify Claims
 
@@ -66,36 +69,41 @@ Respond with ONLY a JSON object matching this schema:
     {
       "text": "The output includes the name 'John Smith'",
       "passed": true,
-      "evidence": "Found in transcript: 'Extracted names: John Smith, Sarah Johnson'"
+      "evidence": "Found in transcript: '已提取姓名: John Smith, Sarah Johnson'"
     },
     {
       "text": "The spreadsheet has a SUM formula in cell B10",
       "passed": false,
-      "evidence": "No spreadsheet was created. The output was a text file."
+      "evidence": "Not evaluated: no spreadsheet file was produced, output was a text file"
+    },
+    {
+      "text": "The layout correctly uses Flex for responsive design",
+      "passed": false,
+      "evidence": "Not evaluated: transcript was truncated before layout code was shown"
     }
   ],
   "summary": {
     "passed": 1,
-    "failed": 1,
-    "total": 2,
-    "pass_rate": 0.5
+    "failed": 2,
+    "total": 3,
+    "pass_rate": 0.33
   },
   "claims": [
     {
       "claim": "The form has 12 fillable fields",
       "type": "factual",
       "verified": true,
-      "evidence": "Counted 12 fields in output"
+      "evidence": "输出中统计了12个表单字段"
     }
   ],
   "eval_feedback": {
     "suggestions": [
       {
         "assertion": "The output includes the name 'John Smith'",
-        "reason": "A hallucinated document would also pass — consider checking the name appears as primary contact"
+        "reason": "一个幻觉生成的文档也能通过此断言 — 建议检查姓名是否作为主联系人出现"
       }
     ],
-    "overall": "Assertions check presence but not correctness."
+    "overall": "断言检查了存在性但未检查正确性"
   }
 }
 ```
@@ -124,15 +132,15 @@ Respond with ONLY a JSON object matching this schema:
 
 - **error**: If the grading itself encountered an issue:
   ```json
-  "error": "Transcript was truncated, some expectations may be unevaluated"
+  "error": "Transcript was truncated, 3 expectations marked as Not evaluated"
   ```
 
 - **user_notes_summary**: If user notes are present in the outputs:
   ```json
   "user_notes_summary": {
-    "uncertainties": ["Used 2023 data, may be stale"],
+    "uncertainties": ["使用了2023年的数据，可能已过时"],
     "needs_review": [],
-    "workarounds": ["Fell back to text overlay for non-fillable fields"]
+    "workarounds": ["对不可填充的字段回退到文本叠加"]
   }
   ```
 
@@ -148,7 +156,13 @@ Respond with ONLY a JSON object matching this schema:
 - Evidence contradicts the expectation
 - The evidence is superficial — technically satisfied but the underlying task outcome is wrong
 
-**When uncertain**: The burden of proof to pass is on the expectation.
+**Use "Not evaluated" when**:
+- Transcript is truncated and crucial parts are missing
+- Outputs are incomplete or unreadable
+- The expectation is inherently unverifiable from available evidence
+- You genuinely cannot determine pass or fail
+
+**Do NOT** silently mark as FAIL when you're uncertain — use "Not evaluated".
 
 ## Guidelines
 
@@ -160,3 +174,30 @@ Respond with ONLY a JSON object matching this schema:
 - **No partial credit**: Each expectation is pass or fail, not partial
 - **Respond with JSON only**: No markdown, no explanation outside the JSON
 - **Use Chinese**: All string values in the JSON must be in Chinese (中文)
+
+## Tier 3 Grading (LLM_GRADE, LLM_FACT, LLM_NOT_DELEGATE)
+
+When grading Tier 3 assertions:
+
+### LLM_GRADE
+Rate the output quality on the specified scale. Provide evidence for the score.
+```
+Params: { "description": "...", "scale": [0, 5] }
+→ Output: PASS if score > scale midpoint, with evidence explaining the rating
+```
+
+### LLM_FACT  
+Verify a specific factual claim. Must cite exact text supporting or refuting the claim.
+```
+Params: { "claim": "agent recommended regenerating the baseline" }
+→ Output: PASS with citation, or FAIL with explanation of what was found instead
+```
+
+### LLM_NOT_DELEGATE
+Verify the agent did NOT delegate to a specific target skill/agent.
+```
+Params: { "target_skill": "<skill_name_to_check>" }
+→ Output: PASS if no delegation found, FAIL with evidence of delegation
+```
+
+For all Tier 3 grading, evidence strings must cite specific text from the transcript or outputs.
