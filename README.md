@@ -188,6 +188,8 @@ skill-eval batch manifest.json --layers integration --projects proj1,proj2
 ```bash
 # 生成报告（自动发现 benchmark.json + scorecard.json + vet-report.json + overfitting_report.json）
 skill-eval report output/iteration-1/ --open
+# Server 模式（支持在线反馈）
+skill-eval report output/iteration-1/ --port 8080 --open
 # 批量报告
 skill-eval batch-report batch-workspace/ --open
 
@@ -201,6 +203,15 @@ skill-eval vet-overfit --domain-bench domain.json --general-bench general.json  
 # 导入外部数据
 skill-eval import monitor.jsonl --benchmark iteration-1/benchmark.json
 ```
+
+### HTML 报告
+
+报告包含两个标签页：
+
+- **输出** — 浏览每条 eval 的 prompt、输出文件、评分详情，可逐条填写反馈。点击「提交所有评审」后：
+  - Server 模式（`--port`）：反馈写入 `workspace/feedback.json`
+  - 静态模式：浏览器自动下载 `feedback.json`
+- **基准测试** — 安全审查面板 + 静态分析记分卡 + 过拟合分析 + 通过率对比 + 盲评对比 + 深度分析 + 检查点明细
 
 ---
 

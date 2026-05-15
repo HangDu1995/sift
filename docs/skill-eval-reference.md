@@ -292,6 +292,33 @@ output/iteration-1/
 - `overfitting_report.json` — 过拟合检测结果
 - `report.html` — 交互式 HTML 报告（含安全审查面板 + 记分卡 + 过拟合面板 + 通过率对比 + 盲评对比 + 深度分析）
 
+### `report` — HTML 报告
+
+```bash
+# 静态文件模式（推荐）
+skill-eval report output/iteration-1/        # 写入 iteration-1/report.html
+skill-eval report output/iteration-1/ --open # 在浏览器中打开
+
+# Server 模式（支持在线反馈提交）
+skill-eval report output/iteration-1/ --port 8080 --open
+```
+
+自动发现 `benchmark.json`、`scorecard.json`、`vet-report.json`、`overfitting_report.json`。
+
+**两个标签页：**
+- **输出** — 浏览 eval 的 prompt、输出文件、评分详情，可逐条反馈。点击「提交所有评审」：
+  - Server 模式：反馈 POST 到 `/api/feedback`，写入 `workspace/feedback.json`
+  - 静态模式：`fetch` 失败后自动创建 Blob，浏览器下载 `feedback.json`
+- **基准测试** — 安全审查 + 评分卡 + 过拟合 + 通过率对比 + 盲评对比 + 深度分析 + 检查点明细
+
+### `batch-report` — 批量 HTML 报告
+
+```bash
+skill-eval batch-report batch-workspace/ --open
+```
+
+展示多 skill 对比：依赖关系图、通过率对比、级联归因、集成测试、各 Skill 详情。
+
 ### `batch` — 批量评测
 
 **Manifest 格式**：
