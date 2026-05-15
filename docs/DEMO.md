@@ -495,26 +495,25 @@ skill-eval batch fixtures/negative-skills/manifest-broken-deps.json --runs 1
 注意：第 14 行的 metadata 字段要求与 eval-1 的 expectation 完全一致——
 这是"按题写指令"的典型特征。
 
-**拆分评测集**：
+**生成通用评测集**（替代已移除的 split-evals）：
 
 ```bash
-skill-eval split-evals fixtures/negative-skills/overfitted-skill/evals/evals-train.json
+# 用 --source-dir 生成 domain 不同的 diverse evals
+skill-eval init path/to/skill/ --source-dir path/to/project --domains web,cli
 ```
 
-`split-evals` 将评测集随机拆分为 train（80%）和 holdout（20%），其中 holdout 对于
-评测者不可见——它才是真正检验泛化能力的"盲测题"。
+此命令扫描源项目特征，然后用 LLM 生成与源项目领域严格不同的 eval 用例，用于过拟合检测。
 
 **过拟合检测**：
 
 ```bash
 skill-eval vet-overfit \
-  --train-bench output/train/iteration-1/benchmark.json \
-  --holdout-bench output/holdout/iteration-1/benchmark.json \
-  --skill fixtures/negative-skills/overfitted-skill/ \
-  --train-evals fixtures/negative-skills/overfitted-skill/evals/evals-train.json
+  --domain-bench output/domain/iteration-1/benchmark.json \
+  --general-bench output/general/iteration-1/benchmark.json \
+  --output overfitting_report.json
 ```
 
-**检测结果（实际运行）**：
+**检测结果（示例）**：
 
 ```
 🔍 Overfitting Detection Report
@@ -554,30 +553,31 @@ train 上有 85% 通过率，但 holdout 只有 33%——泛化差距高达 0.52
 最佳的 Skill 开发流程应引入过拟合检测：
 
 ```
-Step 1: split  → skill-eval split-evals evals/evals-train.json
-                 ↓ 产出 evals-train.json（80%）+ evals-holdout.json（20%）
+Step 1: generate diverse evals
+         skill-eval init my-skill/ --source-dir path/to/project --domains web,cli
+         ↓ 产出 evals-general.json（domain 不同的通用评测）
 
-Step 2: run    → skill-eval full my-skill/ \
-                 --evals evals-train.json --output output/train/
-                 ↓
-                 skill-eval full my-skill/ \
-                 --evals evals-holdout.json --output output/holdout/
+Step 2: run domain + general evals
+         skill-eval full my-skill/ \
+           --evals evals.json --output output/domain/
+         skill-eval full my-skill/ \
+           --evals evals-general.json --output output/general/
 
-Step 3: vet    → skill-eval vet-overfit \
-                 --train-bench output/train/iteration-1/benchmark.json \
-                 --holdout-bench output/holdout/iteration-1/benchmark.json \
-                 --skill my-skill/ \
-                 --train-evals evals-train.json
-                 ↓ 产出 overfitting_score + generalization_gap + 可疑指令清单
+Step 3: vet overfit
+         skill-eval vet-overfit \
+           --domain-bench output/domain/iteration-1/benchmark.json \
+           --general-bench output/general/iteration-1/benchmark.json \
+           --output overfitting_report.json
+         ↓ 产出 overfitting_score + generalization_gap
 ```
 
 | 阶段 | 目的 | 产出 |
 |------|------|------|
-| **split** | 将评测集划分为可见（train）和不可见（holdout） | 两个评测文件 |
-| **run** | 分别在 train 和 holdout 上跑完整 A/B 评测 | 两组 benchmark.json |
-| **vet** | 对比两组结果，检测过拟合信号 | 过拟合报告 |
+| **init --source-dir** | 生成领域不同的通用评测 | evals-general.json |
+| **run (x2)** | 分别在 domain 和 general 上跑 A/B 测试 | 两组 benchmark.json |
+| **vet-overfit** | 对比两组结果，检测过拟合信号 | 过拟合报告 |
 
-**核心理念**：holdout 评分才是真实水平的无偏估计。不要让 Skill 的作者看到 holdout
+**核心理念**：general eval 评分才是真实水平的无偏估计。不要让 Skill 的作者看到 general eval
 的内容——否则过拟合检测失去意义。
 
 **教训**：

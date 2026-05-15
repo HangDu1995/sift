@@ -14,10 +14,12 @@
   - [generate-config — LLM 配置生成](#generate-config--llm-配置生成)
   - [run — A/B 评测](#run--ab-评测)
   - [full — 一键完整流程](#full--一键完整流程)
+  - [report — HTML 报告](#report--html-报告)
   - [batch — 批量评测](#batch--批量评测)
-  - [Pipeline — 流水线评测](#pipeline--流水线评测)
-  - [split-evals — 评测集切分](#split-evals--评测集切分)
+  - [batch-report — 批量 HTML 报告](#batch-report--批量-html-报告)
   - [vet-overfit — 过拟合检测](#vet-overfit--过拟合检测)
+  - [optimize-trigger — 触发优化](#optimize-trigger--触发优化)
+  - [import — 导入外部数据](#import--导入外部数据)
 - [配置驱动架构](#配置驱动架构)
 - [评测体系](#评测体系)
 - [JSON 输出格式](#json-输出格式)
@@ -35,13 +37,13 @@
 在安装或评测 Skill 之前，对其目录进行多扫描器安全检查。集成自 [skill-vetter](https://github.com/app-incubator-xyz/skill-vetter) 的安全扫描逻辑。
 
 ```bash
-# 基本用法（终端表格输出）
+# 安全审查（表格输出 + 自动写 vet-report.json 到 skill 目录）
 skill-eval vet path/to/skill/
 
-# JSON 输出（CI 友好）
+# JSON 输出
 skill-eval vet path/to/skill/ --format json
 
-# 保存结果到文件
+# 保存到指定路径
 skill-eval vet path/to/skill/ --format json -o security-report.json
 
 # 跳过外部扫描器（仅运行原生扫描器）
@@ -222,7 +224,7 @@ pipelines:
 | `--runs` | 3 | 每种配置的运行次数 |
 | `--model` | 用户默认模型 | claude -p 使用的模型 |
 | `--workers` | 4 | 最大并行 worker 数 |
-| `--timeout` | 120 | 每次运行超时（秒） |
+| `--timeout` | 300 | 每次运行超时（秒） |
 | `--max-turns` | 10 | claude -p 最大 agentic 轮数 |
 | `--scoring` | hybrid | 评分模式：hybrid / programmatic / llm |
 | `--compliance-gate` | 关闭 | 遵循性率 < 0.5 时强制失败 |
@@ -258,25 +260,37 @@ output/iteration-1/
         timing.json
       run-2/...
     eval-<id>/...
-  benchmark.json
-  report.html
+   benchmark.json
+   scorecard.json
+   vet-report.json
+   overfitting_report.json
+   report.html
 ```
 
 > **Per-eval 模式（默认）**：每个 eval case 独立通过 `claude -p` 运行，并发由 `--workers` 控制，产出 `with_skill/eval-<id>/run-<n>/` 子目录。旧版 merged-prompt 模式（所有 eval 合并为一个 prompt，通过 checkpoint 机制逐个评估）可通过 `--merged` 标志启用。`compliance.json` 仅在 `with_skill` 配置中生成。
 
 ### `full` — 一键完整流程
 
-自动执行：安全审查（可选门控）→ 静态分析 → 加载 evals → A/B 测试 → 聚合 → 生成报告。
+自动执行 6 步：安全审查（默认） → 静态分析 → 加载 evals → A/B 测试 → 过拟合检测 → 生成报告。
 
-**参数**（`full` 特有）：
+**参数**（`full` 特有，继承 `run` 的全部参数）：
 
-| 参数 | 说明 |
-|------|------|
-| `--security-gate` | 在评测前运行安全审查，BLOCKED 或 REVIEW_NEEDED 时立即失败（exit code 1） |
-| `--compliance-gate` | 遵循性率 < 0.5 时强制失败 |
-| `--eval-samples` | 运行 eval 的数量或比例（如 10 或 0.25） |
-| `--merged` | 使用 merged-prompt 模式而非 per-eval 模式 |
-| `--open` | 运行完成后在浏览器中打开报告 |
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--timeout` | 600 | 每次运行超时（秒） |
+| `--max-turns` | 20 | claude -p 最大 agentic 轮数 |
+| `--security-gate` | 关闭 | 安全审查 BLOCKED/REVIEW_NEEDED 时立即失败（exit 1） |
+| `--compliance-gate` | 关闭 | 遵循性率 < 0.5 时强制失败 |
+| `--eval-samples` | 无 | 运行 eval 的数量或比例 |
+| `--merged` | 关闭 | 使用 merged-prompt 模式 |
+| `--open` | 关闭 | 运行完成后在浏览器中打开报告 |
+
+**产出文件**（均在 `iteration-1/` 下）：
+- `vet-report.json` — 安全审查结果
+- `scorecard.json` — 静态分析评分卡
+- `benchmark.json` — A/B 测试聚合结果
+- `overfitting_report.json` — 过拟合检测结果
+- `report.html` — 交互式 HTML 报告（含安全审查面板 + 记分卡 + 过拟合面板 + 通过率对比 + 盲评对比 + 深度分析）
 
 ### `batch` — 批量评测
 
@@ -444,11 +458,16 @@ skill-eval init <skill-path> --source-dir <project> [--domains web,cli,data-scie
 ### `vet-overfit` — 过拟合检测
 
 ```bash
+# 基础用法（基于 domain benchmark）
+skill-eval vet-overfit --domain-bench iteration-1/benchmark.json --output iteration-1/overfitting_report.json
+
+# 含泛化间隙分析（需 general benchmark）
 skill-eval vet-overfit --domain-bench domain/benchmark.json --general-bench general/benchmark.json
 ```
 
 对比 domain eval 和 general eval 上的 benchmark 结果，计算泛化间隙（gap = domain_delta - general_delta）。
 纯统计评分，不调用 LLM。gap >= 0.20 时判定过拟合，score >= 0.7 时 exit code 1。
+`full` 命令自动在 Step 5 执行此检测。
 
 ---
 

@@ -12,11 +12,14 @@
 # 安装
 pip install -e .
 
-# 安全审查（无需 API，<1s）
+# 安全审查（无需 API，<1s，自动写 vet-report.json）
 skill-eval vet path/to/my-skill/
 
-# 静态分析（无需 API）
+# 静态分析（无需 API，输出 scorecard.json）
 skill-eval analyze path/to/my-skill/
+
+# 初始化评测用例（LLM 生成高质量 evals.json + 自动推导 programmatic assertion）
+skill-eval init path/to/my-skill/
 
 # L0 覆盖率扫描
 skill-eval scan path/to/skills-dir/
@@ -24,17 +27,31 @@ skill-eval scan path/to/skills-dir/
 # LLM 生成配置（需要 claude CLI）
 skill-eval generate-config path/to/skills-dir/ --output eval-config.yaml
 
-# 完整评测（含盲比较 + 深度分析）
-skill-eval full path/to/my-skill/ --runs 3
+# 完整评测（6 步：vet → analyze → load evals → A/B test → overfit → report）
+skill-eval full path/to/my-skill/ --runs 1
 ```
 
 **前置条件**：Python 3.10+，Claude Code CLI >= 2.1.0, < 2.2.0（仅动态评测需要）
+
+### 使用 Skill 操作指南
+
+项目中提供了 `tools/skills/skill-eval-guide/` —— 一个可直接安装到 opencode / Claude Code 的操作指南 skill。Agent 加载后会自动选择合适的命令、参数和执行顺序。
+
+```bash
+# 安装到 opencode
+cp -r tools/skills/skill-eval-guide/ ~/.config/opencode/skills/
+
+# 或在 CLAUDE.md 中引用
+# When evaluating skills, follow the instructions in tools/skills/skill-eval-guide/SKILL.md
+```
+
+Skill 涵盖：13 命令意图映射、环境安装引导、追问用户原则、完整性检查、常见问题排查。
 
 ### 演示
 
 ```bash
 skill-eval full fixtures/test-skills/data-validator/ --runs 1
-# 产出: benchmark.json (delta +0.47) + comparison-run1.json (盲比较) + analysis-notes.json (分析笔记) + report.html
+# 产出: benchmark.json + scorecard.json + vet-report.json + overfitting_report.json + report.html
 ```
 
 > 完整演示指南见 [`docs/DEMO.md`](docs/DEMO.md) —— 包含指标解读、正面案例和 6 个反面教材。
@@ -82,12 +99,13 @@ skill-eval 通过 `claude -p`（Agent SDK / headless 模式）调用 Claude Code
 ### `vet` — 安全审查
 
 ```bash
-skill-eval vet path/to/skill/                # 终端表格输出
+skill-eval vet path/to/skill/                # 终端表格输出 + 自动写 vet-report.json
 skill-eval vet path/to/skill/ --format json  # JSON 输出（CI 友好）
 skill-eval vet path/to/skill/ --skip-external # 跳过外部扫描器
+skill-eval vet path/to/skill/ --output report.json  # 指定输出路径
 ```
 
-4 个扫描器（2 内置 + 2 可选），判定 SAFE / REVIEW_NEEDED / BLOCKED。
+4 个扫描器（2 内置 + 2 可选），判定 SAFE / REVIEW_NEEDED / BLOCKED。结果自动写入 `SKILL_PATH/vet-report.json`，并被 HTML 报告的安全审查面板读取。
 
 ### `analyze` — 静态分析
 
@@ -99,10 +117,12 @@ skill-eval analyze path/to/skill/ --format json  # JSON 输出
 ### `init` — 初始化评测定义
 
 ```bash
-skill-eval init path/to/skill/                  # 自动生成 evals.json
-skill-eval init path/to/skill/ --generate-prompts  # LLM 生成 prompt
+skill-eval init path/to/skill/                  # LLM 自动生成高质量 evals.json
 skill-eval init path/to/skill/ --num-evals 10   # 指定生成评测数量
+skill-eval init path/to/skill/ --source-dir path/to/project --domains web,cli  # 生成 diverse-domain evals
 ```
+
+LLM 生成具体可验证的 expectation + 自动推导 programmatic assertion（FILE_EXISTS / CONTAINS_PATTERN / NOT_CONTAINS 等），确保评测可判定。
 
 ### `scan` — L0 覆盖率扫描
 
@@ -123,25 +143,25 @@ skill-eval generate-config path/to/skills-dir/ --dry-run  # 仅扫描，不调 L
 ### `run` — A/B 评测
 
 ```bash
-skill-eval run path/to/skill/ --runs 3
+skill-eval run path/to/skill/ --runs 1
 skill-eval run path/to/skill/ --scoring programmatic  # 仅程序化评分
 skill-eval run path/to/skill/ --compliance-gate       # 遵循性门控
 skill-eval run path/to/skill/ --eval-samples 10       # 运行 10 条评测（或 0.25 即 25%）
 skill-eval run path/to/skill/ --merged                # 使用 merged-prompt 模式
-skill-eval run path/to/skill/ --workers 4             # 并发 worker 数
+skill-eval run path/to/skill/ --workers 4 --timeout 300  # 并发 + 超时控制（默认 300s）
 ```
 
 ### `full` — 一键完整流程
 
 ```bash
-skill-eval full path/to/skill/ --runs 3
-skill-eval full path/to/skill/ --security-gate --open
+skill-eval full path/to/skill/ --runs 1
+skill-eval full path/to/skill/ --security-gate --open  # 安全门控 + 浏览器打开报告
 skill-eval full path/to/skill/ --eval-samples 10       # 运行 10 条评测（或 0.25 即 25%）
 skill-eval full path/to/skill/ --merged                # 使用 merged-prompt 模式
-skill-eval full path/to/skill/ --workers 4             # 并发 worker 数
+skill-eval full path/to/skill/ --workers 4 --timeout 600  # 并发 + 超时（默认 600s）
 ```
 
-安全审查 → 静态分析 → 加载 evals → A/B 测试 → 聚合 → HTML 报告。默认执行模式为 **per-eval**（每条 eval 独立运行，支持并发），使用 `--merged` 可回退到旧的 merged-prompt 模式。
+**6 步全流程**：安全审查 → 静态分析 → 加载 evals → A/B 测试 → 过拟合检测 → HTML 报告。默认 `--timeout 600`、`--max-turns 20`、per-eval 并发模式。产出 `benchmark.json` + `scorecard.json` + `vet-report.json` + `overfitting_report.json` + `report.html`。
 
 ### `batch` — 批量评测
 
@@ -166,20 +186,20 @@ skill-eval batch manifest.json --layers integration --projects proj1,proj2
 ### 其他命令
 
 ```bash
-skill-eval report output/ --benchmark benchmark.json --open  # HTML 报告
-skill-eval optimize-trigger path/to/skill/ --eval-set triggers.json  # 触发优化
-```
+# 生成报告（自动发现 benchmark.json + scorecard.json + vet-report.json + overfitting_report.json）
+skill-eval report output/iteration-1/ --open
+# 批量报告
+skill-eval batch-report batch-workspace/ --open
 
-### `split-evals` — 评测集切分
+# 触发优化
+skill-eval optimize-trigger path/to/skill/ --eval-set triggers.json
 
-```bash
-skill-eval split-evals path/to/evals.json --holdout-fraction 0.3
-```
+# 过拟合检测
+skill-eval vet-overfit --domain-bench iteration-1/benchmark.json --output iteration-1/overfitting_report.json
+skill-eval vet-overfit --domain-bench domain.json --general-bench general.json  # 含泛化间隙分析
 
-### `vet-overfit` — 过拟合检测
-
-```bash
-skill-eval vet-overfit --train-bench train.json --holdout-bench holdout.json --skill path/to/skill/
+# 导入外部数据
+skill-eval import monitor.jsonl --benchmark iteration-1/benchmark.json
 ```
 
 ---
@@ -232,6 +252,7 @@ pytest tests/ --cov=skill_eval
 
 | 文档 | 内容 |
 |------|------|
+| [Skill 操作指南](tools/skills/skill-eval-guide/SKILL.md) | Agent 操作手册：13 命令意图映射、环境安装、追问用户原则、完整性检查 |
 | [演示指南](docs/DEMO.md) | 30 分钟完整演示：正面案例 + 6 个反面教材 + 指标速查 + 排错决策树 |
 | [参考手册](docs/skill-eval-reference.md) | 完整 CLI 参数、配置架构、评测体系、JSON 格式、FAQ |
 | [架构设计](docs/skill-eval-arch-design.md) | 设计决策、模块契约、质量公式（架构师向） |
