@@ -374,3 +374,34 @@
 | 新增文件 | 5 (`utils.py`, `comparator.py`, `analyzer.py`, `test_agents.py`, `code-audit-fixes.md`) |
 | 删除重复代码 | ~150 行 (cli.py 中 run/full 命令合并) |
 | 测试通过 | 261/261 |
+
+---
+
+## 轮次 7：Phase 1 重构 — Report + Runner + CLI 修复 (2026-05-15)
+
+### 方法
+全面的代码质量审计（3 个 explore agent 并行）：report 功能、batch 性能、架构质量。逐一修复所有发现的 bug 和重复代码。
+
+### 发现与修复
+
+| 编号 | 严重度 | 文件 | 行 | 问题 | 修复 |
+|------|--------|------|-----|------|------|
+| 7.1 | **HIGH** | `reporting/viewer.py:276` | `write_static()` | 不接受 `previous` 参数，`--previous` 无效 | 加 `previous` 参数并传递给 `generate_html` |
+| 7.2 | **HIGH** | `reporting/viewer.py:261` | `generate_html()` | Python 嵌 `previous` key，JS 读 `previous_feedback` / `previous_outputs` | 转换 `previous` → 两个 flat dict 匹配 JS 端 |
+| 7.3 | **HIGH** | `reporting/viewer.py:176` | `_embed_file()` | image 用 key `content`，JS 读 `data_uri`；xlsx/binary 同理 | image→`data_uri`，xlsx→`data_b64`，binary→`data_uri` |
+| 7.4 | MEDIUM | `cli.py:752` | `--static` | 参数名混淆（接受 scorecard.json 但叫 static） | 重命名 `--scorecard`，`--static` 保留为别名 |
+| 7.5 | LOW | `cli.py:795` | `report()` | `write_static()` 不传 `prev_data` | 传入 `previous=prev_data` |
+| 7.6 | **BUG** | `execution/runner.py:298` | retry cleanup | `shutil.rmtree()` 调用但 `import shutil` 缺失 | 加 `import shutil` 到文件顶部 |
+| 7.7 | DEAD | `execution/runner.py:29` | imports | `ScoringOrchestrator` 导入但从未使用 | 删除死导入 |
+| 7.8 | DEAD | `execution/runner.py:664` | `_build_merged_prompt` | 薄封装从未调用 | 删除死代码 |
+| 7.9 | **DUP** | `cli.py:717,1074,1247` | 3 处 | `check_claude_version` 检查逻辑内联重复 3 次 | 统一调用 `_check_claude_or_exit()` |
+
+### 统计
+
+| 指标 | 值 |
+|------|-----|
+| 修复 bug | 9 |
+| 删除死代码 | 2 处 |
+| 去除重复 | 3 处 |
+| 修改文件 | 4 (`viewer.py`, `cli.py`, `runner.py`, `code-audit-fixes.md`) |
+| 测试通过 | 278/278 |

@@ -714,14 +714,9 @@ def optimize_trigger(
     format: str = typer.Option("table", "--format", help="Output format: table or json"),
 ):
     """Optimize Skill trigger description."""
-    from skill_eval.claude_version import check_claude_version
+    _check_claude_or_exit()
     from skill_eval.models import LoopConfig, TriggerQuery
     from skill_eval.optimization.loop import OptimizationLoop
-
-    ok, ver_msg = check_claude_version()
-    if not ok:
-        console.print(f"[red]Error:[/red] {ver_msg}")
-        raise typer.Exit(code=3)
 
     try:
         raw = json.loads(eval_set.read_text(encoding="utf-8"))
@@ -749,7 +744,7 @@ def report(
     workspace: Path = typer.Argument(..., help="Path to evaluation workspace"),
     benchmark: Optional[Path] = typer.Option(None, "--benchmark", help="Path to benchmark.json"),
     previous: Optional[Path] = typer.Option(None, "--previous", help="Path to previous benchmark.json"),
-    static: Optional[Path] = typer.Option(None, "--static", help="Path to scorecard.json"),
+    scorecard: Optional[Path] = typer.Option(None, "--scorecard", "--static", help="Path to scorecard.json"),
     open_browser: bool = typer.Option(False, "--open", help="Open report in browser after generation"),
 ):
     """Generate a static HTML report from evaluation results."""
@@ -765,7 +760,7 @@ def report(
     if bench_path and bench_path.exists():
         bench_data = json.loads(bench_path.read_text(encoding="utf-8"))
 
-    scorecard_path = static
+    scorecard_path = scorecard
     if not scorecard_path or not scorecard_path.exists():
         for candidate in [workspace / "scorecard.json", workspace / "iteration-1" / "scorecard.json"]:
             if candidate.exists():
@@ -792,7 +787,7 @@ def report(
 
     gen = ReportGenerator()
     output_path = workspace / "report.html"
-    gen.write_static(workspace, output_path, bench_data, scorecard=scorecard_data)
+    gen.write_static(workspace, output_path, bench_data, previous=prev_data, scorecard=scorecard_data)
     console.print(f"Report written to {output_path}")
 
     if open_browser:
@@ -1069,16 +1064,10 @@ def batch(
     projects: Optional[str] = typer.Option(None, "--projects", help="Comma-separated project paths to override pipeline projects"),
 ):
     """Run batch evaluation across multiple Skills."""
+    _check_claude_or_exit()
     from skill_eval.batch.manifest import ManifestLoader
     from skill_eval.batch.scheduler import BatchScheduler
-    from skill_eval.claude_version import check_claude_version
     from skill_eval.models import RunConfig, ScoringConfig
-
-    ok, ver_msg = check_claude_version()
-    if not ok:
-        console.print(f"[red]Error:[/red] {ver_msg}")
-        raise typer.Exit(code=3)
-    console.print(f"[dim]{ver_msg}[/dim]")
 
     loader = ManifestLoader()
     if manifest_or_dir.is_dir():
@@ -1244,14 +1233,10 @@ def generate_config(
     dry_run: bool = typer.Option(False, "--dry-run", help="Scan only, don't call LLM"),
 ):
     """Generate eval-config.yaml from skills directory using LLM."""
-    from skill_eval.claude_version import check_claude_version
     from skill_eval.config.generator import ConfigGenerator
 
     if not dry_run:
-        ok, ver_msg = check_claude_version()
-        if not ok:
-            console.print(f"[red]Error:[/red] {ver_msg}")
-            raise typer.Exit(code=3)
+        _check_claude_or_exit()
 
     gen = ConfigGenerator()
     out_path = output or skills_dir / "eval-config.yaml"

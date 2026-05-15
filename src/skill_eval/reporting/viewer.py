@@ -183,13 +183,20 @@ def _embed_file(path: Path) -> dict:
     if ext in IMAGE_EXTENSIONS:
         try:
             data = base64.b64encode(path.read_bytes()).decode("ascii")
-            return {"name": path.name, "type": "image", "content": f"data:{mime};base64,{data}"}
+            return {"name": path.name, "type": "image", "data_uri": f"data:{mime};base64,{data}"}
+        except Exception:
+            pass
+
+    if ext == ".xlsx":
+        try:
+            data = base64.b64encode(path.read_bytes()).decode("ascii")
+            return {"name": path.name, "type": "xlsx", "data_b64": data}
         except Exception:
             pass
 
     try:
         data = base64.b64encode(path.read_bytes()).decode("ascii")
-        return {"name": path.name, "type": "binary", "mime": mime, "content": data}
+        return {"name": path.name, "type": "binary", "data_uri": f"data:{mime};base64,{data}"}
     except Exception:
         return {"name": path.name, "type": "error", "content": "Could not read file"}
 
@@ -258,10 +265,25 @@ class ReportGenerator:
         if previous is None:
             previous = load_previous_iteration(workspace)
 
+        prev_feedback: dict = {}
+        prev_outputs: dict = {}
+        if previous:
+            fb = previous.get("feedback") or {}
+            reviews = fb.get("reviews", [])
+            for r in reviews:
+                prev_feedback[r.get("run_id", "")] = r.get("feedback", "")
+            for prev_run in previous.get("runs", []):
+                rid = prev_run.get("id", "")
+                po = prev_run.get("previous_output")
+                if po:
+                    prev_outputs[rid] = [po]
+
         data = {
             "skill_name": skill_name,
             "runs": runs,
             "previous": previous,
+            "previous_feedback": prev_feedback,
+            "previous_outputs": prev_outputs,
             "benchmark": benchmark,
             "scorecard": scorecard,
             "overfitting": _load_overfitting(workspace),
@@ -273,8 +295,8 @@ class ReportGenerator:
 
         return html
 
-    def write_static(self, workspace: Path, output_path: Path, benchmark: dict | None = None, scorecard: dict | None = None) -> None:
-        html = self.generate_html(workspace, benchmark, scorecard=scorecard)
+    def write_static(self, workspace: Path, output_path: Path, benchmark: dict | None = None, previous: dict | None = None, scorecard: dict | None = None) -> None:
+        html = self.generate_html(workspace, benchmark, previous=previous, scorecard=scorecard)
         output_path.write_text(html, encoding="utf-8")
 
     def serve(self, workspace: Path, port: int = 8080, benchmark: dict | None = None, open_browser: bool = False) -> None:

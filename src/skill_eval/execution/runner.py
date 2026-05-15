@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -26,7 +27,7 @@ from skill_eval.models import (
     TimingData,
 )
 from skill_eval.parser import parse_skill_md
-from skill_eval.scoring.orchestrator import ScoringOrchestrator
+from skill_eval.scoring.programmatic import ProgrammaticChecker
 
 ProgressCallback = Callable[..., None]
 
@@ -659,10 +660,6 @@ class ABTestRunner:
                 )
 
         return iteration_dir
-
-    @staticmethod
-    def _build_merged_prompt(eval_set: EvalSet) -> str:
-        return ABTestRunner._build_merged_prompt_from_evals(eval_set.evals)
 
     @staticmethod
     def _build_merged_prompt_from_evals(evals: list[EvalCase]) -> str:
