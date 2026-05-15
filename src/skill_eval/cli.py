@@ -89,19 +89,18 @@ def _run_ab_eval(
         skip_calibration=no_calibration,
         eval_samples=eval_samples,
         per_eval_mode=per_eval_mode,
+        per_eval_timeout=timeout,
+        min_runs_for_stats=max(3, runs),
     )
 
-    quiet_console = Console(stderr=True) if fmt == "json" else console
     progress_state = _ProgressState(len(eval_set.evals), runs)
 
     def on_progress(eval_name, config_name, eval_idx, total_evals, completed, total, grading, run_duration=0.0, run_output=None, phase="", substep=""):
         progress_state.update(eval_name, config_name, eval_idx, completed, total, grading, run_duration, run_output, phase=phase, substep=substep)
 
     try:
-        with Live(progress_state, console=quiet_console, refresh_per_second=1) as live:
-            progress_state.live = live
-            ab = ABTestRunner(run_config, scoring_config, on_progress=on_progress)
-            iteration_dir = ab.run_ab_test(skill_path, eval_set)
+        ab = ABTestRunner(run_config, scoring_config, on_progress=on_progress)
+        iteration_dir = ab.run_ab_test(skill_path, eval_set)
     except SkillEvalError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=exc.exit_code)
@@ -173,19 +172,22 @@ class _ProgressState:
     def __init__(self, num_evals: int, runs_per_config: int):
         self.num_evals = num_evals
         self.runs_per_config = runs_per_config
-        self.total_runs = 2 * runs_per_config
+        self.total_runs = 2 * runs_per_config * num_evals
         self.completed = 0
+        self.skipped = 0
+        self.failed = 0
+        self.retried = 0
         self.current_eval = ""
         self.current_config = ""
         self.eval_idx = 0
         self.last_grading = None
         self.results: list[dict] = []
-        self.live = None
         self.run_start_time: float | None = None
         self.last_run_duration: float = 0.0
         self.total_elapsed: float = 0.0
         self.phase: str = ""
         self.substep: str = ""
+        self._last_line_count: int = 0
 
     def update(self, eval_name, config_name, eval_idx, completed, total, grading, run_duration=0.0,
                 run_output=None, phase="", substep=""):
@@ -194,6 +196,13 @@ class _ProgressState:
         self.eval_idx = eval_idx
         self.phase = phase
         self.substep = substep
+        if phase == "skipped":
+            self.skipped += 1
+        if phase == "failed":
+            self.failed += 1
+        if phase == "retrying":
+            self.retried += 1
+        prev_completed = self.completed
         if completed > self.completed:
             self.completed = completed
         if grading is not None:
@@ -222,91 +231,67 @@ class _ProgressState:
         else:
             self.run_start_time = time.time()
             self.last_run_duration = 0.0
-        if self.live:
-            self.live.update(self, refresh=True)
 
-    def render(self):
-        pct = self.completed / self.total_runs * 100 if self.total_runs else 0
-        bar_len = 30
-        filled = int(bar_len * self.completed / self.total_runs) if self.total_runs else 0
-        bar = "█" * filled + "░" * (bar_len - filled)
+        import sys
+        progress_line = self._format_progress_line()
+        if progress_line:
+            if sys.stderr.isatty():
+                lines = str(self._last_line_count or 1)
+                sys.stderr.write(f"\033[{lines}A\033[J")
+            sys.stderr.write(progress_line + "\n")
+            sys.stderr.flush()
+            self._last_line_count = progress_line.count("\n") + 1
 
-        lines = []
-        lines.append(f"[bold cyan]{'━' * 60}[/bold cyan]")
-        lines.append(
-            f"  [bold]Progress:[/bold] [{bar}] {pct:.0f}%  "
-            f"({self.completed}/{self.total_runs} runs)"
-        )
+    def _format_progress_bar(self, width: int, pct: float) -> str:
+        filled = int(width * pct / 100) if width else 0
+        return "█" * filled + "░" * (width - filled)
+
+    def _format_progress_line(self) -> str:
+        if self.total_runs == 0:
+            return ""
+        pct = self.completed / self.total_runs * 100
+        bar = self._format_progress_bar(20, pct)
+        parts = [f"[{bar}] {pct:.0f}% ({self.completed}/{self.total_runs})"]
+
+        counters = []
+        if self.skipped:
+            counters.append(f"skip:{self.skipped}")
+        if self.failed:
+            counters.append(f"fail:{self.failed}")
+        if self.retried:
+            counters.append(f"retry:{self.retried}")
+        if counters:
+            parts.append("|".join(counters))
 
         if self.current_eval:
-            tag = "[green]with_skill[/green]" if self.current_config == "with_skill" else "[yellow]without[/yellow]"
-
+            tag = "SKILL" if self.current_config == "with_skill" else "BASE"
             if self.run_start_time is not None:
                 elapsed = time.time() - self.run_start_time
-                phase_str = f" [dim]\\[{self.phase}][/dim]" if self.phase else ""
-                substep_str = f" [dim]{self.substep}[/dim]" if self.substep else ""
-                status = f"[bold yellow]⏳ {elapsed:.0f}s[/bold yellow]{phase_str}{substep_str}"
+                phase_str = f"[{self.phase}]" if self.phase else ""
+                parts.append(f"  [{self.eval_idx}/{self.num_evals}] {self.current_eval[:25]} {tag} ⏳ {elapsed:.0f}s {phase_str} {self.substep}")
+            elif self.last_grading is not None:
+                r = self.results[-1]
+                icon = "✓" if r.get("pass_rate", 0) >= 0.5 else "✗"
+                dur = f"{r.get('duration', 0):.0f}s"
+                parts.append(f"  {icon} {self.current_eval[:25]} {tag} {int(r.get('pass_rate',0)*100)}% [{dur}]")
             else:
-                status = "[dim]starting...[/dim]"
+                parts.append(f"  [{self.eval_idx}/{self.num_evals}] {self.current_eval[:25]} {tag}")
 
-            lines.append(
-                f"  [dim]Current:[/dim] [{self.eval_idx}/{self.num_evals}] "
-                f"{self.current_eval[:35]}  {tag}  {status}"
-            )
-
-        if self.results:
+        if self.results and self.total_elapsed > 0:
             avg = self.total_elapsed / len(self.results)
             remaining = self.total_runs - self.completed
             eta_s = remaining * avg
-            eta_m = int(eta_s) // 60
-            eta_sec = int(eta_s) % 60
-            lines.append(
-                f"  [dim]Avg {avg:.1f}s/run · ETA {eta_m}m{eta_sec:02d}s "
-                f"({remaining} left)[/dim]"
-            )
-            lines.append(f"  [bold]Last run detail:[/bold]")
+            parts.append(f" | avg {avg:.0f}s ETA {eta_s/60:.0f}m{eta_s%60:02.0f}s")
+
+        result_lines = [" ".join(parts)]
+
+        if self.results:
             r = self.results[-1]
-            icon = "✓" if r["pass_rate"] >= 0.5 else "✗"
-            color = "green" if r["pass_rate"] >= 0.5 else "red"
-            cfg = "skill" if r["config"] == "with_skill" else "base"
-            dur = f"{r.get('duration', 0):.0f}s"
-            lines.append(
-                f"    [{color}]{icon}[/{color}] {r['eval'][:30]:30s} {cfg} "
-                f"{r['pass_rate']:.0%} ({r['passed']}/{r['total']}) [{dur}]"
-            )
-            if r.get("tool_calls"):
-                tools_str = " ".join(f"{k}×{v}" for k, v in r["tool_calls"].items())
-                lines.append(f"    [dim]tools: {tools_str}[/dim]")
-            if r.get("num_turns"):
-                lines.append(f"    [dim]turns: {r['num_turns']}  stop: {r.get('stop_reason', '?')}[/dim]")
-            if r.get("result_text"):
-                lines.append(f"    [dim]output: {r['result_text'][:80]}[/dim]")
             if r.get("failed_expectations"):
-                lines.append(f"    [dim]failed expectations:[/dim]")
-                for fe in r["failed_expectations"][:3]:
-                    lines.append(f"      [red]✗[/red] {fe}")
+                for fe in r["failed_expectations"][:2]:
+                    result_lines.append(f"    ✗ {fe[:80]}")
 
-            if len(self.results) > 1:
-                lines.append(f"  [bold]Earlier ({min(len(self.results)-1, 4)}):[/bold]")
-                for r in self.results[-5:-1]:
-                    icon = "✓" if r["pass_rate"] >= 0.5 else "✗"
-                    color = "green" if r["pass_rate"] >= 0.5 else "red"
-                    cfg = "skill" if r["config"] == "with_skill" else "base"
-                    dur = f"{r.get('duration', 0):.0f}s"
-                    tc = " ".join(f"{k}×{v}" for k, v in r.get("tool_calls", {}).items())
-                    line = (
-                        f"    [{color}]{icon}[/{color}] {r['eval'][:25]:25s} {cfg} "
-                        f"{r['pass_rate']:.0%} ({r['passed']}/{r['total']}) [{dur}]"
-                    )
-                    if tc:
-                        line += f"  [dim]{tc}[/dim]"
-                    lines.append(line)
-
-        lines.append(f"[bold cyan]{'━' * 60}[/bold cyan]")
-        return Panel("\n".join(lines), title="A/B Test", border_style="blue")
-
-    def __rich__(self):
-        return self.render()
+        return "\n".join(result_lines)
 
 
 class _BatchProgressState:
@@ -616,7 +601,7 @@ def init(
     from skill_eval.evals.generator import EvalInitGenerator
 
     try:
-        gen = EvalInitGenerator(model=None)
+        gen = EvalInitGenerator(model=None, timeout=300)
 
         if generate_prompts:
             console.print("Generating L1 unit-level evals with LLM...")
@@ -696,6 +681,13 @@ def run(
     if not output_dir:
         output_dir = Path("output")
 
+    if runs < 2:
+        console.print(
+            "[yellow]Warning:[/yellow] --runs 1 means no statistical validity. "
+            "Single-run results have high variance and outlier detection disabled. "
+            "Use --runs 3+ for reliable results."
+        )
+
     _run_ab_eval(
         skill_path=skill_path,
         eval_set=eval_set,
@@ -758,10 +750,9 @@ def report(
     benchmark: Optional[Path] = typer.Option(None, "--benchmark", help="Path to benchmark.json"),
     previous: Optional[Path] = typer.Option(None, "--previous", help="Path to previous benchmark.json"),
     static: Optional[Path] = typer.Option(None, "--static", help="Path to scorecard.json"),
-    port: int = typer.Option(8080, "--port", help="Port for HTTP server"),
-    open_browser: bool = typer.Option(False, "--open", help="Open browser automatically"),
+    open_browser: bool = typer.Option(False, "--open", help="Open report in browser after generation"),
 ):
-    """Generate HTML report from evaluation results."""
+    """Generate a static HTML report from evaluation results."""
     from skill_eval.reporting.viewer import ReportGenerator
 
     bench_data = None
@@ -800,14 +791,13 @@ def report(
                 pass
 
     gen = ReportGenerator()
+    output_path = workspace / "report.html"
+    gen.write_static(workspace, output_path, bench_data, scorecard=scorecard_data)
+    console.print(f"Report written to {output_path}")
 
-    if not open_browser:
-        output_path = workspace / "report.html"
-        html = gen.generate_html(workspace, bench_data, previous=prev_data, scorecard=scorecard_data)
-        output_path.write_text(html, encoding="utf-8")
-        console.print(f"Report written to {output_path}")
-    else:
-        gen.serve(workspace, port, bench_data, open_browser=True)
+    if open_browser:
+        import webbrowser
+        webbrowser.open(f"file://{output_path.resolve()}")
 
 
 @app.command(name="batch-report")
@@ -897,6 +887,12 @@ def full(
 
     if not output_dir:
         output_dir = Path("output")
+
+    if runs < 2:
+        console.print(
+            "[yellow]Warning:[/yellow] --runs 1 means no statistical validity. "
+            "Single-run results have high variance and outlier detection disabled."
+        )
 
     total_steps = 6
     step = 0

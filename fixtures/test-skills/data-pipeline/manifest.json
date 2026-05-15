@@ -1,0 +1,16 @@
+{
+  "name": "data-pipeline",
+  "skills": [
+    {"path": "skills/data-validator", "depends_on": []},
+    {"path": "skills/data-transform", "depends_on": ["skills/data-validator"]},
+    {"path": "skills/report-generator", "depends_on": ["skills/data-transform"]}
+  ],
+  "integration_evals": [
+    {
+      "id": 1,
+      "prompt": "Validate the data in users.json, flatten it, then generate a report",
+      "expected_skills_triggered": ["skills/data-validator"],
+      "expectations": ["data-validator skill is triggered"]
+    }
+  ]
+}

@@ -1194,6 +1194,23 @@
       }
       html += "</div>";
 
+      // ── Anomaly Report ──
+      const anomalyReport = data.anomaly_report;
+      if (anomalyReport && anomalyReport.anomalies && anomalyReport.anomalies.length > 0) {
+        html += '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
+        html += '<div style="font-family:Poppins,sans-serif;font-size:0.8rem;font-weight:600;color:#856404;margin-bottom:0.5rem;">⚠ 异常检测 (' + anomalyReport.anomaly_count + ' 个异常)</div>';
+        for (const a of anomalyReport.anomalies) {
+          html += '<div style="font-size:0.75rem;color:#856404;margin-bottom:0.25rem;">';
+          html += '<strong>' + escapeHtml(a.anomaly_type || "?") + '</strong>: Eval ' + a.eval_id + ' ' + escapeHtml(a.eval_name || "") + ' / ' + escapeHtml(a.configuration || "") + ' run-' + a.run_number;
+          if (a.detail) html += '<br/><span style="color:#926d00;">' + escapeHtml(a.detail) + '</span>';
+          html += '</div>';
+        }
+        if (anomalyReport.retried_count) {
+          html += '<div style="font-size:0.75rem;color:#856404;margin-top:0.5rem;">重试次数: ' + anomalyReport.retried_count + '</div>';
+        }
+        html += '</div>';
+      }
+
       // ── Scorecard (static analysis) ──
       const scorecard = EMBEDDED_DATA.scorecard;
       if (scorecard && (scorecard.checks || scorecard.score !== undefined)) {
@@ -1446,7 +1463,10 @@
           if (cp.expectations && cp.expectations.length) {
             html += '<ul style="font-size:0.75rem;margin:0 0 0.5rem 1.25rem;">';
             for (const e of cp.expectations) {
-              const icon = e.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
+              let icon = e.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
+              if (e.verdict === "UNEVAL") {
+                icon = '<span style="color:var(--accent);" title="无法评估">?</span>';
+              }
               html += '<li>' + icon + ' ' + escapeHtml(e.text || "") + '</li>';
             }
             html += '</ul>';
@@ -1454,8 +1474,16 @@
           if (cp.assertions && cp.assertions.length) {
             html += '<ul style="font-size:0.75rem;margin:0 0 0.5rem 1.25rem;">';
             for (const a of cp.assertions) {
-              const icon = a.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
-              html += '<li style="color:var(--text-muted);">' + icon + ' <em>(assertion)</em> ' + escapeHtml(a.text || "") + '</li>';
+              let icon = a.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
+              if (a.verdict === "UNEVAL") {
+                icon = '<span style="color:var(--accent);" title="无法评估">?</span>';
+              } else if (a.verdict === "TIMEOUT") {
+                icon = '<span style="color:var(--accent);" title="超时">⏱</span>';
+              } else if (a.verdict === "ERROR") {
+                icon = '<span style="color:var(--red);" title="错误">!</span>';
+              }
+              const tierBadge = a.tier ? ' <small style="color:var(--text-muted);">[' + a.tier + ']</small>' : '';
+              html += '<li style="color:var(--text-muted);">' + icon + ' <em>(assertion)</em> ' + escapeHtml(a.text || "") + tierBadge + '</li>';
             }
             html += '</ul>';
           }
@@ -1489,9 +1517,15 @@
             for (const run of configRuns) {
               const r = run.result || {};
               const prClass = r.pass_rate >= 0.8 ? "benchmark-delta-positive" : r.pass_rate < 0.5 ? "benchmark-delta-negative" : "";
-              html += '<tr class="' + rowClass + '"><td>' + configLabel + '</td><td>' + run.run_number + '</td>';
+              const anomalyTag = run.is_anomaly ? ' <span style="background:#ffc107;color:#333;padding:0 4px;border-radius:3px;font-size:0.65rem;font-family:Poppins,sans-serif;" title="' + escapeHtml(run.anomaly_reason || '异常值') + '">异常</span>' : "";
+              const retryTag = run.retry_count ? ' <span style="background:#e0e0e0;color:#666;padding:0 4px;border-radius:3px;font-size:0.65rem;font-family:Poppins,sans-serif;" title="重试 ' + run.retry_count + ' 次">R' + run.retry_count + '</span>' : "";
+              html += '<tr class="' + rowClass + '"><td>' + configLabel + '</td><td>' + run.run_number + anomalyTag + retryTag + '</td>';
               html += '<td class="' + prClass + '">' + ((r.pass_rate || 0) * 100).toFixed(0) + '% (' + (r.passed || 0) + '/' + (r.total || 0) + ')</td>';
-              if (hasTime) html += '<td>' + (r.time_seconds != null ? r.time_seconds.toFixed(1) : "—") + '</td>';
+              if (hasTime) {
+                const timeDisplay = r.time_seconds != null ? r.time_seconds.toFixed(1) : "—";
+                const timeStyle = r.time_seconds > 300 ? 'color:var(--red);' : '';
+                html += '<td style="' + timeStyle + '">' + timeDisplay + '</td>';
+              }
               html += '</tr>';
             }
 

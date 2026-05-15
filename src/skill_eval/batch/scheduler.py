@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -39,6 +41,9 @@ class BatchScheduler:
         total_skills = len(order)
 
         for skill_idx, skill_path in enumerate(order, 1):
+            sys.stderr.write(f"[{skill_idx}/{total_skills}] {skill_path}: A/B test...\n")
+            sys.stderr.flush()
+
             skill_dir = self.base_dir / skill_path
             if not (skill_dir / "SKILL.md").exists():
                 results[skill_path] = NodeStatus.SKIPPED
@@ -76,6 +81,9 @@ class BatchScheduler:
                 ab = ABTestRunner(self.run_config, self.scoring_config, on_progress=make_batch_progress(skill_path, skill_idx, total_skills))
                 iteration_dir = ab.run_ab_test(skill_dir, eval_set)
 
+                agg_start = time.time()
+                sys.stderr.write(f"[{skill_idx}/{total_skills}] {skill_path}: aggregating...\n")
+                sys.stderr.flush()
                 agg = BenchmarkAggregator(model=self.run_config.model)
                 benchmark = agg.aggregate(iteration_dir, skill_dir)
                 (iteration_dir / "benchmark.json").write_text(
@@ -87,6 +95,10 @@ class BatchScheduler:
                 pr = delta.get("pass_rate", "+0.00")
                 is_fail = (isinstance(pr, str) and pr.startswith("-")) or (isinstance(pr, (int, float)) and pr < 0)
                 results[skill_path] = NodeStatus.PASSED if not is_fail else NodeStatus.FAILED
+
+                agg_elapsed = time.time() - agg_start
+                sys.stderr.write(f"[{skill_idx}/{total_skills}] {skill_path}: done ({results[skill_path].value}, delta {pr}, {agg_elapsed:.0f}s)\n")
+                sys.stderr.flush()
 
             except Exception as exc:
                 import traceback

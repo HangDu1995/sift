@@ -7,7 +7,7 @@
 ```bash
 pip install -e .          # 安装 skill-eval
 claude --version           # 需要 Claude Code CLI >= 2.1.0, < 2.2.0
-pytest tests/ -q           # 242 个测试全部通过
+pytest tests/ -q           # 278 个测试全部通过
 ```
 
 **演示用 Skill**：
@@ -32,12 +32,16 @@ skill-eval vet fixtures/test-skills/data-validator/
 **产出解读**：
 
 ```
-┏━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ secrets-scan    ┃ PASS   ┃ No hardcoded secrets found    ┃
-┃ structure-check ┃ PASS   ┃ Skill structure valid         ┃
-┣━━━━━━━━━━━━━━━━━╋━━━━━━━━╋━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
-┃ VERDICT: SAFE   ┃ 所有扫描器通过                          ┃
-┗━━━━━━━━━━━━━━━━━┻━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Scanner         ┃ Status ┃ Detail                                            ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ aguara          │ SKIP   │ aguara not installed                              │
+│                 │        │ (https://github.com/garagon/aguara)               │
+│ skill-scanner   │ SKIP   │ skill-scanner not installed                       │
+│                 │        │ (https://pypi.org/project/cisco-ai-skill-scanner… │
+│ secrets-scan    │ PASS   │ No hardcoded secrets found                        │
+│ structure-check │ PASS   │ Skill structure valid                             │
+└─────────────────┴────────┴───────────────────────────────────────────────────┘
 ```
 
 | 扫描器 | 类型 | 检查内容 |
@@ -110,9 +114,11 @@ skill-eval full fixtures/test-skills/data-validator/ --runs 1
 
 ```
 Results:
-  with_skill:    80% pass rate
-  without_skill: 33% pass rate
-  delta:         +0.47
+  with_skill:    100% pass rate
+  without_skill: 12% pass rate
+  delta:         +0.88
+
+Warning: calibration grade UNRELIABLE — scoring confidence is low
 ```
 
 ---
@@ -136,7 +142,7 @@ Results:
 | **-0.1 ~ +0.1** | Skill 几乎无效 | 审视设计 |
 | **< -0.1** | Skill **反而干扰** Claude | 排查指令 → 重写 |
 
-> data-validator 的 delta = **+0.47**，意味着注入 SKILL.md 将 Claude 的通过率从 33% 提升到 80%——这是一个高价值的 Skill。
+> data-validator 的 delta = **+0.88**，意味着注入 SKILL.md 将 Claude 的通过率从 12% 提升到 100%——这是一个高价值的 Skill。不过 calibration grade 为 UNRELIABLE，提示 expectations 需要重写以提高评分可信度。
 
 ### 输出文件结构
 
@@ -328,9 +334,20 @@ skill-eval vet fixtures/negative-skills/security-risk/
 ```
 
 ```
-Verdict: BLOCKED
-Findings: 1 (HIGH)
-  HIGH: Hardcoded credentials detected  (secrets-scan, line 6)
+                Security Scan: security-risk                 
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Scanner         ┃ Status ┃ Detail                         ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ aguara          │ SKIP   │ External scanners disabled     │
+│ skill-scanner   │ SKIP   │ External scanners disabled     │
+│ secrets-scan    │ FAIL   │ Hardcoded credentials detected │
+│ structure-check │ PASS   │ Skill structure valid          │
+└─────────────────┴────────┴────────────────────────────────┘
+
+Findings:
+  SecuritySeverity.HIGH  Hardcoded credentials detected (SKILL.md:12)
+
+VERDICT: BLOCKED — 1 HIGH/CRITICAL, 0 MEDIUM
 ```
 
 **缺陷**：SKILL.md 中包含 `API_KEY="sk-1234abcd..."` 硬编码密钥，以及 `curl | bash` 不安全操作。
@@ -610,6 +627,8 @@ Skill: [1/3] data-validator
 Passed: 3, Failed: 0, Skipped: 0
 ```
 
+> **注意**：`skill-eval report` 命令不再使用本地服务器（不再需要 `--open` 访问 `http://localhost:8080`）。现在直接生成静态 HTML 文件，`--open` 会用系统默认浏览器打开该文件。
+
 ---
 
 ## 附录 A：完整指标速查表
@@ -621,7 +640,7 @@ Passed: 3, Failed: 0, Skipped: 0
 | **compliance_rate** | compliance.json | followed / total | > 0.7 | 0.5~0.7 | < 0.5 | → 逐条看 failed 指令 |
 | **calibration grade** | calibration.json | agreement + signals | HIGH | MEDIUM/LOW | UNRELIABLE | → 重写 expectations |
 | **static score** | analyze | 0-11 checks | 8+ | 5-7 | < 5 | → 逐条 FAIL |
-| **comparison winner** | comparison-run*.json | rubric content+structure | — | — | — | → 看哪个维度领先 |
+| **comparison winner** | comparison-run*.json | rubric content+structure | — | — | — | → 看哪个维度领先（需 `--model` 参数启用 LLM 盲比较） |
 | **analysis notes** | analysis-notes.json | LLM 分析 | — | — | — | → 读一遍发现隐藏模式 |
 | **vet verdict** | vet | 4 scanners | SAFE | REVIEW_NEEDED | BLOCKED | → 看 findings |
 | **scan status** | scan | evals存在? | ✓ | — | ✗ | → `skill-eval init` |
@@ -675,7 +694,10 @@ skill-eval full my-skill/ --runs 1
 # 5. 正式评测（3 runs，统计稳定）
 skill-eval full my-skill/ --runs 3
 
-# 6. 批量回归
+# 6. 生成报告（静态 HTML，无需服务器）
+skill-eval report output/iteration-1/
+
+# 7. 批量回归
 skill-eval batch manifest.json --runs 3 --baseline baseline.json
 ```
 

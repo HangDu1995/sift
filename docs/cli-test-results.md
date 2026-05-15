@@ -616,6 +616,8 @@ skill-eval full path/to/your-skill/ --runs 1
 | 1 | ✅ Fixed | `benchmark.json` 的 `notes` 字段 Pydantic 序列化类型不匹配 (`Expected str, got dict`) | 已修复：`BenchmarkData.notes` 改为 `list[Any]` |
 | 2 | ℹ️ Low | `scan` 对 `<collection>/skills/` 嵌套结构返回 0 skills | 直接扫描包含 SKILL.md 的扁平目录 |
 | 3 | ℹ️ Low | 集成测试 (chain/routing/contract/pipeline) 为配置验证桩，不执行实际的 Claude 调用 | 已知设计限制，后续版本将接入 `ABTestRunner` |
+| 4 | ℹ️ Changed | `report` 命令不再支持 `--port 8080` HTTP 服务模式 | 始终生成静态 HTML 文件；使用 `--open` 直接在浏览器打开 |
+| 5 | ℹ️ Changed | `comparison` 和 `analysis` 在未提供 `--model` 时被跳过 | 优雅跳过（非失败）；如需盲比较和深度分析，添加 `--model <model-id>` |
 
 ---
 
@@ -633,7 +635,7 @@ skill-eval full path/to/your-skill/ --runs 1
 | Claude Code CLI | 2.1.133 |
 | 操作系统 | macOS (Darwin) |
 | 测试 fixtures | `fixtures/test-skills/` (3 skills) |
-| 单元测试 | 261 passed |
+| 单元测试 | 278 passed |
 
 ### 命令 1: `vet` — 安全审查
 
@@ -776,14 +778,15 @@ skill-eval run fixtures/test-skills/data-validator/ --runs 1 --format json -o /t
 skill-eval full fixtures/test-skills/data-validator/ --runs 1 -o /tmp/full-output
 ```
 
-**结果**: ✅ PASS（delta = +0.47，与 `run` 一致）
+**结果**: ✅ PASS（delta = +0.88）
 
 ```
 Results:
-  with_skill:    80% pass rate
-  without_skill: 33% pass rate
-  delta:         +0.47
+  with_skill:    100% pass rate
+  without_skill: 12% pass rate
+  delta:         +0.88
 
+Note: comparisons skipped (no --model provided)
 Warning: calibration grade UNRELIABLE — scoring confidence is low
 ```
 
@@ -794,6 +797,8 @@ skill-eval report /tmp/run-output/ --benchmark /tmp/run-output/iteration-1/bench
 ```
 
 **结果**: ✅ PASS（62,929 bytes HTML）
+
+> **Note**: The report command now generates a static HTML file only (no longer serves on `--port 8080`). Use `--open` to open the generated HTML file directly in the browser.
 
 ### 命令 10: `import` — 导入监控数据
 
@@ -820,7 +825,7 @@ skill-eval full fixtures/test-skills/data-transform/ --runs 1 --timeout 60
 | Step 1: 静态分析 | ✅ 11/11 | CAPABILITY_UPLIFT |
 | Step 2: 加载 evals | ✅ 3 evals | 1 L1 + 2 L2 |
 | Step 3: A/B 测试 | ✅ 完成 | 2/2 runs |
-| Step 4: 聚合 + 报告 | ✅ 62KB HTML | 含盲比较 + 分析笔记 |
+| Step 4: 聚合 + 报告 | ✅ 62KB HTML | 盲比较 + 分析跳过（无 --model） |
 
 **A/B 结果**：
 
@@ -830,32 +835,11 @@ skill-eval full fixtures/test-skills/data-transform/ --runs 1 --timeout 60
 | without_skill | **27%** (4/15) | ~66s | 基线 agent 对话中描述了正确行为但未写输出文件 |
 | **delta** | **-0.27** | — | **负 delta**：该 Skill 在本次运行中反而干扰了 Claude |
 
-> **注意**：负 delta 并不一定意味 Skill 本身有严重问题。这次运行中 with_skill 因文件输出路径错误导致所有 programmatic assertions 失败（0/15），属于执行层问题而非 Skill 设计问题。这恰好体现了盲比较和分析的价值——它们能帮助定位失败根因。
+> **注意**：负 delta 并不一定意味 Skill 本身有严重问题。这次运行中 with_skill 因文件输出路径错误导致所有 programmatic assertions 失败（0/15），属于执行层问题而非 Skill 设计问题。
 
-**盲比较结果** (`comparison-run1.json`)：
+> **盲比较 + 分析**：本次运行未提供 `--model` 参数，comparison 和 analysis 步骤被优雅跳过。如需盲比较和深度分析，请添加 `--model <model-id>` 参数。
 
-| 指标 | Output A (with_skill) | Output B (without_skill) |
-|------|-----------------------|--------------------------|
-| Winner | **A** (9.0) | B (7.0) |
-| Content | 4.3/5 | 3.7/5 |
-| Structure | 4.7/5 | 3.3/5 |
-| 优势 | metadata 信封（transform_type, record_count, source, transformed_at） | 数据正确但裸 JSON 无元数据 |
-| 劣势 | 未处理 L1 问答、nest/rename-fields 未实现 | 缺少 metadata、缺少 records 信封 |
-
-**LLM 分析笔记**（`analysis-notes.json`，10 条洞察）：
-
-```
-1. with_skill 0% vs without_skill 26.7% — Skill 主动降低了性能
-2. with_skill 从未产出 transformed.json → 5 个程序化断言全部失败，级联到 10 个 LLM 检查
-3. without_skill 也未能文件输出，但通过对话描述了正确行为
-4. Skill 增加了 20.1 秒执行时间（+55%），却产出更差结果
-5. "支持 nest 转换" 在所有配置中 0% 通过 — 从未被演示或描述
-6. "address 展开" 通过率 0% — 输入 fixture 可能不存在嵌套 address 字段
-7. 比较评分（A 80%, B 47%）远高于实际 benchmark → 比较可能使用了不同输入
-8. "rename-fields" 在 without_skill LLM 批处理中通过但文件验证失败
-9. Metadata 要求是 with/without 之间的主要区分因素
-10. 所有 3 个子 eval 都显示 0% — 失败模式均匀，指向执行层根因（文件输出路径）
-```
+**LLM 分析笔记**（`analysis-notes.json`）：未生成（需 `--model`）
 
 ### 命令 13: `batch` (unit) — 多 Skill 批量评测（含 phase/substep 修复验证）
 
@@ -871,13 +855,15 @@ skill-eval batch fixtures/test-skills/manifest.json --runs 1 --workers 1 --layer
 | data-transform | ✅ PASSED | — |
 | report-generator | ✅ PASSED | — |
 
+> **Note**: `batch` 命令的 comparison 和 analysis 步骤现在也需要 `--model` 参数。未提供 `--model` 时，benchmark.json 正常生成，但盲比较和深度分析被优雅跳过（不阻塞流程）。
+
 ### 新增 Agent 功能验证
 
 | Agent | 触发位置 | 产出文件 | 验证结果 |
 |-------|----------|----------|----------|
-| **BlindComparator** | `BenchmarkAggregator._run_comparisons()` | `comparison-run1.json` | ✅ 正确区分 A/B，rubric 含 content+structure 维度 |
-| **PosthocAnalyzer** (benchmark) | `BenchmarkAggregator._run_analysis()` | `analysis-notes.json` | ✅ 生成 10 条深度洞察 |
-| **PosthocAnalyzer** (comparison) | `BenchmarkAggregator._run_comparison_analysis()` | `analysis-result.json` | ⚠️ LLM 调用超时未生成（已知限制） |
+| **BlindComparator** | `BenchmarkAggregator._run_comparisons()` | `comparison-run1.json` | ⚠️ 需 `--model` 参数触发 |
+| **PosthocAnalyzer** (benchmark) | `BenchmarkAggregator._run_analysis()` | `analysis-notes.json` | ⚠️ 需 `--model` 参数触发 |
+| **PosthocAnalyzer** (comparison) | `BenchmarkAggregator._run_comparison_analysis()` | `analysis-result.json` | ⚠️ 需 `--model` 参数触发 |
 
 ### 命令 14: 反面 Skill 验证 — 6 种常见缺陷检测
 
@@ -980,6 +966,15 @@ Overfitting report for overfitted-skill:
           reason: minor overfitting; instruction mirrors expected tool use
 ```
 
+### 近期变更 (v0.1.0+)
+
+| 变更 | 说明 |
+|------|------|
+| `report` 静态 HTML 输出 | `report` 命令不再启动 `--port 8080` HTTP 服务器，始终生成静态 HTML 文件。使用 `--open` 直接在浏览器打开 |
+| `_build_run` 嵌套目录修复 | 修复了 `_build_run` 方法对嵌套目录结构（如 per-eval mode 的 `eval-<id>/run-<n>/`）的处理 |
+| `BenchmarkAggregator` 优雅降级 | comparison 和 analysis 在未提供 `--model` 时优雅跳过，不再阻塞 `benchmark.json` 的生成 |
+| comparison 新增 progress bars | comparison 步骤新增进度条显示，并加入 retry 逻辑提高可靠性 |
+
 ### 版本依赖确认
 
 ```
@@ -990,5 +985,5 @@ $ claude --version
 2.1.133 (Claude Code)
 
 $ python3 -m pytest tests/ -q
-261 passed in 0.17s
+278 passed in 0.17s
 ```

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -108,7 +109,9 @@ class TestBenchmarkAggregator:
             }), encoding="utf-8")
 
         agg = BenchmarkAggregator()
-        benchmark = agg.aggregate(iteration, tmp_path)
+        with patch.object(agg, "_run_comparisons", return_value=[]), \
+             patch.object(agg, "_run_analysis", return_value=([], None)):
+            benchmark = agg.aggregate(iteration, tmp_path)
 
         assert len(benchmark.runs) == 2
         assert benchmark.run_summary["delta"]["pass_rate"] == "+1.00"
@@ -118,6 +121,89 @@ class TestBenchmarkAggregator:
         iteration.mkdir()
 
         agg = BenchmarkAggregator()
-        benchmark = agg.aggregate(iteration)
+        with patch.object(agg, "_run_comparisons", return_value=[]), \
+             patch.object(agg, "_run_analysis", return_value=([], None)):
+            benchmark = agg.aggregate(iteration)
 
         assert benchmark.runs == []
+
+    def test_aggregate_survives_comparison_failure(self, tmp_path: Path):
+        iteration = tmp_path / "iteration-1"
+        with_skill_dir = iteration / "with_skill" / "eval-1" / "run-1"
+        with_skill_dir.mkdir(parents=True)
+        (with_skill_dir / "outputs").mkdir()
+        (with_skill_dir / "grading.json").write_text(json.dumps({
+            "summary": {"pass_rate": 1.0, "passed": 2, "failed": 0, "total": 2},
+            "expectations": [{"text": "x", "passed": True, "evidence": ""}],
+        }))
+
+        without_skill_dir = iteration / "without_skill" / "eval-1" / "run-1"
+        without_skill_dir.mkdir(parents=True)
+        (without_skill_dir / "outputs").mkdir()
+        (without_skill_dir / "grading.json").write_text(json.dumps({
+            "summary": {"pass_rate": 0.0, "passed": 0, "failed": 2, "total": 2},
+            "expectations": [{"text": "x", "passed": False, "evidence": ""}],
+        }))
+
+        agg = BenchmarkAggregator()
+        with patch.object(agg, "_run_comparisons", side_effect=RuntimeError("LLM timeout")):
+            benchmark = agg.aggregate(iteration)
+
+        assert len(benchmark.runs) == 2
+        assert isinstance(benchmark.run_summary, dict)
+        assert "with_skill" in benchmark.run_summary
+        assert benchmark.comparisons is None or benchmark.comparisons == []
+
+    def test_aggregate_survives_analysis_failure(self, tmp_path: Path):
+        iteration = tmp_path / "iteration-1"
+        with_skill_dir = iteration / "with_skill" / "eval-1" / "run-1"
+        with_skill_dir.mkdir(parents=True)
+        (with_skill_dir / "outputs").mkdir()
+        (with_skill_dir / "grading.json").write_text(json.dumps({
+            "summary": {"pass_rate": 1.0, "passed": 2, "failed": 0, "total": 2},
+            "expectations": [],
+        }))
+
+        without_skill_dir = iteration / "without_skill" / "eval-1" / "run-1"
+        without_skill_dir.mkdir(parents=True)
+        (without_skill_dir / "outputs").mkdir()
+        (without_skill_dir / "grading.json").write_text(json.dumps({
+            "summary": {"pass_rate": 0.5, "passed": 1, "failed": 1, "total": 2},
+            "expectations": [],
+        }))
+
+        agg = BenchmarkAggregator()
+        with patch.object(agg, "_run_comparisons", return_value=[]), \
+             patch.object(agg, "_run_analysis", side_effect=RuntimeError("LLM rate limited")):
+            benchmark = agg.aggregate(iteration)
+
+        assert len(benchmark.runs) == 2
+        assert isinstance(benchmark.run_summary, dict)
+        assert benchmark.analysis is None
+
+    def test_aggregate_survives_both_failures(self, tmp_path: Path):
+        iteration = tmp_path / "iteration-1"
+        with_skill_dir = iteration / "with_skill" / "eval-1" / "run-1"
+        with_skill_dir.mkdir(parents=True)
+        (with_skill_dir / "outputs").mkdir()
+        (with_skill_dir / "grading.json").write_text(json.dumps({
+            "summary": {"pass_rate": 0.8, "passed": 4, "failed": 1, "total": 5},
+            "expectations": [],
+        }))
+
+        without_skill_dir = iteration / "without_skill" / "eval-1" / "run-1"
+        without_skill_dir.mkdir(parents=True)
+        (without_skill_dir / "outputs").mkdir()
+        (without_skill_dir / "grading.json").write_text(json.dumps({
+            "summary": {"pass_rate": 0.2, "passed": 1, "failed": 4, "total": 5},
+            "expectations": [],
+        }))
+
+        agg = BenchmarkAggregator()
+        with patch.object(agg, "_run_comparisons", side_effect=RuntimeError("fail1")), \
+             patch.object(agg, "_run_analysis", side_effect=RuntimeError("fail2")):
+            benchmark = agg.aggregate(iteration)
+
+        assert len(benchmark.runs) == 2
+        assert benchmark.comparisons is None or benchmark.comparisons == []
+        assert benchmark.analysis is None

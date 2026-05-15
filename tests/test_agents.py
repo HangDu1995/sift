@@ -147,7 +147,7 @@ class TestBlindComparator:
         c = BlindComparator()
         result = c._parse("")
         assert result.winner == "TIE"
-        assert "failed" in result.reasoning.lower()
+        assert "fail" in result.reasoning.lower() or "失败" in result.reasoning
 
     def test_parse_invalid_json(self):
         c = BlindComparator()

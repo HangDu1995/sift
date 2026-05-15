@@ -71,16 +71,29 @@ def _build_run(root: Path, run_dir: Path) -> dict | None:
     eval_id = 0
     run_number = 0
 
-    if len(parts) >= 2:
-        config = parts[-2]
-    if len(parts) >= 1:
+    if len(parts) >= 3:
+        config = parts[0]
+        try:
+            eval_id = int(parts[1].split("-")[1])
+        except (ValueError, IndexError):
+            pass
         try:
             run_number = int(parts[-1].split("-")[1])
         except (ValueError, IndexError):
             pass
-    if len(parts) >= 3:
+    elif len(parts) >= 2:
+        config = parts[0]
         try:
-            eval_id = int(parts[-3].split("-")[1])
+            eval_id = int(parts[0].split("-")[1])
+        except (ValueError, IndexError):
+            pass
+        try:
+            run_number = int(parts[-1].split("-")[1])
+        except (ValueError, IndexError):
+            pass
+    elif len(parts) >= 1:
+        try:
+            run_number = int(parts[-1].split("-")[1])
         except (ValueError, IndexError):
             pass
 
@@ -236,6 +249,11 @@ class ReportGenerator:
 
         runs = find_runs(workspace)
         skill_name = workspace.name
+
+        if benchmark and isinstance(benchmark, dict):
+            meta = benchmark.get("metadata", {})
+            if meta.get("skill_name"):
+                skill_name = meta["skill_name"]
 
         if previous is None:
             previous = load_previous_iteration(workspace)

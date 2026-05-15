@@ -283,7 +283,7 @@ output/iteration-1/
 | `--compliance-gate` | 关闭 | 遵循性率 < 0.5 时强制失败 |
 | `--eval-samples` | 无 | 运行 eval 的数量或比例 |
 | `--merged` | 关闭 | 使用 merged-prompt 模式 |
-| `--open` | 关闭 | 运行完成后在浏览器中打开报告 |
+| `--open` | 关闭 | 运行完成后在浏览器中直接打开 report.html（`file://` 本地文件） |
 
 **产出文件**（均在 `iteration-1/` 下）：
 - `vet-report.json` — 安全审查结果
@@ -297,19 +297,14 @@ output/iteration-1/
 ```bash
 # 静态文件模式（推荐）
 skill-eval report output/iteration-1/        # 写入 iteration-1/report.html
-skill-eval report output/iteration-1/ --open # 在浏览器中打开
-
-# Server 模式（支持在线反馈提交）
-skill-eval report output/iteration-1/ --port 8080 --open
+skill-eval report output/iteration-1/ --open # 生成并在浏览器中打开
 ```
 
-自动发现 `benchmark.json`、`scorecard.json`、`vet-report.json`、`overfitting_report.json`。
+自动发现 `benchmark.json`、`scorecard.json`、`vet-report.json`、`overfitting_report.json`，始终生成静态 `report.html` 到指定目录。
 
 **两个标签页：**
-- **输出** — 浏览 eval 的 prompt、输出文件、评分详情，可逐条反馈。点击「提交所有评审」：
-  - Server 模式：反馈 POST 到 `/api/feedback`，写入 `workspace/feedback.json`
-  - 静态模式：`fetch` 失败后自动创建 Blob，浏览器下载 `feedback.json`
-- **基准测试** — 安全审查 + 评分卡 + 过拟合 + 通过率对比 + 盲评对比 + 深度分析 + 检查点明细
+- **输出** — 浏览 eval 的 prompt、输出文件、评分详情，可逐条反馈。点击「提交所有评审」后自动创建 Blob，浏览器下载 `feedback.json`
+- **基准测试** — 评分卡 + vet 安全审查 + 过拟合检测 + 通过率对比 + 盲评对比 + 深度分析 + 检查点明细，所有面板聚合在同一视图
 
 ### `batch-report` — 批量 HTML 报告
 
@@ -842,7 +837,7 @@ skill-eval/
 │   ├── android-minimal/           # 最小 Android 项目（~12 文件）
 │   ├── android-medium/            # 中等 Android 项目（~20 文件）
 │   └── README.md
-├── tests/                         # 261 个测试
+├── tests/                         # 278 个测试
 └── docs/
 ```
 

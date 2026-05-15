@@ -171,6 +171,8 @@ skill-eval full path/to/skill/ --workers 4 --timeout 600  # 并发 + 超时（�
 
 **6 步全流程**：安全审查 → 静态分析 → 加载 evals → A/B 测试 → 过拟合检测 → HTML 报告。默认 `--timeout 600`、`--max-turns 20`、per-eval 并发模式。产出 `benchmark.json` + `scorecard.json` + `vet-report.json` + `overfitting_report.json` + `report.html`。
 
+内置统计保护：`--runs 1` 仍可使用（用于快速验证），但工具会警告缺乏统计有效性。默认 `--runs 3` 启用异常检测（超时 + 离群值基于 MAD）、UNEVAL 重试（最多 2 次）、方差分析。
+
 ### `batch` — 批量评测
 
 ```bash
@@ -219,7 +221,27 @@ skill-eval import monitor.jsonl --benchmark iteration-1/benchmark.json
 - **输出** — 浏览每条 eval 的 prompt、输出文件、评分详情，可逐条填写反馈。点击「提交所有评审」后：
   - Server 模式（`--port`）：反馈写入 `workspace/feedback.json`
   - 静态模式：浏览器自动下载 `feedback.json`
-- **基准测试** — 安全审查面板 + 静态分析记分卡 + 过拟合分析 + 通过率对比 + 盲评对比 + 深度分析 + 检查点明细
+- **基准测试** — 安全审查面板 + 静态分析记分卡 + 异常检测面板 + 过拟合分析 + 通过率对比 + 盲评对比 + 深度分析 + 检查点明细
+
+### 断言分级系统
+
+评测断言分为三个层级，每层使用不同的评判方式，避免交叉污染：
+
+| 层级 | 类型 | 判定方式 | 示例 |
+|------|------|---------|------|
+| **Tier 1** | 确定性 | 程序化正则/文件检查 | `FILE_EXISTS`, `CONTAINS_PATTERN`, `NOT_CONTAINS`, `TOOL_CALLED`, `STEP_COUNT` |
+| **Tier 2** | 行为性 | 程序化行为检查 | `GATE_REQUESTED`, `GATE_NOT_SKIPPED`, `PHASE_ORDERED`, `FILE_NOT_WRITTEN` |
+| **Tier 3** | 语义性 | LLM 阅读理解打分 | `LLM_GRADE`（0-5评分），`LLM_FACT`（命题验证+引用），`LLM_NOT_DELEGATE`（委托检测）|
+
+**关键原则**：同一个语义维度只放一个断言。例如验证"是否委托给 spec-evolver（示例）"，只用 `LLM_NOT_DELEGATE`（Tier 3），**不要**同时添加 `NOT_CONTAINS "spec-evolver"`（Tier 1）。
+
+### 异常检测与重试
+
+- **超时检测**：单 eval 超过 `per_eval_timeout`（默认 300s）标记为异常
+- **离群值检测**：基于 Median Absolute Deviation（MAD），同 eval+config 的运行时 > 中位数 + 3×MAD 标记为异常
+- **UNEVAL 重试**：LLM 评判返回 "Not evaluated" 时自动重试（最多 2 次），重试信息标记在报告中
+- **方差监控**：多次运行 pass_rate 标准差过大时报告标注 HIGH_VARIANCE
+- 报告中异常 run 标记 ⚠，重试标记 R{N}，高耗时标红
 
 ---
 
@@ -261,7 +283,7 @@ pipelines:
 ## 测试
 
 ```bash
-pytest tests/ -v           # 261 个测试
+pytest tests/ -v           # 278 个测试
 pytest tests/ --cov=skill_eval
 ```
 

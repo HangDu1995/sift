@@ -14,6 +14,7 @@ import threading
 
 from skill_eval.errors import ClaudeRunnerError
 from skill_eval.models import (
+    AssertionVerdict,
     EvalCase,
     EvalSet,
     ExpectationResult,
@@ -228,10 +229,35 @@ class ABTestRunner:
         completed = [0]
         lock = threading.Lock()
 
-        def run_single_eval(eval_case: EvalCase, config_name: str, run_num: int) -> str:
+        max_retries = getattr(self.config, "max_retries_per_eval", 0)
+
+        def run_single_eval(eval_case: EvalCase, config_name: str, run_num: int, retry_num: int = 0) -> str:
             run_label = f"{eval_case.get_name()}::{config_name}::run-{run_num}"
+            if retry_num > 0:
+                run_label += f"::retry-{retry_num}"
             config_dir = iteration_dir / config_name / f"eval-{eval_case.id}" / f"run-{run_num}"
+            if retry_num > 0:
+                config_dir = iteration_dir / config_name / f"eval-{eval_case.id}" / f"run-{run_num}-retry-{retry_num}"
             config_dir.mkdir(parents=True, exist_ok=True)
+
+            grading_path = config_dir / "grading.json"
+            if retry_num == 0 and grading_path.exists():
+                try:
+                    existing = json.loads(grading_path.read_text(encoding="utf-8"))
+                    if existing.get("summary", {}).get("total", 0) > 0:
+                        with lock:
+                            completed[0] += 1
+                        self._emit_progress(
+                            eval_case.get_name(), config_name,
+                            eval_case.id, len(evals),
+                            completed[0], total_jobs,
+                            GradingResult.model_validate(existing),
+                            0.0, None, phase="skipped",
+                            substep="already completed",
+                        )
+                        return run_label
+                except Exception:
+                    pass
             outputs_dir = config_dir / "outputs"
             outputs_dir.mkdir(exist_ok=True)
             eval_case.setup_fixtures(outputs_dir)
@@ -268,6 +294,17 @@ class ABTestRunner:
                     error=str(exc),
                 )
                 (config_dir / "grading.json").write_text(grading.model_dump_json(indent=2), encoding="utf-8")
+                if retry_num < max_retries:
+                    shutil.rmtree(config_dir, ignore_errors=True)
+                    self._emit_progress(
+                        eval_case.get_name(), config_name,
+                        eval_case.id, len(evals),
+                        completed[0], total_jobs,
+                        grading, run_duration, None,
+                        phase="retrying",
+                        substep=f"error, retry {retry_num+1}/{max_retries}",
+                    )
+                    return run_single_eval(eval_case, config_name, run_num, retry_num + 1)
                 with lock:
                     completed[0] += 1
                 self._emit_progress(
@@ -275,6 +312,7 @@ class ABTestRunner:
                     eval_case.id, len(evals),
                     completed[0], total_jobs,
                     grading, run_duration, None,
+                    phase="failed",
                 )
                 return run_label
 
@@ -294,6 +332,9 @@ class ABTestRunner:
 
             all_expectations, per_checkpoint = self._score_checkpoints(
                 [eval_case], run_output.transcript, outputs_dir,
+                tool_trace=run_output.tool_trace,
+                num_turns=run_output.num_turns,
+                stop_reason=run_output.stop_reason,
             )
 
             passed = sum(1 for e in all_expectations if e.passed)
@@ -373,8 +414,25 @@ class ABTestRunner:
             )
 
             run_duration = time.time() - run_start
+
+            # Check for UNEVAL results that need retry
+            uneval_count = sum(
+                1 for e in all_expectations
+                if getattr(e, "verdict", None) == AssertionVerdict.UNEVAL
+            )
+            if uneval_count > 0 and retry_num < self.config.max_retries_per_eval:
+                self._emit_progress(
+                    eval_case.get_name(), config_name,
+                    eval_case.id, len(evals),
+                    completed[0], total_jobs,
+                    overall_grading, run_duration, run_output,
+                    phase="retrying", substep=f"{uneval_count} UNEVAL assertions, retry {retry_num+1}/{self.config.max_retries_per_eval}",
+                )
+                return run_single_eval(eval_case, config_name, run_num, retry_num + 1)
+
             with lock:
                 completed[0] += 1
+
             self._emit_progress(
                 eval_case.get_name(), config_name,
                 eval_case.id, len(evals),
@@ -622,6 +680,9 @@ class ABTestRunner:
         eval_cases: list[EvalCase],
         transcript: str,
         outputs_dir: Path,
+        tool_trace: list | None = None,
+        num_turns: int = 0,
+        stop_reason: str = "",
     ) -> tuple[list, list[dict]]:
         prog_checker = None
         if self.scoring_config.enable_programmatic:
@@ -639,7 +700,13 @@ class ABTestRunner:
                 expectation_map.append((cp_idx, exp_text))
 
             if eval_case.assertions and prog_checker:
-                cp_prog = prog_checker.check(eval_case, outputs_dir)
+                cp_prog = prog_checker.check(
+                    eval_case, outputs_dir,
+                    transcript=transcript,
+                    tool_trace=tool_trace,
+                    num_turns=num_turns,
+                    stop_reason=stop_reason,
+                )
                 all_expectations.extend(cp_prog)
                 prog_results_by_cp[cp_idx] = cp_prog
 
@@ -650,6 +717,21 @@ class ABTestRunner:
         if not expectation_map:
             return all_expectations, per_checkpoint
 
+        # Also grade Tier 3 assertions via LLM
+        from skill_eval.scoring.llm_grader import LLMGrader
+        grader = LLMGrader(
+            model=self.scoring_config.llm_model,
+            timeout=self.scoring_config.llm_timeout,
+        )
+        tier3_results_by_cp: dict[int, list] = {}
+        if self.scoring_config.enable_llm:
+            for cp_idx, eval_case in enumerate(eval_cases):
+                tier3 = [a for a in eval_case.assertions if getattr(a, "tier", None) == "TIER3"]
+                if tier3:
+                    tier3_results = grader.grade_tier3(tier3, transcript, outputs_dir)
+                    tier3_results_by_cp[cp_idx] = tier3_results
+                    all_expectations.extend(tier3_results)
+
         prompt = (
             f"You are a checkpoint evaluator. Determine which expectations are covered in the execution transcript.\n\n"
             f"## Expectations ({len(expectation_map)} total across {len(eval_cases)} checkpoints)\n"
@@ -659,11 +741,10 @@ class ABTestRunner:
             f"Respond with ONLY a JSON array:\n"
             f'[{{"index": 0, "passed": true, "evidence": "brief reason"}}]\n\n'
             f"Judge each independently. passed=true only if there is clear evidence in the transcript.\n"
+            f"If unable to judge, use `passed: false` with evidence starting with 'Not evaluated:' and explain why.\n"
             f"All evidence strings must be in Chinese (中文)."
         )
 
-        from skill_eval.scoring.llm_grader import LLMGrader
-        grader = LLMGrader(model=self.scoring_config.llm_model, timeout=self.scoring_config.llm_timeout)
         response = grader._call_claude(prompt)
 
         results_by_index: dict[int, tuple[bool, str]] = {}
@@ -684,9 +765,16 @@ class ABTestRunner:
 
         exp_results_by_cp: dict[int, list] = {}
         for global_idx, (cp_idx, exp_text) in enumerate(expectation_map):
-            passed, evidence = results_by_index.get(global_idx, (False, "Not evaluated"))
+            passed, evidence = results_by_index.get(global_idx, (False, "Not evaluated: no grading response"))
+            verdict = AssertionVerdict.PASS if passed else (
+                AssertionVerdict.UNEVAL if evidence.startswith("Not evaluated") else AssertionVerdict.FAIL
+            )
             exp_result = ExpectationResult(
-                text=exp_text, passed=passed, evidence=evidence, source="llm_batch",
+                text=exp_text,
+                passed=passed,
+                evidence=evidence,
+                source="llm_batch",
+                verdict=verdict,
             )
             all_expectations.append(exp_result)
             exp_results_by_cp.setdefault(cp_idx, []).append(exp_result)
@@ -694,7 +782,8 @@ class ABTestRunner:
         for cp_idx, eval_case in enumerate(eval_cases):
             cp_exps = exp_results_by_cp.get(cp_idx, [])
             cp_assertions = prog_results_by_cp.get(cp_idx, [])
-            cp_all = cp_assertions + cp_exps
+            cp_tier3 = tier3_results_by_cp.get(cp_idx, [])
+            cp_all = cp_assertions + cp_tier3 + cp_exps
             cp_passed = sum(1 for e in cp_all if e.passed)
             cp_total = len(cp_all)
             per_checkpoint.append({
@@ -703,13 +792,26 @@ class ABTestRunner:
                 "passed": cp_passed,
                 "failed": cp_total - cp_passed,
                 "total": cp_total,
+                "uneval": sum(1 for e in cp_all if getattr(e, "verdict", None) == AssertionVerdict.UNEVAL),
                 "pass_rate": cp_passed / cp_total if cp_total > 0 else 0.0,
                 "assertions": [
-                    {"text": e.text, "passed": e.passed, "evidence": e.evidence, "source": e.source}
+                    {
+                        "text": e.text,
+                        "passed": e.passed,
+                        "evidence": e.evidence,
+                        "source": e.source,
+                        "verdict": getattr(e, "verdict", None).value if getattr(e, "verdict", None) else None,
+                    }
                     for e in cp_assertions
                 ],
                 "expectations": [
-                    {"text": e.text, "passed": e.passed, "evidence": e.evidence, "source": e.source}
+                    {
+                        "text": e.text,
+                        "passed": e.passed,
+                        "evidence": e.evidence,
+                        "source": e.source,
+                        "verdict": getattr(e, "verdict", None).value if getattr(e, "verdict", None) else None,
+                    }
                     for e in cp_exps
                 ],
             })
@@ -737,3 +839,51 @@ class ABTestRunner:
                 completed, total,
                 grading, run_duration, run_output, phase=phase, substep=substep,
             )
+
+    @staticmethod
+    def detect_outliers(
+        durations: list[dict],
+        threshold_multiplier: float = 3.0,
+    ) -> list[dict]:
+        """Detect outlier runs based on duration using Median Absolute Deviation.
+
+        Each dict: {eval_id, config, run_number, duration_seconds}
+        Returns list of dicts with anomaly_reason added.
+        """
+        if len(durations) < 4:
+            return []
+
+        import statistics
+        values = [d["duration_seconds"] for d in durations]
+        median = statistics.median(values)
+        deviations = [abs(v - median) for v in values]
+        mad = statistics.median(deviations) if deviations else 0.0
+
+        if mad == 0:
+            return []
+
+        anomalies = []
+        for d in durations:
+            if d["duration_seconds"] > median + threshold_multiplier * mad:
+                anomalies.append({
+                    **d,
+                    "anomaly_type": "outlier",
+                    "detail": f"Duration {d['duration_seconds']:.1f}s > median {median:.1f}s + {threshold_multiplier}×MAD {threshold_multiplier * mad:.1f}s",
+                })
+        return anomalies
+
+    @staticmethod
+    def detect_timeout(
+        durations: list[dict],
+        timeout_seconds: int,
+    ) -> list[dict]:
+        """Detect runs that exceeded the per-eval timeout."""
+        anomalies = []
+        for d in durations:
+            if d["duration_seconds"] > timeout_seconds:
+                anomalies.append({
+                    **d,
+                    "anomaly_type": "timeout",
+                    "detail": f"Duration {d['duration_seconds']:.1f}s > timeout {timeout_seconds}s",
+                })
+        return anomalies

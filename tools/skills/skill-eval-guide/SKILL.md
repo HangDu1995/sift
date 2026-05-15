@@ -250,14 +250,23 @@ skill-eval vet "$SKILL"
 # Step 2: 静态分析
 skill-eval analyze "$SKILL"
 
-# Step 3: 确保 evals.json 质量
+# Step 3: 确保 evals.json 质量（检查模糊 expectation + tier 重叠）
 python3 -c "
 import json
 e = json.load(open('$SKILL/evals.json'))
 evals = e.get('evals',[])
 vague = sum(1 for ev in evals for x in ev.get('expectations',[]) if 'follows' in str(x).lower())
 if vague > len(evals)*0.3:
-    print('NEEDS_REGEN')
+    print('NEEDS_REGEN (vague expectations)')
+# Check for tier overlap: same semantic dimension checked by both TIER1 and TIER3
+for ev in evals:
+    has_not_contains = any(a['type'] == 'NOT_CONTAINS' for a in ev.get('assertions',[]))
+    has_llm_not_delegate = any(a['type'] == 'LLM_NOT_DELEGATE' for a in ev.get('assertions',[]))
+    if has_not_contains and has_llm_not_delegate:
+        target = [a['params'].get('pattern','') for a in ev['assertions'] if a['type']=='NOT_CONTAINS']
+        delegated = [a['params'].get('target_skill','') for a in ev['assertions'] if a['type']=='LLM_NOT_DELEGATE']
+        if any(t in d or d in t for t in target for d in delegated):
+            print(f'OVERLAP in {ev[\"name\"]}: NOT_CONTAINS + LLM_NOT_DELEGATE checking same thing')
 "
 # 如果需要，重新生成：
 # skill-eval init "$SKILL" --output "$SKILL/evals.json"
@@ -314,13 +323,65 @@ PYEOF
 ## 常见问题
 
 | 问题 | 解决 |
-|---|---|
+|---|---|---|
 | skill-eval 未安装 | 向用户索要 GitHub URL，clone + `pip install -e .` |
 | evals 质量差（模糊 expectation） | `skill-eval init /path/to/skill` 重新用 LLM 生成 |
 | pass_rate 全 0% | expectation 太模糊，重新 init；或用 `--scoring llm` |
 | 超时 | `--timeout 600`，`--eval-samples 5` |
 | without_skill 无 grading | 正常（无 skill 时 Claude 可能不产出可评判内容） |
-| calibration UNRELIABLE | 改进 evals 具体性，加 programmatic assertion |
+| calibration UNRELIABLE | 检查是否有反复 UNEVAL 的断言，考虑重新设计 evals |
 | benchmark.json 缺失 | aggregation 失败，单独 `skill-eval report iteration-1/` |
 | report 面板空白 | 缺对应 JSON 文件，把 vet-report/scorecard/overfitting 文件 cp 到 iteration-1/ |
 | batch 显示 0 skills | 输入不是 skills 目录（需含 skills/ 子目录）或 manifest.json 格式不对 |
+| LLM 断言返回 "Not evaluated" | 断言会自动重试（最多 2 次）；仍 UNEVAL 则标记为 INDETERMINATE 不参与 pass_rate |
+| 单次运行方差大 | `--runs 1` 会显示警告；推荐 `--runs 3` 以上启用异常检测和统计保护 |
+| 报告显示"异常"标记 | 离群值检测（MAD）发现该 run 运行时间异常，建议重试或增大 `--timeout` |
+
+---
+
+## 断言设计原则
+
+### 三层断言体系
+
+| 层级 | 类型 | 判定 | 不适用 |
+|------|------|------|--------|
+| **Tier 1** 确定性 | `FILE_EXISTS`, `CONTAINS_PATTERN`, `NOT_CONTAINS`, `TOOL_CALLED`, `STEP_COUNT` | 正则/文件检查 | 语义判断（如"是否正确"） |
+| **Tier 2** 行为性 | `GATE_REQUESTED`, `GATE_NOT_SKIPPED`, `PHASE_ORDERED`, `FILE_NOT_WRITTEN` | 程序化行为检查 | 文字匹配 |
+| **Tier 3** 语义性 | `LLM_GRADE`, `LLM_FACT`, `LLM_NOT_DELEGATE` | LLM 打分+举证 | 简单字面匹配 |
+
+### 关键规则
+
+1. **同一维度只用一层**：不要同时放 `NOT_CONTAINS "spec-evolver"` 和 `LLM_NOT_DELEGATE`（此处 spec-evolver 仅为示例，实际替换为目标 skill 名）。字面没出现不等于语义上没委托。
+2. **Tier 3 必须标注 `retry_on_uneval: true`**：LLM 评判可能返回 "Not evaluated"，启用自动重试。
+3. **不要为每条 expectation 自动生成 CONTAINS_PATTERN**：expectation 是 LLM 评的语义判断，CONTAINS_PATTERN 是机器正则检查——两者量的是不同东西，不应重叠。
+4. **Tier 1 只做文件内容检查**：检查 agent 输出的文件里有什么/没什么，不检查 transcript（对话文本）。
+
+### evals.json 设计范例
+
+```json
+{
+  "skill_name": "my-skill",
+  "evals": [
+    {
+      "id": 1,
+      "name": "L1-decision-logic-route",
+      "prompt": "具体测试场景...",
+      "expectations": [
+        "输出中提到 spec/baseline/ 不存在或需要创建"
+      ],
+      "assertions": [
+        {"name": "文件 baseline/ui-manifest.md 存在", "type": "FILE_EXISTS", "tier": "TIER1", "params": {"filename": "spec/baseline/ui-manifest.md"}},
+        {"name": "未委托给 other-skill（示例）", "type": "LLM_NOT_DELEGATE", "tier": "TIER3", "retry_on_uneval": true, "params": {"target_skill": "other-skill"}}
+      ],
+      "fixtures": [{"path": "spec/baseline/ui-manifest.md", "content": "# Manifest\n..."}]
+    }
+  ]
+}
+```
+
+### 异常检测
+
+- `--runs 1` 可用（快速验证），但会警告缺乏统计有效性，异常检测禁用
+- `--runs 3+` 启用基于 MAD 的离群值检测（运行时间异常标记为"异常"并高亮到报告）
+- UNEVAL 断言自动重试（最多 2 次），重试成功则用 retry 结果，失败则标记 INDETERMINATE
+- 报告中异常 run 显示 ⚠ 标记，重试显示 R{N}，超时 shows 红色
