@@ -35,14 +35,22 @@ skill-eval full path/to/my-skill/ --runs 1
 
 ### 使用 Skill 操作指南
 
-项目中提供了 `tools/skills/skill-eval-guide/` —— 一个可直接安装到 opencode / Claude Code 的操作指南 skill。Agent 加载后会自动选择合适的命令、参数和执行顺序。
+项目中提供了操作指南 skill，可安装到 Claude Code 或 opencode。Agent 加载后会自动选择合适的命令、参数和执行顺序。
+
+**Claude Code**（项目内已可用，输入 `/skill-eval-guide` 即可）：
 
 ```bash
-# 安装到 opencode
-cp -r tools/skills/skill-eval-guide/ ~/.config/opencode/skills/
+# 项目内安装（已完成）
+cp tools/skills/skill-eval-guide/SKILL.md .claude/commands/skill-eval-guide.md
 
-# 或在 CLAUDE.md 中引用
-# When evaluating skills, follow the instructions in tools/skills/skill-eval-guide/SKILL.md
+# 全局安装（所有项目可用）
+cp tools/skills/skill-eval-guide/SKILL.md ~/.claude/commands/skill-eval-guide.md
+```
+
+**opencode**：
+
+```bash
+cp -r tools/skills/skill-eval-guide/ ~/.config/opencode/skills/
 ```
 
 Skill 涵盖：13 命令意图映射、环境安装引导、追问用户原则、完整性检查、常见问题排查。
