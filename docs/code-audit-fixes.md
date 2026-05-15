@@ -405,3 +405,36 @@
 | 去除重复 | 3 处 |
 | 修改文件 | 4 (`viewer.py`, `cli.py`, `runner.py`, `code-audit-fixes.md`) |
 | 测试通过 | 278/278 |
+
+---
+
+## 轮次 8：Phase 2 重构 — 性能优化 (2026-05-15)
+
+### 方法
+修复 batch 评测串行执行导致的极慢速度（3 个 skill = ~15 分钟），将 skill 级别和 comparison 级别改为并行执行。
+
+### 发现与修复
+
+| 编号 | 严重度 | 文件 | 问题 | 修复 |
+|------|--------|------|------|------|
+| 8.1 | **PERF** | `batch/dag.py` | `topological_order()` 仅返回扁平列表，无法表示可并行层 | 新增 `topological_levels()`：返回 `[["a"], ["b", "c"]]` 形式的层级列表 |
+| 8.2 | **PERF** | `batch/scheduler.py` | `run_unit_tests()` 串行 for 循环跑 skill | 改用 `topological_levels()` + `ThreadPoolExecutor`：同层无依赖 skill 并发跑 |
+| 8.3 | **PERF** | `batch/scheduler.py` | `self.run_config.output_dir` 被多线程并发修改（非线程安全） | 每个 skill 用 `run_config.model_copy(update={...})` 创建独立副本 |
+| 8.4 | **PERF** | `execution/benchmark.py` | `_run_comparisons()` 串行 for 循环跑 comparison LLM 调用 | 改用 `ThreadPoolExecutor` 并发执行（max_workers=min(total,4)），保持进度条实时更新 |
+| 8.5 | **REFACTOR** | `batch/scheduler.py` | 单 skill 逻辑内嵌在 for 循环中 | 提取为 `_run_single_skill()` 方法，方便测试和复用 |
+
+### 性能提升预估
+
+| 场景 | 原耗时 | 新耗时 | 提升 |
+|------|--------|--------|------|
+| 3 skill 线性依赖 | ~15min (串行) | ~15min (无法并行) | 0% |
+| 5 skill 无依赖 | ~25min (串行) | ~5min (全并行) | **5x** |
+| 3 comparison pairs | ~90s (串行) | ~30s (并行) | **3x** |
+
+### 统计
+| 指标 | 值 |
+|------|-----|
+| 新增方法 | 2 (`topological_levels`, `_run_single_skill`) |
+| 并行化改造 | 3 处 |
+| 修改文件 | 3 (`dag.py`, `scheduler.py`, `benchmark.py`) |
+| 测试通过 | 278/278 |

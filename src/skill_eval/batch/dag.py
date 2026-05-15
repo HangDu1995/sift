@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import deque
+
 from skill_eval.errors import CyclicDependencyError
 from skill_eval.models import SkillEntry
 
@@ -41,6 +43,33 @@ class SkillDAG:
             raise CyclicDependencyError("Cyclic dependency detected in skill manifest")
 
         return order
+
+    def topological_levels(self) -> list[list[str]]:
+        in_degree: dict[str, int] = {n: 0 for n in self.nodes}
+        adj: dict[str, list[str]] = {n: [] for n in self.nodes}
+        for src, dst in self.edges:
+            if src in adj:
+                adj[src].append(dst)
+            if dst in in_degree:
+                in_degree[dst] += 1
+
+        queue = deque(n for n, d in in_degree.items() if d == 0)
+        levels: list[list[str]] = []
+
+        while queue:
+            level = list(queue)
+            levels.append(level)
+            next_queue: deque[str] = deque()
+            for node in level:
+                for neighbor in adj.get(node, []):
+                    in_degree[neighbor] -= 1
+                    if in_degree[neighbor] == 0:
+                        next_queue.append(neighbor)
+            queue = next_queue
+
+        if sum(len(l) for l in levels) != len(self.nodes):
+            raise CyclicDependencyError("Cyclic dependency detected in skill manifest")
+        return levels
 
     def get_dependencies(self, skill_path: str) -> list[str]:
         return [src for src, dst in self.edges if dst == skill_path]

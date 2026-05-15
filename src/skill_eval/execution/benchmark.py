@@ -367,7 +367,8 @@ class BenchmarkAggregator:
         return min(len(v) for v in configs.values()) if configs else 0
 
     def _run_comparisons(self, iteration_dir: Path) -> list:
-        import sys, time
+        import sys, time, threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         from skill_eval.scoring.comparator import BlindComparator
 
         with_skill_dir = iteration_dir / "with_skill"
@@ -376,7 +377,6 @@ class BenchmarkAggregator:
             return []
 
         comparator = BlindComparator(model=self.model, timeout=self.timeout)
-        comparisons: list[ComparisonResult] = []
 
         ws_runs = sorted(p for p in with_skill_dir.glob("run-*") if p.is_dir())
         ws_nested = sorted(p for p in with_skill_dir.glob("eval-*/run-*") if p.is_dir())
@@ -387,34 +387,35 @@ class BenchmarkAggregator:
         if wos_nested:
             wos_runs = wos_nested
 
-        total = min(len(ws_runs), len(wos_runs))
+        pairs = list(zip(ws_runs, wos_runs))
+        total = len(pairs)
         if total == 0:
             return []
 
-        failures = 0
+        completed_count = [0]
+        failures = [0]
+        lock = threading.Lock()
         start_time = time.time()
 
-        for idx, (ws_run, wos_run) in enumerate(zip(ws_runs, wos_runs)):
-            bar = self._progress_bar(idx + 1, total, 20)
+        def _progress_line():
+            with lock:
+                c = completed_count[0]
+            pct = c / total * 100 if total else 0
+            bar = self._progress_bar(c, total, 20)
             elapsed = time.time() - start_time
-            eta = ""
-            if idx > 0:
-                eta_s = (elapsed / (idx + 1)) * (total - idx - 1)
-                eta = f" ETA {eta_s/60:.0f}m{eta_s%60:02.0f}s"
-            status = f"[{idx+1}/{total}] comparison{bar}{eta}"
-            if failures:
-                status += f" ({failures} failures)"
-            sys.stderr.write(f"\r{status}")
-            sys.stderr.flush()
+            eta_str = ""
+            if c > 0:
+                eta_s = (elapsed / c) * (total - c)
+                eta_str = f" ETA {eta_s/60:.0f}m{eta_s%60:02.0f}s"
+            return f"\r[{c}/{total}] comparison {bar} {pct:.0f}%{eta_str}"
 
+        def _do_comparison(idx, ws_run, wos_run):
             ws_output = self._collect_run_output(ws_run)
             wos_output = self._collect_run_output(wos_run)
             ws_grading = self._load_grading(ws_run)
 
             merged_prompt_path = iteration_dir / "merged_prompt.txt"
-            eval_prompt = ""
-            if merged_prompt_path.exists():
-                eval_prompt = merged_prompt_path.read_text(encoding="utf-8")[:2000]
+            eval_prompt = merged_prompt_path.read_text(encoding="utf-8")[:2000] if merged_prompt_path.exists() else ""
 
             expectations = []
             if ws_grading:
@@ -422,22 +423,37 @@ class BenchmarkAggregator:
 
             result = self._compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectations)
             if result is None:
-                failures += 1
+                with lock:
+                    failures[0] += 1
                 result = ComparisonResult(winner="TIE", reasoning="comparison failed after retries")
-            comparisons.append(result)
 
             comp_path = ws_run.parent.parent / f"comparison-run{ws_run.name.split('-')[1]}.json"
             comp_path.write_text(
                 json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
+            with lock:
+                completed_count[0] += 1
+            sys.stderr.write(_progress_line())
+            sys.stderr.flush()
+            return (idx, result)
 
-        status = f"[{total}/{total}] comparison done ({time.time()-start_time:.0f}s)"
-        if failures:
-            status += f", {failures} failed"
-        sys.stderr.write(f"\r{status}\n")
+        comparisons_dict: dict[int, ComparisonResult] = {}
+        max_workers = min(total, 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            sys.stderr.write(_progress_line())
+            sys.stderr.flush()
+            futures = {pool.submit(_do_comparison, i, ws, wos): i for i, (ws, wos) in enumerate(pairs)}
+            for future in as_completed(futures):
+                idx, result = future.result()
+                comparisons_dict[idx] = result
+
+        comparisons = [comparisons_dict[i] for i in sorted(comparisons_dict)]
+        status = f"\r[{total}/{total}] comparison done ({time.time()-start_time:.0f}s)"
+        if failures[0]:
+            status += f", {failures[0]} failed"
+        sys.stderr.write(status + "\n")
         sys.stderr.flush()
-
         return comparisons
 
     def _compare_with_retry(self, comparator, ws_output, wos_output, eval_prompt, expectations, max_retries=3):
@@ -463,12 +479,13 @@ class BenchmarkAggregator:
 
     def _run_analysis(self, iteration_dir: Path, benchmark: BenchmarkData) -> tuple[list[str], object | None]:
         import sys
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         from skill_eval.scoring.analyzer import PosthocAnalyzer
 
         if not benchmark.runs:
             return [], None
 
-        sys.stderr.write("analysis: evaluating benchmark...")
+        sys.stderr.write("analysis: evaluating benchmark...\n")
         sys.stderr.flush()
 
         analyzer = PosthocAnalyzer(model=self.model, timeout=self.timeout)
@@ -489,8 +506,6 @@ class BenchmarkAggregator:
 
         comp_analysis = None
         if benchmark.comparisons:
-            sys.stderr.write("\ranalysis: comparing best vs worst...")
-            sys.stderr.flush()
             for attempt in range(3):
                 try:
                     comp_analysis = self._run_comparison_analysis(iteration_dir, benchmark, analyzer)
@@ -506,7 +521,7 @@ class BenchmarkAggregator:
                     encoding="utf-8",
                 )
 
-        sys.stderr.write("\ranalysis: done\n")
+        sys.stderr.write("analysis: done\n")
         sys.stderr.flush()
 
         return notes, comp_analysis
