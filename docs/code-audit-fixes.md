@@ -438,3 +438,47 @@
 | 并行化改造 | 3 处 |
 | 修改文件 | 3 (`dag.py`, `scheduler.py`, `benchmark.py`) |
 | 测试通过 | 278/278 |
+
+---
+
+## 轮次 9：Phase 3 重构 — 架构拆分 (2026-05-15)
+
+### 方法
+将 4 个超大型单体文件拆分为模块化 package 结构。
+
+### 拆分明细
+
+| 原文件 | 原行数 | 拆分后 | 新文件数 |
+|--------|--------|--------|----------|
+| `execution/benchmark.py` | 618 | `benchmark.py` + `comparison_suite.py` + `analysis_suite.py` | 3 |
+| `execution/runner.py` | 886 | `runner.py` + `cli_runner.py` + `anomaly.py` | 3 |
+| `models.py` | 696 | `models/` package (9 files) | 9 |
+
+### 拆分内容
+
+| 文件 | 提取内容 |
+|------|----------|
+| `execution/comparison_suite.py` | `run_comparisons`, `_compare_with_retry`, `_progress_bar`, `_collect_run_output`, `_load_grading` |
+| `execution/analysis_suite.py` | `run_analysis`, `run_comparison_analysis`, `_load_transcript` |
+| `execution/cli_runner.py` | `ClaudeRunner` class + `find_project_root()` |
+| `execution/anomaly.py` | `detect_outliers()`, `detect_timeout()` |
+| `models/enums.py` | 10 个枚举类型 |
+| `models/eval_models.py` | `EvalCase`, `EvalSet`, `Assertion`, `FixtureFile` |
+| `models/grading_models.py` | `GradingResult`, `GradingSummary`, `ExpectationResult`, `TimingData` 等 |
+| `models/execution_models.py` | `RunConfig`, `RunOutput`, `ScoringConfig`, `ToolCallRecord` |
+| `models/benchmark_models.py` | `BenchmarkData`, `RunResultEntry`, `StatsValue` 等 |
+| `models/comparison_models.py` | `ComparisonResult` 等 |
+| `models/analysis_models.py` | `AnalysisResult` 等 |
+| `models/batch_models.py` | `SkillsManifest`, `SkillEntry`, `NodeStatus` 等 |
+
+所有旧 `from skill_eval.models import X` 保持兼容，通过 `models/__init__.py` 重导出。
+
+### 统计
+
+| 指标 | 值 |
+|------|-----|
+| 新增文件 | 13 |
+| 删除文件 | 1 (`models.py` → `models/__init__.py`) |
+| 代码净增 | +200 行 |
+| 最大子文件 | 212 行 |
+| 测试通过 | 278/278 |
