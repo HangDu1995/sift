@@ -109,8 +109,8 @@ class TestBenchmarkAggregator:
             }), encoding="utf-8")
 
         agg = BenchmarkAggregator()
-        with patch.object(agg, "_run_comparisons", return_value=[]), \
-             patch.object(agg, "_run_analysis", return_value=([], None)):
+        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
             benchmark = agg.aggregate(iteration, tmp_path)
 
         assert len(benchmark.runs) == 2
@@ -121,8 +121,8 @@ class TestBenchmarkAggregator:
         iteration.mkdir()
 
         agg = BenchmarkAggregator()
-        with patch.object(agg, "_run_comparisons", return_value=[]), \
-             patch.object(agg, "_run_analysis", return_value=([], None)):
+        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
             benchmark = agg.aggregate(iteration)
 
         assert benchmark.runs == []
@@ -146,7 +146,7 @@ class TestBenchmarkAggregator:
         }))
 
         agg = BenchmarkAggregator()
-        with patch.object(agg, "_run_comparisons", side_effect=RuntimeError("LLM timeout")):
+        with patch("skill_eval.execution.benchmark.run_comparisons", side_effect=RuntimeError("LLM timeout")):
             benchmark = agg.aggregate(iteration)
 
         assert len(benchmark.runs) == 2
@@ -173,8 +173,8 @@ class TestBenchmarkAggregator:
         }))
 
         agg = BenchmarkAggregator()
-        with patch.object(agg, "_run_comparisons", return_value=[]), \
-             patch.object(agg, "_run_analysis", side_effect=RuntimeError("LLM rate limited")):
+        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("skill_eval.execution.benchmark.run_analysis", side_effect=RuntimeError("LLM rate limited")):
             benchmark = agg.aggregate(iteration)
 
         assert len(benchmark.runs) == 2
@@ -200,8 +200,8 @@ class TestBenchmarkAggregator:
         }))
 
         agg = BenchmarkAggregator()
-        with patch.object(agg, "_run_comparisons", side_effect=RuntimeError("fail1")), \
-             patch.object(agg, "_run_analysis", side_effect=RuntimeError("fail2")):
+        with patch("skill_eval.execution.benchmark.run_comparisons", side_effect=RuntimeError("fail1")), \
+             patch("skill_eval.execution.benchmark.run_analysis", side_effect=RuntimeError("fail2")):
             benchmark = agg.aggregate(iteration)
 
         assert len(benchmark.runs) == 2
