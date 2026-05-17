@@ -1,0 +1,33 @@
+{
+  "skill_name": "data-validator",
+  "skill_path": "/Users/layne/codes/skill-eval/fixtures/test-skills/data-pipeline/skills/data-validator",
+  "verdict": "SAFE",
+  "scanners": [
+    {
+      "name": "aguara",
+      "status": "SKIP",
+      "findings": [],
+      "message": "aguara not installed (https://github.com/garagon/aguara)"
+    },
+    {
+      "name": "skill-scanner",
+      "status": "SKIP",
+      "findings": [],
+      "message": "skill-scanner not installed (https://pypi.org/project/cisco-ai-skill-scanner/)"
+    },
+    {
+      "name": "secrets-scan",
+      "status": "PASS",
+      "findings": [],
+      "message": "No hardcoded secrets found"
+    },
+    {
+      "name": "structure-check",
+      "status": "PASS",
+      "findings": [],
+      "message": "Skill structure valid"
+    }
+  ],
+  "findings": [],
+  "summary": "All scanners passed"
+}

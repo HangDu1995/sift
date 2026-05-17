@@ -32,12 +32,15 @@ def _run_ab_eval(
 
     lc = _log_console(fmt)
     total_evals = len(eval_set.evals)
+    actual_evals = total_evals
     sampled = ""
     if eval_samples:
         if isinstance(eval_samples, float) and eval_samples <= 1.0:
-            sampled = f" (sampled {int(eval_samples * 100)}%)"
+            actual_evals = max(1, int(total_evals * eval_samples))
+            sampled = f" (sampled {int(eval_samples * 100)}% = {actual_evals}/{total_evals})"
         else:
-            sampled = f" (sampled {eval_samples}/{total_evals})"
+            actual_evals = min(int(eval_samples), total_evals)
+            sampled = f" (sampled {actual_evals}/{total_evals})"
     lc.print(f"Running A/B test: {eval_set.skill_name} ({total_evals} evals{sampled} × {runs} runs, {'per-eval' if per_eval_mode else 'merged'} mode)")
 
     scoring_config = ScoringConfig(
@@ -60,7 +63,7 @@ def _run_ab_eval(
         min_runs_for_stats=max(3, runs),
     )
 
-    progress_state = _ProgressState(len(eval_set.evals), runs)
+    progress_state = _ProgressState(actual_evals, runs)
 
     def on_progress(eval_name, config_name, eval_idx, total_evals, completed, total, grading, run_duration=0.0, run_output=None, phase="", substep=""):
         progress_state.update(eval_name, config_name, eval_idx, completed, total, grading, run_duration, run_output, phase=phase, substep=substep)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -162,130 +163,155 @@ class ABTestRunner:
                 )
                 return run_label
 
-            timing = TimingData(
-                total_tokens=run_output.total_tokens,
-                duration_ms=run_output.duration_ms,
-                total_duration_seconds=run_output.duration_ms / 1000.0,
-            )
-            (config_dir / "timing.json").write_text(timing.model_dump_json(indent=2), encoding="utf-8")
+            try:
+                timing = TimingData(
+                    total_tokens=run_output.total_tokens,
+                    duration_ms=run_output.duration_ms,
+                    total_duration_seconds=run_output.duration_ms / 1000.0,
+                )
+                (config_dir / "timing.json").write_text(timing.model_dump_json(indent=2), encoding="utf-8")
 
-            self._emit_progress(
-                eval_case.get_name(), config_name,
-                eval_case.id, len(evals),
-                completed[0], total_jobs,
-                None, 0.0, None, phase="scoring",
-            )
-
-            all_expectations, per_checkpoint = self._score_checkpoints(
-                [eval_case], run_output.transcript, outputs_dir,
-                tool_trace=run_output.tool_trace,
-                num_turns=run_output.num_turns,
-                stop_reason=run_output.stop_reason,
-            )
-
-            passed = sum(1 for e in all_expectations if e.passed)
-            total_exp = len(all_expectations)
-            overall_grading = GradingResult(
-                expectations=all_expectations,
-                summary=GradingSummary(
-                    passed=passed,
-                    failed=total_exp - passed,
-                    total=total_exp,
-                    pass_rate=passed / total_exp if total_exp > 0 else 0.0,
-                ),
-            )
-            (config_dir / "grading.json").write_text(overall_grading.model_dump_json(indent=2), encoding="utf-8")
-            (config_dir / "checkpoints.json").write_text(
-                json.dumps(per_checkpoint, indent=2, ensure_ascii=False), encoding="utf-8"
-            )
-
-            compliance_report = None
-            if config_name == "with_skill" and skill_path:
                 self._emit_progress(
                     eval_case.get_name(), config_name,
                     eval_case.id, len(evals),
                     completed[0], total_jobs,
-                    None, 0.0, None, phase="compliance",
-                )
-                from skill_eval.compliance.extractor import InstructionExtractor
-                from skill_eval.compliance.checker import ComplianceChecker
-
-                extractor = InstructionExtractor()
-                _, _, _, _, skill_body = parse_skill_md(skill_path)
-                instructions = extractor.extract(skill_body)
-                if instructions:
-                    log_path = config_dir / "compliance.log"
-                    log_path.write_text("", encoding="utf-8")
-                    checker = ComplianceChecker()
-                    compliance_report = checker.check(
-                        instructions=instructions,
-                        transcript=run_output.transcript,
-                        output_dir=outputs_dir,
-                        model=self.config.model,
-                        timeout=self.scoring_config.llm_timeout,
-                        tool_trace=list(run_output.tool_trace),
-                        log_path=log_path,
-                    )
-                    compliance_report.skill_name = eval_set.skill_name
-                    (config_dir / "compliance.json").write_text(
-                        compliance_report.model_dump_json(indent=2), encoding="utf-8"
-                    )
-
-            if not self.config.skip_calibration:
-                from skill_eval.calibration.calibrator import CalibrationChecker
-                calibrator = CalibrationChecker()
-                calibration_report = calibrator.calibrate(overall_grading, compliance=compliance_report)
-                (config_dir / "calibration.json").write_text(
-                    calibration_report.model_dump_json(indent=2), encoding="utf-8"
+                    None, 0.0, None, phase="scoring",
                 )
 
-            run_debug = {
-                "config": config_name,
-                "eval_name": eval_case.get_name(),
-                "eval_id": eval_case.id,
-                "run_num": run_num,
-                "prompt": prompt[:500],
-                "duration_ms": run_output.duration_ms,
-                "total_tokens": run_output.total_tokens,
-                "num_turns": run_output.num_turns,
-                "stop_reason": run_output.stop_reason,
-                "tool_calls": run_output.tool_calls,
-                "tool_trace": [t.model_dump() for t in run_output.tool_trace],
-                "result_text": run_output.result_text[:2000] if run_output.result_text else "",
-                "transcript_preview": run_output.transcript[:2000] if run_output.transcript else "",
-                "grading_summary": overall_grading.summary.model_dump(),
-            }
-            (config_dir / "run_debug.json").write_text(
-                json.dumps(run_debug, indent=2, ensure_ascii=False), encoding="utf-8"
-            )
+                all_expectations, per_checkpoint = self._score_checkpoints(
+                    [eval_case], run_output.transcript, outputs_dir,
+                    tool_trace=run_output.tool_trace,
+                    num_turns=run_output.num_turns,
+                    stop_reason=run_output.stop_reason,
+                )
 
-            run_duration = time.time() - run_start
+                passed = sum(1 for e in all_expectations if e.passed)
+                total_exp = len(all_expectations)
+                overall_grading = GradingResult(
+                    expectations=all_expectations,
+                    summary=GradingSummary(
+                        passed=passed,
+                        failed=total_exp - passed,
+                        total=total_exp,
+                        pass_rate=passed / total_exp if total_exp > 0 else 0.0,
+                    ),
+                )
+                (config_dir / "grading.json").write_text(overall_grading.model_dump_json(indent=2), encoding="utf-8")
+                (config_dir / "checkpoints.json").write_text(
+                    json.dumps(per_checkpoint, indent=2, ensure_ascii=False), encoding="utf-8"
+                )
 
-            # Check for UNEVAL results that need retry
-            uneval_count = sum(
-                1 for e in all_expectations
-                if getattr(e, "verdict", None) == AssertionVerdict.UNEVAL
-            )
-            if uneval_count > 0 and retry_num < self.config.max_retries_per_eval:
+                compliance_report = None
+                if config_name == "with_skill" and skill_path:
+                    self._emit_progress(
+                        eval_case.get_name(), config_name,
+                        eval_case.id, len(evals),
+                        completed[0], total_jobs,
+                        None, 0.0, None, phase="compliance",
+                    )
+                    from skill_eval.compliance.extractor import InstructionExtractor
+                    from skill_eval.compliance.checker import ComplianceChecker
+
+                    extractor = InstructionExtractor()
+                    _, _, _, _, skill_body = parse_skill_md(skill_path)
+                    instructions = extractor.extract(skill_body)
+                    if instructions:
+                        log_path = config_dir / "compliance.log"
+                        log_path.write_text("", encoding="utf-8")
+                        checker = ComplianceChecker()
+                        compliance_report = checker.check(
+                            instructions=instructions,
+                            transcript=run_output.transcript,
+                            output_dir=outputs_dir,
+                            model=self.config.model,
+                            timeout=self.scoring_config.llm_timeout,
+                            tool_trace=list(run_output.tool_trace),
+                            log_path=log_path,
+                        )
+                        compliance_report.skill_name = eval_set.skill_name
+                        (config_dir / "compliance.json").write_text(
+                            compliance_report.model_dump_json(indent=2), encoding="utf-8"
+                        )
+
+                if not self.config.skip_calibration:
+                    from skill_eval.calibration.calibrator import CalibrationChecker
+                    calibrator = CalibrationChecker()
+                    calibration_report = calibrator.calibrate(overall_grading, compliance=compliance_report)
+                    (config_dir / "calibration.json").write_text(
+                        calibration_report.model_dump_json(indent=2), encoding="utf-8"
+                    )
+
+                run_debug = {
+                    "config": config_name,
+                    "eval_name": eval_case.get_name(),
+                    "eval_id": eval_case.id,
+                    "run_num": run_num,
+                    "prompt": prompt[:500],
+                    "duration_ms": run_output.duration_ms,
+                    "total_tokens": run_output.total_tokens,
+                    "num_turns": run_output.num_turns,
+                    "stop_reason": run_output.stop_reason,
+                    "tool_calls": run_output.tool_calls,
+                    "tool_trace": [t.model_dump() for t in run_output.tool_trace],
+                    "result_text": run_output.result_text[:2000] if run_output.result_text else "",
+                    "transcript_preview": run_output.transcript[:2000] if run_output.transcript else "",
+                    "grading_summary": overall_grading.summary.model_dump(),
+                }
+                (config_dir / "run_debug.json").write_text(
+                    json.dumps(run_debug, indent=2, ensure_ascii=False), encoding="utf-8"
+                )
+
+                run_duration = time.time() - run_start
+
+                # Check for UNEVAL results that need retry
+                uneval_count = sum(
+                    1 for e in all_expectations
+                    if getattr(e, "verdict", None) == AssertionVerdict.UNEVAL
+                )
+                if uneval_count > 0 and retry_num < self.config.max_retries_per_eval:
+                    self._emit_progress(
+                        eval_case.get_name(), config_name,
+                        eval_case.id, len(evals),
+                        completed[0], total_jobs,
+                        overall_grading, run_duration, run_output,
+                        phase="retrying", substep=f"{uneval_count} UNEVAL assertions, retry {retry_num+1}/{self.config.max_retries_per_eval}",
+                    )
+                    return run_single_eval(eval_case, config_name, run_num, retry_num + 1)
+
+                with lock:
+                    completed[0] += 1
+
                 self._emit_progress(
                     eval_case.get_name(), config_name,
                     eval_case.id, len(evals),
                     completed[0], total_jobs,
                     overall_grading, run_duration, run_output,
-                    phase="retrying", substep=f"{uneval_count} UNEVAL assertions, retry {retry_num+1}/{self.config.max_retries_per_eval}",
                 )
-                return run_single_eval(eval_case, config_name, run_num, retry_num + 1)
+                return run_label
 
-            with lock:
-                completed[0] += 1
-
-            self._emit_progress(
-                eval_case.get_name(), config_name,
-                eval_case.id, len(evals),
-                completed[0], total_jobs,
-                overall_grading, run_duration, run_output,
-            )
-            return run_label
+            except Exception as exc:
+                import traceback
+                run_duration = time.time() - run_start
+                (config_dir / "error.txt").write_text(f"{exc}\n{traceback.format_exc()}", encoding="utf-8")
+                grading = GradingResult(
+                    summary=GradingSummary(pass_rate=0.0, passed=0, failed=0, total=0),
+                    expectations=[ExpectationResult(text=e, passed=False, evidence=str(exc), source="error")
+                                  for e in eval_case.expectations],
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                (config_dir / "grading.json").write_text(grading.model_dump_json(indent=2), encoding="utf-8")
+                traceback.print_exc()
+                with lock:
+                    completed[0] += 1
+                self._emit_progress(
+                    eval_case.get_name(), config_name,
+                    eval_case.id, len(evals),
+                    completed[0], total_jobs,
+                    grading, run_duration, None,
+                    phase="failed",
+                    substep=f"{type(exc).__name__}",
+                )
+                return run_label
 
         jobs = []
         for eval_case in evals:
@@ -369,142 +395,164 @@ class ABTestRunner:
                     )
                     continue
 
-                timing = TimingData(
-                    total_tokens=run_output.total_tokens,
-                    duration_ms=run_output.duration_ms,
-                    total_duration_seconds=run_output.duration_ms / 1000.0,
-                )
-                (run_dir / "timing.json").write_text(
-                    timing.model_dump_json(indent=2), encoding="utf-8"
-                )
+                try:
 
-                self._emit_progress(
-                    config_name, config_name,
-                    1, 1,
-                    completed_runs, total_runs,
-                    None, 0.0, None, phase="scoring",
-                    substep=f"batch checking {num_checkpoints} checkpoints",
-                )
+                    timing = TimingData(
+                        total_tokens=run_output.total_tokens,
+                        duration_ms=run_output.duration_ms,
+                        total_duration_seconds=run_output.duration_ms / 1000.0,
+                    )
+                    (run_dir / "timing.json").write_text(
+                        timing.model_dump_json(indent=2), encoding="utf-8"
+                    )
 
-                all_expectations, per_checkpoint = self._score_checkpoints(
-                    evals, run_output.transcript, outputs_dir,
-                )
-
-                passed = sum(1 for e in all_expectations if e.passed)
-                total_exp = len(all_expectations)
-                overall_grading = GradingResult(
-                    expectations=all_expectations,
-                    summary=GradingSummary(
-                        passed=passed,
-                        failed=total_exp - passed,
-                        total=total_exp,
-                        pass_rate=passed / total_exp if total_exp > 0 else 0.0,
-                    ),
-                )
-                (run_dir / "grading.json").write_text(
-                    overall_grading.model_dump_json(indent=2), encoding="utf-8"
-                )
-                (run_dir / "checkpoints.json").write_text(
-                    json.dumps(per_checkpoint, indent=2, ensure_ascii=False), encoding="utf-8"
-                )
-
-                compliance_report = None
-
-                if config_name == "with_skill" and skill_path:
                     self._emit_progress(
                         config_name, config_name,
                         1, 1,
                         completed_runs, total_runs,
-                        None, 0.0, None, phase="compliance",
+                        None, 0.0, None, phase="scoring",
+                        substep=f"batch checking {num_checkpoints} checkpoints",
                     )
-                    from skill_eval.compliance.extractor import InstructionExtractor
-                    from skill_eval.compliance.checker import ComplianceChecker
 
-                    extractor = InstructionExtractor()
-                    _, _, _, _, skill_body = parse_skill_md(skill_path)
-                    instructions = extractor.extract(skill_body)
+                    all_expectations, per_checkpoint = self._score_checkpoints(
+                        evals, run_output.transcript, outputs_dir,
+                    )
 
-                    if instructions:
-                        log_path = run_dir / "compliance.log"
-                        log_path.write_text("", encoding="utf-8")
+                    passed = sum(1 for e in all_expectations if e.passed)
+                    total_exp = len(all_expectations)
+                    overall_grading = GradingResult(
+                        expectations=all_expectations,
+                        summary=GradingSummary(
+                            passed=passed,
+                            failed=total_exp - passed,
+                            total=total_exp,
+                            pass_rate=passed / total_exp if total_exp > 0 else 0.0,
+                        ),
+                    )
+                    (run_dir / "grading.json").write_text(
+                        overall_grading.model_dump_json(indent=2), encoding="utf-8"
+                    )
+                    (run_dir / "checkpoints.json").write_text(
+                        json.dumps(per_checkpoint, indent=2, ensure_ascii=False), encoding="utf-8"
+                    )
 
-                        def _on_compliance_substep(step, total_instr, text, followed, confidence):
-                            self._emit_progress(
-                                config_name, config_name,
-                                1, 1,
-                                completed_runs, total_runs,
-                                None, 0.0, None, phase="compliance",
-                                substep=f"checking {step}/{total_instr}",
+                    compliance_report = None
+
+                    if config_name == "with_skill" and skill_path:
+                        self._emit_progress(
+                            config_name, config_name,
+                            1, 1,
+                            completed_runs, total_runs,
+                            None, 0.0, None, phase="compliance",
+                        )
+                        from skill_eval.compliance.extractor import InstructionExtractor
+                        from skill_eval.compliance.checker import ComplianceChecker
+
+                        extractor = InstructionExtractor()
+                        _, _, _, _, skill_body = parse_skill_md(skill_path)
+                        instructions = extractor.extract(skill_body)
+
+                        if instructions:
+                            log_path = run_dir / "compliance.log"
+                            log_path.write_text("", encoding="utf-8")
+
+                            def _on_compliance_substep(step, total_instr, text, followed, confidence):
+                                self._emit_progress(
+                                    config_name, config_name,
+                                    1, 1,
+                                    completed_runs, total_runs,
+                                    None, 0.0, None, phase="compliance",
+                                    substep=f"checking {step}/{total_instr}",
+                                )
+
+                            checker = ComplianceChecker()
+                            compliance_report = checker.check(
+                                instructions=instructions,
+                                transcript=run_output.transcript,
+                                output_dir=outputs_dir,
+                                model=self.config.model,
+                                timeout=self.scoring_config.llm_timeout,
+                                tool_trace=list(run_output.tool_trace),
+                                on_substep=_on_compliance_substep,
+                                log_path=log_path,
+                            )
+                            compliance_report.skill_name = eval_set.skill_name
+                            (run_dir / "compliance.json").write_text(
+                                compliance_report.model_dump_json(indent=2), encoding="utf-8"
                             )
 
-                        checker = ComplianceChecker()
-                        compliance_report = checker.check(
-                            instructions=instructions,
-                            transcript=run_output.transcript,
-                            output_dir=outputs_dir,
-                            model=self.config.model,
-                            timeout=self.scoring_config.llm_timeout,
-                            tool_trace=list(run_output.tool_trace),
-                            on_substep=_on_compliance_substep,
-                            log_path=log_path,
+                    if not self.config.skip_calibration:
+                        self._emit_progress(
+                            config_name, config_name,
+                            1, 1,
+                            completed_runs, total_runs,
+                            None, 0.0, None, phase="calibration",
                         )
-                        compliance_report.skill_name = eval_set.skill_name
-                        (run_dir / "compliance.json").write_text(
-                            compliance_report.model_dump_json(indent=2), encoding="utf-8"
-                        )
+                        from skill_eval.calibration.calibrator import CalibrationChecker
 
-                if not self.config.skip_calibration:
+                        calibrator = CalibrationChecker()
+                        calibration_report = calibrator.calibrate(overall_grading, compliance=compliance_report)
+                        (run_dir / "calibration.json").write_text(
+                            calibration_report.model_dump_json(indent=2), encoding="utf-8"
+                        )
+                    else:
+                        calibration_report = None
+
+                    run_debug = {
+                        "config": config_name,
+                        "run_num": run_num,
+                        "prompt": merged_prompt[:500],
+                        "duration_ms": run_output.duration_ms,
+                        "total_tokens": run_output.total_tokens,
+                        "num_turns": run_output.num_turns,
+                        "stop_reason": run_output.stop_reason,
+                        "tool_calls": run_output.tool_calls,
+                        "tool_trace": [t.model_dump() for t in run_output.tool_trace],
+                        "result_text": run_output.result_text[:2000] if run_output.result_text else "",
+                        "transcript_preview": run_output.transcript[:2000] if run_output.transcript else "",
+                        "grading_summary": overall_grading.summary.model_dump(),
+                        "num_checkpoints": num_checkpoints,
+                    }
+                    if calibration_report:
+                        run_debug["calibration_grade"] = calibration_report.grade.value
+                        run_debug["calibration_confidence"] = calibration_report.overall_confidence
+                        run_debug["calibration_agreement_rate"] = calibration_report.agreement_rate
+                    if compliance_report:
+                        run_debug["compliance_rate"] = compliance_report.compliance_rate
+                    (run_dir / "run_debug.json").write_text(
+                        json.dumps(run_debug, indent=2, ensure_ascii=False), encoding="utf-8"
+                    )
+
+                    completed_runs += 1
+                    run_duration = time.time() - run_start
                     self._emit_progress(
                         config_name, config_name,
                         1, 1,
                         completed_runs, total_runs,
-                        None, 0.0, None, phase="calibration",
+                        overall_grading, run_duration, run_output,
                     )
-                    from skill_eval.calibration.calibrator import CalibrationChecker
-
-                    calibrator = CalibrationChecker()
-                    calibration_report = calibrator.calibrate(overall_grading, compliance=compliance_report)
-                    (run_dir / "calibration.json").write_text(
-                        calibration_report.model_dump_json(indent=2), encoding="utf-8"
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
+                    run_duration = time.time() - run_start
+                    (run_dir / "error.txt").write_text(f"{exc}\n{traceback.format_exc()}", encoding="utf-8")
+                    grading = GradingResult(
+                        summary=GradingSummary(pass_rate=0.0, passed=0, failed=0, total=0),
+                        expectations=[],
+                        error=f"{type(exc).__name__}: {exc}",
                     )
-                else:
-                    calibration_report = None
+                    (run_dir / "grading.json").write_text(grading.model_dump_json(indent=2), encoding="utf-8")
+                    completed_runs += 1
+                    self._emit_progress(
+                        config_name, config_name,
+                        1, 1,
+                        completed_runs, total_runs,
+                        grading, run_duration, None,
+                        phase="failed",
+                        substep=f"{type(exc).__name__}",
+                    )
 
-                run_debug = {
-                    "config": config_name,
-                    "run_num": run_num,
-                    "prompt": merged_prompt[:500],
-                    "duration_ms": run_output.duration_ms,
-                    "total_tokens": run_output.total_tokens,
-                    "num_turns": run_output.num_turns,
-                    "stop_reason": run_output.stop_reason,
-                    "tool_calls": run_output.tool_calls,
-                    "tool_trace": [t.model_dump() for t in run_output.tool_trace],
-                    "result_text": run_output.result_text[:2000] if run_output.result_text else "",
-                    "transcript_preview": run_output.transcript[:2000] if run_output.transcript else "",
-                    "grading_summary": overall_grading.summary.model_dump(),
-                    "num_checkpoints": num_checkpoints,
-                }
-                if calibration_report:
-                    run_debug["calibration_grade"] = calibration_report.grade.value
-                    run_debug["calibration_confidence"] = calibration_report.overall_confidence
-                    run_debug["calibration_agreement_rate"] = calibration_report.agreement_rate
-                if compliance_report:
-                    run_debug["compliance_rate"] = compliance_report.compliance_rate
-                (run_dir / "run_debug.json").write_text(
-                    json.dumps(run_debug, indent=2, ensure_ascii=False), encoding="utf-8"
-                )
-
-                completed_runs += 1
-                run_duration = time.time() - run_start
-                self._emit_progress(
-                    config_name, config_name,
-                    1, 1,
-                    completed_runs, total_runs,
-                    overall_grading, run_duration, run_output,
-                )
-
-        return iteration_dir
+            return iteration_dir
 
     @staticmethod
     def _build_merged_prompt_from_evals(evals: list[EvalCase]) -> str:
