@@ -47,7 +47,7 @@ def report(
     if previous and previous.exists():
         from skill_eval.reporting.viewer import load_previous_iteration
 
-        prev_data = load_previous_iteration(previous.parent) if previous.is_dir() else None
+        prev_data = load_previous_iteration(previous) if previous.is_dir() else None
         if prev_data is None:
             try:
                 prev_runs_data = json.loads(previous.read_text(encoding="utf-8"))

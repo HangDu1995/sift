@@ -98,7 +98,7 @@ def _build_run(root: Path, run_dir: Path) -> dict | None:
             pass
 
     prompt = ""
-    eval_metadata_path = run_dir.parent.parent / "eval_metadata.json"
+    eval_metadata_path = root / "eval_metadata.json"
     if eval_metadata_path.exists():
         try:
             meta = json.loads(eval_metadata_path.read_text(encoding="utf-8"))
@@ -149,7 +149,7 @@ def _build_run(root: Path, run_dir: Path) -> dict | None:
             pass
 
     previous_output = None
-    prev_dir = run_dir.parent.parent / "previous" / run_dir.name
+    prev_dir = root / "previous" / str(run_dir.relative_to(root))
     if prev_dir.is_dir() and (prev_dir / "outputs").is_dir():
         prev_outputs = sorted((prev_dir / "outputs").iterdir())
         if prev_outputs:
@@ -274,9 +274,9 @@ class ReportGenerator:
                 prev_feedback[r.get("run_id", "")] = r.get("feedback", "")
             for prev_run in previous.get("runs", []):
                 rid = prev_run.get("id", "")
-                po = prev_run.get("previous_output")
+                po = prev_run.get("outputs")
                 if po:
-                    prev_outputs[rid] = [po]
+                    prev_outputs[rid] = po
 
         data = {
             "skill_name": skill_name,

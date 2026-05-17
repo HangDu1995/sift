@@ -6,7 +6,6 @@ ClaudeRunner lives in cli_runner.py. Anomaly detection lives in anomaly.py.
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import time
@@ -31,7 +30,6 @@ from skill_eval.models import (
     TimingData,
 )
 from skill_eval.parser import parse_skill_md
-from skill_eval.scoring.programmatic import ProgrammaticChecker
 
 ProgressCallback = Callable[..., None]
 
@@ -326,6 +324,9 @@ class ABTestRunner:
                     future.result()
                 except Exception as exc:
                     job = futures[future]
+                    import traceback
+                    traceback.print_exc()
+                    print(f"[skill-eval] Unhandled error in run {job}: {exc}", file=__import__("sys").stderr, flush=True)
                     with lock:
                         completed[0] += 1
 
@@ -552,7 +553,7 @@ class ABTestRunner:
                         substep=f"{type(exc).__name__}",
                     )
 
-            return iteration_dir
+        return iteration_dir
 
     @staticmethod
     def _build_merged_prompt_from_evals(evals: list[EvalCase]) -> str:

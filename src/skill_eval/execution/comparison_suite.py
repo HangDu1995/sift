@@ -14,7 +14,7 @@ def _load_grading(run_dir: Path) -> dict | None:
     return None
 
 
-def _collect_run_output(run_dir: Path, aggregator) -> str:
+def _collect_run_output(run_dir: Path) -> str:
     outputs_dir = run_dir / "outputs"
     if not outputs_dir.is_dir():
         grading = _load_grading(run_dir)
@@ -103,8 +103,8 @@ def run_comparisons(aggregator, iteration_dir: Path) -> list:
         return f"\r[{c}/{total}] comparison {bar} {pct:.0f}%{eta_str}"
 
     def _do_comparison(idx, ws_run, wos_run):
-        ws_output = _collect_run_output(ws_run, aggregator)
-        wos_output = _collect_run_output(wos_run, aggregator)
+        ws_output = _collect_run_output(ws_run)
+        wos_output = _collect_run_output(wos_run)
         ws_grading = _load_grading(ws_run)
 
         merged_prompt_path = iteration_dir / "merged_prompt.txt"

@@ -10,13 +10,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
-from skill_eval.batch.dag import SkillDAG, build_dag
+from skill_eval.batch.dag import build_dag
 from skill_eval.batch.cascade import CascadeAnalyzer
 from skill_eval.models import (
     NodeStatus,
     RunConfig,
     ScoringConfig,
-    SkillEntry,
     SkillsManifest,
 )
 
@@ -122,7 +121,7 @@ class BatchScheduler:
             agg_start = time.time()
             sys.stderr.write(f"[{idx}/{total}] {skill_path}: aggregating...\n")
             sys.stderr.flush()
-            agg = BenchmarkAggregator(model=run_config.model)
+                agg = BenchmarkAggregator(model=run_config.model, timeout=self.scoring_config.llm_timeout)
             benchmark = agg.aggregate(iteration_dir, skill_dir)
             (iteration_dir / "benchmark.json").write_text(
                 json.dumps(benchmark.model_dump(mode="json"), indent=2, ensure_ascii=False),

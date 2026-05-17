@@ -8,12 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from skill_eval.models import (
-    AnalysisResult,
     AnomalyReport,
-    AssertionVerdict,
     BenchmarkData,
     BenchmarkMetadata,
-    ComparisonResult,
     RunAnomaly,
     RunResultEntry,
     RunResultMetrics,

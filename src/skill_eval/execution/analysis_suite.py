@@ -71,7 +71,6 @@ def run_comparison_analysis(aggregator, iteration_dir: Path, benchmark: Benchmar
 
 def run_analysis(aggregator, iteration_dir: Path, benchmark: BenchmarkData) -> tuple:
     import sys
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     from skill_eval.scoring.analyzer import PosthocAnalyzer
 
     if not benchmark.runs:

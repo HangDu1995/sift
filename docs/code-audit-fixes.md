@@ -482,3 +482,36 @@
 | 代码净增 | +200 行 |
 | 最大子文件 | 212 行 |
 | 测试通过 | 278/278 |
+
+---
+
+## 轮次 10：Phase 4 — 审计修复 (2026-05-16)
+
+### 方法
+4 个 explore agent 并行审计 20+ 个文件。发现 14 个 bug（1 CRITICAL, 4 HIGH/MEDIUM, 9 MINOR）。
+
+### 发现与修复
+
+| 编号 | 严重度 | 文件 | 问题 | 修复 |
+|------|--------|------|------|------|
+| 10.1 | **CRITICAL** | `runner.py:555` | `return iteration_dir` 在 `for config_name` 循环内 → only with_skill | 提到循环外 |
+| 10.2 | **HIGH** | `viewer.py:277` | prev_outputs 读 `previous_output` → 永远空 | 改读 `outputs` |
+| 10.3 | MEDIUM | `benchmark.py` | 3 个未使用的 model 导入 | 删除 |
+| 10.4 | MEDIUM | `scheduler.py` | 不传 timeout 给 BenchmarkAggregator | 传 `llm_timeout` |
+| 10.5 | MEDIUM | `viewer.py:101` | `run_dir.parent.parent` 路径脆弱 | 改用 `root` |
+| 10.6 | MEDIUM | `viewer.py:152` | `run_dir.parent.parent / "previous"` 路径脆弱 | 改用 `root` |
+| 10.7 | MINOR | `runner.py` | `import os` 未使用 | 删除 |
+| 10.8 | MINOR | `runner.py` | `ProgrammaticChecker` 未使用 | 删除 |
+| 10.9 | MINOR | `runner.py` | `future.result()` 异常静默 | 加日志 |
+| 10.10 | MINOR | `cli_runner.py` | `import re` 未使用 | 删除 |
+| 10.11 | MINOR | `comparison_suite.py` | `aggregator` 参数未使用 | 删除 |
+| 10.12 | MINOR | `analysis_suite.py` | `ThreadPoolExecutor` 导入未使用 | 删除 |
+| 10.13 | MINOR | `scheduler.py` | `SkillDAG, SkillEntry` 导入未使用 | 删除 |
+| 10.14 | MINOR | `report.py` | `previous.parent` 应传 `previous` | 修正 |
+
+### 统计
+| 指标 | 值 |
+|------|-----|
+| 修复 | 14 |
+| 修改文件 | 8 |
+| 测试 | 278/278 |
