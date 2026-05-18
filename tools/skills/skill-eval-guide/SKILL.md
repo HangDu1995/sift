@@ -175,7 +175,7 @@ Manifest 格式：
 ### `batch-report` — 批量报告
 
 ```bash
-skill-eval batch-report test-results/batch/ --open
+skill-eval batch-report test-results/batch/
 ```
 
 ### `vet-overfit` — 过拟合检测
@@ -192,7 +192,8 @@ skill-eval vet-overfit \
 ### `report` — 生成报告
 
 ```bash
-skill-eval report test-results/NAME/iteration-1/ --open
+skill-eval report test-results/NAME/iteration-1/                    # 生成静态 report.html
+skill-eval report test-results/NAME/iteration-1/ --open             # 生成并打开
 ```
 
 自动发现 benchmark.json、scorecard.json、overfitting_report.json、vet-report.json。

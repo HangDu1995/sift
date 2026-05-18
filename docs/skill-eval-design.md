@@ -2211,7 +2211,7 @@ class RuntimeCacheUsage(BaseModel):
 | `generate-config` | `skill-eval generate-config SKILLS_DIR [--output FILE] [--model MODEL]` | ~30s | 是 |
 | `run` | `skill-eval run SKILL_PATH [--evals PATH] [--runs N] [--model MODEL] [--workers N] [--timeout N] [--scoring MODE] [--compliance-gate] [--security-gate] [--no-calibration] [--eval-samples N] [--merged] [--output DIR]` | 5-30min | 是 |
 | `optimize-trigger` | `skill-eval optimize-trigger SKILL_PATH --eval-set PATH [--max-iterations N] [--model MODEL]` | 10-60min | 是 |
-| `report` | `skill-eval report WORKSPACE [--benchmark PATH] [--previous PATH] [--static FILE] [--port PORT] [--open]` | <1s | 否 |
+| `report` | `skill-eval report WORKSPACE [--benchmark PATH] [--previous PATH] [--scorecard PATH] [--open]` | <1s | 否 |
 | `import` | `skill-eval import JSONL_PATH --benchmark PATH` | <1s | 否 |
 | `full` | `skill-eval full SKILL_PATH [--runs N] [--model MODEL] [--eval-samples N] [--merged] [--compliance-gate] [--security-gate] [--open]` | 5-30min | 是 |
 | `batch` | `skill-eval batch MANIFEST_OR_DIR [--runs N] [--model MODEL] [--layers LAYERS] [--baseline PATH] [--fail-fast] [--workers N] [--output DIR]` | 30-120min | 是 |
