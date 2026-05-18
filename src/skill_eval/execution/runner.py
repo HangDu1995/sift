@@ -106,10 +106,13 @@ class ABTestRunner:
             outputs_dir = config_dir / "outputs"
             outputs_dir.mkdir(exist_ok=True)
             eval_case.setup_fixtures(outputs_dir)
+            source_path, source_name = eval_case.setup_source(skill_path, outputs_dir)
 
             run_start = time.time()
             use_skill = skill_path if config_name == "with_skill" else None
             prompt = eval_case.prompt
+            if source_path:
+                prompt += f"\n\nSOURCE PROJECT AVAILABLE: '{source_name}' copied to working directory at {source_path}"
             if eval_case.expected_output:
                 prompt += f"\n\nExpected output:\n{eval_case.expected_output}"
 
@@ -338,6 +341,8 @@ class ABTestRunner:
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
         merged_prompt = self._build_merged_prompt_from_evals(evals)
+        if source_info:
+            merged_prompt = source_info.strip() + "\n\n" + merged_prompt
         num_checkpoints = len(evals)
 
         (iteration_dir / "merged_prompt.txt").write_text(merged_prompt, encoding="utf-8")
@@ -357,6 +362,13 @@ class ABTestRunner:
 
                 for eval_case in evals:
                     eval_case.setup_fixtures(outputs_dir)
+
+                # Collect source project info for the merged prompt
+                source_info = ""
+                for eval_case in evals:
+                    sp, sn = eval_case.setup_source(skill_path, outputs_dir)
+                    if sp:
+                        source_info += f"\n\nSOURCE PROJECT AVAILABLE: '{sn}' copied to working directory at {sp}"
 
                 run_start = time.time()
                 self._emit_progress(
