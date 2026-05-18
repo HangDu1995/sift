@@ -515,3 +515,40 @@
 | 修复 | 14 |
 | 修改文件 | 8 |
 | 测试 | 278/278 |
+
+---
+
+## 轮次 11：Phase 5 — Non-interactive 模式重写 + Source Project 支持 (2026-05-18)
+
+### 背景
+a2h-spec Skill 在默认 non-interactive prompt 下 delta = -0.53（with_skill 仅 13%，明显差于 without_skill 的 67%）。根因：
+1. 旧 non-interactive prompt 写 "Skip ALL steps that ask the user for input"，Claude 跳过所有交互步骤
+2. evals 全是 L1（纯问答）+ FILE_EXISTS 断言但无 source project，程序化断言全部失败
+3. Skill 的 248 条指令中大部分是交互/确认类，在 eval 环境无法执行
+
+### 修复
+
+| 编号 | 严重度 | 文件 | 问题 | 修复 |
+|------|--------|------|------|------|
+| 11.1 | **HIGH** | `cli_runner.py:46` | Non-interactive prompt 要求 "Skip ALL steps" 导致交互式 Skill 链路断裂 | 重写为 "SIMULATE a reasonable user response and continue immediately"，Claude 模拟用户回答 |
+| 11.2 | **HIGH** | `eval_models.py:38` | 无 source project 支持，FILE_EXISTS 断言无法通过 | 新增 `source_dir` 字段 + `setup_source()` 方法：自动复制项目目录到工作区 |
+| 11.3 | MEDIUM | `runner.py:109,363` | runner 不注入 source project 到 prompt | `setup_source()` 调用后追加 SOURCE PROJECT AVAILABLE 提示 |
+| 11.4 | MEDIUM | `a2h-spec/evals.json` | 全部 L1 + FILE_EXISTS 断言 + 不可能通过的断言（LLM_NOT_DELEGATE） | 升级 6 个 eval → L2，CONTAINS_PATTERN 替代 FILE_EXISTS，移除不可行断言，添加 source_dir |
+
+### 效果验证（a2h-spec, 50% evals, 1 run）
+
+| 指标 | 修复前 | 修复后 | 变化 |
+|------|--------|--------|------|
+| with_skill pass_rate | 13% | **74%** | +61% |
+| without_skill pass_rate | 67% | 79% | +12% |
+| delta | **-0.53** | **-0.06** | +0.47 |
+| runs | 11 | 12 | — |
+| compliance rate | — | 0-4% (248 条指令) | 交互类指令在 eval 环境无法遵循 |
+
+### 统计
+
+| 指标 | 值 |
+|------|-----|
+| 修复 | 4 |
+| 修改文件 | 3 (`cli_runner.py`, `eval_models.py`, `runner.py`) |
+| 测试 | 278/278 |
