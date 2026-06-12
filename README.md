@@ -1,6 +1,9 @@
 # Skill-Eval
+| 平台 | 命令 |
+|------|------|
+| macOS / Linux | `bash install.sh` |
+| Windows | `install.bat` |
 
-对 Claude Code Skill 的自动化评测工具。将 skill 开发从直觉驱动的艺术变成**可度量、可复现、可门禁**的工程流程。
 
 与 [skill-creator](https://github.com/anthropics/skill-creator) 对比，skill-eval 的核心差异：
 
@@ -18,7 +21,8 @@
 ```bash
 git clone https://github.com/fuxi-ailabs/skill-eval.git
 cd skill-eval
-bash install.sh
+bash install.sh     # macOS / Linux
+# install.bat       # Windows
 ```
 
 这会完成三件事：
@@ -34,11 +38,14 @@ git clone https://github.com/fuxi-ailabs/skill-eval.git
 cd skill-eval
 pip install -e .
 
-# 安装 skill-eval-guide 到 Claude Code（可选，让 Claude 自动选择评测命令）
+# 安装 skill-eval-guide（可选，让 Claude 自动选择评测命令）
+# macOS / Linux:
 cp tools/skills/skill-eval-guide/SKILL.md ~/.claude/skills/skill-eval-guide/SKILL.md
-
-# 安装到 opencode（可选）
 cp tools/skills/skill-eval-guide/SKILL.md ~/.config/opencode/skills/skill-eval-guide/SKILL.md
+
+# Windows:
+copy tools\skills\skill-eval-guide\SKILL.md %USERPROFILE%\.claude\skills\skill-eval-guide\SKILL.md
+copy tools\skills\skill-eval-guide\SKILL.md %USERPROFILE%\.config\opencode\skills\skill-eval-guide\SKILL.md
 ```
 
 前置条件：Python 3.10+，Claude Code CLI >= 2.1.0（仅动态评测需要）。
