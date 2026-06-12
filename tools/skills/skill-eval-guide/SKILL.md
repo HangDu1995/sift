@@ -48,8 +48,7 @@ python3 --version         # 必须：>= 3.10
 | 目标 skill 路径不知道 | "请提供要评测的 skill 路径" |
 | skill 目录下没有 evals.json | "没有 evals.json，要我运行 `skill-eval init` 生成吗？" |
 | evals.json 质量差（>50% 模糊 expectation） | "当前 evals 质量较差（X/Y 条模糊），建议重新生成。要我运行 `skill-eval init` 吗？" |
-| 做 batch 评测但没有 skills 目录 | "batch 评测需要一个包含多个 skill 的目录或 manifest.json，请提供" |
-| 做 regression 但没有上次 benchmark | "regression 需要 baseline benchmark.json，请提供" |
+| 做 batch 评测但没有 skills 目录或 manifest.json | "batch 评测需要一个包含多个 skill 的目录或 manifest.json，请提供" |
 
 ---
 
@@ -107,11 +106,11 @@ skill-eval init /path/to/skill --num-evals 10
 
 ```bash
 skill-eval run /path/to/skill \
-  --runs 3 --timeout 300 \
+  --runs 1 --timeout 300 \
   --output test-results/NAME/
 ```
 
-关键参数：`--runs`、`--timeout`、`--eval-samples`、`--workers`、`--max-turns`、`--scoring`、`--compliance-gate`。
+关键参数：`--runs`（默认 1，不足 3 时自动跳过遵循性检查，推荐 3）、`--timeout`、`--eval-samples`、`--workers`、`--max-turns`、`--scoring`、`--no-compliance`、`--compliance-gate`。
 
 每个 eval 独立并发执行，产出 grading.json、compliance.json、calibration.json。
 
@@ -132,7 +131,7 @@ skill-eval batch /path/to/skills-directory/ \
   --layers unit --runs 1 --output test-results/batch/
 
 # 用 manifest.json
-skill-eval batch manifest.json --layers unit --runs 3
+skill-eval batch manifest.json --runs 3
 ```
 
 Manifest 格式：
@@ -168,8 +167,8 @@ skill-eval vet "$SKILL"
 # Step 2: 静态分析
 skill-eval analyze "$SKILL"
 
-# Step 3: A/B 测试
-skill-eval run "$SKILL" --runs 3 --output "$OUT"
+# Step 3: A/B 测试（默认 runs=1 快速验证，加 --runs 3 获得统计有效性）
+skill-eval run "$SKILL" --output "$OUT"
 
 # Step 4: 打开报告
 skill-eval report "$OUT/iteration-1/" --open
@@ -187,47 +186,27 @@ skill-eval vet "$SKILL"
 # Step 2: 静态分析
 skill-eval analyze "$SKILL"
 
-# Step 3: 确保 evals.json 质量
-python3 -c "
-import json
-e = json.load(open('$SKILL/evals.json'))
-evals = e.get('evals',[])
-vague = sum(1 for ev in evals for x in ev.get('expectations',[]) if 'follows' in str(x).lower())
-if vague > len(evals)*0.3:
-    print('NEEDS_REGEN (vague expectations)')
-for ev in evals:
-    has_not_contains = any(a['type'] == 'NOT_CONTAINS' for a in ev.get('assertions',[]))
-    has_llm_not_delegate = any(a['type'] == 'LLM_NOT_DELEGATE' for a in ev.get('assertions',[]))
-    if has_not_contains and has_llm_not_delegate:
-        target = [a['params'].get('pattern','') for a in ev['assertions'] if a['type']=='NOT_CONTAINS']
-        delegated = [a['params'].get('target_skill','') for a in ev['assertions'] if a['type']=='LLM_NOT_DELEGATE']
-        if any(t in d or d in t for t in target for d in delegated):
-            print(f'OVERLAP in {ev[\"name\"]}: NOT_CONTAINS + LLM_NOT_DELEGATE checking same thing')
-"
-# 如果需要，重新生成：
-# skill-eval init "$SKILL" --output "$SKILL/evals.json"
-
-# Step 4: A/B 测试
+# Step 3: A/B 测试（runs=3 获得统计有效性 + 遵循性检查）
 skill-eval run "$SKILL" --runs 3 --compliance-gate --output "$OUT"
 
-# Step 5: 验证结果
+# Step 4: 验证结果
 ls "$OUT/iteration-1/benchmark.json"
 ls "$OUT/iteration-1/report.html"
 
-# Step 6: 打开报告
+# Step 5: 打开报告
 skill-eval report "$OUT/iteration-1/" --open
 ```
 
 ### "快速验证"
 
 ```bash
-skill-eval run /path/to/skill --eval-samples 3 --runs 1 --output test-results/quick/
+skill-eval run /path/to/skill --eval-samples 3 --output test-results/quick/
 ```
 
 ### "批量评测多个 skill"
 
 ```bash
-skill-eval batch /path/to/skills-dir/ --layers unit --runs 1 --output test-results/batch/
+skill-eval batch /path/to/skills-dir/ --runs 1 --output test-results/batch/
 skill-eval batch-report test-results/batch/
 ```
 
@@ -268,8 +247,8 @@ PYEOF
 | report 面板空白 | 缺对应 JSON 文件，把 vet-report/scorecard 文件 cp 到 iteration-1/ |
 | batch 显示 0 skills | 输入不是 skills 目录或 manifest.json 格式不对 |
 | LLM 断言返回 "Not evaluated" | 断言会自动重试（最多 2 次）；仍 UNEVAL 则标记为 INDETERMINATE |
-| 单次运行方差大 | `--runs 1` 会显示警告；推荐 `--runs 3` 以上启用异常检测 |
-| compliance_rate 低 | SKILL.md 指令有矛盾或太难遵循，重写指令 |
+| 单次运行方差大 | `--runs 1` 默认仅快速验证；推荐 `--runs 3` 启用异常检测和统计有效性 |
+| 遵循性率低 | SKILL.md 指令有矛盾或太难遵循，重写指令 |
 
 ---
 
