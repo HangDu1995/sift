@@ -11,26 +11,41 @@
 
 ---
 
-## 快速开始
+## 安装
+
+### 一键安装
 
 ```bash
+git clone https://github.com/fuxi-ailabs/skill-eval.git
+cd skill-eval
+bash install.sh
+```
+
+这会完成三件事：
+1. `pip install -e .` — 安装 skill-eval CLI
+2. 将 skill-eval-guide skill 安装到 Claude Code (`~/.claude/skills/`) 和 opencode (`~/.config/opencode/skills/`)
+3. 验证环境
+
+### 手动安装
+
+```bash
+# 安装 CLI
+git clone https://github.com/fuxi-ailabs/skill-eval.git
+cd skill-eval
 pip install -e .
 
-# 安全审查 + 静态分析（零 API 成本，<1s）
-skill-eval vet path/to/skill/
-skill-eval analyze path/to/skill/
+# 安装 skill-eval-guide 到 Claude Code（可选，让 Claude 自动选择评测命令）
+cp tools/skills/skill-eval-guide/SKILL.md ~/.claude/skills/skill-eval-guide/SKILL.md
 
-# 生成评测用例
-skill-eval init path/to/skill/
-
-# 跑 A/B 评测
-skill-eval run path/to/skill/
-
-# 看报告
-skill-eval report output/iteration-1/ --open
+# 安装到 opencode（可选）
+cp tools/skills/skill-eval-guide/SKILL.md ~/.config/opencode/skills/skill-eval-guide/SKILL.md
 ```
 
 前置条件：Python 3.10+，Claude Code CLI >= 2.1.0（仅动态评测需要）。
+
+---
+
+## 快速开始
 
 ---
 
