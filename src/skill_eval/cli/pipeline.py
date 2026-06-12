@@ -98,22 +98,66 @@ def _run_ab_eval(
 
     summary = benchmark.run_summary
     delta = summary.get("delta", {})
+    comparisons = getattr(benchmark, "comparisons", []) or []
+    analysis = getattr(benchmark, "analysis", None)
 
     if fmt == "json":
         console.print(json.dumps(benchmark.model_dump(mode="json"), indent=2, ensure_ascii=False))
     else:
         ws = summary.get("with_skill", {}).get("pass_rate", {})
         wos = summary.get("without_skill", {}).get("pass_rate", {})
+        ws_mean = ws.get("mean", 0) * 100
+        wos_mean = wos.get("mean", 0) * 100
+        pr_delta = delta.get("pass_rate", "—")
+
+        # Count blind comparison wins
+        a_wins = sum(1 for c in comparisons if c.get("winner") == "A")
+        b_wins = sum(1 for c in comparisons if c.get("winner") == "B")
+        total_comps = a_wins + b_wins
+
         console.print(f"\n[bold]Results:[/bold]")
-        console.print(f"  with_skill:    {ws.get('mean', 0)*100:.0f}% pass rate")
-        console.print(f"  without_skill: {wos.get('mean', 0)*100:.0f}% pass rate")
-        console.print(f"  delta:         {delta.get('pass_rate', '—')}")
+
+        # 1. Quality — blind comparison (primary metric)
+        if total_comps > 0:
+            if a_wins > b_wins:
+                console.print(f"  [green]Quality:[/green]   with_skill wins blind comparison ({a_wins}/{total_comps})")
+            elif b_wins > a_wins:
+                console.print(f"  [yellow]Quality:[/yellow]   without_skill wins blind comparison ({b_wins}/{total_comps})")
+            else:
+                console.print(f"  Quality:   tie ({a_wins}/{total_comps})")
+        else:
+            console.print(f"  Quality:   (add --model for blind comparison)")
+
+        # 2. Pass rate — mechanical assertions (secondary)
+        delta_color = ""
+        if isinstance(pr_delta, (int, float)) and pr_delta < 0:
+            delta_color = "red"
+        elif isinstance(pr_delta, str) and pr_delta.startswith("-"):
+            delta_color = "red"
+        delta_str = f"[{delta_color}]({pr_delta})[/{delta_color}]" if delta_color else f"({pr_delta})"
+        console.print(f"  Pass rate:  with_skill {ws_mean:.0f}% vs without_skill {wos_mean:.0f}% {delta_str}")
+
+        # 3. Analysis insights
+        if analysis and isinstance(analysis, dict):
+            strengths = analysis.get("winner_strengths", [])
+            if strengths:
+                console.print(f"\n[bold]Key strengths:[/bold]")
+                for s in strengths[:2]:
+                    console.print(f"  • {s}")
+
         console.print(f"\nBenchmark saved to: {benchmark_path}")
 
-    pr = delta.get("pass_rate", "+0.00")
-    if isinstance(pr, str) and pr.startswith("-"):
-        raise typer.Exit(code=1)
-    elif isinstance(pr, (int, float)) and pr < 0:
+    # Exit code: blind comparison wins (primary), fallback to pass rate delta
+    is_fail = False
+    if total_comps > 0 and b_wins >= a_wins:
+        is_fail = True
+    else:
+        pr = delta.get("pass_rate", "+0.00")
+        if isinstance(pr, str) and pr.startswith("-"):
+            is_fail = True
+        elif isinstance(pr, (int, float)) and pr < 0:
+            is_fail = True
+    if is_fail:
         raise typer.Exit(code=1)
 
     return benchmark, iteration_dir
