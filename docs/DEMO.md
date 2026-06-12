@@ -1,13 +1,13 @@
 # Skill-Eval 演示指南
 
-> 30 分钟演示 skill-eval 的完整能力——从静态检查到盲比较，从正面案例到反面教材。
+> 15 分钟演示 skill-eval 的完整能力——从安全审查到 A/B 评测，从正面案例到反面教材。
 
 ## 前置条件
 
 ```bash
 pip install -e .          # 安装 skill-eval
 claude --version           # 需要 Claude Code CLI >= 2.1.0, < 2.2.0
-pytest tests/ -q           # 278 个测试全部通过
+pytest tests/ -q           # 测试验证
 ```
 
 **演示用 Skill**：
@@ -15,7 +15,7 @@ pytest tests/ -q           # 278 个测试全部通过
 | 类型 | 目录 | 用途 |
 |------|------|------|
 | ✅ 正面 | `fixtures/test-skills/data-validator/` | 展示 Skill 如何**提升** Claude 表现 |
-| ❌ 反面×6 | `fixtures/negative-skills/` | 展示框架如何**检测**各种 Skill 缺陷 |
+| ❌ 反面×4 | `fixtures/negative-skills/` | 展示框架如何**检测**各种 Skill 缺陷 |
 
 ---
 
@@ -36,25 +36,13 @@ skill-eval vet fixtures/test-skills/data-validator/
 ┃ Scanner         ┃ Status ┃ Detail                                            ┃
 ┡━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
 │ aguara          │ SKIP   │ aguara not installed                              │
-│                 │        │ (https://github.com/garagon/aguara)               │
 │ skill-scanner   │ SKIP   │ skill-scanner not installed                       │
-│                 │        │ (https://pypi.org/project/cisco-ai-skill-scanner… │
 │ secrets-scan    │ PASS   │ No hardcoded secrets found                        │
 │ structure-check │ PASS   │ Skill structure valid                             │
 └─────────────────┴────────┴───────────────────────────────────────────────────┘
 ```
 
-| 扫描器 | 类型 | 检查内容 |
-|--------|------|----------|
-| `secrets-scan` | 内置 | 硬编码密钥（API key / password / token） |
-| `structure-check` | 内置 | SKILL.md 结构完整性（frontmatter、name 字段） |
-| `aguara` | 可选外部 | Prompt 注入检测（Go） |
-| `skill-scanner` | 可选外部 | 已知恶意模式检测（pip） |
-
-VERDICT 三种结果：
-- **SAFE** → exit 0，通过
-- **REVIEW_NEEDED** → 存在 MEDIUM 风险，需要人工审查
-- **BLOCKED** → 存在 HIGH/CRITICAL 风险，exit 1
+VERDICT 三种结果：**SAFE**（exit 0）、**REVIEW_NEEDED**（需人工审查）、**BLOCKED**（exit 1）。
 
 ### 1.2 静态分析（< 1 秒，无需 Claude）
 
@@ -68,57 +56,23 @@ skill-eval analyze fixtures/test-skills/data-validator/
 Score: 11/11  Category: CAPABILITY_UPLIFT
 ```
 
-| # | 检查项 | 检查内容 | 结果 |
-|---|--------|----------|------|
-| 1 | `description_length` | 描述 ≥ 20 字符 | ✅ 134 chars |
-| 2 | `description_has_trigger` | 含动作触发词 | ✅ |
-| 3 | `description_third_person` | 使用第三人称 | ✅ |
-| 4 | `name_kebab_case` | name 符合 kebab-case | ✅ |
-| 5 | `name_max_64` | name ≤ 64 字符 | ✅ 14 chars |
-| 6 | `name_no_reserved` | name 非保留字 | ✅ |
-| 7 | `skill_md_max_500_lines` | ≤ 500 行 | ✅ 67 lines |
-| 8 | `has_examples` | 含示例代码 | ✅ |
-| 9 | `reference_depth` | references/ 扁平 | ✅ |
-| 10 | `anti_fabrication` | 含反捏造指引 | ✅ |
-| 11 | `source_documented` | 含参考来源 | ✅ |
+两种分类：**CAPABILITY_UPLIFT**（增强型，教 Claude 新能力）和 **ENCODED_PREFERENCE**（偏好型，编码团队约定）。
 
-**两种分类**：
-- **CAPABILITY_UPLIFT**（增强型）：教 Claude 它原本不会的新能力
-- **ENCODED_PREFERENCE**（偏好型）：编码团队偏好，Claude 本身就会但可能有不同做法
-
-### 1.3 覆盖率扫描（< 1 秒）
+### 1.3 完整 A/B 评测（需要 Claude，2-3 分钟）
 
 ```bash
-skill-eval scan fixtures/test-skills/
+skill-eval run fixtures/test-skills/data-validator/ --runs 1 --output output/
 ```
 
-```
-Total: 3  With evals: 3  Missing: 0
-```
-
-扫描整个 skills 目录，标记哪些 Skill 有/缺少 evals。**没有 evals 就无法量化评估**。
-
-### 1.4 完整 A/B 评测（需要 Claude，2-3 分钟）
-
-```bash
-skill-eval full fixtures/test-skills/data-validator/ --runs 1
-# 注：该 Skill 只有 3 个 eval，无需 --eval-samples。
-# 当 eval 数量较多（>10）时，可加 --eval-samples 10 限制每个 eval 的采样轮数以节省时间。
-```
-
-这一步是核心——对 with_skill（注入 SKILL.md）和 without_skill（不注入）分别运行相同的评测，量化 Skill 的**因果贡献**。
-
-> **默认运行模式**：per-eval mode（每个 eval 独立并发运行），各 eval 互不阻塞。使用 `--merged` 可切换为合并模式（所有 eval 合并为一个 prompt）。
+对 with_skill 和 without_skill 分别运行相同的评测，量化 Skill 的**因果贡献**。每个 eval 独立并发执行。
 
 **实际结果**（data-validator）：
 
 ```
 Results:
-  with_skill:    100% pass rate
-  without_skill: 12% pass rate
-  delta:         +0.88
-
-Warning: calibration grade UNRELIABLE — scoring confidence is low
+  with_skill:    80% pass rate
+  without_skill: 33% pass rate
+  delta:         +0.47
 ```
 
 ---
@@ -142,8 +96,6 @@ Warning: calibration grade UNRELIABLE — scoring confidence is low
 | **-0.1 ~ +0.1** | Skill 几乎无效 | 审视设计 |
 | **< -0.1** | Skill **反而干扰** Claude | 排查指令 → 重写 |
 
-> data-validator 的 delta = **+0.88**，意味着注入 SKILL.md 将 Claude 的通过率从 12% 提升到 100%——这是一个高价值的 Skill。不过 calibration grade 为 UNRELIABLE，提示 expectations 需要重写以提高评分可信度。
-
 ### 输出文件结构
 
 ```
@@ -151,25 +103,24 @@ output/iteration-1/
 ├── benchmark.json          # 聚合结果（核心文件）
 │   ├── runs[]              #   每条 run 的 pass_rate / time / tokens
 │   ├── run_summary         #   mean / stddev / delta
-│   ├── comparisons[]       #   🆕 盲比较（BlindComparator）
-│   └── analysis            #   🆕 深度分析（PosthocAnalyzer）
+│   ├── comparisons[]       #   盲比较
+│   └── analysis            #   深度分析
 ├── report.html             #   自包含 HTML 可视化报告
-├── comparison-run1.json    #   🆕 盲比较详细结果
-├── analysis-notes.json     #   🆕 LLM 分析洞察
 │
-├── with_skill/run-1/
-│   ├── grading.json        #   每条 expectation + assertion 的 pass/fail + evidence
-│   ├── checkpoints.json    #   每个 eval case 独立通过率
-│   ├── compliance.json     #   SKILL.md 指令遵循性
-│   ├── calibration.json    #   评分可信度校准
-│   └── run_debug.json      #   完整 transcript + tool_calls
+├── with_skill/
+│   └── eval-<id>/run-<n>/
+│       ├── grading.json    #   每条 expectation + assertion 的 pass/fail + evidence
+│       ├── compliance.json #   SKILL.md 指令遵循性
+│       ├── calibration.json#   评分可信度校准
+│       └── run_debug.json  #   完整 transcript + tool_calls
 │
-└── without_skill/run-1/    #   同上（无 compliance）
+└── without_skill/
+    └── eval-<id>/run-<n>/  #   同上（无 compliance.json）
 ```
 
 ### 单文件详解
 
-#### grading.json —— 最基础的结果
+#### grading.json
 
 ```json
 {
@@ -190,15 +141,12 @@ output/iteration-1/
 }
 ```
 
-**expectations vs assertions**：
-- **expectations**（`source: "llm_batch"`）：语义期望，LLM 从 transcript 中判断是否满足
-- **assertions**（`source: "programmatic"`）：程序化断言，检查文件是否存在/JSON 字段是否正确
-
-> with_skill 没有 `compliance.json` 文件——只有使用了 SKILL.md 的配置才会产生遵循性检查。
+- **expectations**（`source: "llm_batch"`）：语义期望，LLM 从 transcript 中判断
+- **assertions**（`source: "programmatic"`）：程序化断言，检查文件是否存在/内容匹配
 
 #### compliance.json —— 指令遵循性
 
-只有 with_skill 配置产生。框架从 SKILL.md 中提取 6 类指令：
+框架从 SKILL.md 中提取 6 类指令：
 
 | 指令类型 | 来源 | 示例 |
 |----------|------|------|
@@ -209,123 +157,46 @@ output/iteration-1/
 | `OUTPUT_FORMAT` | 输出格式要求 | "Write to validation-report.json" |
 | `REFERENCE_USAGE` | 参考文档引用 | "See references/schema-rules.md" |
 
-每条检查结果为 `followed: true/false`，汇总为 `compliance_rate`（0.0-1.0）。
-
-**排错路径**：
-
-```
-delta 为负 / 低
-  ↓
-看 compliance_rate
-  ├── compliance_rate < 0.5  → 指令有问题：SKILL.md 太难遵循或有矛盾
-  │                             → 重写指令，消除矛盾
-  └── compliance_rate ≥ 0.7  → 指令没问题但效果差
-                                 → 看 calibration.json
-```
+每条检查结果为 `followed: true/false`，汇总为 `compliance_rate`。
 
 #### calibration.json —— 评分可信度
 
-当 `hybrid` 模式同时使用程序化断言和 LLM 评分时，两者可能出现分歧。校准引擎检查 7 种信号：
+校准引擎检查 7 种信号：
 
-| 等级 | Agreement Rate | 含义 | 对 delta 的影响 |
-|------|----------------|------|-----------------|
-| **HIGH** | ≥ 0.8 | 程序化和 LLM 评分高度一致 | 可信，权重 1.0 |
-| **MEDIUM** | ≥ 0.6 | 存在少量分歧 | 基本可信，权重 0.8 |
-| **LOW** | ≥ 0.4 | 分歧较多 | 需人工复核，权重 0.5 |
-| **UNRELIABLE** | < 0.4 | 严重分歧 | **不可信**，exit 1 |
-
-> 当 grade 为 UNRELIABLE 时，说明 expectations 写得不清晰——LLM 和程序化检查给了相反的结论。此时应该**重写 expectations** 而非相信任一结果。
-
-#### comparison-run1.json —— 🆕 盲比较
-
-BlindComparator 在不知道哪个输出来自哪个配置的情况下，从两个维度评分：
-
-| 维度 | 检查项 | 1-5 分 |
-|------|--------|--------|
-| **Content**（内容） | correctness · completeness · accuracy | 每个 1-5 |
-| **Structure**（结构） | organization · formatting · usability | 每个 1-5 |
-| **Overall** | (content + structure) / 2，缩放至 1-10 | 综合分 |
-
-**data-validator 实际结果**：
-
-```
-Output A (with_skill):  content 4.7 / structure 4.0 → overall 8.7
-Output B (without_skill): content 3.7 / structure 3.7 → overall 8.3
-Winner: A (with_skill 仅以 0.4 分优势胜出)
-```
-
-盲比较告诉你：**Skill 主要提升了哪方面**（内容？结构？），这比只看 delta 数字更有指导意义。
-
-#### analysis-notes.json —— 🆕 LLM 分析洞察
-
-PosthocAnalyzer 在 benchmark 聚合后自动运行，生成聚合指标无法揭示的模式发现。例如：
-
-```
-• Eval 2 (L2-有效数据验证) 是 with_skill 唯一失败的 eval（50%）——3 个 expectations
-  全部失败但 3 个 assertions 全部通过。这提示 expectations 的措辞可能与 Claude
-  的理解有偏差
-• 有效记录的误判（valid_count: 0, invalid_count: 2）同时出现在 with_skill 和
-  without_skill 中——这不是 Skill 的问题，是 eval prompt 或其 fixture 的设计问题
-• with_skill 的 time_seconds 比 without_skill 少 17.7 秒——Skill 帮助 Claude
-  更快找到正确的处理方式
-```
-
-**分析笔记怎么用**：看完 delta 后读一遍，它能帮你发现指标背后**看不见的**模式——比如"这个 eval 到底是不是写错了"。
+| 等级 | Agreement Rate | 含义 | 权重 |
+|------|----------------|------|------|
+| **HIGH** | ≥ 0.8 | 程序化和 LLM 评分高度一致 | 1.0 |
+| **MEDIUM** | ≥ 0.6 | 存在少量分歧 | 0.8 |
+| **LOW** | ≥ 0.4 | 分歧较多 | 0.5 |
+| **UNRELIABLE** | < 0.4 | 严重分歧 | 0.2 |
 
 ### 质量公式
-
-skill-eval 综合所有维度的最终评分：
 
 ```
 Score = StaticAnalysis(0-11)
       + Delta × 100
       + ComplianceRate(%)
-      + TriggerAccuracy(%)
       - PerformancePenalty
       × CalibrationWeight
 ```
-
-每个维度都能独立排查，形成完整的 Skill 质量证据链。
 
 ---
 
 ## 第二幕：反面教材（negative-skills）
 
-`fixtures/negative-skills/` 下专门构造了 6 种常见缺陷，演示框架如何检测它们。
-
 ### 2.1 坏指令型：bad-instruction
 
-**只看 SKILL.md 的前几句**：
+**缺陷**：指令自相矛盾（"用 Python 但不要用代码"、"用 pandas 但不要用 pandas"）。
 
-```markdown
-## 转换数据
-用 Python 3 处理数据文件。**不要使用任何脚本或代码**。
-你应该手动逐行分析 JSON 然后重写输出。如果遇到 CSV 使用 csv 库，
-但如果遇到 JSON 使用 jq 命令。如果数据是 XML 就用 pandas（不要用 pandas）。
-最终输出到 output.json 或 result.json，具体取决于你在哪个系统上运行。
-```
+**静态分析**：11/11——静态检查**不检测语义矛盾**。
 
-**缺陷**：指令自相矛盾（"用 Python 但不要用代码"、"用 pandas 但不要用 pandas"）、输出文件名不确定、验证"随意"。
-
-**静态分析**：11/11——静态检查**不检测语义矛盾**。这说明静态分析是必要的但不够——还需要动态评测。
-
-**A/B 评测（预期）**：
-
-| 配置 | 预期 | 原因 |
-|------|------|------|
-| with_skill | **低** | 矛盾指令让 Claude 困惑，更可能出错 |
-| without_skill | **中** | Claude 自行判断，没有矛盾干扰 |
-| delta | **负** | 坏 Skill 不如没有 Skill |
+**A/B 评测（预期）**：delta 为负（矛盾指令干扰 Claude）。
 
 ```bash
-skill-eval full fixtures/negative-skills/bad-instruction/ --runs 1
-# 可选：--eval-samples <N> 限制每个 eval 的采样轮数（eval 数量多时有用）
+skill-eval run fixtures/negative-skills/bad-instruction/ --runs 1
 ```
 
-**教训**：
-- 静态分析 11/11 ≠ Skill 没问题
-- 矛盾指令会**主动降低** Claude 表现
-- compliance.json 会显示指令遵循率低（因为指令互相矛盾，无法同时满足）
+**教训**：静态分析 11/11 ≠ Skill 没问题。compliance.json 会显示指令遵循率低。
 
 ### 2.2 安全风险型：security-risk
 
@@ -334,352 +205,56 @@ skill-eval vet fixtures/negative-skills/security-risk/
 ```
 
 ```
-                Security Scan: security-risk                 
-┏━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ Scanner         ┃ Status ┃ Detail                         ┃
-┡━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ aguara          │ SKIP   │ External scanners disabled     │
-│ skill-scanner   │ SKIP   │ External scanners disabled     │
-│ secrets-scan    │ FAIL   │ Hardcoded credentials detected │
-│ structure-check │ PASS   │ Skill structure valid          │
-└─────────────────┴────────┴────────────────────────────────┘
-
-Findings:
-  SecuritySeverity.HIGH  Hardcoded credentials detected (SKILL.md:12)
-
-VERDICT: BLOCKED — 1 HIGH/CRITICAL, 0 MEDIUM
+VERDICT: BLOCKED — 1 HIGH finding（硬编码 API key）
 ```
-
-**缺陷**：SKILL.md 中包含 `API_KEY="sk-1234abcd..."` 硬编码密钥，以及 `curl | bash` 不安全操作。
-
-**教训**：
-- `vet` 命令自动扫描硬编码密钥（匹配 pattern：`api_key\|secret\|token\s*[:=]\s*["'][A-Za-z0-9_-]{16,}["']`）
-- 外部扫描器（aguara, skill-scanner）能检测更多类型
-- 在生产发布前必须跑 `vet` 作为 CI gate
 
 ### 2.3 静态分析失败型：low-quality
 
-**SKILL.md 全文**：
-
-```markdown
----
-name: low-quality
-description: 干活
----
-# 干活
-做数据处理。
-```
-
-**静态分析结果**：
+**SKILL.md**：描述只有 2 字 "干活"，无示例，无反捏造。
 
 ```
 Score: 6/11
-
-PASS: description_third_person, name_kebab_case, name_max_64,
-      name_no_reserved, skill_md_max_500_lines, reference_depth
-FAIL: description_length (2 chars, min 20)
-      description_has_trigger (no action words)
-      has_examples (no examples)
-      anti_fabrication (missing guidance)
-      source_documented (no sources)
+FAIL: description_length, description_has_trigger,
+      has_examples, anti_fabrication, source_documented
 ```
-
-```bash
-skill-eval analyze fixtures/negative-skills/low-quality/ --format json
-```
-
-**教训**：
-- 描述太短（2 字 "干活"）→ 触发不准
-- 缺示例 → Claude 自己猜，结果不可控
-- 无反捏造 → 可能伪造数据
-- 无参考来源 → 不可审计
 
 ### 2.4 空壳型：empty-shell
 
-**SKILL.md 全文**：
-
-```markdown
----
-name: empty-shell
----
-```
-
-没有内容、没有 evals。
-
-```bash
-skill-eval scan fixtures/negative-skills/
-```
-
-```
-empty-shell: ✗ MISSING (no evals)
-```
-
-**教训**：只有名字没有内容和 evals 的 Skill 是无效的。`scan` 命令自动发现并标记。
-
-### 2.5 违规格式型：bad-format
-
-**缺陷**：SKILL.md **没有 YAML frontmatter**（少了 `---` 开头），且超过 500 行（故意填充了大量 FAQ）。
-
-```bash
-skill-eval analyze fixtures/negative-skills/bad-format/
-```
-
-```
-Error: SKILL.md missing frontmatter (no opening ---)
-```
-
-**教训**：
-- 必须用 `---\n...\n---` 包裹 frontmatter
-- name 必须是 kebab-case
-- SKILL.md ≤ 500 行（太长 Claude 顾不全）
-
-### 2.6 依赖错误型：broken-root + cascade-victim + missing-dep
-
-三个 Skill 组成一个**故意有问题的 DAG**：
-
-```json
-{
-  "skills": [
-    {"path": "broken-root",    "depends_on": []},
-    {"path": "cascade-victim", "depends_on": ["broken-root"]},
-    {"path": "missing-dep",    "depends_on": ["nonexistent-skill"]}
-  ]
-}
-```
-
-**缺陷分析**：
-- **broken-root**：指令要求 "NEVER 使用任何工具"——故意让它无法完成任何实际工作
-- **cascade-victim**：本身没问题，但依赖 broken-root
-- **missing-dep**：依赖一个不存在的 Skill
-
-```bash
-skill-eval batch fixtures/negative-skills/manifest-broken-deps.json --runs 1
-```
-
-**预期输出**：
-
-```
-  ✗ broken-root       FAILED
-  ○ cascade-victim    CASCADE_FAILED    ← 不是自己的错
-  ✗ missing-dep       FAILED
-
-  Attributions:
-    broken-root:     ROOT_CAUSE           ← "是你的问题"
-    cascade-victim:  CASCADE              ← "不是你的事"
-    missing-dep:     DEPENDENCY_MISSING   ← "没找到依赖"
-```
-
-**归因类型**：
-
-| 类型 | 含义 | 排查方向 |
-|------|------|----------|
-| `ROOT_CAUSE` | 该 Skill 自身导致失败 | 看它的 compliance / grading |
-| `CASCADE` | 上游失败引发的连锁 | 看上游（ROOT_CAUSE 是哪个？） |
-| `DEPENDENCY_MISSING` | 依赖的 Skill 不存在 | 检查 manifest.json 和文件路径 |
-| `INDEPENDENT` | 与其他 Skill 无关的独立失败 | 看自身 grading |
-
-**教训**：
-- DAG 归因帮你精准定位"谁该背锅"——下游失败不一定是下游的问题
-- `CASCADE` 状态说明 cascade-victim 本身没问题，不应该被惩罚
-- `DEPENDENCY_MISSING` 帮你发现 manifest 配置错误
-
-### 2.7 过拟合型：overfitted-skill
-
-**什么是过拟合**：Skill 的指令被"逆向适配"以通过特定 eval 用例，但无法泛化到未见过的场景。就像学生背了考试答案但不会举一反三。
-
-**SKILL.md 关键内容**：
-
-```markdown
-## Instructions
-1. When processing data, always output a JSON object with the following metadata fields:
-   id, name, status, and timestamp.
-2. NEVER modify the original data. Always create a new output file.
-3. For validation, ALWAYS check that id is a positive integer and name is non-empty.
-4. For type field, only allow values: user, order, product.
-5. When writing output files, always use output/ directory.
-6. For any SQL-related checks, scan for: DROP, DELETE, INSERT, UNION, --.
-7. Step 1: Read the input file. Step 2: Validate each field. Step 3: Write results.
-8. Always sort output alphabetically by the name field.
-9. NEVER fabricate validation errors—only flag what you actually find.
-10. If the input is empty, return an error object with code: 400.
-11. When in doubt, consult the references/schema.json file.
-12. Always escape special characters in string fields.
-13. Record all validation results in a results.json file.
-14. For metadata, include created_at, updated_at, and author fields.
-15. Process records in batches of 100 for large files.
-```
-
-注意：第 14 行的 metadata 字段要求与 eval-1 的 expectation 完全一致——
-这是"按题写指令"的典型特征。
-
-**生成通用评测集**（替代已移除的 split-evals）：
-
-```bash
-# 用 --source-dir 生成 domain 不同的 diverse evals
-skill-eval init path/to/skill/ --source-dir path/to/project --domains web,cli
-```
-
-此命令扫描源项目特征，然后用 LLM 生成与源项目领域严格不同的 eval 用例，用于过拟合检测。
-
-**过拟合检测**：
-
-```bash
-skill-eval vet-overfit \
-  --domain-bench output/domain/iteration-1/benchmark.json \
-  --general-bench output/general/iteration-1/benchmark.json \
-  --output overfitting_report.json
-```
-
-**检测结果（示例）**：
-
-```
-🔍 Overfitting Detection Report
-────────────────────────────────────────────
-  overfitting_score:    0.78 (HIGH)
-  generalization_gap:   -0.52
-  suspicious_instructions: 10 (7 HIGH + 2 MEDIUM + 1 LOW)
-  train_pass_rate:      0.85
-  holdout_pass_rate:    0.33
-
-🧩 Detected Patterns (Top 3):
-  • Instruction line 14 directly mirrors eval-1 expectation about
-    metadata fields (created_at, updated_at, author)
-  • Instruction line 4 matches eval-3 type field validation exactly
-    (user, order, product)
-  • Instruction line 3 parrots eval-2 id validation wording verbatim
-    ("positive integer" and "non-empty")
-```
-
-train 上有 85% 通过率，但 holdout 只有 33%——泛化差距高达 0.52。
-7 条 HIGH 级别可疑指令表明 SKILL.md 中超过一半的指令都是"背答案"式的。
-
-**指标解读**：
-
-| 指标 | 含义 | 判断标准 |
-|------|------|----------|
-| **overfitting_score** (0-1) | Skill 对训练集过拟合的总体程度 | > 0.6 高度过拟合，< 0.3 良好泛化 |
-| **generalization_gap** | train 与 holdout pass_rate 之差 | < -0.3 严重退化，≈ 0 泛化良好 |
-| **suspicious_instructions** | 被判定为与 eval 高度耦合的指令数 | HIGH 越多越危险 |
-| **anomaly_detail** | 逐条指令的相似度 + 证据 | 看 detail 定位具体是哪些 eval 被"背"了 |
-
-`generalization_gap` 是核心指标——train 高出 holdout 越多，说明 Skill 越"只会做见过的题"。
-如果 train 和 holdout 的 pass_rate 都低（比如都 < 0.4），那只是 Skill 质量差，不一定是过拟合。
-
-#### 防过拟合工作流
-
-最佳的 Skill 开发流程应引入过拟合检测：
-
-```
-Step 1: generate diverse evals
-         skill-eval init my-skill/ --source-dir path/to/project --domains web,cli
-         ↓ 产出 evals-general.json（domain 不同的通用评测）
-
-Step 2: run domain + general evals
-         skill-eval full my-skill/ \
-           --evals evals.json --output output/domain/
-         skill-eval full my-skill/ \
-           --evals evals-general.json --output output/general/
-
-Step 3: vet overfit
-         skill-eval vet-overfit \
-           --domain-bench output/domain/iteration-1/benchmark.json \
-           --general-bench output/general/iteration-1/benchmark.json \
-           --output overfitting_report.json
-         ↓ 产出 overfitting_score + generalization_gap
-```
-
-| 阶段 | 目的 | 产出 |
-|------|------|------|
-| **init --source-dir** | 生成领域不同的通用评测 | evals-general.json |
-| **run (x2)** | 分别在 domain 和 general 上跑 A/B 测试 | 两组 benchmark.json |
-| **vet-overfit** | 对比两组结果，检测过拟合信号 | 过拟合报告 |
-
-**核心理念**：general eval 评分才是真实水平的无偏估计。不要让 Skill 的作者看到 general eval
-的内容——否则过拟合检测失去意义。
-
-**教训**：
-- 在 train 上表现好 ≠ Skill 真的好——可能是"背答案"
-- 7+ 条 HIGH 级别可疑指令强烈建议重写 SKILL.md，去除与 eval 的机械对应
-- `generalization_gap` < -0.3 时，建议用更大的 holdout 集重新验证
-- 理想状态：train 和 holdout 的 pass_rate 都在高位且差距 < 0.1
+只有 `---\nname: empty-shell\n---`，没有内容、没有 evals。
 
 ---
 
-## 第三幕：批量评测（正面 DAG）
+## 第三幕：批量评测
 
-回到正常的三个 Skill：
+三个正常 Skill 的 DAG：
 
 ```bash
 skill-eval batch fixtures/test-skills/manifest.json --runs 1 --layers unit
 ```
 
-这会按 DAG 顺序依次评测 data-validator → data-transform → report-generator。
+按 DAG 顺序依次评测 data-validator → data-transform → report-generator。
 
+```bash
+skill-eval report output/iteration-1/ --open
 ```
-Skill: [1/3] data-validator
-  Eval: [1] L1-验证规则理解  with_skill  PASS
-  ...
-
-  ✓ data-validator        PASSED
-  ✓ data-transform        PASSED
-  ✓ report-generator      PASSED
-
-Passed: 3, Failed: 0, Skipped: 0
-```
-
-> **注意**：`skill-eval report` 命令不再使用本地服务器（不再需要 `--open` 访问 `http://localhost:8080`）。现在直接生成静态 HTML 文件，`--open` 会用系统默认浏览器打开该文件。
 
 ---
 
 ## 附录 A：完整指标速查表
 
-| 指标 | 文件 | 公式 | 好 | 警告 | 坏 | 排错路径 |
-|------|------|------|-----|------|-----|----------|
-| **delta** | benchmark.json | with − without | > +0.3 | -0.1~+0.1 | < -0.1 | → compliance → calibration |
-| **pass_rate** | grading.json | passed / total | > 0.8 | 0.5~0.8 | < 0.5 | → checkpoints 定位失败 eval |
-| **compliance_rate** | compliance.json | followed / total | > 0.7 | 0.5~0.7 | < 0.5 | → 逐条看 failed 指令 |
-| **calibration grade** | calibration.json | agreement + signals | HIGH | MEDIUM/LOW | UNRELIABLE | → 重写 expectations |
-| **static score** | analyze | 0-11 checks | 8+ | 5-7 | < 5 | → 逐条 FAIL |
-| **comparison winner** | comparison-run*.json | rubric content+structure | — | — | — | → 看哪个维度领先（需 `--model` 参数启用 LLM 盲比较） |
-| **analysis notes** | analysis-notes.json | LLM 分析 | — | — | — | → 读一遍发现隐藏模式 |
-| **vet verdict** | vet | 4 scanners | SAFE | REVIEW_NEEDED | BLOCKED | → 看 findings |
-| **scan status** | scan | evals存在? | ✓ | — | ✗ | → `skill-eval init` |
+| 指标 | 文件 | 公式 | 好 | 警告 | 坏 |
+|------|------|------|-----|------|-----|
+| **delta** | benchmark.json | with − without | > +0.3 | -0.1~+0.1 | < -0.1 |
+| **pass_rate** | grading.json | passed / total | > 0.8 | 0.5~0.8 | < 0.5 |
+| **compliance_rate** | compliance.json | followed / total | > 0.7 | 0.5~0.7 | < 0.5 |
+| **calibration grade** | calibration.json | agreement + signals | HIGH | MEDIUM/LOW | UNRELIABLE |
+| **static score** | analyze | 0-11 checks | 8+ | 5-7 | < 5 |
 
-## 附录 B：常见排错决策树
-
-```
-delta < -0.1（Skill 反而有害）
-│
-├─→ 看 compliance_rate
-│   ├── < 0.5  → SKILL.md 指令有矛盾或太难遵循
-│   │            → 重写矛盾指令，分解复杂步骤
-│   └── ≥ 0.7  → 指令看似被遵循但结果差
-│                → 看 calibration grade
-│                    ├── UNRELIABLE / LOW → expectations 不可信
-│                    │                      → 重写 expectations
-│                    └── HIGH / MEDIUM → 指令方向错误
-│                                         → 重新设计 SKILL.md 指令
-
-delta ≈ 0（Skill 无效果）
-│
-├─→ 看 checkpoint breakdown
-│   └── 是否每个 eval 的 pass_rate 都一样？
-│       └── 是 → expectations 太简单，没区分度
-│                → 增加 L2 有 assertions 的 eval case
-
-pass_rate 高但 calibration UNRELIABLE
-│
-└─→ 看 disagreements
-    └── 程序化检查说 FAIL，LLM 说 PASS？
-        └── expectations 写得太模糊
-            → 重写为可验证的具体条件
-```
-
-## 附录 C：从零开始的 6 步流程
+## 附录 B：从零开始的 5 步流程
 
 ```bash
-# 1. 初始化 evals（可选：--num-evals 5 指定生成数量）
-skill-eval init my-skill/ --no-generate-prompts
+# 1. 初始化 evals
+skill-eval init my-skill/
 
 # 2. 编辑 evals/evals.json，补充 L2 用例 + assertions + fixtures
 
@@ -687,18 +262,12 @@ skill-eval init my-skill/ --no-generate-prompts
 skill-eval analyze my-skill/
 skill-eval vet my-skill/
 
-# 4. 快速验证（1 run，快速反馈）
-#    可选：--eval-samples 10 限制每个 eval 的采样轮数
-skill-eval full my-skill/ --runs 1
+# 4. 快速验证（1 run）
+skill-eval run my-skill/ --runs 1 --eval-samples 5
 
 # 5. 正式评测（3 runs，统计稳定）
-skill-eval full my-skill/ --runs 3
+skill-eval run my-skill/ --runs 3 --compliance-gate
 
-# 6. 生成报告（静态 HTML，无需服务器）
-skill-eval report output/iteration-1/
-
-# 7. 批量回归
-skill-eval batch manifest.json --runs 3 --baseline baseline.json
+# 6. 生成报告
+skill-eval report output/iteration-1/ --open
 ```
-
-> **运行模式**：默认 per-eval mode，每个 eval 独立并发运行。加 `--merged` 切换为合并模式。

@@ -27,8 +27,9 @@ def analyze(
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=exc.exit_code)
 
+    data = report.model_dump(mode="json")
+
     if format == "json":
-        data = report.model_dump(mode="json")
         text = json.dumps(data, indent=2, ensure_ascii=False)
         if output:
             output.write_text(text, encoding="utf-8")
@@ -51,11 +52,11 @@ def analyze(
         )
         console.print(table)
 
-        if output:
-            data = report.model_dump(mode="json")
-            output.write_text(
-                json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
-            )
+    if not output:
+        output = skill_path / "scorecard.json"
+
+    output.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    console.print(f"  Report: {output}")
 
     if report.score < report.max_score:
         raise typer.Exit(code=1)

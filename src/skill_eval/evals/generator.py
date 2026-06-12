@@ -429,15 +429,6 @@ class EvalInitGenerator:
                         retry_on_uneval=True,
                     ))
 
-            # Gate-related → Tier 2
-            if any(kw in exp_lower for kw in ['审批', '确认', 'gate', '门禁', '等待']):
-                _add(Assertion(
-                    name="请求用户确认",
-                    type=AssertionType.GATE_REQUESTED,
-                    params={},
-                    tier=AssertionTier.TIER2,
-                ))
-
         return assertions
 
     # ------------------------------------------------------------------
@@ -503,10 +494,6 @@ class EvalInitGenerator:
             "\"params\": {\"filename\": \"spec/baseline/ui-manifest.md\"}}\n"
             "  - CONTAINS_PATTERN: {\"name\": \"mentions page_id\", \"type\": \"CONTAINS_PATTERN\", "
             "\"tier\": \"TIER1\", \"params\": {\"pattern\": \"page_id\"}}\n\n"
-            "**Tier 2 (Behavioral)**: GATE_REQUESTED, GATE_NOT_SKIPPED, PHASE_ORDERED, FILE_NOT_WRITTEN. "
-            "Use when testing procedural gates and ordering.\n"
-            "  - GATE_REQUESTED: {\"name\": \"gate B requested\", \"type\": \"GATE_REQUESTED\", "
-            "\"tier\": \"TIER2\", \"params\": {\"gate\": \"Phase B\"}}\n\n"
             "**Tier 3 (Semantic)**: LLM_GRADE, LLM_FACT, LLM_NOT_DELEGATE. "
             "For quality judgments and delegation checks. Always use retry_on_uneval: true.\n"
             "  - LLM_NOT_DELEGATE: {\"name\": \"no <TARGET_SKILL> delegation\", "

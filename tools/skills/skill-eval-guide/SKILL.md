@@ -3,9 +3,8 @@ name: skill-eval-guide
 description: >
   Use this skill whenever you need to evaluate, test, benchmark, or quality-check any skill (SKILL.md).
   Trigger on: "evaluate", "test", "benchmark", "跑评测", "评测", "跑一下", "测试", "全面测评",
-  "跑所有测评", "验证skill", "检查skill质量", "安全审查", "vet", "静态分析", "analyze", "过拟合",
-  "overfit", "集成测试", "batch", "跑batch", "多skill评测", "扫描skills", "scan", "生成配置",
-  "generate-config", "优化触发", "optimize-trigger", "report", "报告", "init", "初始化evals".
+  "跑所有测评", "验证skill", "检查skill质量", "安全审查", "vet", "静态分析", "analyze",
+  "batch", "跑batch", "多skill评测", "report", "报告", "init", "初始化evals".
   This skill provides EXACT commands to run for every skill-eval operation.
 type: guide
 domain: quality-assurance
@@ -49,15 +48,12 @@ python3 --version         # 必须：>= 3.10
 | 目标 skill 路径不知道 | "请提供要评测的 skill 路径" |
 | skill 目录下没有 evals.json | "没有 evals.json，要我运行 `skill-eval init` 生成吗？" |
 | evals.json 质量差（>50% 模糊 expectation） | "当前 evals 质量较差（X/Y 条模糊），建议重新生成。要我运行 `skill-eval init` 吗？" |
-| 做 diverse eval / 过拟合检测但没有 source project | "过拟合检测需要源项目路径（如 Android 项目），请提供" |
 | 做 batch 评测但没有 skills 目录 | "batch 评测需要一个包含多个 skill 的目录或 manifest.json，请提供" |
 | 做 regression 但没有上次 benchmark | "regression 需要 baseline benchmark.json，请提供" |
 
 ---
 
-## 13 个命令的意图映射
-
-根据用户的话选择正确的命令：
+## 命令意图映射
 
 | 用户说了什么 | 命令 | 说明 |
 |---|---|---|
@@ -65,16 +61,10 @@ python3 --version         # 必须：>= 3.10
 | "静态分析" / "analyze" / "评分卡" / "打分" | `analyze` | 11 项结构化评分 |
 | "生成 evals" / "init evals" / "初始化" | `init` | LLM 自动生成 evals.json |
 | "跑测试" / "A/B 测试" / "run" | `run` | with vs without skill 对比 |
-| "一键评测" / "full" / "全流程" / "完整评测" | `full` | vet + analyze + run + overfit + report |
-| "跑所有测评" / "全面测评" | 先 `full` → 再 `vet-overfit` → 再 `batch` + `batch-report` |
-| "批量评测" / "batch" / "多 skill" | `batch` + `batch-report` | 多 skill unit/integration/regression |
-| "过拟合检测" / "overfit" / "泛化" | `vet-overfit` | domain vs general 对比 |
-| "扫描 skills" / "覆盖率检查" / "scan" | `scan` | 检查哪些 skill 缺少 evals |
-| "生成配置" / "config" / "generate-config" | `generate-config` | LLM 生成 eval-config.yaml |
-| "优化触发" / "trigger" / "描述优化" | `optimize-trigger` | 优化 SKILL.md description |
+| "跑所有测评" / "全面测评" | 先 `vet` → `analyze` → `run` → `report` |
+| "批量评测" / "batch" / "多 skill" | `batch` + `batch-report` | 多 skill 单元测试 |
 | "生成报告" / "report" / "报告" | `report` | 生成 HTML 报告（单 skill） |
 | "批量报告" / "batch-report" | `batch-report` | 生成 HTML 报告（多 skill） |
-| "导入数据" / "import" | `import` | 导入 skill-monitor JSONL |
 
 ---
 
@@ -89,7 +79,6 @@ skill-eval vet /path/to/skill --skip-external # 只跑内置扫描器
 ```
 
 4 个扫描器：aguara、skill-scanner、secrets-scan、structure-check。
-结果自动写入 `SKILL_PATH/vet-report.json`。
 
 ### `analyze` — 静态分析
 
@@ -107,9 +96,6 @@ skill-eval init /path/to/skill --output /path/to/skill/evals.json
 
 # 限制数量
 skill-eval init /path/to/skill --num-evals 10
-
-# 生成 general-domain evals（用于过拟合检测，需提供源项目）
-skill-eval init /path/to/skill --source-dir /path/to/android-project --domains web,cli
 ```
 
 **init 自动做的事：**
@@ -117,56 +103,38 @@ skill-eval init /path/to/skill --source-dir /path/to/android-project --domains w
 2. 自动生成 programmatic assertion（FILE_EXISTS, CONTAINS_PATTERN, NOT_CONTAINS 等）
 3. 检查 expectation 质量，避免模糊表述
 
-**注意：** 如果用户要测过拟合但没给源项目路径，必须先追问。例如："要做过拟合检测的话，需要提供一个源项目目录（如 Android 项目），我可以帮你生成 diverse-domain evals。请提供项目路径。"
-
-### `scan` — L0 覆盖率扫描
-
-```bash
-skill-eval scan /path/to/skills-directory/
-```
-
-检查 evals.json 存在性、assertion 类型合法性、覆盖率。
-
-### `generate-config` — 生成配置文件
-
-```bash
-skill-eval generate-config /path/to/skills-directory/
-```
-
-LLM 扫描所有 skill frontmatter 生成 `eval-config.yaml`（domain_templates、integration_scenarios、pipelines）。
-
 ### `run` — A/B 测试
 
 ```bash
 skill-eval run /path/to/skill \
-  --runs 1 --timeout 300 --eval-samples 5 \
+  --runs 3 --timeout 300 \
   --output test-results/NAME/
 ```
 
-关键参数：`--runs`、`--timeout`、`--eval-samples`、`--workers`、`--max-turns`、`--scoring`。
+关键参数：`--runs`、`--timeout`、`--eval-samples`、`--workers`、`--max-turns`、`--scoring`、`--compliance-gate`。
 
-### `full` — 一键全流程（推荐首选）
+每个 eval 独立并发执行，产出 grading.json、compliance.json、calibration.json。
+
+### `report` — 生成报告
 
 ```bash
-skill-eval full /path/to/skill --output test-results/NAME/
+skill-eval report test-results/NAME/iteration-1/                    # 生成静态 report.html
+skill-eval report test-results/NAME/iteration-1/ --open             # 生成并打开
 ```
 
-自动执行：vet → analyze → load evals → A/B test → overfit → report。
-默认 `--timeout 600`、`--max-turns 20`。
-用 `--eval-samples 5` 先验证，再全量。
+自动发现 benchmark.json、scorecard.json、vet-report.json。
 
 ### `batch` — 批量评测
 
 ```bash
 # 用 skills 目录
 skill-eval batch /path/to/skills-directory/ \
-  --layers unit,integration --runs 1 --output test-results/batch/
+  --layers unit --runs 1 --output test-results/batch/
 
 # 用 manifest.json
-skill-eval batch manifest.json --layers unit,integration,regression
+skill-eval batch manifest.json --layers unit --runs 3
 ```
 
-三层测试：unit（A/B）、integration（chain/routing/contract/pipeline）、regression（与上次对比）。
 Manifest 格式：
 ```json
 {"name": "project", "skills": [{"path": "skills/s1", "depends_on": []}]}
@@ -176,38 +144,6 @@ Manifest 格式：
 
 ```bash
 skill-eval batch-report test-results/batch/
-```
-
-### `vet-overfit` — 过拟合检测
-
-```bash
-skill-eval vet-overfit \
-  --domain-bench iteration-1/benchmark.json \
-  --general-bench general/benchmark.json \
-  --output iteration-1/overfitting_report.json
-```
-
-有 `--general-bench` 才有 gap analysis；没有则用基础评分。
-
-### `report` — 生成报告
-
-```bash
-skill-eval report test-results/NAME/iteration-1/                    # 生成静态 report.html
-skill-eval report test-results/NAME/iteration-1/ --open             # 生成并打开
-```
-
-自动发现 benchmark.json、scorecard.json、overfitting_report.json、vet-report.json。
-
-### `optimize-trigger` — 优化触发描述
-
-```bash
-skill-eval optimize-trigger /path/to/skill --eval-set trigger-evals.json --max-iterations 5
-```
-
-### `import` — 导入外部数据
-
-```bash
-skill-eval import monitor-data.jsonl --benchmark iteration-1/benchmark.json
 ```
 
 ---
@@ -233,7 +169,7 @@ skill-eval vet "$SKILL"
 skill-eval analyze "$SKILL"
 
 # Step 3: A/B 测试
-skill-eval full "$SKILL" --output "$OUT"
+skill-eval run "$SKILL" --runs 3 --output "$OUT"
 
 # Step 4: 打开报告
 skill-eval report "$OUT/iteration-1/" --open
@@ -251,7 +187,7 @@ skill-eval vet "$SKILL"
 # Step 2: 静态分析
 skill-eval analyze "$SKILL"
 
-# Step 3: 确保 evals.json 质量（检查模糊 expectation + tier 重叠）
+# Step 3: 确保 evals.json 质量
 python3 -c "
 import json
 e = json.load(open('$SKILL/evals.json'))
@@ -259,7 +195,6 @@ evals = e.get('evals',[])
 vague = sum(1 for ev in evals for x in ev.get('expectations',[]) if 'follows' in str(x).lower())
 if vague > len(evals)*0.3:
     print('NEEDS_REGEN (vague expectations)')
-# Check for tier overlap: same semantic dimension checked by both TIER1 and TIER3
 for ev in evals:
     has_not_contains = any(a['type'] == 'NOT_CONTAINS' for a in ev.get('assertions',[]))
     has_llm_not_delegate = any(a['type'] == 'LLM_NOT_DELEGATE' for a in ev.get('assertions',[]))
@@ -272,8 +207,8 @@ for ev in evals:
 # 如果需要，重新生成：
 # skill-eval init "$SKILL" --output "$SKILL/evals.json"
 
-# Step 4: A/B 测试（默认已包含 vet + analyze + overfit + report）
-skill-eval full "$SKILL" --output "$OUT"
+# Step 4: A/B 测试
+skill-eval run "$SKILL" --runs 3 --compliance-gate --output "$OUT"
 
 # Step 5: 验证结果
 ls "$OUT/iteration-1/benchmark.json"
@@ -286,7 +221,7 @@ skill-eval report "$OUT/iteration-1/" --open
 ### "快速验证"
 
 ```bash
-skill-eval full /path/to/skill --eval-samples 3 --runs 1 --output test-results/quick/
+skill-eval run /path/to/skill --eval-samples 3 --runs 1 --output test-results/quick/
 ```
 
 ### "批量评测多个 skill"
@@ -311,8 +246,6 @@ if (it/'scorecard.json').exists():
     s=json.load(open(it/'scorecard.json')); print(f'scorecard: {s["score"]}/{s["max_score"]}')
 if (it/'vet-report.json').exists():
     v=json.load(open(it/'vet-report.json')); print(f'vet: {v["verdict"]}')
-if (it/'overfitting_report.json').exists():
-    o=json.load(open(it/'overfitting_report.json')); print(f'overfit: {o["overfitting_score"]:.2f}')
 if (it/'benchmark.json').exists():
     b=json.load(open(it/'benchmark.json'))
     ws=[r for r in b.get('runs',[]) if r['configuration']=='with_skill']
@@ -332,57 +265,26 @@ PYEOF
 | without_skill 无 grading | 正常（无 skill 时 Claude 可能不产出可评判内容） |
 | calibration UNRELIABLE | 检查是否有反复 UNEVAL 的断言，考虑重新设计 evals |
 | benchmark.json 缺失 | aggregation 失败，单独 `skill-eval report iteration-1/` |
-| report 面板空白 | 缺对应 JSON 文件，把 vet-report/scorecard/overfitting 文件 cp 到 iteration-1/ |
-| batch 显示 0 skills | 输入不是 skills 目录（需含 skills/ 子目录）或 manifest.json 格式不对 |
-| LLM 断言返回 "Not evaluated" | 断言会自动重试（最多 2 次）；仍 UNEVAL 则标记为 INDETERMINATE 不参与 pass_rate |
-| 单次运行方差大 | `--runs 1` 会显示警告；推荐 `--runs 3` 以上启用异常检测和统计保护 |
-| 报告显示"异常"标记 | 离群值检测（MAD）发现该 run 运行时间异常，建议重试或增大 `--timeout` |
+| report 面板空白 | 缺对应 JSON 文件，把 vet-report/scorecard 文件 cp 到 iteration-1/ |
+| batch 显示 0 skills | 输入不是 skills 目录或 manifest.json 格式不对 |
+| LLM 断言返回 "Not evaluated" | 断言会自动重试（最多 2 次）；仍 UNEVAL 则标记为 INDETERMINATE |
+| 单次运行方差大 | `--runs 1` 会显示警告；推荐 `--runs 3` 以上启用异常检测 |
+| compliance_rate 低 | SKILL.md 指令有矛盾或太难遵循，重写指令 |
 
 ---
 
 ## 断言设计原则
 
-### 三层断言体系
+### 两层断言体系
 
 | 层级 | 类型 | 判定 | 不适用 |
 |------|------|------|--------|
-| **Tier 1** 确定性 | `FILE_EXISTS`, `CONTAINS_PATTERN`, `NOT_CONTAINS`, `TOOL_CALLED`, `STEP_COUNT` | 正则/文件检查 | 语义判断（如"是否正确"） |
-| **Tier 2** 行为性 | `GATE_REQUESTED`, `GATE_NOT_SKIPPED`, `PHASE_ORDERED`, `FILE_NOT_WRITTEN` | 程序化行为检查 | 文字匹配 |
+| **Tier 1** 确定性 | `FILE_EXISTS`, `CONTAINS_PATTERN`, `NOT_CONTAINS`, `TOOL_CALLED`, `STEP_COUNT` | 正则/文件检查 | 语义判断 |
 | **Tier 3** 语义性 | `LLM_GRADE`, `LLM_FACT`, `LLM_NOT_DELEGATE` | LLM 打分+举证 | 简单字面匹配 |
 
 ### 关键规则
 
-1. **同一维度只用一层**：不要同时放 `NOT_CONTAINS "spec-evolver"` 和 `LLM_NOT_DELEGATE`（此处 spec-evolver 仅为示例，实际替换为目标 skill 名）。字面没出现不等于语义上没委托。
-2. **Tier 3 必须标注 `retry_on_uneval: true`**：LLM 评判可能返回 "Not evaluated"，启用自动重试。
-3. **不要为每条 expectation 自动生成 CONTAINS_PATTERN**：expectation 是 LLM 评的语义判断，CONTAINS_PATTERN 是机器正则检查——两者量的是不同东西，不应重叠。
-4. **Tier 1 只做文件内容检查**：检查 agent 输出的文件里有什么/没什么，不检查 transcript（对话文本）。
-
-### evals.json 设计范例
-
-```json
-{
-  "skill_name": "my-skill",
-  "evals": [
-    {
-      "id": 1,
-      "name": "L1-decision-logic-route",
-      "prompt": "具体测试场景...",
-      "expectations": [
-        "输出中提到 spec/baseline/ 不存在或需要创建"
-      ],
-      "assertions": [
-        {"name": "文件 baseline/ui-manifest.md 存在", "type": "FILE_EXISTS", "tier": "TIER1", "params": {"filename": "spec/baseline/ui-manifest.md"}},
-        {"name": "未委托给 other-skill（示例）", "type": "LLM_NOT_DELEGATE", "tier": "TIER3", "retry_on_uneval": true, "params": {"target_skill": "other-skill"}}
-      ],
-      "fixtures": [{"path": "spec/baseline/ui-manifest.md", "content": "# Manifest\n..."}]
-    }
-  ]
-}
-```
-
-### 异常检测
-
-- `--runs 1` 可用（快速验证），但会警告缺乏统计有效性，异常检测禁用
-- `--runs 3+` 启用基于 MAD 的离群值检测（运行时间异常标记为"异常"并高亮到报告）
-- UNEVAL 断言自动重试（最多 2 次），重试成功则用 retry 结果，失败则标记 INDETERMINATE
-- 报告中异常 run 显示 ⚠ 标记，重试显示 R{N}，超时 shows 红色
+1. **同一维度只用一层**：不要同时放 `NOT_CONTAINS "spec-evolver"` 和 `LLM_NOT_DELEGATE`
+2. **Tier 3 必须标注 `retry_on_uneval: true`**：LLM 评判可能返回 "Not evaluated"，启用自动重试
+3. **不要为每条 expectation 自动生成 CONTAINS_PATTERN**：expectation 是 LLM 评的语义判断，CONTAINS_PATTERN 是机器正则检查——两者量的是不同东西
+4. **Tier 1 只做文件内容检查**：检查 agent 输出的文件里有什么/没什么，不检查 transcript

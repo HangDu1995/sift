@@ -10,7 +10,6 @@ import signal
 import subprocess
 import sys
 import webbrowser
-from functools import partial
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -201,16 +200,6 @@ def _embed_file(path: Path) -> dict:
         return {"name": path.name, "type": "error", "content": "Could not read file"}
 
 
-def _load_overfitting(workspace: Path) -> dict | None:
-    path = workspace / "overfitting_report.json"
-    if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return None
-
-
 def _load_vet_report(workspace: Path) -> dict | None:
     for candidate in [workspace / "vet-report.json", workspace / "iteration-1" / "vet-report.json"]:
         if candidate.exists():
@@ -286,7 +275,6 @@ class ReportGenerator:
             "previous_outputs": prev_outputs,
             "benchmark": benchmark,
             "scorecard": scorecard,
-            "overfitting": _load_overfitting(workspace),
             "vet_report": _load_vet_report(workspace),
         }
 

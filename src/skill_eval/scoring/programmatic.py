@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from skill_eval.models import (
+    AssertionTier,
     AssertionType,
     AssertionVerdict,
     EvalCase,
@@ -42,6 +43,8 @@ class ProgrammaticChecker:
             "stop_reason": stop_reason,
         }
         for assertion in eval_case.assertions:
+            if assertion.tier == AssertionTier.TIER3:
+                continue  # Tier 3 assertions (LLM_GRADE, LLM_FACT, LLM_NOT_DELEGATE) are handled by LLM grader
             verdict, evidence = self._run_assertion(
                 assertion.type, assertion.params, output_dir, context
             )
@@ -72,11 +75,6 @@ class ProgrammaticChecker:
             AssertionType.CUSTOM_PLUGIN: self._custom_plugin,
             AssertionType.TOOL_CALLED: self._tool_called,
             AssertionType.STEP_COUNT: self._step_count,
-            # Tier 2
-            AssertionType.GATE_REQUESTED: self._gate_requested,
-            AssertionType.GATE_NOT_SKIPPED: self._gate_not_skipped,
-            AssertionType.PHASE_ORDERED: self._phase_ordered,
-            AssertionType.FILE_NOT_WRITTEN: self._file_not_written,
         }.get(atype)
         if handler is None:
             return AssertionVerdict.ERROR, f"Unknown assertion type: {atype}"
@@ -105,7 +103,7 @@ class ProgrammaticChecker:
             return AssertionVerdict.PASS, f"Pattern '{pattern}' found in {filename}"
         return AssertionVerdict.FAIL, f"Pattern '{pattern}' not found in {filename}"
 
-    def _contains_pattern(self, params: dict, output_dir: Path, _ctx: dict) -> tuple[AssertionVerdict, str]:
+    def _contains_pattern(self, params: dict, output_dir: Path, ctx: dict) -> tuple[AssertionVerdict, str]:
         pattern = params.get("pattern", "")
         filepath = params.get("path", "")
         target = output_dir / filepath if filepath else output_dir
@@ -122,7 +120,11 @@ class ProgrammaticChecker:
                         return AssertionVerdict.PASS, f"Pattern '{pattern}' found in {f.name}"
                 except Exception:
                     continue
-        return AssertionVerdict.FAIL, f"Pattern '{pattern}' not found in any file"
+        # Fallback: search in transcript (supports advisory/knowledge skills with no file output)
+        transcript = ctx.get("transcript", "")
+        if transcript and re.search(pattern, transcript):
+            return AssertionVerdict.PASS, f"Pattern '{pattern}' found in transcript"
+        return AssertionVerdict.FAIL, f"Pattern '{pattern}' not found in any file or transcript"
 
     def _json_has_field(self, params: dict, output_dir: Path, _ctx: dict) -> tuple[AssertionVerdict, str]:
         filename = params.get("filename", "")
@@ -288,69 +290,6 @@ class ProgrammaticChecker:
         if max_val is not None and num_turns > max_val:
             return AssertionVerdict.FAIL, f"Step count {num_turns} > max {max_val}"
         return AssertionVerdict.PASS, f"Step count: {num_turns}"
-
-    # ---- Tier 2 handlers (use transcript context) ----
-
-    def _gate_requested(self, params: dict, _output_dir: Path, ctx: dict) -> tuple[AssertionVerdict, str]:
-        gate_label = params.get("gate", "")
-        transcript = ctx.get("transcript", "")
-        stop_reason = ctx.get("stop_reason", "")
-        # Check if the agent asked the user for confirmation before proceeding
-        ask_patterns = [
-            r"(?:是否|请|could you|would you like|shall I|want me to).{0,30}",
-            r"(?:确认|继续|审批|approve|continue|confirm|review).{0,20}[\?]",
-        ]
-        asked = any(re.search(p, transcript, re.IGNORECASE) for p in ask_patterns)
-        stopped = "end_turn" in stop_reason.lower()
-        if gate_label:
-            if re.search(re.escape(gate_label), transcript, re.IGNORECASE):
-                if asked or stopped:
-                    return AssertionVerdict.PASS, f"Gate '{gate_label}' requested confirmation"
-                return AssertionVerdict.PASS, f"Gate '{gate_label}' mentioned"
-        if asked or stopped:
-            return AssertionVerdict.PASS, "User confirmation requested"
-        return AssertionVerdict.FAIL, "No confirmation request found"
-
-    def _gate_not_skipped(self, params: dict, _output_dir: Path, ctx: dict) -> tuple[AssertionVerdict, str]:
-        gate_label = params.get("gate", "")
-        transcript = ctx.get("transcript", "")
-        skip_patterns = [
-            r"(?:跳过|skip(?:ping)?|bypass|ignore).{0,30}" + re.escape(gate_label),
-            re.escape(gate_label) + r".{0,10}(?:跳过|skip|ignore|bypass)",
-        ]
-        for pattern in skip_patterns:
-            if re.search(pattern, transcript, re.IGNORECASE):
-                return AssertionVerdict.FAIL, f"Gate '{gate_label}' was skipped"
-        return AssertionVerdict.PASS, f"Gate '{gate_label}' not skipped"
-
-    def _phase_ordered(self, params: dict, _output_dir: Path, ctx: dict) -> tuple[AssertionVerdict, str]:
-        phases = params.get("phases", [])
-        if len(phases) < 2:
-            return AssertionVerdict.ERROR, "Need at least 2 phases for ordering check"
-        transcript = ctx.get("transcript", "")
-        positions = {}
-        for phase in phases:
-            match = re.search(re.escape(phase), transcript, re.IGNORECASE)
-            if match:
-                positions[phase] = match.start()
-            else:
-                positions[phase] = float("inf")
-        for i in range(len(phases) - 1):
-            if positions.get(phases[i], float("inf")) > positions.get(phases[i + 1], float("inf")):
-                return AssertionVerdict.FAIL, f"Phase '{phases[i]}' appears after '{phases[i+1]}'"
-        return AssertionVerdict.PASS, f"Phases ordered correctly: {' → '.join(phases)}"
-
-    def _file_not_written(self, params: dict, output_dir: Path, _ctx: dict) -> tuple[AssertionVerdict, str]:
-        pattern = params.get("pattern", "*")
-        import glob
-        matched = glob.glob(str(output_dir / pattern), recursive=False)
-        # Also check recursive
-        matched.extend(glob.glob(str(output_dir / "**" / pattern), recursive=True))
-        matched = list(set(matched))
-        if matched:
-            names = [Path(m).name for m in matched[:5]]
-            return AssertionVerdict.FAIL, f"Forbidden files written: {', '.join(names)}"
-        return AssertionVerdict.PASS, f"No files matching '{pattern}' written"
 
     @staticmethod
     def _read_all_files(output_dir: Path, include: str | None = None) -> dict[str, str]:

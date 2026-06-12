@@ -1,16 +1,10 @@
 # Framework defaults — override via project-level eval-config.yaml or skill-level eval-config.yaml.
-# These values are used when no higher-priority config is found.
 
 version: 1
 
 scanning:
   collection_prefix: ""
   skills_dir: "skills/"
-  manifest_file: "manifest.json"
-  skill_md: "SKILL.md"
-  evals_paths:
-    - "evals.json"
-    - "evals/evals.json"
 
 grading:
   default_threshold: 0.7

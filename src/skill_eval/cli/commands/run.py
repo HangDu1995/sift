@@ -10,6 +10,7 @@ from rich.table import Table
 from skill_eval.cli.helpers import _check_claude_or_exit, _discover_evals, _parse_eval_samples
 from skill_eval.cli.main import app, console
 from skill_eval.cli.pipeline import _run_ab_eval
+from skill_eval.env_check import check_skill_env, check_eval_env
 from skill_eval.errors import SkillEvalError
 
 
@@ -19,14 +20,7 @@ def _render_security_report(report, console: Console) -> None:
     table.add_column("Status")
     table.add_column("Detail")
     for s in report.scanners:
-        if s.status == "PASS":
-            status = "[green]PASS[/green]"
-        elif s.status == "FAIL":
-            status = "[red]FAIL[/red]"
-        elif s.status == "WARN":
-            status = "[yellow]WARN[/yellow]"
-        else:
-            status = "[dim]SKIP[/dim]"
+        status = {"PASS": "[green]PASS[/green]", "FAIL": "[red]FAIL[/red]", "WARN": "[yellow]WARN[/yellow]"}.get(s.status, "[dim]SKIP[/dim]")
         table.add_row(s.name, status, s.message)
     console.print(table)
 
@@ -37,31 +31,27 @@ def _render_security_report(report, console: Console) -> None:
             loc = f" ({f.file_path}" + (f":{f.line}" if f.line else "") + ")" if f.file_path else ""
             console.print(f"  [{color}]{f.severity}[/{color}] [{f.scanner}] {f.description}{loc}")
 
-    if report.verdict == "BLOCKED":
-        console.print(f"\n[red bold]VERDICT: BLOCKED[/red bold] — {report.summary}")
-    elif report.verdict == "REVIEW_NEEDED":
-        console.print(f"\n[yellow bold]VERDICT: REVIEW NEEDED[/yellow bold] — {report.summary}")
-    else:
-        console.print(f"\n[green bold]VERDICT: SAFE[/green bold] — {report.summary}")
+    verdict_color = {"BLOCKED": "red bold", "REVIEW_NEEDED": "yellow bold"}.get(report.verdict, "green bold")
+    console.print(f"\n[{verdict_color}]VERDICT: {report.verdict}[/{verdict_color}] — {report.summary}")
 
 
 @app.command()
 def run(
     skill_path: Path = typer.Argument(..., help="Path to skill directory"),
     evals: Optional[Path] = typer.Option(None, "--evals", help="Path to evals.json"),
-    runs: int = typer.Option(3, "--runs", help="Number of runs per configuration"),
+    runs: int = typer.Option(1, "--runs", help="Number of runs per configuration"),
     model: Optional[str] = typer.Option(None, "--model", help="Model for claude -p"),
     workers: int = typer.Option(4, "--workers", help="Max parallel workers"),
     timeout: int = typer.Option(300, "--timeout", help="Timeout per run in seconds"),
     max_turns: int = typer.Option(10, "--max-turns", help="Max agentic turns per claude -p run"),
     scoring: str = typer.Option("hybrid", "--scoring", help="Scoring mode: hybrid, programmatic, or llm"),
     compliance_gate: bool = typer.Option(False, "--compliance-gate", help="Force-fail if compliance_rate < 0.5"),
+    no_compliance: Optional[bool] = typer.Option(None, "--no-compliance/--compliance", help="Skip compliance checking (auto: on for --runs<3)"),
     no_calibration: bool = typer.Option(False, "--no-calibration", help="Skip scoring calibration"),
     security_gate: bool = typer.Option(False, "--security-gate", help="Fail if security vetting returns BLOCKED or REVIEW_NEEDED"),
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
     format: str = typer.Option("table", "--format", help="Output format"),
     eval_samples: Optional[str] = typer.Option(None, "--eval-samples", help="Number or pct of evals to run (e.g. 10 or 0.25)"),
-    merged: bool = typer.Option(False, "--merged", help="Use merged-prompt mode instead of per-eval"),
 ):
     """Run A/B evaluation of a Skill."""
     from skill_eval.evals.loader import EvalLoader
@@ -88,12 +78,26 @@ def run(
     if not output_dir:
         output_dir = Path("output")
 
-    if runs < 2:
+    if runs < 3:
         console.print(
-            "[yellow]Warning:[/yellow] --runs 1 means no statistical validity. "
-            "Single-run results have high variance and outlier detection disabled. "
-            "Use --runs 3+ for reliable results."
+            "[dim]Tip: use --runs 3 for statistical validity (outlier detection, variance analysis).[/dim]"
         )
+
+    # Environment check
+    env_result = check_skill_env(skill_path)
+    prompts = [e.prompt for e in eval_set.evals]
+    env_result.update(check_eval_env(prompts))
+    missing = [tool for tool, ok in env_result.items() if not ok]
+    if missing:
+        console.print(
+            f"[yellow]Environment:[/yellow] tools referenced but not found: {', '.join(missing)}"
+        )
+
+    # Compliance: on by default for runs>=3, off for runs<3, explicit flag overrides
+    if no_compliance is None:
+        skip_compliance = runs < 3
+    else:
+        skip_compliance = no_compliance
 
     _run_ab_eval(
         skill_path=skill_path,
@@ -105,8 +109,8 @@ def run(
         max_turns=max_turns,
         scoring=scoring,
         no_calibration=no_calibration,
+        skip_compliance=skip_compliance,
         output_dir=output_dir,
         fmt=format,
         eval_samples=_parse_eval_samples(eval_samples),
-        per_eval_mode=not merged,
     )

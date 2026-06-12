@@ -6,8 +6,7 @@ from enum import Enum
 
 
 class AssertionTier(str, Enum):
-    TIER1 = "TIER1"  # Deterministic: file/regex checks, always trustworthy
-    TIER2 = "TIER2"  # Behavioral: gates, ordering, file access patterns
+    TIER1 = "TIER1"  # Deterministic: file/regex checks
     TIER3 = "TIER3"  # Semantic: LLM-judged quality/fact checks
 
 
@@ -25,11 +24,6 @@ class AssertionType(str, Enum):
     CUSTOM_PLUGIN = "CUSTOM_PLUGIN"
     TOOL_CALLED = "TOOL_CALLED"
     STEP_COUNT = "STEP_COUNT"
-    # Tier 2 — Behavioral
-    GATE_REQUESTED = "GATE_REQUESTED"
-    GATE_NOT_SKIPPED = "GATE_NOT_SKIPPED"
-    PHASE_ORDERED = "PHASE_ORDERED"
-    FILE_NOT_WRITTEN = "FILE_NOT_WRITTEN"
     # Tier 3 — Semantic (LLM-judged)
     LLM_GRADE = "LLM_GRADE"
     LLM_FACT = "LLM_FACT"
@@ -94,26 +88,12 @@ class SkillCategory(str, Enum):
     ENCODED_PREFERENCE = "ENCODED_PREFERENCE"
 
 
-class FailureType(str, Enum):
-    ROOT_CAUSE = "ROOT_CAUSE"
-    CASCADE = "CASCADE"
-    INDEPENDENT = "INDEPENDENT"
-    DEPENDENCY_MISSING = "DEPENDENCY_MISSING"
-
-
 class NodeStatus(str, Enum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
     PASSED = "PASSED"
     FAILED = "FAILED"
     SKIPPED = "SKIPPED"
-    CASCADE_FAILED = "CASCADE_FAILED"
-
-
-class EdgeType(str, Enum):
-    STATIC_DEP = "STATIC_DEP"
-    RUNTIME_CALL = "RUNTIME_CALL"
-    MANIFEST_DECLARED = "MANIFEST_DECLARED"
 
 
 class SecuritySeverity(str, Enum):

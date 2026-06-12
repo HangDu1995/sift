@@ -1,4 +1,4 @@
-"""Tests for batch modules — DAG, cascade, manifest."""
+"""Tests for batch modules — DAG, manifest."""
 
 from __future__ import annotations
 
@@ -8,10 +8,9 @@ from pathlib import Path
 import pytest
 
 from skill_eval.batch.dag import SkillDAG, build_dag
-from skill_eval.batch.cascade import CascadeAnalyzer
 from skill_eval.batch.manifest import ManifestLoader
 from skill_eval.errors import CyclicDependencyError, ManifestError
-from skill_eval.models import NodeStatus, SkillEntry, FailureType
+from skill_eval.models import NodeStatus, SkillEntry
 
 
 class TestDAG:
@@ -58,43 +57,6 @@ class TestDAG:
         dag = build_dag(skills)
         assert "a" not in dag.nodes
         assert "b" in dag.nodes
-
-
-class TestCascadeAnalyzer:
-    def test_root_cause(self):
-        dag = SkillDAG()
-        dag.add_skill(SkillEntry(path="a", depends_on=[]))
-        analyzer = CascadeAnalyzer()
-        results = {"a": NodeStatus.FAILED}
-        attr = analyzer.analyze(dag, results)
-        assert attr["a"] == FailureType.ROOT_CAUSE
-
-    def test_cascade(self):
-        dag = SkillDAG()
-        dag.add_skill(SkillEntry(path="a", depends_on=[]))
-        dag.add_skill(SkillEntry(path="b", depends_on=["a"]))
-        analyzer = CascadeAnalyzer()
-        results = {"a": NodeStatus.FAILED, "b": NodeStatus.FAILED}
-        attr = analyzer.analyze(dag, results)
-        assert attr["a"] == FailureType.ROOT_CAUSE
-        assert attr["b"] == FailureType.CASCADE
-
-    def test_dependency_missing(self):
-        dag = SkillDAG()
-        dag.add_skill(SkillEntry(path="a", depends_on=[]))
-        dag.add_skill(SkillEntry(path="b", depends_on=["a"]))
-        analyzer = CascadeAnalyzer()
-        results = {"b": NodeStatus.SKIPPED}
-        attr = analyzer.analyze(dag, results)
-        assert attr["b"] == FailureType.DEPENDENCY_MISSING
-
-    def test_all_pass(self):
-        dag = SkillDAG()
-        dag.add_skill(SkillEntry(path="a", depends_on=[]))
-        analyzer = CascadeAnalyzer()
-        results = {"a": NodeStatus.PASSED}
-        attr = analyzer.analyze(dag, results)
-        assert attr == {}
 
 
 class TestManifestLoader:

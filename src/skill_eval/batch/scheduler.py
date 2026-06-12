@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Callable
 
 from skill_eval.batch.dag import build_dag
-from skill_eval.batch.cascade import CascadeAnalyzer
 from skill_eval.models import (
     NodeStatus,
     RunConfig,
@@ -43,7 +42,7 @@ class BatchScheduler:
         total_skills = sum(len(l) for l in levels)
         global_idx = [0]
 
-        for level_idx, level in enumerate(levels, 1):
+        for level in levels:
             if len(level) == 1:
                 skill_path = level[0]
                 with results_lock:
@@ -121,7 +120,7 @@ class BatchScheduler:
             agg_start = time.time()
             sys.stderr.write(f"[{idx}/{total}] {skill_path}: aggregating...\n")
             sys.stderr.flush()
-                agg = BenchmarkAggregator(model=run_config.model, timeout=self.scoring_config.llm_timeout)
+            agg = BenchmarkAggregator(model=run_config.model, timeout=self.scoring_config.llm_timeout)
             benchmark = agg.aggregate(iteration_dir, skill_dir)
             (iteration_dir / "benchmark.json").write_text(
                 json.dumps(benchmark.model_dump(mode="json"), indent=2, ensure_ascii=False),
@@ -143,139 +142,3 @@ class BatchScheduler:
             print(f"[skill-eval batch] ERROR in {skill_path}: {exc}", flush=True)
             traceback.print_exc()
             return NodeStatus.FAILED
-
-    def generate_cascade_report(self, results: dict[str, NodeStatus]) -> dict:
-        analyzer = CascadeAnalyzer()
-        attributions = analyzer.analyze(self.dag, results)
-
-        report = {
-            "total_skills": len(self.manifest.skills),
-            "passed": sum(1 for s in results.values() if s == NodeStatus.PASSED),
-            "failed": sum(1 for s in results.values() if s == NodeStatus.FAILED),
-            "skipped": sum(1 for s in results.values() if s in (NodeStatus.SKIPPED, NodeStatus.CASCADE_FAILED)),
-            "attributions": {k: v.value for k, v in attributions.items()},
-        }
-        return report
-
-    def run_integration_tests(
-        self,
-        workspace: Path,
-        config: object | None = None,
-        scenario_type: str | None = None,
-        pipeline_name: str | None = None,
-        pipeline_steps: list[str] | None = None,
-        project_overrides: list[str] | None = None,
-    ) -> dict:
-        from skill_eval.integration.runner import run_integration_batch
-
-        scenarios = []
-        skill_keywords: dict[str, list[str]] = {}
-        pipelines: list[dict] = []
-        if config is not None:
-            scenarios = getattr(config, "integration_scenarios", []) or []
-            skill_keywords = getattr(config, "skill_keywords", {}) or {}
-            pipelines = getattr(config, "pipelines", []) or []
-        integration_evals = self.manifest.integration_evals if hasattr(self.manifest, "integration_evals") else []
-        if integration_evals:
-            for ie in integration_evals:
-                scenarios.append({
-                    "name": getattr(ie, "id", "ie"),
-                    "type": "routing",
-                    "test_prompts": [{"prompt": ie.prompt, "should_trigger": ie.expected_skills_triggered}],
-                })
-
-        if not scenarios and not pipelines:
-            return {"total": 0, "passed": 0, "failed": 0, "scenarios": []}
-
-        skills_dir = self.base_dir
-        skills_map: dict[str, Path] = {}
-        for skill in self.manifest.skills:
-            sp = self.base_dir / (skill.path if hasattr(skill, "path") else str(skill))
-            if (sp / "SKILL.md").exists():
-                name = getattr(skill, "name", sp.name)
-                skills_map[name] = sp
-
-        return run_integration_batch(
-            scenarios=scenarios,
-            skill_keywords=skill_keywords,
-            scenario_type=scenario_type,
-            workspace_dir=workspace / "integration",
-            pipelines=pipelines if pipelines else None,
-            pipeline_name=pipeline_name,
-            pipeline_steps=pipeline_steps,
-            project_overrides=project_overrides,
-            skills_dir=skills_dir,
-            skills_map=skills_map,
-        )
-
-    def run_regression_tests(self, workspace: Path, baseline: Path) -> dict:
-        if not baseline.exists():
-            return {"total": 0, "passed": 0, "failed": 0, "regressions": [], "error": "Baseline file not found"}
-
-        try:
-            baseline_data = json.loads(baseline.read_text(encoding="utf-8"))
-        except Exception as exc:
-            return {"total": 0, "passed": 0, "failed": 0, "regressions": [], "error": str(exc)}
-
-        baseline_runs = baseline_data.get("runs", [])
-        baseline_by_skill: dict[str, float] = {}
-        for run in baseline_runs:
-            name = run.get("eval_name", "")
-            config = run.get("configuration", "")
-            if config == "with_skill":
-                pr = run.get("result", {}).get("pass_rate", 0.0)
-                baseline_by_skill[name] = pr
-
-        current_benchmarks: dict[str, float] = {}
-        unit_dir = workspace / "unit"
-        if unit_dir.is_dir():
-            for unit_sub in unit_dir.iterdir():
-                for bench_file in unit_sub.rglob("benchmark.json"):
-                    try:
-                        bd = json.loads(bench_file.read_text(encoding="utf-8"))
-                        for run in bd.get("runs", []):
-                            name = run.get("eval_name", "")
-                            config = run.get("configuration", "")
-                            if config == "with_skill":
-                                current_benchmarks[name] = run.get("result", {}).get("pass_rate", 0.0)
-                    except Exception:
-                        continue
-
-        regressions: list[dict] = []
-        passed = 0
-        failed = 0
-        all_skills = set(baseline_by_skill.keys()) | set(current_benchmarks.keys())
-
-        for skill_name in sorted(all_skills):
-            baseline_pr = baseline_by_skill.get(skill_name)
-            current_pr = current_benchmarks.get(skill_name)
-            entry: dict = {"skill": skill_name, "baseline_pass_rate": baseline_pr, "current_pass_rate": current_pr}
-
-            if baseline_pr is None or current_pr is None:
-                entry["status"] = "MISSING"
-                entry["delta"] = None
-                passed += 1
-            else:
-                delta = current_pr - baseline_pr
-                entry["delta"] = round(delta, 4)
-                if current_pr >= baseline_pr:
-                    entry["status"] = "STABLE" if abs(delta) <= 0.05 else "IMPROVED"
-                    passed += 1
-                elif delta < -0.05:
-                    entry["status"] = "REGRESSED"
-                    failed += 1
-                else:
-                    entry["status"] = "STABLE"
-                    passed += 1
-
-                if baseline_pr > 0 and current_pr <= baseline_pr:
-                    entry["redundant"] = True
-
-            regressions.append(entry)
-
-        return {
-            "total": len(regressions),
-            "passed": passed,
-            "failed": failed,
-            "regressions": regressions,
-        }

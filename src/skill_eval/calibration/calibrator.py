@@ -125,13 +125,13 @@ class CalibrationChecker:
             if compliance.compliance_rate >= 0.8:
                 signals.append(ConfidenceSignal(
                     signal_type=SignalType.COMPLIANCE_BACKS_SCORING,
-                    description=f"合规比率 {compliance.compliance_rate:.0%}",
+                    description=f"遵循性比率 {compliance.compliance_rate:.0%}",
                     impact=0.1,
                 ))
             elif compliance.compliance_rate < 0.5:
                 signals.append(ConfidenceSignal(
                     signal_type=SignalType.COMPLIANCE_CONTRADICTS_SCORING,
-                    description=f"合规性偏低 {compliance.compliance_rate:.0%}",
+                    description=f"遵循性偏低 {compliance.compliance_rate:.0%}",
                     impact=-0.3,
                 ))
 
@@ -177,7 +177,7 @@ class CalibrationChecker:
             recs.append("一致性比率偏低——建议增加 runs_per_config 以提高统计稳定性")
 
         if SignalType.COMPLIANCE_CONTRADICTS_SCORING in signal_types:
-            recs.append("合规性与评分矛盾——输出正确性可能并非由 Skill 导致")
+            recs.append("遵循性与评分矛盾——输出正确性可能并非由 Skill 导致")
 
         if SignalType.WEAK_EVIDENCE in signal_types:
             recs.append("评分证据不足——建议添加更具体的期望条件")

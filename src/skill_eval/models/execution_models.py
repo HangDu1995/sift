@@ -15,8 +15,8 @@ class RunConfig(BaseModel):
     output_dir: Path = Path("output")
     max_turns: int = 10
     skip_calibration: bool = False
+    skip_compliance: bool = False
     eval_samples: int | float | None = None
-    per_eval_mode: bool = True
     per_eval_timeout: int = 300  # Per-eval timeout for outlier detection
     outlier_threshold_multiplier: float = 3.0  # > N×MAD → anomaly
     min_runs_for_stats: int = 3  # Minimum runs before statistical checks kick in

@@ -10,21 +10,6 @@ def collect_batch_data(workspace: Path, manifest: dict | None = None) -> dict:
     """Collect all benchmark data from a batch workspace."""
     skills: list[dict] = []
 
-    cascade_path = workspace / "cascade-report.json"
-    cascade = None
-    if cascade_path.exists():
-        try:
-            cascade = json.loads(cascade_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-
-    if manifest is None:
-        try:
-            cascade_data = json.loads(cascade_path.read_text(encoding="utf-8")) if cascade_path.exists() else {}
-        except Exception:
-            cascade_data = {}
-        manifest = cascade_data.get("manifest") if cascade_data else None
-
     unit_dir = workspace / "unit"
     if unit_dir.is_dir():
         for skill_dir in sorted(unit_dir.iterdir()):
@@ -42,7 +27,6 @@ def collect_batch_data(workspace: Path, manifest: dict | None = None) -> dict:
 
             meta = bench.get("metadata", {})
             summary = bench.get("run_summary", {})
-            runs = bench.get("runs", [])
             delta = summary.get("delta", {})
 
             with_skill = summary.get("with_skill", {}).get("pass_rate", {})
@@ -57,22 +41,15 @@ def collect_batch_data(workspace: Path, manifest: dict | None = None) -> dict:
                 "delta": delta.get("pass_rate"),
                 "delta_time": delta.get("time_seconds"),
                 "delta_tokens": delta.get("tokens"),
-                "runs": runs,
+                "runs": bench.get("runs", []),
                 "benchmark": bench,
                 "has_comparisons": bool(bench.get("comparisons")),
                 "has_analysis": bool(bench.get("analysis")),
                 "notes_count": len(bench.get("notes", [])),
                 "dependencies": [],
                 "depended_by": [],
-                "overfitting": _load_overfitting_report(iteration),
             }
             skills.append(skill_data)
-
-    if cascade:
-        attributions = cascade.get("attributions", {})
-        for s in skills:
-            attr = attributions.get(s["name"], "PASSED")
-            s["status"] = attr
 
     if manifest:
         manifest_skills = manifest.get("skills", [])
@@ -91,32 +68,10 @@ def collect_batch_data(workspace: Path, manifest: dict | None = None) -> dict:
                         other.setdefault("depended_by", []).append(s["name"])
                         break
 
-    integration_path = workspace / "integration-report.json"
-    integration = None
-    if integration_path.exists():
-        try:
-            integration = json.loads(integration_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-
     return {
         "skills": skills,
-        "cascade": cascade,
         "manifest": manifest,
-        "integration": integration,
     }
-
-
-
-
-def _load_overfitting_report(iteration_dir: Path) -> dict | None:
-    path = iteration_dir / "overfitting_report.json"
-    if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return None
 
 
 def generate_batch_html(workspace: Path, manifest: dict | None = None) -> str:

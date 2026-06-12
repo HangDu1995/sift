@@ -10,7 +10,6 @@ import pytest
 from skill_eval.reporting.viewer import (
     ReportGenerator,
     _build_run,
-    _load_overfitting,
     _load_vet_report,
     find_runs,
 )
@@ -150,16 +149,6 @@ class TestReportGeneratorStatic:
 
 
 class TestLoadAuxData:
-    def test_load_overfitting(self, tmp_path: Path):
-        of = tmp_path / "overfitting_report.json"
-        of.write_text(json.dumps({"overfitting_score": 0.3, "verdict": "good"}))
-        result = _load_overfitting(tmp_path)
-        assert result is not None
-        assert result["overfitting_score"] == 0.3
-
-    def test_load_overfitting_missing(self, tmp_path: Path):
-        assert _load_overfitting(tmp_path) is None
-
     def test_load_vet_report(self, tmp_path: Path):
         v = tmp_path / "vet-report.json"
         v.write_text(json.dumps({"verdict": "SAFE"}))

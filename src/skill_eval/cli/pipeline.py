@@ -22,10 +22,10 @@ def _run_ab_eval(
     max_turns: int,
     scoring: str,
     no_calibration: bool,
-    output_dir: Path,
+    skip_compliance: bool = False,
+    output_dir: Path = Path("output"),
     fmt: str = "table",
     eval_samples: int | float | None = None,
-    per_eval_mode: bool = True,
 ) -> tuple:
     from skill_eval.execution.runner import ABTestRunner
     from skill_eval.execution.benchmark import BenchmarkAggregator
@@ -41,7 +41,7 @@ def _run_ab_eval(
         else:
             actual_evals = min(int(eval_samples), total_evals)
             sampled = f" (sampled {actual_evals}/{total_evals})"
-    lc.print(f"Running A/B test: {eval_set.skill_name} ({total_evals} evals{sampled} × {runs} runs, {'per-eval' if per_eval_mode else 'merged'} mode)")
+    lc.print(f"Running A/B test: {eval_set.skill_name} ({total_evals} evals{sampled} × {runs} runs)")
 
     scoring_config = ScoringConfig(
         enable_programmatic=scoring in ("hybrid", "programmatic"),
@@ -57,8 +57,8 @@ def _run_ab_eval(
         max_turns=max_turns,
         output_dir=output_dir,
         skip_calibration=no_calibration,
+        skip_compliance=skip_compliance,
         eval_samples=eval_samples,
-        per_eval_mode=per_eval_mode,
         per_eval_timeout=timeout,
         min_runs_for_stats=max(3, runs),
     )
