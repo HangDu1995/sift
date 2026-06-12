@@ -95,8 +95,9 @@ class EvalInitGenerator:
 
     def generate_with_llm(self, skill_path: Path) -> EvalSet:
         name, description, content, frontmatter, body = parse_skill_md(skill_path)
+        is_procedural = self._is_procedural_skill(content, skill_path)
 
-        prompt = self._build_llm_prompt(name, description, content)
+        prompt = self._build_llm_prompt(name, description, content, is_procedural)
         try:
             response = call_claude(prompt, model=self.model, timeout=self.timeout)
         except RuntimeError:
@@ -105,10 +106,18 @@ class EvalInitGenerator:
         eval_set = self._parse_llm_response(response, name)
         if eval_set is not None:
             for case in eval_set.evals:
-                case.assertions = self._auto_generate_assertions(case)
+                if case.level == "L1":
+                    case.assertions = self._auto_generate_assertions(case)
             return eval_set
 
         return self.generate_template(skill_path)
+
+    def _is_procedural_skill(self, content: str, skill_path: Path) -> bool:
+        """Detect if skill is tool-chain/procedural (deserves L2 evals)."""
+        code_blocks = len(re.findall(r'```', content)) // 2
+        has_scripts = (skill_path / "scripts").is_dir()
+        has_references = (skill_path / "references").is_dir()
+        return code_blocks >= 3 or has_scripts or has_references
 
     # ------------------------------------------------------------------
     # Section splitting — split on ## headings only, fold ###+ in
@@ -353,8 +362,14 @@ class EvalInitGenerator:
 
     @staticmethod
     def _auto_generate_assertions(eval_case: EvalCase) -> list[Assertion]:
+        """Auto-derive assertions from expectations. LLM-generated take priority."""
+        # If LLM already produced sufficient assertions, use them as-is
+        if eval_case.assertions and len(eval_case.assertions) >= len(eval_case.expectations):
+            return eval_case.assertions
+
         assertions: list[Assertion] = list(eval_case.assertions)
         seen = {(a.type, json.dumps(a.params, sort_keys=True)) for a in assertions}
+        is_l1 = eval_case.level == "L1"
 
         def _add(a: Assertion) -> None:
             key = (a.type, json.dumps(a.params, sort_keys=True))
@@ -362,72 +377,37 @@ class EvalInitGenerator:
                 seen.add(key)
                 assertions.append(a)
 
-        # From fixtures: every fixture file → FILE_EXISTS (Tier 1)
-        for f in eval_case.fixtures:
-            if f.path:
-                _add(Assertion(
-                    name=f"文件 {f.path} 存在",
-                    type=AssertionType.FILE_EXISTS,
-                    params={"filename": f.path},
-                    tier=AssertionTier.TIER1,
-                ))
-
-        # From expectations: extract file names, patterns, negative patterns
+        # From expectations: extract patterns
         for exp in eval_case.expectations:
             exp_lower = exp.lower()
 
-            # File references: "生成 X.md", "写入 Y.json", "输出 Z.txt" → Tier 1
-            file_refs = re.findall(r'[\w/\-]+\.(?:md|json|yaml|yml|xml|txt|ets|ts|py|js|csv|html)', exp)
-            for fr in file_refs[:2]:
-                _add(Assertion(
-                    name=f"产出文件 {fr}",
-                    type=AssertionType.FILE_EXISTS,
-                    params={"filename": fr},
-                    tier=AssertionTier.TIER1,
-                ))
+            # File references: only add FILE_EXISTS for L2 evals (L1 doesn't produce files)
+            if not is_l1:
+                file_refs = re.findall(r'[\w/\-]+\.(?:md|json|yaml|yml|xml|txt|py|js|csv|html|pdf)', exp)
+                for fr in file_refs[:2]:
+                    _add(Assertion(name=f"产出文件 {fr}", type=AssertionType.FILE_EXISTS,
+                                   params={"filename": fr}))
 
-            # "包含 X" / "提到 Y" → Tier 1
-            contains_patterns = re.findall(r'[包含提及展示输出写出].{0,3}["「《]([^"」》]{3,40})["」》]', exp)
-            if not contains_patterns:
-                contains_patterns = re.findall(r'(?:includes|contains|mentions|shows|outputs)\s+["\u201c]([^"\u201d]{3,40})["\u201d]', exp_lower)
-            if not contains_patterns:
-                keywords = re.findall(r'(?:验证|检查|确认).{0,3}([A-Za-z_\./]{3,40})', exp)
-                if not keywords:
-                    keywords = re.findall(r'([A-Z][a-z]+(?:[A-Z][a-z]+){2,})', exp)
-                    if not keywords:
-                        keywords = re.findall(r'([A-Z][a-z]+(?:Layout|Activity|Fragment|Manager|Service|View))', exp)
-                if keywords:
-                    contains_patterns = keywords
-            for kw in contains_patterns[:2]:
-                if len(kw) >= 3:
-                    _add(Assertion(
-                        name=f"输出包含: {kw}",
-                        type=AssertionType.CONTAINS_PATTERN,
-                        params={"pattern": re.escape(kw)},
-                        tier=AssertionTier.TIER1,
-                    ))
+            # "包含 X" / "mentions Y" → Tier 1
+            for kw in re.findall(r'["\u201c]([^"\u201d]{3,50})["\u201d]', exp):
+                _add(Assertion(name=f"输出包含: {kw}", type=AssertionType.CONTAINS_PATTERN,
+                               params={"pattern": re.escape(kw)}))
+            for kw in re.findall(r'(?:includes|contains|mentions)\s+["\u201c]([^"\u201d]{3,50})["\u201d]', exp_lower):
+                _add(Assertion(name=f"输出包含: {kw}", type=AssertionType.CONTAINS_PATTERN,
+                               params={"pattern": re.escape(kw)}))
 
-            # "不应 X" / "不能 Y" → Tier 1
-            not_patterns = re.findall(r'(?:不应|不能|禁止|避免|不可|不得).{0,5}["\u201c]([^"\u201d]{3,40})["\u201d]', exp)
-            for kw in not_patterns[:1]:
-                _add(Assertion(
-                    name=f"输出不应包含: {kw}",
-                    type=AssertionType.NOT_CONTAINS,
-                    params={"pattern": re.escape(kw)},
-                    tier=AssertionTier.TIER1,
-                ))
+            # "不应 X" / "does not contain Y" → Tier 1
+            for kw in re.findall(r'(?:不应|不能|禁止|避免|不包含|does not|should not)\s*["\u201c]?([^"\u201d\s]{3,50})["\u201d]?', exp, re.IGNORECASE):
+                _add(Assertion(name=f"输出不含: {kw}", type=AssertionType.NOT_CONTAINS,
+                               params={"pattern": re.escape(kw)}))
 
-            # "委托" / "delegate" → Tier 3 LLM_NOT_DELEGATE
+            # "委托" / "delegate" → Tier 3
             if any(kw in exp_lower for kw in ['委托', 'delegate', '调度', 'dispatch']):
-                target_match = re.search(r'(?:委托|调度).{0,5}["\u201c]?([a-zA-Z][a-zA-Z0-9_-]{2,30})', exp, re.IGNORECASE)
-                if target_match:
-                    _add(Assertion(
-                        name=f"未委托给 {target_match.group(1)}",
-                        type=AssertionType.LLM_NOT_DELEGATE,
-                        params={"target_skill": target_match.group(1)},
-                        tier=AssertionTier.TIER3,
-                        retry_on_uneval=True,
-                    ))
+                m = re.search(r'(["a-zA-Z][a-zA-Z0-9_-]{2,30})', exp)
+                if m:
+                    _add(Assertion(name=f"未委托给 {m.group(1)}", type=AssertionType.LLM_NOT_DELEGATE,
+                                   params={"target_skill": m.group(1)}, tier=AssertionTier.TIER3,
+                                   retry_on_uneval=True))
 
         return assertions
 
@@ -435,87 +415,119 @@ class EvalInitGenerator:
     # LLM-based generation
     # ------------------------------------------------------------------
 
-    def _build_llm_prompt(self, name: str, description: str, content: str) -> str:
+    def _build_llm_prompt(self, name: str, description: str, content: str, is_procedural: bool = False) -> str:
+        if is_procedural:
+            return self._build_procedural_prompt(name, description, content)
+        return self._build_knowledge_prompt(name, description, content)
+
+    def _build_knowledge_prompt(self, name: str, description: str, content: str) -> str:
         return (
             "You are an expert at creating evaluation test cases for AI coding assistant skills.\n\n"
-            "Given the following Skill definition, generate **L1 unit-level** evaluation test cases.\n\n"
-            "## L1 Unit-Level Test Definition\n\n"
-            "Each test case tests whether Claude **understands and can apply** the skill's rules.\n"
-            "L1 tests do NOT require a real project — they test rule comprehension via targeted prompts.\n\n"
-            "## Test Case Categories\n\n"
-            "Generate test cases for these categories (pick the most relevant ones for this skill):\n\n"
-            "1. **Input Validation**: What happens when preconditions are met/not met?\n"
-            "2. **Decision Logic**: Does Claude follow the correct branching/rules for different scenarios?\n"
-            "3. **Scheduling/Ordering**: Does Claude understand execution order, parallelism, dependencies?\n"
-            "4. **Skill Binding**: Does Claude know which sub-skills to use in which context?\n"
-            "5. **Error Handling**: Does Claude follow failure recovery/fallback rules?\n"
-            "6. **Output Format**: Does Claude produce output in the required format/structure?\n\n"
-            "## Schema\n\n"
-            "Output a JSON object matching this exact schema:\n"
+            "Given the following Skill definition, generate **L1 rule-comprehension** evaluation test cases.\n"
+            "L1 tests check whether Claude **understands the rules and conventions** — NOT whether it can execute tasks.\n\n"
+            "## Categories (pick the most relevant)\n\n"
+            "1. **Decision Logic**: branching rules, conditions, scenarios\n"
+            "2. **Input Validation**: what happens when preconditions met/not met?\n"
+            "3. **Output Format**: does Claude know the required output structure?\n"
+            "4. **Skill Binding**: which sub-skill/tool to use in which context?\n"
+            "5. **Error Handling**: failure recovery and fallback rules\n"
+            "6. **Constraint Following**: NEVER/ALWAYS/MUST rules\n\n"
+            "## Output JSON (ONLY this, no other text)\n"
             "```json\n"
             "{\n"
             f'  "skill_name": "{name}",\n'
             '  "evals": [\n'
             "    {\n"
             '      "id": 1,\n'
-            '      "name": "L1-<category>-<short description>",\n'
+            '      "name": "L1-<category>-<short>",\n'
             '      "level": "L1",\n'
-            '      "prompt": "A specific, targeted question/scenario that tests ONE rule or behavior. '
-            'For multi-step pipeline skills, provide enough context (e.g. project structure, file contents) '
-            'so the model can complete the task autonomously.",\n'
-            '      "expected_output": "What the correct response looks like",\n'
-            '      "expectations": ["CRITICAL: Each expectation must be a SINGLE, CONCRETE, VERIFIABLE statement '
-            'that can be objectively checked. GOOD: \'Output contains a file path matching pattern *.md\'. '
-            'GOOD: \'Response mentions checking for AndroidManifest.xml\'. '
-            'GOOD: \'Output includes a numbered list of steps\'. '
-            'BAD: \'The output follows the skill instructions\'. '
-            'BAD: \'The response is correct and complete\'."],\n'
+            '      "prompt": "A specific question that tests ONE rule. '
+            'Make it realistic — what would a real user ask?",\n'
+            '      "expectations": ["Single, concrete, verifiable claim. '
+            'GOOD: \'response mentions checking for AndroidManifest.xml\'. '
+            'BAD: \'the output is correct\'. BAD: \'follows the skill instructions\'."],\n'
             '      "assertions": [\n'
-            '        {"name": "File X exists", "type": "FILE_EXISTS", "params": {"filename": "path/to/file"}},\n'
-            '        {"name": "Output contains pattern Y", "type": "CONTAINS_PATTERN", "params": {"pattern": "regex"}},\n'
-            '        {"name": "JSON field Z present", "type": "JSON_HAS_FIELD", "params": {"filename": "f.json", "field": "key"}}\n'
-            '      ],\n'
-            '      "fixtures": [{"path": "relative/path/file.ext", "content": "file content"}]\n'
+            '        {"name": "mentions X", "type": "CONTAINS_PATTERN", "params": {"pattern": "keyword"}},\n'
+            '        {"name": "avoids Y", "type": "NOT_CONTAINS", "params": {"pattern": "forbidden"}}\n'
+            "      ],\n"
+            '      "fixtures": []\n'
             "    }\n"
             "  ]\n"
             "}\n"
             "```\n\n"
-            "## Critical Rules for Expectations\n\n"
-            "- NEVER write vague expectations like 'The output follows the skill instructions without errors'\n"
-            "- EVERY expectation must be checkable by examining the output text or files produced\n"
-            "- Use concrete patterns: 'contains X', 'mentions Y', 'includes a section titled Z', "
-            "'produces a file named W', 'lists at least N items'\n"
-            "- For pipeline skills with multiple phases, test ONE phase per eval case\n\n"
-            "## Critical Rules for Assertions\n\n"
-            "Generate 2-5 tiered assertions for EVERY eval case. Assertions are organized into three tiers:\n\n"
-            "**Tier 1 (Deterministic)**: FILE_EXISTS, CONTAINS_PATTERN, NOT_CONTAINS, JSON_HAS_FIELD, "
-            "LINE_COUNT, TOOL_CALLED, STEP_COUNT. Always include at least 1 Tier 1.\n"
-            "  - FILE_EXISTS: {\"name\": \"spec file exists\", \"type\": \"FILE_EXISTS\", \"tier\": \"TIER1\", "
-            "\"params\": {\"filename\": \"spec/baseline/ui-manifest.md\"}}\n"
-            "  - CONTAINS_PATTERN: {\"name\": \"mentions page_id\", \"type\": \"CONTAINS_PATTERN\", "
-            "\"tier\": \"TIER1\", \"params\": {\"pattern\": \"page_id\"}}\n\n"
-            "**Tier 3 (Semantic)**: LLM_GRADE, LLM_FACT, LLM_NOT_DELEGATE. "
-            "For quality judgments and delegation checks. Always use retry_on_uneval: true.\n"
-            "  - LLM_NOT_DELEGATE: {\"name\": \"no <TARGET_SKILL> delegation\", "
-            "\"type\": \"LLM_NOT_DELEGATE\", \"tier\": \"TIER3\", \"retry_on_uneval\": true, "
-            "\"params\": {\"target_skill\": \"<TARGET_SKILL>\"}}\n"
-            "**CRITICAL**: NEVER put a CONTAINS_PATTERN/NOT_CONTAINS and an expectation "
-            "checking the same semantic thing. If you need to verify delegation to a skill, "
-            "use LLM_NOT_DELEGATE (Tier 3) — NOT CONTAINS_PATTERN or NOT_CONTAINS. "
-            "Programmatic assertions and expectations must not overlap.\n\n"
-            "## Other Guidelines\n\n"
-            "- **Prompt specificity**: Each prompt should target ONE specific rule or behavior, not the entire skill\n"
-            "- **Fixtures**: Only include fixtures when the test requires Claude to check file existence/content. "
-            "Most L1 tests need NO fixtures (empty array).\n"
-            "- **Language**: Write prompts in the SAME language as the SKILL.md. "
-            "If SKILL.md is in Chinese, write prompts in Chinese.\n"
-            "- **Coverage**: Aim for 5-10 test cases covering the most important rules\n"
-            "- **Edge cases**: Include at least one negative test (wrong input, missing precondition)\n"
-            "- Output ONLY the JSON, no other text\n\n"
-            f"## Skill Definition\n\n"
-            f"Skill name: {name}\n"
-            f"Description: {description}\n\n"
-            f"Full SKILL.md content:\n{content[:10000]}\n"
+            "## Rules\n"
+            "- 5-10 evals covering the most important rules\n"
+            "- NO vague expectations — every one must be objectively checkable\n"
+            "- assertions use ONLY: CONTAINS_PATTERN, NOT_CONTAINS for text checks. "
+            "NO FILE_EXISTS — L1 tests don't produce files.\n"
+            "- Language: same as SKILL.md\n"
+            "- At least 1 negative test (wrong input, missing precondition)\n\n"
+            f"## Skill\n\nname: {name}\ndescription: {description}\n\n{content[:10000]}\n"
+        )
+
+    def _build_procedural_prompt(self, name: str, description: str, content: str) -> str:
+        return (
+            "You are an expert at creating evaluation test cases for AI coding assistant skills.\n\n"
+            "This skill contains executable procedures (code examples, scripts, or reference files). "
+            "Generate a mix of L1 and L2 test cases.\n\n"
+            "## L1 Tests (40% — ~3-4 cases)\n"
+            "Test whether Claude **understands the rules**: which tool to use, what parameters, "
+            "what order to do things, what NOT to do. Prompt asks a question or describes a scenario "
+            "and expects a knowledgeable response. NO fixtures needed.\n\n"
+            "## L2 Tests (60% — ~4-6 cases)\n"
+            "Test whether Claude **actually executes** the task correctly. "
+            "Provide fixture files as input and check output files with assertions. "
+            "These test the exact code patterns and workflows from the skill.\n\n"
+            "For L2, include fixtures that simulate real input data. "
+            "For example, if the skill processes PDF files, provide a minimal valid fixture. "
+            "Use FILE_EXISTS, CONTAINS_PATTERN, NOT_CONTAINS assertions to check outputs.\n\n"
+            "## Output JSON (ONLY this, no other text)\n"
+            "```json\n"
+            "{\n"
+            f'  "skill_name": "{name}",\n'
+            '  "evals": [\n'
+            "    {\n"
+            '      "id": 1,\n'
+            '      "name": "L1-<category>-<short>",\n'
+            '      "level": "L1",\n'
+            '      "prompt": "Question/scenario testing knowledge of ONE rule",\n'
+            '      "expectations": ["Verifiable claim about what Claude should say/know"],\n'
+            '      "assertions": [\n'
+            '        {"name": "mentions correct tool", "type": "CONTAINS_PATTERN", "params": {"pattern": "keyword"}}\n'
+            '      ],\n'
+            '      "fixtures": []\n'
+            "    },\n"
+            "    {\n"
+            '      "id": 5,\n'
+            '      "name": "L2-<operation>-<scenario>",\n'
+            '      "level": "L2",\n'
+            '      "prompt": "A realistic task: process/generate/convert file X, produce output Y. '
+            'Include the exact file paths from fixtures.",\n'
+            '      "expectations": ["Verifiable claim about the OUTPUT FILES produced — '
+            'e.g. \'generated merged.pdf with 3 pages\', \'extracted text saved to output.txt\'"],\n'
+            '      "assertions": [\n'
+            '        {"name": "output file exists", "type": "FILE_EXISTS", "params": {"filename": "output.pdf"}},\n'
+            '        {"name": "contains expected content", "type": "CONTAINS_PATTERN", "params": {"pattern": "Expected", "path": "output.txt"}}\n'
+            "      ],\n"
+            '      "fixtures": [\n'
+            '        {"path": "input.pdf", "content": "(simulated file content — make it realistic but minimal)"}\n'
+            "      ]\n"
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "```\n\n"
+            "## Rules\n"
+            "- Total 8-12 evals\n"
+            "- L1: test rules/decisions (no fixtures). L2: test actual execution (with fixtures).\n"
+            "- L2 fixtures must be REALISTIC minimal test data that Claude can actually process.\n"
+            "- For text-based fixtures (JSON/code), include the ACTUAL content. "
+            "For binary fixtures (PDF/image), write a minimal placeholder.\n"
+            "- L2 expectations must mention CONCRETE output: file names, counts, patterns.\n"
+            "- L1 assertions: CONTAINS_PATTERN, NOT_CONTAINS only. NO FILE_EXISTS on L1.\n"
+            "- L2 assertions: FILE_EXISTS, CONTAINS_PATTERN, NOT_CONTAINS, JSON_HAS_FIELD.\n"
+            "- Language: same as SKILL.md\n"
+            "- Include at least 1 error-handling or edge-case scenario\n\n"
+            f"## Skill\n\nname: {name}\ndescription: {description}\n\n{content[:8000]}\n"
         )
 
     def _parse_llm_response(self, response: str, fallback_name: str) -> EvalSet | None:
