@@ -361,26 +361,29 @@ class ABTestRunner:
 
             prog_results = []
             if prog_checker:
-                prog_results = prog_checker.check_all(eval_case, outputs_dir, transcript=transcript, tool_calls=None, num_turns=num_turns, stop_reason=stop_reason)
+                prog_results = prog_checker.check(eval_case, outputs_dir, transcript=transcript, tool_trace=tool_trace, num_turns=num_turns, stop_reason=stop_reason)
 
             llm_results = []
-            if self.scoring_config.enable_llm and eval_case.expectations:
+            tier3_results = []
+            if self.scoring_config.enable_llm:
                 from skill_eval.scoring.llm_grader import LLMGrader
                 grader = LLMGrader(model=self.scoring_config.llm_model, timeout=self.scoring_config.llm_timeout)
-                llm_grading = grader.grade(
-                    transcript=transcript,
-                    expectations=eval_case.expectations,
-                    outputs_dir=outputs_dir,
-                    prog_results=prog_results if prog_results else None,
-                )
-                llm_results = llm_grading.expectations if llm_grading else []
+
+                if eval_case.expectations:
+                    llm_grading = grader.grade(
+                        eval_case=eval_case,
+                        transcript=transcript,
+                        output_dir=outputs_dir,
+                    )
+                    llm_results = llm_grading.expectations if llm_grading else []
+
+                tier3_assertions = [a for a in eval_case.assertions if a.tier and a.tier.value == "TIER3"]
+                if tier3_assertions:
+                    tier3_results = grader.grade_tier3(tier3_assertions, transcript, outputs_dir)
 
             merged = prog_results[:]
-            prog_texts = {e.text for e in prog_results}
-            for e in llm_results:
-                if e.text in prog_texts:
-                    continue
-                merged.append(e)
+            merged.extend(llm_results)
+            merged.extend(tier3_results)
 
             cp["expectations"] = [e.model_dump(mode="json") for e in merged]
             cp["total"] = len(merged)
@@ -393,7 +396,7 @@ class ABTestRunner:
 
         return all_expectations, checkpoint_results
 
-    def on_progress_callback(
+    def _emit_progress(
         self,
         eval_name: str = "",
         config_name: str = "",

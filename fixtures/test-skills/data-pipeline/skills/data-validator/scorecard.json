@@ -1,0 +1,65 @@
+{
+  "skill_name": "data-validator",
+  "skill_path": "fixtures/test-skills/data-pipeline/skills/data-validator",
+  "category": "CAPABILITY_UPLIFT",
+  "checks": [
+    {
+      "name": "description_length",
+      "passed": true,
+      "message": "Description length: 134 chars"
+    },
+    {
+      "name": "description_has_trigger",
+      "passed": true,
+      "message": "Description contains trigger word"
+    },
+    {
+      "name": "description_third_person",
+      "passed": true,
+      "message": "Description uses third person"
+    },
+    {
+      "name": "name_kebab_case",
+      "passed": true,
+      "message": "Name 'data-validator' is kebab-case"
+    },
+    {
+      "name": "name_max_64",
+      "passed": true,
+      "message": "Name length: 14 chars"
+    },
+    {
+      "name": "name_no_reserved",
+      "passed": true,
+      "message": "Name is not a reserved word"
+    },
+    {
+      "name": "skill_md_max_500_lines",
+      "passed": true,
+      "message": "SKILL.md has 67 lines"
+    },
+    {
+      "name": "has_examples",
+      "passed": true,
+      "message": "SKILL.md contains examples"
+    },
+    {
+      "name": "reference_depth",
+      "passed": true,
+      "message": "references/ directory is flat"
+    },
+    {
+      "name": "anti_fabrication",
+      "passed": true,
+      "message": "Contains anti-fabrication guidance"
+    },
+    {
+      "name": "source_documented",
+      "passed": true,
+      "message": "Sources/references documented"
+    }
+  ],
+  "score": 11,
+  "max_score": 11,
+  "timestamp": "2026-06-12T06:50:15Z"
+}
