@@ -83,6 +83,21 @@ LLM 自动生成 L1/L2 测试用例，自动推导程序化断言（FILE_EXISTS 
 skill-eval init path/to/skill/
 ```
 
+### `add` — 追加评测用例
+
+LLM 辅助或手动添加 eval 到已有的 evals.json。
+
+```bash
+# LLM 模式：一句话想法 → 完整 eval
+skill-eval add pdf/ --idea "test encrypted PDF decryption" --level L2
+
+# 手动模式
+skill-eval add pdf/ --prompt "Decrypt file.pdf..." --expectation "produces output.pdf" --level L2
+
+# 预览不保存
+skill-eval add pdf/ --idea "..." --dry-run
+```
+
 ### `run` — A/B 评测
 
 with_skill vs without_skill 对照执行，程序化断言 + LLM 评分 + 遵循性检查 + 校准，产出 benchmark.json。

@@ -69,6 +69,34 @@ skill-eval vet path/to/skill/ --skip-external # 跳过外部扫描器
 |------|--------|------|
 | `--num-evals` | 无 | 最多生成的 eval case 数量 |
 
+### `add` — 追加评测用例
+
+LLM 辅助或手动添加单个 eval case 到已有 evals.json。
+
+```bash
+# LLM 辅助：输入想法 → LLM 生成完整 eval
+skill-eval add pdf/ --idea "encrypted PDF decryption with wrong password should fail" --level L2
+
+# 手动模式
+skill-eval add pdf/ --prompt "Decrypt file.pdf..." --expectation "output exists" --level L2
+
+# 预览
+skill-eval add pdf/ --idea "..." --dry-run
+```
+
+**参数**：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--idea` | 无 | 自然语言描述，LLM 生成完整 eval case |
+| `--prompt` | 无 | 手动指定 eval prompt |
+| `--expectation` | 无 | 手动指定 expectation（可重复） |
+| `--level` | L1 | 测试层级：L1 / L2 |
+| `--dry-run` | false | 仅预览，不写入 |
+| `--model` | 默认 | LLM 模型（用于 --idea） |
+
+`--idea` 模式下，自动分配 id、自动推导 assertions 和 fixtures。
+
 ### `analyze` — 静态分析
 
 11 项自动化体检，**零 API 成本，<1s 完成**。

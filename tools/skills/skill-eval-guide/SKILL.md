@@ -64,6 +64,7 @@ python3 --version         # 必须：>= 3.10
 | "批量评测" / "batch" / "多 skill" | `batch` + `batch-report` | 多 skill 单元测试 |
 | "生成报告" / "report" / "报告" | `report` | 生成 HTML 报告（单 skill） |
 | "批量报告" / "batch-report" | `batch-report` | 生成 HTML 报告（多 skill） |
+| "添加 eval" / "写 eval" / "add eval" / "测试用例" | `add` | 追加 eval 到 evals.json |
 
 ---
 
@@ -144,6 +145,38 @@ Manifest 格式：
 ```bash
 skill-eval batch-report test-results/batch/
 ```
+
+### `add` — 追加 eval 用例
+
+```bash
+# LLM 模式：一句话描述 → 完整 eval
+skill-eval add /path/to/skill --idea "加密PDF解密后内容是否完整" --level L2
+
+# 手动模式：直接指定
+skill-eval add /path/to/skill --prompt "Decrypt secret.pdf with password hunter2..." \
+  --expectation "produces unlocked.pdf" --expectation "file is readable" --level L2
+
+# 预览不保存
+skill-eval add /path/to/skill --idea "..." --dry-run
+```
+
+`--idea` 会调 LLM 生成完整的 eval case（prompt、expectations、assertions、fixtures），展示后让你确认再写入。
+
+---
+
+## 帮用户设计 eval 用例
+
+当用户要写评测用例时：
+
+1. 读 SKILL.md，了解 skill 的功能和边界
+2. 问用户想测什么场景，或主动建议几个方向：
+   - 常规流程（最常用的操作）
+   - 边界/错误处理（输入不对、文件缺失）
+   - 工具选择（有多个工具时选哪个）
+   - 输出格式（产出什么文件、什么结构）
+3. 对每个场景，用 `skill-eval add <path> --idea "描述"` 写入
+4. L1（知识问答题）测规则理解，L2（执行题带 fixture）测实际产出
+5. 跑 `skill-eval run` 验证用例质量，根据结果迭代
 
 ---
 
