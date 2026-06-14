@@ -34,7 +34,7 @@ skill-eval --help   # 验证
 ```bash
 claude --version          # 必须：skill-eval 依赖 claude -p
 skill-eval --version      # 必须：评测工具
-python3 --version         # 必须：>= 3.10
+python3 --version || python --version  # 必须：>= 3.10
 ```
 
 ---

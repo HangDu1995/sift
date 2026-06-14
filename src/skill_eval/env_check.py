@@ -17,8 +17,24 @@ _TOOL_PATTERNS: dict[str, str] = {
     "maven": r"\bmvn\b|maven",
     "java": r"\bjava\b",
     "node": r"\bnode\b",
-    "python": r"\bpython3?\b",
+    "python": r"\bpython3?\b",  # matches both python and python3
 }
+
+# Tools that have multiple possible binary names (priority order)
+_ALIASES: dict[str, list[str]] = {
+    "python": ["python3", "python", "python3.14", "python3.13", "python3.12", "python3.11", "python3.10"],
+    "node": ["node", "nodejs"],
+}
+
+
+def _check_available(tool: str) -> bool:
+    """Check if a tool is available, trying aliases if necessary."""
+    if shutil.which(tool):
+        return True
+    for alias in _ALIASES.get(tool, []):
+        if shutil.which(alias):
+            return True
+    return False
 
 
 def check_skill_env(skill_path: Path) -> dict[str, bool]:
@@ -41,7 +57,7 @@ def check_skill_env(skill_path: Path) -> dict[str, bool]:
             continue
         if re.search(pattern, content, re.IGNORECASE):
             seen.add(tool)
-            results[tool] = shutil.which(tool) is not None
+            results[tool] = _check_available(tool)
 
     return results
 
@@ -57,6 +73,6 @@ def check_eval_env(eval_prompts: list[str]) -> dict[str, bool]:
             continue
         if re.search(pattern, content, re.IGNORECASE):
             seen.add(tool)
-            results[tool] = shutil.which(tool) is not None
+            results[tool] = _check_available(tool)
 
     return results

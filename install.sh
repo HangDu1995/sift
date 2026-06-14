@@ -40,7 +40,7 @@ echo "  opencode:     $OC_DIR/skill-eval-guide/"
 echo ""
 echo "[3/3] Verifying..."
 echo "  CLI:     $(skill-eval --version)"
-echo "  Python:  $(python3 --version)"
+echo "  Python:  $(python3 --version 2>/dev/null || python --version 2>/dev/null || echo 'not found')"
 
 if command -v claude &> /dev/null; then
     echo "  Claude:  $(claude --version 2>&1 | head -1)"
