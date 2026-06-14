@@ -33,3 +33,6 @@ batch-workspace*/
 venv/
 
 test-results/
+dist/
+build/
+skill-eval.spec
