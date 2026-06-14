@@ -111,8 +111,8 @@ def _run_ab_eval(
         pr_delta = delta.get("pass_rate", "—")
 
         # Count blind comparison wins
-        a_wins = sum(1 for c in comparisons if c.get("winner") == "A")
-        b_wins = sum(1 for c in comparisons if c.get("winner") == "B")
+        a_wins = sum(1 for c in comparisons if getattr(c, "winner", None) == "A")
+        b_wins = sum(1 for c in comparisons if getattr(c, "winner", None) == "B")
         total_comps = a_wins + b_wins
 
         console.print(f"\n[bold]Results:[/bold]")
