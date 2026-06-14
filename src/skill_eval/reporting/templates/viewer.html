@@ -1230,42 +1230,6 @@
         html += '</div>';
       }
 
-      // ── Overfitting ──
-      const overfit = EMBEDDED_DATA.overfitting;
-      if (overfit) {
-        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
-        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">过拟合分析</div>';
-
-        const gap = overfit.generalization_gap;
-        if (gap) {
-          const gapColor = gap.verdict === "good" ? "var(--green)" : gap.verdict === "warn" ? "var(--accent)" : "var(--red)";
-          html += '<div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem;">';
-          html += '<div style="flex:1;min-width:150px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;text-align:center;">';
-          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">领域 Δ</div>';
-          html += '<div style="font-size:1.3rem;font-family:Poppins,sans-serif;font-weight:600;">' + (gap.domain_delta > 0 ? '+' : '') + gap.domain_delta.toFixed(2) + '</div>';
-          html += '<div style="font-size:0.7rem;color:var(--text-muted);">ws ' + (gap.domain_pass_rate_with * 100).toFixed(0) + '% / wos ' + (gap.domain_pass_rate_without * 100).toFixed(0) + '%</div>';
-          html += '</div>';
-          html += '<div style="flex:1;min-width:150px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;text-align:center;">';
-          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">通用 Δ</div>';
-          html += '<div style="font-size:1.3rem;font-family:Poppins,sans-serif;font-weight:600;">' + (gap.general_delta > 0 ? '+' : '') + gap.general_delta.toFixed(2) + '</div>';
-          html += '<div style="font-size:0.7rem;color:var(--text-muted);">ws ' + (gap.general_pass_rate_with * 100).toFixed(0) + '% / wos ' + (gap.general_pass_rate_without * 100).toFixed(0) + '%</div>';
-          html += '</div>';
-          html += '<div style="flex:1;min-width:120px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;text-align:center;">';
-          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">差距</div>';
-          html += '<div style="font-size:1.3rem;font-family:Poppins,sans-serif;font-weight:600;color:' + gapColor + ';">' + gap.gap.toFixed(2) + '</div>';
-          html += '<div style="font-size:0.7rem;color:' + gapColor + ';text-transform:uppercase;">' + gap.verdict + '</div>';
-          html += '</div></div>';
-        }
-
-        html += '<div style="font-size:1.1rem;font-family:Poppins,sans-serif;margin-bottom:0.5rem;">过拟合得分：<span style="color:' + (overfit.overfitting_score >= 0.7 ? 'var(--red)' : overfit.overfitting_score >= 0.4 ? 'var(--accent)' : 'var(--green)') + ';">' + (overfit.overfitting_score * 100).toFixed(0) + '%</span></div>';
-
-        if (overfit.recommendation) {
-          html += '<div style="margin-top:0.75rem;padding:0.5rem 0.75rem;background:var(--bg);border-radius:var(--radius);font-size:0.8125rem;">' + escapeHtml(overfit.recommendation) + '</div>';
-        }
-
-        html += '</div>';
-      }
-
       // ── Security vet report ──
       const vetReport = EMBEDDED_DATA.vet_report;
       if (vetReport) {
@@ -1482,8 +1446,7 @@
               } else if (a.verdict === "ERROR") {
                 icon = '<span style="color:var(--red);" title="错误">!</span>';
               }
-              const tierBadge = a.tier ? ' <small style="color:var(--text-muted);">[' + a.tier + ']</small>' : '';
-              html += '<li style="color:var(--text-muted);">' + icon + ' <em>(assertion)</em> ' + escapeHtml(a.text || "") + tierBadge + '</li>';
+              html += '<li style="color:var(--text-muted);">' + icon + ' ' + escapeHtml(a.text || "") + '</li>';
             }
             html += '</ul>';
           }
@@ -1558,7 +1521,7 @@
                 }
               }
             }
-            html += '<table class="benchmark-table" style="margin-top:0.5rem;"><thead><tr><th>断言</th>';
+            html += '<table class="benchmark-table" style="margin-top:0.5rem;"><thead><tr><th>检查项</th>';
             for (const config of configGroups) {
               html += '<th>' + escapeHtml(config.replace(/_/g, " ")) + '</th>';
             }
