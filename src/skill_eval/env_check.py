@@ -20,11 +20,40 @@ _TOOL_PATTERNS: dict[str, str] = {
     "python": r"\bpython3?\b",  # matches both python and python3
 }
 
-# Tools that have multiple possible binary names (priority order)
+# Tools that have multiple possible binary names
 _ALIASES: dict[str, list[str]] = {
-    "python": ["python3", "python", "python3.14", "python3.13", "python3.12", "python3.11", "python3.10"],
+    "python": ["python3", "python"],
     "node": ["node", "nodejs"],
 }
+
+
+def _find_python() -> list[str]:
+    """Find all available python binaries on PATH."""
+    import os
+    candidates = []
+    for path in os.environ.get("PATH", "").split(os.pathsep):
+        try:
+            for entry in os.listdir(path):
+                if entry in ("python", "python3") or (entry.startswith("python3.") and all(c.isdigit() or c == '.' for c in entry[7:])):
+                    full = os.path.join(path, entry)
+                    if os.access(full, os.X_OK) and entry not in candidates:
+                        candidates.append(entry)
+        except OSError:
+            continue
+    return sorted(set(candidates), reverse=True)
+
+
+def _check_available(tool: str) -> bool:
+    """Check if a tool is available, trying aliases if necessary."""
+    if shutil.which(tool):
+        return True
+    for alias in _ALIASES.get(tool, []):
+        if shutil.which(alias):
+            return True
+    if tool == "python":
+        for py in _find_python():
+            return True
+    return False
 
 
 def _check_available(tool: str) -> bool:
