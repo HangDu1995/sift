@@ -52,6 +52,34 @@ See references/guide.md for best practices.
 """
 
 
+SAMPLE_BODY_CN = """\
+# 工作流
+
+1. 使用 Read 工具读取输入文件
+2. 运行 bash 命令检查环境
+3. 调用 scripts/validate.py 验证结果
+
+## 规则
+
+- 严禁捏造数据或编造缺失值
+- 禁止跳过验证步骤
+- 必须使用 UTF-8 编码
+
+## 反捏造
+
+禁止捏造数据。不得编造数值。严禁虚构内容。
+
+## 格式
+
+```python
+import json
+json.dump(data, f, indent=2)
+```
+
+参考 references/guide.md 了解最佳实践。
+"""
+
+
 class TestInstructionExtractor:
     def test_extracts_heading_steps(self):
         ext = InstructionExtractor()
@@ -99,6 +127,43 @@ class TestInstructionExtractor:
         ext = InstructionExtractor()
         checks = ext.extract("")
         assert checks == []
+
+
+class TestInstructionExtractorChinese:
+    """中文 SKILL.md 提取(P0-1:补中文关键词后,约束 / 工具 / 反捏造不再漏判)."""
+
+    def test_extracts_constraints_cn(self):
+        ext = InstructionExtractor()
+        constraints = [c for c in ext.extract(SAMPLE_BODY_CN) if c.source == InstructionSource.CONSTRAINT]
+        assert len(constraints) >= 3
+        texts = "".join(c.instruction_text for c in constraints)
+        assert "严禁" in texts
+        assert "禁止" in texts
+        assert "必须" in texts
+
+    def test_extracts_tool_requirements_cn(self):
+        ext = InstructionExtractor()
+        tools = [c for c in ext.extract(SAMPLE_BODY_CN) if c.source == InstructionSource.TOOL_REQUIREMENT]
+        assert len(tools) > 0
+        names = [c.params.get("tool_name") for c in tools]
+        assert "bash" in names
+        assert "scripts" in names  # 调用 scripts/validate.py -> tool_name=scripts
+        for t in tools:
+            assert t.check_method == CheckMethod.TOOL_CALL_CHECK
+
+    def test_extracts_anti_fabrication_cn(self):
+        ext = InstructionExtractor()
+        af = [c for c in ext.extract(SAMPLE_BODY_CN) if c.source == InstructionSource.ANTI_FABRICATION]
+        assert len(af) > 0
+        texts = "".join(c.instruction_text for c in af)
+        assert "捏造" in texts or "编造" in texts or "虚构" in texts
+
+    def test_english_not_regressed(self):
+        """英文 baseline 不回归:'using' 不应被拆成 use+ing。"""
+        ext = InstructionExtractor()
+        tools = [c for c in ext.extract(SAMPLE_BODY) if c.source == InstructionSource.TOOL_REQUIREMENT]
+        names = [c.params.get("tool_name") for c in tools]
+        assert "ing" not in names
 
 
 class TestComplianceChecker:
