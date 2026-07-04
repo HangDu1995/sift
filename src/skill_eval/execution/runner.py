@@ -34,6 +34,23 @@ from skill_eval.parser import parse_skill_md
 ProgressCallback = Callable[..., None]
 
 
+def _copy_skill_references(skill_path: Path | None, work_dir: Path) -> None:
+    """把 skill 的 references/ 拷进考场 work_dir,使 body 中的 references/xxx 引用可读。
+
+    skill body 常引用 references/xxx 作为领域知识;若不拷进 Claude 的 cwd,它会反复
+    尝试读取不存在的文件直至 timeout。references/ 不存在则无操作;目标已存在则不覆盖。
+    """
+    if not skill_path:
+        return
+    src = skill_path / "references"
+    if not src.is_dir():
+        return
+    dst = work_dir / "references"
+    if dst.exists():
+        return
+    shutil.copytree(src, dst)
+
+
 class ABTestRunner:
     def __init__(
         self,
@@ -103,6 +120,9 @@ class ABTestRunner:
             outputs_dir.mkdir(exist_ok=True)
             eval_case.setup_fixtures(outputs_dir)
             source_path, source_name = eval_case.setup_source(skill_path, outputs_dir)
+            # references/ 是 skill body 常引用的领域知识;仅 with_skill 注入 body 时才拷进考场(P0-2)。
+            if config_name == "with_skill":
+                _copy_skill_references(skill_path, outputs_dir)
 
             run_start = time.time()
             use_skill = skill_path if config_name == "with_skill" else None

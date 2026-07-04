@@ -207,3 +207,104 @@ class TestBenchmarkAggregator:
         assert len(benchmark.runs) == 2
         assert benchmark.comparisons is None or benchmark.comparisons == []
         assert benchmark.analysis is None
+
+
+class TestCopySkillReferences:
+    """_copy_skill_references:把 skill 的 references/ 拷进考场(P0-2 核心逻辑)."""
+
+    @staticmethod
+    def _make_skill(tmp_path: Path, with_refs: bool = True) -> Path:
+        skill = tmp_path / "skill"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: t\ndescription: test skill\n---\nbody\n", encoding="utf-8"
+        )
+        if with_refs:
+            refs = skill / "references"
+            refs.mkdir()
+            (refs / "guide.md").write_text("domain knowledge", encoding="utf-8")
+        return skill
+
+    def test_copies_references_into_work_dir(self, tmp_path: Path):
+        from skill_eval.execution.runner import _copy_skill_references
+        skill = self._make_skill(tmp_path, with_refs=True)
+        work = tmp_path / "work"
+        work.mkdir()
+        _copy_skill_references(skill, work)
+        assert (work / "references" / "guide.md").read_text(encoding="utf-8") == "domain knowledge"
+
+    def test_no_references_dir_is_noop(self, tmp_path: Path):
+        from skill_eval.execution.runner import _copy_skill_references
+        skill = self._make_skill(tmp_path, with_refs=False)
+        work = tmp_path / "work"
+        work.mkdir()
+        _copy_skill_references(skill, work)
+        assert not (work / "references").exists()
+
+    def test_does_not_overwrite_existing(self, tmp_path: Path):
+        from skill_eval.execution.runner import _copy_skill_references
+        skill = self._make_skill(tmp_path, with_refs=True)
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "references").mkdir()
+        (work / "references" / "existing.md").write_text("keep me", encoding="utf-8")
+        _copy_skill_references(skill, work)
+        assert (work / "references" / "existing.md").read_text(encoding="utf-8") == "keep me"
+        assert not (work / "references" / "guide.md").exists()
+
+    def test_none_skill_path_is_noop(self, tmp_path: Path):
+        from skill_eval.execution.runner import _copy_skill_references
+        work = tmp_path / "work"
+        work.mkdir()
+        _copy_skill_references(None, work)
+        assert not (work / "references").exists()
+
+
+class TestABTestRunnerReferencesAutoCopy:
+    """P0-2 集成:references 依赖型 skill(未配 source_dir)开箱即用 ——
+    with_skill 考场自动有 references/,without_skill 没有。"""
+
+    @staticmethod
+    def _make_skill(tmp_path: Path) -> Path:
+        skill = tmp_path / "myskill"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: myskill\ndescription: test skill\n---\n"
+            "# 步骤\n\n参见 references/guide.md 了解领域知识。\n",
+            encoding="utf-8",
+        )
+        (skill / "references").mkdir()
+        (skill / "references" / "guide.md").write_text("domain knowledge", encoding="utf-8")
+        return skill
+
+    def test_with_skill_copies_references_without_does_not(self, tmp_path: Path):
+        from skill_eval.execution.runner import ABTestRunner
+        from skill_eval.models import (
+            RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase,
+        )
+
+        skill = self._make_skill(tmp_path)
+
+        # mock ClaudeRunner.run —— 不真跑 claude,返回最小 RunOutput
+        def fake_run(self, prompt, skill_path=None, **kwargs):
+            return RunOutput(exit_code=0, stdout="ok", transcript="done", result_text="done")
+
+        config = RunConfig(
+            runs_per_config=1,
+            output_dir=tmp_path / "out",
+            skip_compliance=True,
+            skip_calibration=True,
+            max_workers=1,
+        )
+        scoring = ScoringConfig(enable_programmatic=False, enable_llm=False)
+        runner = ABTestRunner(config=config, scoring_config=scoring)
+        eval_set = EvalSet(skill_name="myskill", evals=[
+            EvalCase(id=1, prompt="do the task"),  # 故意不配 source_dir
+        ])
+        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+            runner.run_ab_test(skill, eval_set)
+
+        with_ref = tmp_path / "out" / "iteration-1" / "with_skill" / "eval-1" / "run-1" / "outputs" / "references" / "guide.md"
+        without_ref = tmp_path / "out" / "iteration-1" / "without_skill" / "eval-1" / "run-1" / "outputs" / "references"
+        assert with_ref.exists(), "with_skill 考场应自动拷 references/(body 引用了它)"
+        assert not without_ref.exists(), "without_skill 不注入 body,不该拷 references/"
