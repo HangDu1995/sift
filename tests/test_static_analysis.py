@@ -171,3 +171,35 @@ class TestStaticAnalyzer:
 
         assert report.skill_name == "minimal"
         assert report.score < report.max_score
+
+
+class TestIndividualChecksChinese:
+    """中文 SKILL.md 的静态检查(P1-3:补中文关键词后不误报)."""
+
+    def test_description_has_trigger_cn(self):
+        assert check_description_has_trigger({"description": "Ascend C 算子 Tiling 设计指南"}).passed
+        assert check_description_has_trigger({"description": "根据需求生成设计文档"}).passed
+        assert check_description_has_trigger({"description": "分析性能并优化算子"}).passed
+
+    def test_description_has_trigger_cn_no_verb_still_fails(self):
+        assert not check_description_has_trigger({"description": "关于算子的一些说明文字"}).passed
+
+    def test_description_third_person_cn_pass(self):
+        assert check_description_third_person({"description": "为算子生成 Tiling 设计方案"}).passed
+
+    def test_description_third_person_cn_fail(self):
+        assert not check_description_third_person({"description": "我会帮你生成算子设计"}).passed
+        assert not check_description_third_person({"description": "我们来分析性能"}).passed
+
+    def test_has_examples_cn(self):
+        assert check_has_examples("如下示例展示用法").passed
+        assert check_has_examples("举个例子说明").passed
+        assert not check_has_examples("只有普通文字没有任何代码或演示").passed
+
+    def test_anti_fabrication_cn(self):
+        assert check_anti_fabrication("严禁捏造数据,不得编造结果").passed
+        assert check_anti_fabrication("禁止虚构内容").passed
+
+    def test_source_documented_cn(self):
+        assert check_source_documented("根据官方文档整理").passed
+        assert check_source_documented("参考资料见 references/guide.md").passed

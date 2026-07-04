@@ -18,11 +18,16 @@ def check_description_length(frontmatter: dict) -> CheckResult:
 def check_description_has_trigger(frontmatter: dict) -> CheckResult:
     desc = str(frontmatter.get("description", "")).lower()
     trigger_words = [
+        # 英文
         "create", "generate", "build", "write", "implement",
         "refactor", "convert", "extract", "analyze", "design",
         "set up", "configure", "debug", "fix", "optimize",
         "review", "test", "deploy", "migrate", "transform",
         "help", "assist", "manage", "handle", "process",
+        # 中文动作动词(P1-3:否则中文 description 全部漏判)
+        "创建", "生成", "构建", "编写", "实现", "重构", "转换",
+        "提取", "分析", "设计", "配置", "调试", "修复", "优化",
+        "审查", "测试", "部署", "迁移", "管理", "处理", "使用",
     ]
     if any(w in desc for w in trigger_words):
         return CheckResult(name="description_has_trigger", passed=True, message="Description contains trigger word")
@@ -31,7 +36,12 @@ def check_description_has_trigger(frontmatter: dict) -> CheckResult:
 
 def check_description_third_person(frontmatter: dict) -> CheckResult:
     desc = str(frontmatter.get("description", ""))
-    first_person = [" i ", " i'll", " i'm", " i can", " i will", " i use", " my "]
+    first_person = [
+        # 英文
+        " i ", " i'll", " i'm", " i can", " i will", " i use", " my ",
+        # 中文第一人称(用词组避免单字"我"误匹配"自我"等)
+        "我会", "我来", "我的", "我们", "我可以", "我帮",
+    ]
     lower = f" {desc.lower()} "
     if not any(p in lower for p in first_person):
         return CheckResult(name="description_third_person", passed=True, message="Description uses third person")
@@ -70,7 +80,9 @@ def check_skill_md_max_500_lines(content: str) -> CheckResult:
 
 
 def check_has_examples(body: str) -> CheckResult:
-    example_patterns = ["example", "sample", "```", "for instance", "e.g."]
+    example_patterns = ["example", "sample", "```", "for instance", "e.g.",
+                        # 中文(P1-3)
+                        "示例", "样例", "举例", "例如", "例子"]
     lower = body.lower()
     if any(p in lower for p in example_patterns):
         return CheckResult(name="has_examples", passed=True, message="SKILL.md contains examples")
@@ -92,7 +104,9 @@ def check_reference_depth(skill_path: Path) -> CheckResult:
 
 def check_anti_fabrication(body: str) -> CheckResult:
     lower = body.lower()
-    patterns = ["anti-fabrication", "never fabricate", "do not fabricate", "do not invent", "never invent", "no hallucination"]
+    patterns = ["anti-fabrication", "never fabricate", "do not fabricate", "do not invent", "never invent", "no hallucination",
+                # 中文(P1-3)
+                "捏造", "编造", "虚构", "伪造", "臆造"]
     if any(p in lower for p in patterns):
         return CheckResult(name="anti_fabrication", passed=True, message="Contains anti-fabrication guidance")
     return CheckResult(name="anti_fabrication", passed=False, message="Missing anti-fabrication guidance")
@@ -100,7 +114,9 @@ def check_anti_fabrication(body: str) -> CheckResult:
 
 def check_source_documented(body: str) -> CheckResult:
     lower = body.lower()
-    patterns = ["source", "reference", "references/", "scripts/", "based on", "according to"]
+    patterns = ["source", "reference", "references/", "scripts/", "based on", "according to",
+                # 中文(P1-3)
+                "来源", "参考", "依据", "根据", "出处"]
     if any(p in lower for p in patterns):
         return CheckResult(name="source_documented", passed=True, message="Sources/references documented")
     return CheckResult(name="source_documented", passed=False, message="No source documentation found")
