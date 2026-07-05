@@ -279,6 +279,19 @@ Score = StaticCompliance(0-11)
 | **L1**（单元级） | 单个 Skill 的规则理解是否正确 | evals.json + expectations |
 | **L2**（Mock 场景） | Skill 在有 fixture 的场景下能否正确产出文件 | evals.json + assertions + fixtures |
 
+### 校准可信度与 eval 设计
+
+`calibration.json` 的核心信号 `agreement_rate`(评分可信度)依赖 **程序化断言和 LLM 期望评同一项**(双判):只有同一件事同时被 `assertions`(程序化,确定性)和 `expectations`(LLM 语义)覆盖,才能比较两者判断是否一致。
+
+| eval 设计 | agreement_rate | calibration 可信度 |
+|---|---|---|
+| **双判**(同一项既有 assertion 又有 expectation) | 有数据(一致率) | 可作为强参考 |
+| **无双判**(assertions 和 expectations 各评各的,无交集) | `null`(显示"—",非"0%") | 退化为基准值 + 弱信号,不宜作强参考 |
+
+**建议**:对真正想验证的关键产出,在 `evals.json` 里**同时**写一条 `assertion`(可机械验证)和一条 `expectation`(语义描述)、两者指向同一件事,让校准有双判数据。例:验证"生成了排序脚本" → 既写 `{"type": "FILE_EXISTS", "params": {"filename": "sort.py"}}`(程序化),又写 expectation `"实现了排序算法"`(语义),两者评同一产出。
+
+> 注:不双判时 calibration 不会假报"0% 一致",而是显式标 `agreement_rate: null` 并在 recommendations 提示"无双判数据"。此时 confidence 只靠 compliance/evidence 等弱信号,grade 不宜作为评分可信度的强依据。
+
 ---
 
 ## JSON 输出格式

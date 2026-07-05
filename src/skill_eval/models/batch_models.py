@@ -96,7 +96,7 @@ class CalibrationReport(BaseModel):
     llm_only_count: int
     both_evaluated: int
     agreement_count: int
-    agreement_rate: float
+    agreement_rate: float | None  # None = 无 prog/llm 双判数据(P2-3),非"0% 一致"
     disagreements: list[DisagreementRecord] = Field(default_factory=list)
     confidence_signals: list[ConfidenceSignal] = Field(default_factory=list)
     overall_confidence: float

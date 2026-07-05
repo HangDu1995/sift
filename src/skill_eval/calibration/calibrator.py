@@ -39,7 +39,7 @@ class CalibrationChecker:
 
         disagreements = self._find_disagreements(expectations)
         agreement_count = both_evaluated - len(disagreements)
-        agreement_rate = agreement_count / both_evaluated if both_evaluated > 0 else 0.0
+        agreement_rate = agreement_count / both_evaluated if both_evaluated > 0 else None
 
         signals = self._detect_signals(
             agreement_rate=agreement_rate,
@@ -53,7 +53,7 @@ class CalibrationChecker:
 
         confidence = self._compute_confidence(signals)
         grade = self._grade(confidence)
-        recommendations = self._generate_recommendations(signals, disagreements)
+        recommendations = self._generate_recommendations(signals, disagreements, both_evaluated)
 
         return CalibrationReport(
             total_expectations=len(expectations),
@@ -61,7 +61,7 @@ class CalibrationChecker:
             llm_only_count=llm_only,
             both_evaluated=both_evaluated,
             agreement_count=agreement_count,
-            agreement_rate=round(agreement_rate, 4),
+            agreement_rate=round(agreement_rate, 4) if agreement_rate is not None else None,
             disagreements=disagreements,
             confidence_signals=signals,
             overall_confidence=round(confidence, 4),
@@ -98,7 +98,7 @@ class CalibrationChecker:
 
     def _detect_signals(
         self,
-        agreement_rate: float,
+        agreement_rate: float | None,
         both_evaluated: int,
         total: int,
         programmatic_only: int,
@@ -108,13 +108,13 @@ class CalibrationChecker:
     ) -> list[ConfidenceSignal]:
         signals: list[ConfidenceSignal] = []
 
-        if agreement_rate >= 0.9 and both_evaluated > 0:
+        if agreement_rate is not None and agreement_rate >= 0.9:
             signals.append(ConfidenceSignal(
                 signal_type=SignalType.HIGH_AGREEMENT_RATE,
                 description=f"一致性比率 {agreement_rate:.0%}",
                 impact=0.1,
             ))
-        elif agreement_rate < 0.6 and both_evaluated > 0:
+        elif agreement_rate is not None and agreement_rate < 0.6:
             signals.append(ConfidenceSignal(
                 signal_type=SignalType.LOW_AGREEMENT_RATE,
                 description=f"一致性比率偏低 {agreement_rate:.0%}",
@@ -168,10 +168,14 @@ class CalibrationChecker:
         return ConfidenceGrade.UNRELIABLE
 
     def _generate_recommendations(
-        self, signals: list[ConfidenceSignal], disagreements: list[DisagreementRecord]
+        self, signals: list[ConfidenceSignal], disagreements: list[DisagreementRecord],
+        both_evaluated: int = 0,
     ) -> list[str]:
         recs: list[str] = []
         signal_types = {s.signal_type for s in signals}
+
+        if both_evaluated == 0:
+            recs.append("无程序化+LLM 双判数据——agreement_rate 不可用,confidence 主要靠其他信号;建议 eval 设计让 assertions(程序化)与 expectations(LLM)评同项,校准才有双判依据")
 
         if SignalType.LOW_AGREEMENT_RATE in signal_types:
             recs.append("一致性比率偏低——建议增加 runs_per_config 以提高统计稳定性")

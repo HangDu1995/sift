@@ -284,6 +284,20 @@ class TestCalibrationChecker:
         assert len(report.disagreements) == 1
         assert report.agreement_rate == 0.0
 
+    def test_no_dual_evaluation_agreement_rate_is_none(self):
+        """P2-3: 无 prog/llm 双判时 agreement_rate=None(非假 0.0),且给无双判提示。"""
+        cal = CalibrationChecker()
+        grading = GradingResult(
+            expectations=[
+                ExpectationResult(text="e1", passed=True, evidence="OK output", source="programmatic"),
+            ],
+            summary=GradingSummary(passed=1, failed=0, total=1, pass_rate=1.0),
+        )
+        report = cal.calibrate(grading)
+        assert report.agreement_rate is None, "无双判时 agreement_rate 应为 None,不是 0.0"
+        assert report.both_evaluated == 0
+        assert any("双判" in r for r in report.recommendations), "应给无双判提示"
+
     def test_with_compliance(self):
         cal = CalibrationChecker()
         grading = GradingResult(

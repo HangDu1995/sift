@@ -45,7 +45,7 @@ class ComplianceSummary(BaseModel):
 class CalibrationSummary(BaseModel):
     grade: ConfidenceGrade
     overall_confidence: float
-    agreement_rate: float
+    agreement_rate: float | None  # None = 无 prog/llm 双判数据(P2-3);死字段(当前无构造点),随 CalibrationReport 同步
     disagreement_count: int
 
 
