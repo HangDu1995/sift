@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from skill_eval.i18n import ANTI_FABRICATION_CN  # 反捏造词与 compliance/extractor.py 共用(P2-13)
 from skill_eval.models import CheckResult
 
 
@@ -104,9 +105,8 @@ def check_reference_depth(skill_path: Path) -> CheckResult:
 
 def check_anti_fabrication(body: str) -> CheckResult:
     lower = body.lower()
-    patterns = ["anti-fabrication", "never fabricate", "do not fabricate", "do not invent", "never invent", "no hallucination",
-                # 中文(P1-3)
-                "捏造", "编造", "虚构", "伪造", "臆造"]
+    patterns = ["anti-fabrication", "never fabricate", "do not fabricate", "do not invent", "never invent", "no hallucination"]
+    patterns.extend(ANTI_FABRICATION_CN)  # 中文反捏造词,与 extractor 共用(skill_eval.i18n,P2-13)
     if any(p in lower for p in patterns):
         return CheckResult(name="anti_fabrication", passed=True, message="Contains anti-fabrication guidance")
     return CheckResult(name="anti_fabrication", passed=False, message="Missing anti-fabrication guidance")

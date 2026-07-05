@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from skill_eval.i18n import ANTI_FABRICATION_CN  # 反捏造词与 static_analysis/checks.py 共用(P2-13)
 from skill_eval.models import (
     CheckMethod,
     InstructionCheck,
@@ -11,10 +12,9 @@ from skill_eval.models import (
     InstructionSource,
 )
 
-# 中文关键词 — 补充英文中心的提取规则,使中文 SKILL.md 的约束 / 工具 / 反捏造指令同样被识别(P0-1)。
+# 中文关键词 — extractor 独用(单模块词表留原处);反捏造词已移至 skill_eval.i18n 共享(P2-13)。
 _CONSTRAINT_KEYWORDS_CN: tuple[str, ...] = ("禁止", "严禁", "不得", "不应", "不可", "必须")
 _TOOL_VERBS_CN: tuple[str, ...] = ("运行", "执行", "调用", "启动")
-_ANTI_FABRICATION_KEYWORDS_CN: tuple[str, ...] = ("捏造", "编造", "虚构", "伪造", "臆造")
 
 
 class InstructionExtractor:
@@ -124,13 +124,13 @@ class InstructionExtractor:
             "anti-fabrication" in lower
             or "never fabricate" in lower
             or "do not fabricate" in lower
-            or any(w in body for w in _ANTI_FABRICATION_KEYWORDS_CN)
+            or any(w in body for w in ANTI_FABRICATION_CN)
         )
         if not has_af:
             return checks
         for line in body.split("\n"):
             ls = line.strip().lower()
-            if "fabricat" in ls or "invent" in ls or "hallucinat" in ls or any(w in line for w in _ANTI_FABRICATION_KEYWORDS_CN):
+            if "fabricat" in ls or "invent" in ls or "hallucinat" in ls or any(w in line for w in ANTI_FABRICATION_CN):
                 checks.append(InstructionCheck(
                     source=InstructionSource.ANTI_FABRICATION,
                     instruction_text=line.strip(),
