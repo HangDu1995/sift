@@ -21,6 +21,35 @@ def find_project_root() -> Path:
     return current
 
 
+def _build_non_interactive_prompt(prompt: str, skill_name: str, skill_body: str) -> str:
+    """构造 with_skill 模式的注入 prompt:skill body + non_interactive 指示 + 原 prompt。
+
+    non_interactive 指示 Claude 自动跑完 skill 流程不卡住,但不诱导捏造数据(P1-4:
+    此前 'generate synthetic test data' 与 skill 的反捏造指令冲突,诱导 Claude 违规
+    -> compliance 假红灯)。改为缺数据时报告缺失 + 用真实可得数据继续,不捏造。
+    """
+    return (
+        f"You have the following Skill loaded. Follow its instructions when handling the user's request.\n\n"
+        f"<skill name=\"{skill_name}\">\n"
+        f"{skill_body}\n"
+        f"</skill>\n\n"
+        f"<non_interactive_mode>\n"
+        f"This is a NON-INTERACTIVE automated evaluation.\n"
+        f"- Execute ALL phases/stages of the skill end-to-end. DO NOT skip steps.\n"
+        f"- When the skill asks for user input (path, choice, confirmation): "
+        f"SIMULATE a reasonable user response and continue immediately.\n"
+        f"- For file paths: explore the working directory and use what you find.\n"
+        f"- For choices: state your assumption and proceed with the recommended option.\n"
+        f"- For data input: use real files in the working directory. If required data is "
+        f"genuinely missing, state what is missing and proceed with what is available — "
+        f"do NOT fabricate or invent data.\n"
+        f"- NEVER output questions or wait — always provide the simulated answer inline and continue.\n"
+        f"</non_interactive_mode>\n\n"
+        f"---\n\n"
+        f"{prompt}"
+    )
+
+
 class ClaudeRunner:
     def run(
         self,
@@ -37,24 +66,7 @@ class ClaudeRunner:
             skill_injected_prompt = prompt
             if skill_path:
                 name, description, content, _, skill_body = parse_skill_md(skill_path)
-                skill_injected_prompt = (
-                    f"You have the following Skill loaded. Follow its instructions when handling the user's request.\n\n"
-                    f"<skill name=\"{name}\">\n"
-                    f"{skill_body}\n"
-                    f"</skill>\n\n"
-                    f"<non_interactive_mode>\n"
-                    f"This is a NON-INTERACTIVE automated evaluation.\n"
-                    f"- Execute ALL phases/stages of the skill end-to-end. DO NOT skip steps.\n"
-                    f"- When the skill asks for user input (path, choice, confirmation): "
-                    f"SIMULATE a reasonable user response and continue immediately.\n"
-                    f"- For file paths: explore the working directory and use what you find.\n"
-                    f"- For choices: state your assumption and proceed with the recommended option.\n"
-                    f"- For data input: generate representative synthetic test data.\n"
-                    f"- NEVER output questions or wait — always provide the simulated answer inline and continue.\n"
-                    f"</non_interactive_mode>\n\n"
-                    f"---\n\n"
-                    f"{prompt}"
-                )
+                skill_injected_prompt = _build_non_interactive_prompt(prompt, name, skill_body)
 
             cmd = ["claude", "-p", skill_injected_prompt, "--output-format", "stream-json", "--verbose",
                     "--dangerously-skip-permissions",
