@@ -6,6 +6,7 @@ from skill_eval.models import SkillCategory
 
 
 _PREFERENCE_SIGNALS = [
+    # 英文
     "exact template",
     "team convention",
     "company standard",
@@ -14,9 +15,16 @@ _PREFERENCE_SIGNALS = [
     "coding standard",
     "style guide",
     "preferred pattern",
+    # 中文(对齐英文语义;"规范"/"风格"作根词,不另列其短语特例,避免子串重叠双计)
+    "模板",
+    "约定",
+    "风格",
+    "规范",
+    "公司标准",
 ]
 
 _UPGRADE_SIGNALS = [
+    # 英文
     "step-by-step",
     "workflow",
     "best practice",
@@ -26,6 +34,18 @@ _UPGRADE_SIGNALS = [
     "enhanced",
     "advanced",
     "comprehensive",
+    # 中文(同上);"技术"/"方法"过泛不加(几乎必现,会淹没信号)
+    "分步",
+    "逐步",
+    "工作流",
+    "最佳实践",
+    "算法",
+    "方法论",
+    "进阶",
+    "高级",
+    "增强",
+    "全面",
+    "综合",
 ]
 
 

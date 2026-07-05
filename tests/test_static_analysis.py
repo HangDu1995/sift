@@ -148,6 +148,22 @@ class TestClassifier:
         )
         assert cat == SkillCategory.ENCODED_PREFERENCE
 
+    def test_capability_uplift_chinese(self):
+        """中文 upgrade 类 skill 不再被漏判(P2-1:中文信号词)。"""
+        cat = classify_skill(
+            "按分步工作流执行,采用最佳实践与算法设计,提供进阶增强的全面方法",
+            "综合设计工具",
+        )
+        assert cat == SkillCategory.CAPABILITY_UPLIFT
+
+    def test_encoded_preference_chinese(self):
+        """中文 preference 类 skill 能被判 ENCODED_PREFERENCE(此前中文全默认 uplift,分类失效)。"""
+        cat = classify_skill(
+            "使用此模板,遵循团队约定与编码规范,符合公司标准的项目风格",
+            "格式化工具",
+        )
+        assert cat == SkillCategory.ENCODED_PREFERENCE
+
 
 class TestStaticAnalyzer:
     def test_analyze_sample_skill(self, sample_skill_path: Path):
