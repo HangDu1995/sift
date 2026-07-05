@@ -165,7 +165,16 @@ class ClaudeRunner:
                 continue
 
             if event.get("type") == "result":
-                total_tokens = event.get("total_tokens", total_tokens) or total_tokens
+                # token 解析:claude CLI 2.x 的 result event 顶层无 total_tokens,
+                # token 在 usage 子对象(input_tokens + output_tokens,标准 Anthropic 字段);
+                # 老格式若有顶层 total_tokens 则优先(兼容旧版)。
+                result_tokens = event.get("total_tokens") or 0
+                if not result_tokens:
+                    usage = event.get("usage") or {}
+                    result_tokens = ((usage.get("input_tokens") or 0)
+                                     + (usage.get("output_tokens") or 0))
+                if result_tokens:
+                    total_tokens = result_tokens
                 result_text = event.get("result", "") or result_text
                 num_turns = event.get("num_turns", num_turns)
                 stop_reason = event.get("stop_reason", stop_reason) or event.get("subtype", "")

@@ -1,8 +1,10 @@
-"""Tests for Claude CLI runner prompt construction (P1-4)."""
+"""Tests for Claude CLI runner: prompt construction + stream-json token parsing."""
 
 from __future__ import annotations
 
-from skill_eval.execution.cli_runner import _build_non_interactive_prompt
+import json
+
+from skill_eval.execution.cli_runner import ClaudeRunner, _build_non_interactive_prompt
 
 
 class TestNonInteractivePrompt:
@@ -33,3 +35,41 @@ class TestNonInteractivePrompt:
         assert "use real files" in p
         assert "state what is missing" in p
         assert "proceed with what is available" in p
+
+
+class TestParseStreamJsonTokenExtraction:
+    """result event token 解析:claude CLI 2.x 顶层无 total_tokens,token 在 usage 子对象
+    (input_tokens + output_tokens,标准 Anthropic 字段)。GLM/Claude 原生 2.x 实测同结构。"""
+
+    def test_token_from_usage_when_no_top_level_total_tokens(self):
+        """claude CLI 2.x 真实结构:result event 无顶层 total_tokens,token 在 usage。"""
+        stdout = json.dumps({
+            "type": "result", "subtype": "success",
+            "result": "pong", "num_turns": 1, "stop_reason": "end_turn",
+            "usage": {"input_tokens": 12239, "output_tokens": 3,
+                      "cache_creation_input_tokens": 0, "cache_read_input_tokens": 12672},
+        })
+        runner = ClaudeRunner()
+        _, total_tokens, _, result_text, num_turns, stop_reason, _ = runner._parse_stream_json(stdout)
+        assert total_tokens == 12242  # 12239 + 3(不含 cache)
+        assert result_text == "pong"
+        assert num_turns == 1
+        assert stop_reason == "end_turn"
+
+    def test_top_level_total_tokens_still_preferred(self):
+        """老格式兼容:result 有顶层 total_tokens 时优先用,不回退 usage。"""
+        stdout = json.dumps({
+            "type": "result", "total_tokens": 9999,
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "result": "x", "num_turns": 1,
+        })
+        runner = ClaudeRunner()
+        _, total_tokens, _, _, _, _, _ = runner._parse_stream_json(stdout)
+        assert total_tokens == 9999
+
+    def test_zero_tokens_when_neither_present(self):
+        """两者都没有 → 0(不崩,兼容 result event 极端缺字段)。"""
+        stdout = json.dumps({"type": "result", "result": "x", "num_turns": 1})
+        runner = ClaudeRunner()
+        _, total_tokens, _, _, _, _, _ = runner._parse_stream_json(stdout)
+        assert total_tokens == 0
