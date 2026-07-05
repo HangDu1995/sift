@@ -74,6 +74,7 @@ class ComplianceReport(BaseModel):
     compliance_rate: float
     checks: list[ComplianceResultItem] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    filtered_count: int = 0  # P0-1b: CONSTRAINT 候选经 LLM 精筛剔除的非可遵循项(路由提示/描述语)
 
 
 class DisagreementRecord(BaseModel):

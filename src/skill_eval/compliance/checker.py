@@ -12,12 +12,17 @@ from skill_eval.models import (
     ComplianceResultItem,
     InstructionCheck,
     InstructionPriority,
+    InstructionSource,
 )
 from skill_eval.utils import call_claude
 
 _BATCH_TIMEOUT = 90
 _SINGLE_TIMEOUT = 30
 _MAX_LLM_IN_BATCH = 30
+_APPLICABILITY_TIMEOUT = 60
+# P0-1b: 禁止性词确定性高(CONSTRAINT 语义本义),不过 LLM 精筛;仅"必须"类需精筛。
+_CONSTRAINT_MUST_KEYWORD = "必须"
+_PROHIBITIVE_CN: tuple[str, ...] = ("禁止", "严禁", "不得", "不应", "不可")
 
 
 class ComplianceChecker:
@@ -32,9 +37,14 @@ class ComplianceChecker:
         on_substep=None,
         log_path: Path | None = None,
     ) -> ComplianceReport:
+        # P0-1b: CONSTRAINT 候选 LLM 精筛 —— 仅"必须"类(无禁止性词)过 LLM 去假阳性
+        instructions, filtered_count = self._filter_constraint_candidates(instructions, model)
         total = len(instructions)
         if log_path:
-            log_path.write_text(f"Compliance check: {total} instructions\n", encoding="utf-8")
+            msg = f"Compliance check: {total} instructions"
+            if filtered_count:
+                msg += f" (filtered {filtered_count} non-applicable CONSTRAINT candidates)"
+            log_path.write_text(msg + "\n", encoding="utf-8")
 
         llm_instructions = []
         llm_indices = []
@@ -87,6 +97,7 @@ class ComplianceChecker:
             compliance_rate=followed / total if total > 0 else 0.0,
             checks=items,
             warnings=[],
+            filtered_count=filtered_count,
         )
 
     @staticmethod
@@ -97,6 +108,93 @@ class ComplianceChecker:
         line = f"[{tag}] {step}/{total} [{item.source}] conf={item.confidence:.1f} {text}\n"
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(line)
+
+    def _filter_constraint_candidates(
+        self, instructions: list[InstructionCheck], model: str | None
+    ) -> tuple[list[InstructionCheck], int]:
+        """P0-1b: CONSTRAINT 候选里,仅"必须"类(无禁止性词)过 LLM 精筛去假阳性。
+
+        禁止性词(禁止/严禁/不得/不应/不可)确定性高直接保留;"必须"类可能是
+        路由提示(必须先读某文件)/描述语(必须考虑…),过 LLM 判可遵循性。
+        返回 (过滤后 instructions, 剔除数)。LLM 不可用时保守保留全部(不误剔)。
+        """
+        must_indices = [
+            i for i, inst in enumerate(instructions)
+            if inst.source == InstructionSource.CONSTRAINT
+            and _CONSTRAINT_MUST_KEYWORD in inst.instruction_text
+            and not any(w in inst.instruction_text for w in _PROHIBITIVE_CN)
+        ]
+        if not must_indices:
+            return instructions, 0
+
+        candidates = [instructions[i] for i in must_indices]
+        applicable_mask = self._llm_judge_constraint_applicability(candidates, model)
+
+        removed = {
+            global_i for local_i, global_i in enumerate(must_indices)
+            if not applicable_mask[local_i]
+        }
+        if not removed:
+            return instructions, 0
+
+        filtered = [inst for i, inst in enumerate(instructions) if i not in removed]
+        return filtered, len(removed)
+
+    def _llm_judge_constraint_applicability(
+        self, candidates: list[InstructionCheck], model: str | None
+    ) -> list[bool]:
+        """LLM 判每条 CONSTRAINT 候选是否为「可遵循的硬约束」。
+
+        可遵循:强制要求执行者做/不做某具体行为,可在执行过程里检验(如"必须使用 UTF-8"
+        "必须按步骤顺序执行""必须先读 design.md 作为强制前置")。非可遵循:文档导航/概述
+        (表格括号附注"(必须先读)"、章节标题"(所有类别必须)"、描述语"必须考虑和完成的"),
+        不是对执行者的可检验硬性要求。返回与 candidates 等长 bool 列表(True=保留)。
+        """
+        instruction_list = "".join(
+            f"[{i}] {inst.instruction_text}\n" for i, inst in enumerate(candidates)
+        )
+        prompt = (
+            "判断以下每条指令是否为「可遵循的硬约束」(强制要求执行者做或不做某件具体行为)。\n\n"
+            "## 判定标准\n"
+            "- ✅ 可遵循硬约束:要求执行者执行或避免某具体动作,可在执行过程里检验是否照做。"
+            "例如「必须使用 UTF-8 编码」「必须按 Step 1→2→3 顺序执行」"
+            "「必须在 @triton.jit kernel 中实现」「必须先读 design.md(作为强制前置步骤时)」。\n"
+            "- ❌ 非可遵循:文档导航或概述性语句,不是可检验的执行约束。例如表格单元格里的"
+            "括号附注「(⚠️ 必须先读)」、章节标题「(所有类别必须)」、描述语「必须考虑和完成的」"
+            "——这些是提示读者去看哪、或概述下文要讲什么,不是对执行者的硬性要求。\n\n"
+            f"## 候选指令 ({len(candidates)} 条)\n{instruction_list}\n"
+            "## 输出格式\n"
+            "只返回 JSON 数组,每元素:{\"index\": 0, \"applicable\": true/false}\n"
+        )
+        try:
+            result_text = call_claude(
+                prompt, model=model, timeout=_APPLICABILITY_TIMEOUT, max_turns=1
+            )
+            return self._parse_applicability(result_text, len(candidates))
+        except RuntimeError:
+            # LLM 不可用:保守保留全部(不误剔,退到关键词法现状)
+            return [True] * len(candidates)
+
+    @staticmethod
+    def _parse_applicability(text: str, n: int) -> list[bool]:
+        """解析 LLM 适用性判定;默认保留(保守,不误剔)。"""
+        mask = [True] * n
+        m = re.search(r"\[[\s\S]*\]", text)
+        if not m:
+            return mask
+        try:
+            items = json.loads(m.group())
+        except json.JSONDecodeError:
+            return mask
+        if not isinstance(items, list):
+            return mask
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            idx = item.get("index")
+            if isinstance(idx, int) and 0 <= idx < n:
+                mask[idx] = bool(item.get("applicable", True))
+        return mask
 
     def _check_instruction(
         self,

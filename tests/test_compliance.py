@@ -333,3 +333,86 @@ class TestCalibrationChecker:
         )
         report = cal.calibrate(grading)
         assert isinstance(report.recommendations, list)
+
+
+class TestConstraintFiltering:
+    """P0-1b: CONSTRAINT 候选 LLM 精筛 —— '必须'类过 LLM 去假阳性,禁止性词直接保留。"""
+
+    @staticmethod
+    def _constraint(text: str) -> InstructionCheck:
+        return InstructionCheck(
+            source=InstructionSource.CONSTRAINT,
+            instruction_text=text,
+            section="Constraint",
+            priority=InstructionPriority.REQUIRED,
+            check_method=CheckMethod.LLM_JUDGE,
+        )
+
+    def test_prohibitive_kept_without_llm(self, mocker):
+        """禁止性词(禁止/严禁/不得…)确定性高,不过 LLM 直接保留。"""
+        spy = mocker.patch("skill_eval.compliance.checker.call_claude")
+        checker = ComplianceChecker()
+        instructions = [
+            self._constraint("禁止跳过验证步骤"),
+            self._constraint("严禁捏造数据"),
+        ]
+        filtered, n = checker._filter_constraint_candidates(instructions, model=None)
+        assert len(filtered) == 2
+        assert n == 0
+        spy.assert_not_called()
+
+    def test_must_false_positive_filtered(self, mocker):
+        """'必须'路由提示/描述语经 LLM 判非可遵循 → 剔除。"""
+        mocker.patch(
+            "skill_eval.compliance.checker.call_claude",
+            return_value='[{"index": 0, "applicable": false}]',
+        )
+        checker = ComplianceChecker()
+        instructions = [self._constraint("（⚠️ 必须先读） / [算法](references/x.md)")]
+        filtered, n = checker._filter_constraint_candidates(instructions, model=None)
+        assert len(filtered) == 0
+        assert n == 1
+
+    def test_must_real_constraint_kept(self, mocker):
+        """'必须'真约束(必须使用 UTF-8)经 LLM 判可遵循 → 保留。"""
+        mocker.patch(
+            "skill_eval.compliance.checker.call_claude",
+            return_value='[{"index": 0, "applicable": true}]',
+        )
+        checker = ComplianceChecker()
+        instructions = [self._constraint("必须使用 UTF-8 编码")]
+        filtered, n = checker._filter_constraint_candidates(instructions, model=None)
+        assert len(filtered) == 1
+        assert n == 0
+
+    def test_llm_unavailable_keeps_all(self, mocker):
+        """LLM 不可用(RuntimeError)时保守保留全部,不误剔。"""
+        mocker.patch(
+            "skill_eval.compliance.checker.call_claude",
+            side_effect=RuntimeError("timeout"),
+        )
+        checker = ComplianceChecker()
+        instructions = [self._constraint("必须先读 references/x.md")]
+        filtered, n = checker._filter_constraint_candidates(instructions, model=None)
+        assert len(filtered) == 1
+        assert n == 0
+
+    def test_prohibitive_and_must_mixed(self, mocker):
+        """混合:禁止性保留不过 LLM,'必须'过 LLM;LLM 未提的 index 默认保留。"""
+        spy = mocker.patch(
+            "skill_eval.compliance.checker.call_claude",
+            return_value='[{"index": 0, "applicable": false}]',
+        )
+        checker = ComplianceChecker()
+        instructions = [
+            self._constraint("禁止跳过"),
+            self._constraint("必须先读 x.md"),
+            self._constraint("必须使用 UTF-8"),
+        ]
+        filtered, n = checker._filter_constraint_candidates(instructions, model=None)
+        assert n == 1  # 只剔"必须先读"
+        assert len(filtered) == 2
+        texts = [i.instruction_text for i in filtered]
+        assert "禁止跳过" in texts
+        assert "必须使用 UTF-8" in texts
+        spy.assert_called_once()  # 禁止性不过 LLM,只对 2 条"必须"候选调一次
