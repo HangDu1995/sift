@@ -38,6 +38,7 @@ class EvalCase(BaseModel):
     mode: str = ""
     source_dir: str = ""
     source_dir_as: str = ""
+    timeout: int | None = None  # per-eval 覆盖全局 timeout(P1-3a);None 走 RunConfig.timeout_seconds
 
     def get_name(self) -> str:
         return self.name or f"eval-{self.id}"

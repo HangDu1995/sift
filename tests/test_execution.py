@@ -308,3 +308,70 @@ class TestABTestRunnerReferencesAutoCopy:
         without_ref = tmp_path / "out" / "iteration-1" / "without_skill" / "eval-1" / "run-1" / "outputs" / "references"
         assert with_ref.exists(), "with_skill 考场应自动拷 references/(body 引用了它)"
         assert not without_ref.exists(), "without_skill 不注入 body,不该拷 references/"
+
+
+class TestABTestRunnerPerEvalTimeout:
+    """P1-3a: per-eval timeout 覆盖全局(混跑时重任务给大、轻任务走默认)。"""
+
+    @staticmethod
+    def _make_skill(tmp_path: Path) -> Path:
+        skill = tmp_path / "skill"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: t\ndescription: test skill\n---\nbody\n", encoding="utf-8"
+        )
+        return skill
+
+    def test_per_eval_timeout_overrides_global(self, tmp_path: Path):
+        from skill_eval.execution.runner import ABTestRunner
+        from skill_eval.models import (
+            RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase,
+        )
+
+        captured: list[int | None] = []
+
+        def fake_run(self, prompt, skill_path=None, timeout=None, **kwargs):
+            captured.append(timeout)
+            return RunOutput(exit_code=0, stdout="ok", transcript="done", result_text="done")
+
+        skill = self._make_skill(tmp_path)
+        config = RunConfig(
+            runs_per_config=1, output_dir=tmp_path / "out", timeout_seconds=300,
+            skip_compliance=True, skip_calibration=True, max_workers=1,
+        )
+        runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
+        eval_set = EvalSet(skill_name="t", evals=[
+            EvalCase(id=1, prompt="simple"),               # 无 timeout → 全局 300
+            EvalCase(id=2, prompt="design", timeout=600),  # per-eval → 600
+        ])
+        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+            runner.run_ab_test(skill, eval_set)
+
+        # 2 evals × 2 configs = 4 runs;eval1 全 300,eval2 全 600
+        assert 300 in captured, "无 per-eval timeout 的 eval 应走全局 300"
+        assert 600 in captured, "有 per-eval timeout 的 eval 应覆盖为 600"
+        assert all(t in (300, 600) for t in captured), f"意外 timeout: {captured}"
+
+    def test_no_per_eval_timeout_falls_back_to_global(self, tmp_path: Path):
+        from skill_eval.execution.runner import ABTestRunner
+        from skill_eval.models import (
+            RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase,
+        )
+
+        captured: list[int | None] = []
+
+        def fake_run(self, prompt, skill_path=None, timeout=None, **kwargs):
+            captured.append(timeout)
+            return RunOutput(exit_code=0, stdout="ok", transcript="done", result_text="done")
+
+        skill = self._make_skill(tmp_path)
+        config = RunConfig(
+            runs_per_config=1, output_dir=tmp_path / "out", timeout_seconds=250,
+            skip_compliance=True, skip_calibration=True, max_workers=1,
+        )
+        runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
+        eval_set = EvalSet(skill_name="t", evals=[EvalCase(id=1, prompt="x")])  # 都不配 timeout
+        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+            runner.run_ab_test(skill, eval_set)
+
+        assert all(t == 250 for t in captured), f"无 per-eval 应全部走全局 250,实际: {captured}"

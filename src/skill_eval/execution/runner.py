@@ -144,7 +144,7 @@ class ABTestRunner:
                     prompt=prompt,
                     skill_path=use_skill,
                     model=self.config.model,
-                    timeout=self.config.timeout_seconds,
+                    timeout=eval_case.timeout or self.config.timeout_seconds,
                     max_turns=self.config.max_turns,
                     cwd=outputs_dir,
                 )
