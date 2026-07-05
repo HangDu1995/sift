@@ -19,6 +19,7 @@ def batch(
     runs: int = typer.Option(3, "--runs", help="Runs per configuration"),
     model: Optional[str] = typer.Option(None, "--model", help="Model for claude -p"),
     max_turns: int = typer.Option(10, "--max-turns", help="Max agentic turns per claude -p run"),
+    max_retries: int = typer.Option(2, "--max-retries", help="Max retries per eval on UNEVAL/error (each retry re-runs claude + scoring + compliance LLM; heavy skills may want 0-1 to save tokens)"),
     fail_fast: bool = typer.Option(False, "--fail-fast", help="Stop on first failure"),
     workers: int = typer.Option(4, "--workers", help="Max parallel workers"),
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
@@ -41,7 +42,7 @@ def batch(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    run_config = RunConfig(runs_per_config=runs, model=model, max_workers=workers, max_turns=max_turns, output_dir=output_dir)
+    run_config = RunConfig(runs_per_config=runs, model=model, max_workers=workers, max_turns=max_turns, max_retries_per_eval=max_retries, output_dir=output_dir)
     scoring_config = ScoringConfig(enable_programmatic=True, enable_llm=True, llm_model=model)
 
     console.print(f"[bold]Batch evaluation:[/bold] {manifest.name} ({len(manifest.skills)} skills)")

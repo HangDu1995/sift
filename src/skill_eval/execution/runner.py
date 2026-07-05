@@ -87,7 +87,7 @@ class ABTestRunner:
         completed = [0]
         lock = threading.Lock()
 
-        max_retries = getattr(self.config, "max_retries_per_eval", 0)
+        max_retries = self.config.max_retries_per_eval
 
         def run_single_eval(eval_case: EvalCase, config_name: str, run_num: int, retry_num: int = 0) -> str:
             run_label = f"{eval_case.get_name()}::{config_name}::run-{run_num}"

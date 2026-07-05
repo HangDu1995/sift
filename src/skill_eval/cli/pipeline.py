@@ -26,6 +26,7 @@ def _run_ab_eval(
     output_dir: Path = Path("output"),
     fmt: str = "table",
     eval_samples: int | float | None = None,
+    max_retries: int = 2,
 ) -> tuple:
     from skill_eval.execution.runner import ABTestRunner
     from skill_eval.execution.benchmark import BenchmarkAggregator
@@ -61,6 +62,7 @@ def _run_ab_eval(
         eval_samples=eval_samples,
         per_eval_timeout=timeout,
         min_runs_for_stats=max(3, runs),
+        max_retries_per_eval=max_retries,
     )
 
     progress_state = _ProgressState(actual_evals, runs)

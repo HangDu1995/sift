@@ -44,6 +44,7 @@ def run(
     workers: int = typer.Option(4, "--workers", help="Max parallel workers"),
     timeout: int = typer.Option(300, "--timeout", help="Timeout per run in seconds"),
     max_turns: int = typer.Option(10, "--max-turns", help="Max agentic turns per claude -p run"),
+    max_retries: int = typer.Option(2, "--max-retries", help="Max retries per eval on UNEVAL/error (each retry re-runs claude + scoring + compliance LLM; heavy skills may want 0-1 to save tokens)"),
     scoring: str = typer.Option("hybrid", "--scoring", help="Scoring mode: hybrid, programmatic, or llm"),
     compliance_gate: bool = typer.Option(False, "--compliance-gate", help="Force-fail if compliance_rate < 0.5"),
     no_compliance: Optional[bool] = typer.Option(None, "--no-compliance/--compliance", help="Skip compliance checking (auto: on for --runs<3)"),
@@ -113,4 +114,5 @@ def run(
         output_dir=output_dir,
         fmt=format,
         eval_samples=_parse_eval_samples(eval_samples),
+        max_retries=max_retries,
     )

@@ -375,3 +375,67 @@ class TestABTestRunnerPerEvalTimeout:
             runner.run_ab_test(skill, eval_set)
 
         assert all(t == 250 for t in captured), f"无 per-eval 应全部走全局 250,实际: {captured}"
+
+
+class TestABTestRunnerRetry:
+    """P2-2: max_retries_per_eval 控制 retry 次数(error 触发)。
+    CLI --max-retries 透传 RunConfig.max_retries_per_eval,字段直接驱动此行为。"""
+
+    @staticmethod
+    def _make_skill(tmp_path: Path) -> Path:
+        skill = tmp_path / "skill"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: t\ndescription: test skill\n---\nbody\n", encoding="utf-8"
+        )
+        return skill
+
+    def test_zero_retries_no_retry_on_error(self, tmp_path: Path):
+        """max_retries=0 → error 不 retry,每 job 只调 1 次 claude。"""
+        from skill_eval.execution.runner import ABTestRunner
+        from skill_eval.models import RunConfig, ScoringConfig, EvalSet, EvalCase
+        from skill_eval.errors import ClaudeRunnerError
+
+        call_count = [0]
+
+        def fake_run(self, prompt, skill_path=None, **kwargs):
+            call_count[0] += 1
+            raise ClaudeRunnerError("boom")
+
+        skill = self._make_skill(tmp_path)
+        config = RunConfig(
+            runs_per_config=1, output_dir=tmp_path / "out", max_retries_per_eval=0,
+            skip_compliance=True, skip_calibration=True, max_workers=1,
+        )
+        runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
+        eval_set = EvalSet(skill_name="t", evals=[EvalCase(id=1, prompt="x")])
+        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+            runner.run_ab_test(skill, eval_set)
+
+        # 1 eval × 2 config × 1 run = 2 jobs;error 不 retry → 共 2 次调用
+        assert call_count[0] == 2, f"max_retries=0 不该 retry,期望 2 次调用(2 job),实际 {call_count[0]}"
+
+    def test_two_retries_three_calls_per_job_on_error(self, tmp_path: Path):
+        """max_retries=2 → error 重试到 3 次/job(original + retry×2)。"""
+        from skill_eval.execution.runner import ABTestRunner
+        from skill_eval.models import RunConfig, ScoringConfig, EvalSet, EvalCase
+        from skill_eval.errors import ClaudeRunnerError
+
+        call_count = [0]
+
+        def fake_run(self, prompt, skill_path=None, **kwargs):
+            call_count[0] += 1
+            raise ClaudeRunnerError("boom")
+
+        skill = self._make_skill(tmp_path)
+        config = RunConfig(
+            runs_per_config=1, output_dir=tmp_path / "out", max_retries_per_eval=2,
+            skip_compliance=True, skip_calibration=True, max_workers=1,
+        )
+        runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
+        eval_set = EvalSet(skill_name="t", evals=[EvalCase(id=1, prompt="x")])
+        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+            runner.run_ab_test(skill, eval_set)
+
+        # 2 job × (1 + 2 retry) = 6 次调用
+        assert call_count[0] == 6, f"max_retries=2 该 3 次/job,期望 6 次调用(2 job),实际 {call_count[0]}"
