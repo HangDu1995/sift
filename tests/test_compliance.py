@@ -203,6 +203,47 @@ class TestInstructionExtractorChinese:
         for t in tools:
             assert t.check_method == CheckMethod.TOOL_CALL_CHECK
 
+    def test_tool_requirement_cn_rejects_chinese_compound(self):
+        """中文「运行时/运行中/运行失败」不是工具调用——「运行」是「运行时(runtime)」
+        等词的一部分。旧 \\w+ 在 Unicode 下匹配汉字,把「运行时依赖基线」抽成
+        tool_name='时依赖基线'(假阳性;ascendc-env-check 实测 6 条里 5 条垃圾)。
+        设计本意(L83 注释)就是不抽中文工具名——要求工具名 ASCII 开头对齐该意图。"""
+        ext = InstructionExtractor()
+        body = "运行时依赖基线;运行失败;运行中的进程;运行时检测当前设备"
+        tools = [c for c in ext.extract(body) if c.source == InstructionSource.TOOL_REQUIREMENT]
+        names = [c.params.get("tool_name") for c in tools]
+        assert "时依赖基线" not in names
+        assert "失败" not in names
+        assert "中的进程" not in names
+        assert "时检测当前设备" not in names
+        assert names == []  # 这段全是「运行X」复合词,没真工具调用
+
+    def test_tool_requirement_cn_keeps_ascii_tool(self):
+        """中文动词 + ASCII 工具名(含 - 和 .)照抽——真工具名 npu-smi/check_env.sh 都是 ASCII。"""
+        ext = InstructionExtractor()
+        body = "运行 npu-smi info 查设备;调用 check_env.sh;执行 get_npu_arch.py"
+        tools = [c for c in ext.extract(body) if c.source == InstructionSource.TOOL_REQUIREMENT]
+        names = [c.params.get("tool_name") for c in tools]
+        assert any(n and n.startswith("npu") for n in names), names
+        assert any(n and "check_env" in n for n in names), names
+        assert any(n and "get_npu_arch" in n for n in names), names
+
+    def test_constraint_cn_rejects_buke_compound(self):
+        """「不可用/不可见」是普通词(unavailable/invisible),非禁止性约束,误命中会抽出
+        「不可用时的回退方案见 X」这种路由提示(env-check 实测)。但「不可遗漏关键步骤」
+        仍是真约束,得保留。"""
+        ext = InstructionExtractor()
+        body = (
+            "不可用时的回退方案见 asys_commands.md。"
+            "设备不可见时先排查驱动。"
+            "不可遗漏任何检查项。"
+        )
+        constraints = [c for c in ext.extract(body) if c.source == InstructionSource.CONSTRAINT]
+        texts = "".join(c.instruction_text for c in constraints)
+        assert "不可用" not in texts
+        assert "不可见" not in texts
+        assert "不可遗漏" in texts  # 真约束保留
+
     def test_extracts_anti_fabrication_cn(self):
         ext = InstructionExtractor()
         af = [c for c in ext.extract(SAMPLE_BODY_CN) if c.source == InstructionSource.ANTI_FABRICATION]

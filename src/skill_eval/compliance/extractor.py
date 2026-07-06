@@ -81,9 +81,13 @@ class InstructionExtractor:
         checks: list[InstructionCheck] = []
         # 英文:动词 + 必有空格 + 可选 "the" + 工具名。\s+ 防 "using" 被拆成 use+ing。
         # 中文:动词(常无空格)+ 英文工具名(中文工具名无法对应 trace 里的工具调用,不提取)。
+        # 工具名必须 ASCII 开头([A-Za-z],可含 - 和 .,如 npu-smi / check_env.sh):
+        # 旧 \w+ 在 Unicode 下匹配汉字,把「运行时依赖基线」抽成 tool_name='时依赖基线'
+        # —— ascendc-env-check 实测 6 条 TOOL_REQUIREMENT 里 5 条是「运行时/运行中/运行失败」
+        # 复合词假阳性(运行=runtime 非动词 run)。对齐上面注释的设计本意。
         patterns = [
-            re.compile(r"(?:run|execute|use|call|invoke)\s+(?:the\s+)?(\w+\.?\w*)", re.IGNORECASE),
-            re.compile(rf"(?:{'|'.join(_TOOL_VERBS_CN)})\s*(\w+\.?\w*)"),
+            re.compile(r"(?:run|execute|use|call|invoke)\s+(?:the\s+)?([A-Za-z][\w\-\.]*)", re.IGNORECASE),
+            re.compile(rf"(?:{'|'.join(_TOOL_VERBS_CN)})\s*([A-Za-z][\w\-\.]*)"),
         ]
         for pattern in patterns:
             for match in pattern.finditer(text):
@@ -101,7 +105,13 @@ class InstructionExtractor:
     def _extract_constraints(self, body: str) -> list[InstructionCheck]:
         checks: list[InstructionCheck] = []
         # 中文约束词后跟至少 2 字内容(中文信息密度高,2 字 ≈ 英文 5 字);`.` 默认不跨行。
-        cn = "|".join(_CONSTRAINT_KEYWORDS_CN)
+        # "不可" 后跟这些字构成普通词(不可用/不可见/不可数/不可能...),非禁止性约束 →
+        # 负向前瞻排除,否则把「不可用时的回退方案见 X」误当约束(ascendc-env-check 实测)。
+        # "不可遗漏/不可省略" 等真约束保留(后跟字不在排除表)。
+        cn = "|".join(
+            rf"不可(?!用|见|数|能|逆|抗|解|测|及)" if k == "不可" else k
+            for k in _CONSTRAINT_KEYWORDS_CN
+        )
         pattern = re.compile(
             r"(NEVER|ALWAYS|MUST\s+NOT|DO\s+NOT|SHALL\s+NOT|SHOULD\s+NOT)\s+.{5,}"
             rf"|(?:{cn}).{{2,}}",
