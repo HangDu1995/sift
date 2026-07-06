@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from skill_eval.compliance.extractor import InstructionExtractor
 from skill_eval.compliance.checker import (
     ComplianceChecker,
-    _APPLICABILITY_VOTES,
     _extract_first_balanced,
-    clear_applicability_cache,
 )
 from skill_eval.calibration.calibrator import CalibrationChecker
 from skill_eval.models import (
@@ -381,12 +377,6 @@ class TestConstraintFiltering:
             check_method=CheckMethod.LLM_JUDGE,
         )
 
-    @pytest.fixture(autouse=True)
-    def _clear_applicability_cache(self):
-        """P0-1c: 模块级缓存跨测试会污染,每个测试前清空。"""
-        clear_applicability_cache()
-        yield
-
     def test_prohibitive_kept_without_llm(self, mocker):
         """禁止性词(禁止/严禁/不得…)确定性高,不过 LLM 直接保留。"""
         spy = mocker.patch("skill_eval.compliance.checker.call_claude")
@@ -454,71 +444,8 @@ class TestConstraintFiltering:
         texts = [i.instruction_text for i in filtered]
         assert "禁止跳过" in texts
         assert "必须使用 UTF-8" in texts
-        # P0-1c: self-consistency 把 2 条"必须"候选打包,判 N 次(N=_APPLICABILITY_VOTES)
-        assert spy.call_count == _APPLICABILITY_VOTES
-
-    def test_self_consistency_majority_filters(self, mocker):
-        """P0-1c: N 次采样多数判非可遵循 → 剔除(单次抽签可能错,多数票稳)。"""
-        mocker.patch(
-            "skill_eval.compliance.checker.call_claude",
-            side_effect=[
-                '[{"index": 0, "applicable": false}]',
-                '[{"index": 0, "applicable": false}]',
-                '[{"index": 0, "applicable": true}]',  # 仅 1 票说可遵循
-            ],
-        )
-        checker = ComplianceChecker()
-        instructions = [self._constraint("必须先读 references/x.md")]
-        filtered, n = checker._filter_constraint_candidates(instructions, model=None)
-        assert n == 1  # 多数(2/3)判非可遵循 → 剔除
-        assert len(filtered) == 0
-
-    def test_self_consistency_majority_keeps(self, mocker):
-        """P0-1c: N 次采样多数判可遵循 → 保留。"""
-        mocker.patch(
-            "skill_eval.compliance.checker.call_claude",
-            side_effect=[
-                '[{"index": 0, "applicable": true}]',
-                '[{"index": 0, "applicable": true}]',
-                '[{"index": 0, "applicable": false}]',  # 仅 1 票说非可遵循
-            ],
-        )
-        checker = ComplianceChecker()
-        instructions = [self._constraint("必须使用 UTF-8 编码")]
-        filtered, n = checker._filter_constraint_candidates(instructions, model=None)
-        assert n == 0  # 多数(2/3)判可遵循 → 保留
-        assert len(filtered) == 1
-
-    def test_cache_hit_skips_recompute(self, mocker):
-        """P0-1c: 同候选二次过滤命中缓存,call_claude 不再调(filtered_count 确定一致)。"""
-        spy = mocker.patch(
-            "skill_eval.compliance.checker.call_claude",
-            return_value='[{"index": 0, "applicable": false}]',
-        )
-        checker = ComplianceChecker()
-        instructions = [self._constraint("必须先读 references/cache.md")]
-        f1, n1 = checker._filter_constraint_candidates(instructions, model=None)
-        calls_after_first = spy.call_count
-        assert calls_after_first == _APPLICABILITY_VOTES  # 首次判 N 次
-        f2, n2 = checker._filter_constraint_candidates(instructions, model=None)
-        assert spy.call_count == calls_after_first  # 二次命中缓存,不再调
-        assert (f1, n1) == (f2, n2)  # 结果一致 → filtered_count 跨 run 确定
-
-    def test_too_few_samples_keeps_all(self, mocker):
-        """P0-1c: 成功样本 < 半数请求 → 保守全保留(不据薄证据剔)。"""
-        mocker.patch(
-            "skill_eval.compliance.checker.call_claude",
-            side_effect=[
-                RuntimeError("down"),
-                '[{"index": 0, "applicable": false}]',
-                RuntimeError("down"),
-            ],
-        )
-        checker = ComplianceChecker()
-        instructions = [self._constraint("必须先读 references/x.md")]
-        filtered, n = checker._filter_constraint_candidates(instructions, model=None)
-        assert n == 0  # 仅 1/3 成功,太薄 → 保守保留
-        assert len(filtered) == 1
+        # 单次 call_claude 判整批"必须"候选(parser 修后该结构化判定确定,无需自洽)
+        spy.assert_called_once()
 
 
 class TestParseRobustness:
