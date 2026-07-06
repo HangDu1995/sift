@@ -129,6 +129,52 @@ class TestInstructionExtractor:
             assert r.check_method == CheckMethod.TOOL_CALL_CHECK
             assert r.params.get("script_path"), "REFERENCE_USAGE 须带 script_path"
 
+    def test_reference_usage_category_collapse(self):
+        """路由型 skill 的类别级 references/<X>(无扩展名)是互斥备选 → 合并成一条;
+        否则 N 类里 N-1 个不适用的算成假 FAIL(ascendc-tiling-design 曾 1/7 假红灯)。"""
+        ext = InstructionExtractor()
+        body = (
+            "## References\n"
+            "- reduction 算子见 references/reduction\n"
+            "- broadcast 算子见 references/broadcast\n"
+            "- elementwise 算子见 references/elewise\n"
+        )
+        refs = [c for c in ext.extract(body) if c.source == InstructionSource.REFERENCE_USAGE]
+        # 3 个类别级 → 合并成 1 条(查任意 references/ 读),不是 3 条
+        assert len(refs) == 1
+        assert refs[0].check_method == CheckMethod.TOOL_CALL_CHECK
+        assert refs[0].params.get("script_path") == "references/"
+
+    def test_reference_usage_file_level_individual(self):
+        """文件级 references/<X>.md 是独立必读,各自一条(读 1/3 不该算全过)。"""
+        ext = InstructionExtractor()
+        body = (
+            "## References\n"
+            "读 references/architecture.md 和 references/api.md 和 references/conventions.md\n"
+        )
+        refs = [c for c in ext.extract(body) if c.source == InstructionSource.REFERENCE_USAGE]
+        assert len(refs) == 3  # 3 个文件级,各自一条(不合并)
+        paths = sorted(r.params.get("script_path") for r in refs)
+        assert paths == [
+            "references/api.md",
+            "references/architecture.md",
+            "references/conventions.md",
+        ]
+
+    def test_reference_usage_category_mixed(self):
+        """类别级 + 文件级混存:类别合并成 1 条,文件各自一条。"""
+        ext = InstructionExtractor()
+        body = (
+            "## References\n"
+            "- 各类算子见 references/reduction / references/broadcast\n"
+            "- 通用规范必读 references/conventions.md\n"
+        )
+        refs = [c for c in ext.extract(body) if c.source == InstructionSource.REFERENCE_USAGE]
+        # 1 条合并的类别(reduction+broadcast)+ 1 条文件(conventions.md)
+        assert len(refs) == 2
+        paths = sorted(r.params.get("script_path") for r in refs)
+        assert paths == ["references/", "references/conventions.md"]
+
     def test_empty_body(self):
         ext = InstructionExtractor()
         checks = ext.extract("")
@@ -315,6 +361,33 @@ class TestComplianceChecker:
         trace_other = [{"name": "Read", "input_summary": "reading some_other.md"}]
         item2 = checker._check_instruction(
             inst, transcript="", output_dir=tmp_path, model=None, timeout=5, tool_trace=trace_other
+        )
+        assert item2.followed is False
+
+    def test_reference_usage_category_grouped_check(self, tmp_path: Path):
+        """合并后的类别指令(script_path='references/'):读任一 references/ 文件 → followed;
+        啥都没读(捏造)→ not followed。修路由型 skill 假红灯:softmax 属 reduction,
+        只读 reduction 是对的,合并后是 1/1 而非误导的 1/7。"""
+        checker = ComplianceChecker()
+        inst = InstructionCheck(
+            source=InstructionSource.REFERENCE_USAGE,
+            instruction_text="Consult reference material (7 alternative category references)",
+            section="References",
+            priority=InstructionPriority.RECOMMENDED,
+            check_method=CheckMethod.TOOL_CALL_CHECK,
+            params={"script_path": "references/"},
+        )
+        # Claude 路由到 reduction,读了 reduction 文件 → 过(就算只读 1 类也算对)
+        trace_read = [{"name": "Read", "input_summary": '{"file_path": "/x/outputs/references/reduction/patterns.md"}'}]
+        item = checker._check_instruction(
+            inst, transcript="", output_dir=tmp_path, model=None, timeout=5, tool_trace=trace_read
+        )
+        assert item.followed is True
+        assert item.source == "programmatic"
+        # 啥参考都没读(只读了产出物)→ 不过(反捏造信号)
+        trace_none = [{"name": "Read", "input_summary": '{"file_path": "/x/outputs/operator_spec.md"}'}]
+        item2 = checker._check_instruction(
+            inst, transcript="", output_dir=tmp_path, model=None, timeout=5, tool_trace=trace_none
         )
         assert item2.followed is False
     def test_high_confidence(self):

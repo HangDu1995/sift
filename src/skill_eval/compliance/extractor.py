@@ -158,7 +158,36 @@ class InstructionExtractor:
     def _extract_reference_usage(self, body: str) -> list[InstructionCheck]:
         checks: list[InstructionCheck] = []
         refs = re.findall(r"references/[\w\-\.]+|scripts/[\w\-\.]+", body)
+        # 区分两类(P0-1d follow-up,修路由型 skill 假红灯 —— 见 §41 观察 1):
+        # - 类别级 references/<X>(X 无扩展名 = 目录/类别):路由型 skill 的**互斥备选**,
+        #   每任务只 1 类适用。合并成一条"查阅参考资料"(查任意 references/ 读)。
+        #   否则 N 类互斥里 N-1 个不适用的会被算成假 FAIL —— ascendc-tiling-design
+        #   曾 1/7 假红灯:softmax 属 reduction,Claude 只读 reduction 是对的,另 6 类
+        #   本就不适用却算 FAIL,prog 率被虚低。
+        # - 文件级(references/<X>.md 或 scripts/<X>):独立必读,各自一条查真 Read
+        #   (读 1/3 不该算全过)。
+        category_refs: set[str] = set()
+        file_refs: set[str] = set()
         for ref in set(refs):
+            seg = ref.split("/")[-1]
+            if ref.startswith("references/") and "." not in seg:
+                category_refs.add(ref)
+            else:
+                file_refs.add(ref)
+        if category_refs:
+            checks.append(InstructionCheck(
+                source=InstructionSource.REFERENCE_USAGE,
+                instruction_text=(
+                    f"Consult reference material ({len(category_refs)} alternative category references)"
+                ),
+                section="References",
+                priority=InstructionPriority.RECOMMENDED,
+                # 路由型 skill 提取期无法知道任务属哪类,只查"有没有查参考"(反捏造语义)。
+                # 读哪类由 Claude 路由决定;误路由(读错类)属内容/scoring,不是 compliance。
+                check_method=CheckMethod.TOOL_CALL_CHECK,
+                params={"script_path": "references/"},
+            ))
+        for ref in file_refs:
             checks.append(InstructionCheck(
                 source=InstructionSource.REFERENCE_USAGE,
                 instruction_text=f"Use reference file: {ref}",
