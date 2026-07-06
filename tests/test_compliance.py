@@ -127,6 +127,11 @@ class TestInstructionExtractor:
         refs = [c for c in checks if c.source == InstructionSource.REFERENCE_USAGE]
         assert len(refs) > 0
         assert any("guide.md" in c.instruction_text for c in refs)
+        # P0-1d: REFERENCE_USAGE 走 TOOL_CALL_CHECK 查真 Read/调用(非 FILE_PRESENCE 恒真),
+        # extractor 须发 script_path 供 _check_tool_call 匹配 tool_trace 入参
+        for r in refs:
+            assert r.check_method == CheckMethod.TOOL_CALL_CHECK
+            assert r.params.get("script_path"), "REFERENCE_USAGE 须带 script_path"
 
     def test_empty_body(self):
         ext = InstructionExtractor()
@@ -259,8 +264,31 @@ class TestComplianceChecker:
         )
         assert report.compliance_rate == 0.5
 
-
-class TestCalibrationChecker:
+    def test_reference_usage_tool_call_check(self, tmp_path: Path):
+        """P0-1d: REFERENCE_USAGE 走 TOOL_CALL_CHECK —— tool_trace 里有 Read(ref) → followed;
+        没读该 ref → not followed。替代旧 FILE_PRESENCE(P0-2 拷文件后恒真、无意义)。"""
+        checker = ComplianceChecker()
+        inst = InstructionCheck(
+            source=InstructionSource.REFERENCE_USAGE,
+            instruction_text="Use reference file: references/guide.md",
+            section="References",
+            priority=InstructionPriority.RECOMMENDED,
+            check_method=CheckMethod.TOOL_CALL_CHECK,
+            params={"script_path": "references/guide.md"},
+        )
+        # 读过该 ref → followed
+        trace_read = [{"name": "Read", "input_summary": "reading references/guide.md"}]
+        item = checker._check_instruction(
+            inst, transcript="", output_dir=tmp_path, model=None, timeout=5, tool_trace=trace_read
+        )
+        assert item.followed is True
+        assert item.source == "programmatic"
+        # 没读该 ref(读了别的)→ not followed
+        trace_other = [{"name": "Read", "input_summary": "reading some_other.md"}]
+        item2 = checker._check_instruction(
+            inst, transcript="", output_dir=tmp_path, model=None, timeout=5, tool_trace=trace_other
+        )
+        assert item2.followed is False
     def test_high_confidence(self):
         cal = CalibrationChecker()
         grading = GradingResult(

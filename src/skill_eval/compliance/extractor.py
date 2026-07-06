@@ -164,7 +164,10 @@ class InstructionExtractor:
                 instruction_text=f"Use reference file: {ref}",
                 section="References",
                 priority=InstructionPriority.RECOMMENDED,
-                check_method=CheckMethod.FILE_PRESENCE,
-                params={"path": ref},
+                # P0-1d: 查"Claude 真读了/调用了没",不是"文件在不在 output_dir"。
+                # 后者因 P0-2 把 references 拷进考场而恒真、无意义。TOOL_CALL_CHECK +
+                # script_path 让 _check_tool_call 匹配 tool_trace 入参里的该路径。
+                check_method=CheckMethod.TOOL_CALL_CHECK,
+                params={"script_path": ref},
             ))
         return checks
