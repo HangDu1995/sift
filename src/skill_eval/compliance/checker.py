@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import threading
 from pathlib import Path
 
 from skill_eval.models import (
@@ -23,6 +25,18 @@ _APPLICABILITY_TIMEOUT = 60
 # P0-1b: 禁止性词确定性高(CONSTRAINT 语义本义),不过 LLM 精筛;仅"必须"类需精筛。
 _CONSTRAINT_MUST_KEYWORD = "必须"
 _PROHIBITIVE_CN: tuple[str, ...] = ("禁止", "严禁", "不得", "不应", "不可")
+# P0-1c: self-consistency —— 适用性判定非确定(§39 实测 filtered_count [6,6,0] 漂移),
+# 单次抽签可能错。N 次采样每条候选取多数票(治漂移 + 提精度),再按 SKILL.md 内容 hash
+# 缓存多数结果(同 skill 只判一次,跨 run 复用 → filtered_count 确定一致)。
+_APPLICABILITY_VOTES = 3
+_APPLICABILITY_CACHE: dict[str, list[bool]] = {}
+_APPLICABILITY_LOCK = threading.Lock()
+
+
+def clear_applicability_cache() -> None:
+    """清空适用性判定缓存(测试隔离用)。"""
+    with _APPLICABILITY_LOCK:
+        _APPLICABILITY_CACHE.clear()
 
 
 class ComplianceChecker:
@@ -128,7 +142,13 @@ class ComplianceChecker:
             return instructions, 0
 
         candidates = [instructions[i] for i in must_indices]
-        applicable_mask = self._llm_judge_constraint_applicability(candidates, model)
+        cache_key = self._candidate_cache_key(candidates, model)
+        with _APPLICABILITY_LOCK:
+            applicable_mask = _APPLICABILITY_CACHE.get(cache_key)
+        if applicable_mask is None:
+            applicable_mask = self._llm_judge_constraint_applicability(candidates, model)
+            with _APPLICABILITY_LOCK:
+                _APPLICABILITY_CACHE[cache_key] = applicable_mask
 
         removed = {
             global_i for local_i, global_i in enumerate(must_indices)
@@ -140,16 +160,30 @@ class ComplianceChecker:
         filtered = [inst for i, inst in enumerate(instructions) if i not in removed]
         return filtered, len(removed)
 
+    @staticmethod
+    def _candidate_cache_key(candidates: list[InstructionCheck], model: str | None) -> str:
+        """P0-1c: 候选指令文本 + model 的 hash → 缓存键。同 SKILL.md → 同键 → 跨 run 复用。"""
+        content = f"model={model or 'default'}\n" + "\n".join(
+            c.instruction_text for c in candidates
+        )
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
     def _llm_judge_constraint_applicability(
         self, candidates: list[InstructionCheck], model: str | None
     ) -> list[bool]:
-        """LLM 判每条 CONSTRAINT 候选是否为「可遵循的硬约束」。
+        """P0-1c: self-consistency —— N 次采样每条候选取多数票。
+
+        可遵循性判定标准不变(见下)。原本单次 call_claude 非确定(§39 实测同 skill
+        三 run filtered_count [6,6,0]),单次抽签可能错。现采 N 次样,每条候选按"说
+        applicable 的票数"取多数:过半(≥ samples/2,平票保守保留)→ 保留,否则剔除。
+        样本不足(成功 < 半数请求)→ 保守全保留。全失败 → 退到关键词法现状(全保留)。
 
         可遵循:强制要求执行者做/不做某具体行为,可在执行过程里检验(如"必须使用 UTF-8"
         "必须按步骤顺序执行""必须先读 design.md 作为强制前置")。非可遵循:文档导航/概述
         (表格括号附注"(必须先读)"、章节标题"(所有类别必须)"、描述语"必须考虑和完成的"),
         不是对执行者的可检验硬性要求。返回与 candidates 等长 bool 列表(True=保留)。
         """
+        n = len(candidates)
         instruction_list = "".join(
             f"[{i}] {inst.instruction_text}\n" for i, inst in enumerate(candidates)
         )
@@ -162,18 +196,34 @@ class ComplianceChecker:
             "- ❌ 非可遵循:文档导航或概述性语句,不是可检验的执行约束。例如表格单元格里的"
             "括号附注「(⚠️ 必须先读)」、章节标题「(所有类别必须)」、描述语「必须考虑和完成的」"
             "——这些是提示读者去看哪、或概述下文要讲什么,不是对执行者的硬性要求。\n\n"
-            f"## 候选指令 ({len(candidates)} 条)\n{instruction_list}\n"
+            f"## 候选指令 ({n} 条)\n{instruction_list}\n"
             "## 输出格式\n"
             "只返回 JSON 数组,每元素:{\"index\": 0, \"applicable\": true/false}\n"
         )
-        try:
-            result_text = call_claude(
-                prompt, model=model, timeout=_APPLICABILITY_TIMEOUT, max_turns=1
-            )
-            return self._parse_applicability(result_text, len(candidates))
-        except RuntimeError:
-            # LLM 不可用:保守保留全部(不误剔,退到关键词法现状)
-            return [True] * len(candidates)
+        votes = [0] * n  # votes[i] = 说 applicable=True 的样本数
+        samples = 0
+        for _ in range(_APPLICABILITY_VOTES):
+            try:
+                result_text = call_claude(
+                    prompt, model=model, timeout=_APPLICABILITY_TIMEOUT, max_turns=1
+                )
+            except RuntimeError:
+                continue  # 跳过失败样本,用剩余
+            sample = self._parse_applicability(result_text, n)
+            for i, applicable in enumerate(sample):
+                if applicable:
+                    votes[i] += 1
+            samples += 1
+
+        if samples == 0:
+            # LLM 全不可用:保守保留全部(不误剔,退到关键词法现状)
+            return [True] * n
+        min_needed = (_APPLICABILITY_VOTES + 1) // 2  # ceil(半数)
+        if samples < min_needed:
+            # 成功样本太薄(< 半数请求):不据此剔,保守全保留
+            return [True] * n
+        threshold = samples / 2  # >= → 保留(平票保守保留)
+        return [votes[i] >= threshold for i in range(n)]
 
     @staticmethod
     def _parse_applicability(text: str, n: int) -> list[bool]:
