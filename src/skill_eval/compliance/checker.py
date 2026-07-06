@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import threading
 from pathlib import Path
 
@@ -37,6 +36,45 @@ def clear_applicability_cache() -> None:
     """清空适用性判定缓存(测试隔离用)。"""
     with _APPLICABILITY_LOCK:
         _APPLICABILITY_CACHE.clear()
+
+
+def _extract_first_balanced(text: str, open_ch: str = "[", close_ch: str = "]") -> str | None:
+    """提取首个平衡的 JSON 数组/对象(字符串感知)。
+
+    旧贪婪正则 ``\\[[\\s\\S]*\\]`` 会从首个 ``[`` 一路吞到文本**末个** ``]``。当 LLM
+    在 JSON 之后的 reasoning 里用 ``[0]-[4]``/``[5]`` 引用条目(实测 GLM 常这么做),
+    贪婪正则把 JSON+reasoning+尾 ``]`` 全包进来 → ``json.loads`` 失败 → 调用方默认
+    全保留(适用性)或全 False(遵循),被误判成"LLM 漂移"(实为 parser bug,见探针)。
+
+    本函数按括号深度配平取首个完整结构,且跳过 JSON 字符串内部的括号(evidence 里
+    可能含 ``[N]``/``}``)。不平衡或不存在返回 None。
+    """
+    start = text.find(open_ch)
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if escape:
+            escape = False
+            continue
+        if c == "\\":
+            escape = True
+            continue
+        if c == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if c == open_ch:
+            depth += 1
+        elif c == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
 
 
 class ComplianceChecker:
@@ -229,11 +267,11 @@ class ComplianceChecker:
     def _parse_applicability(text: str, n: int) -> list[bool]:
         """解析 LLM 适用性判定;默认保留(保守,不误剔)。"""
         mask = [True] * n
-        m = re.search(r"\[[\s\S]*\]", text)
-        if not m:
+        arr_str = _extract_first_balanced(text)
+        if arr_str is None:
             return mask
         try:
-            items = json.loads(m.group())
+            items = json.loads(arr_str)
         except json.JSONDecodeError:
             return mask
         if not isinstance(items, list):
@@ -390,12 +428,12 @@ class ComplianceChecker:
             for inst in instructions
         ]
 
-        array_match = re.search(r"\[[\s\S]*\]", text)
-        if not array_match:
+        array_str = _extract_first_balanced(text)
+        if array_str is None:
             return defaults
 
         try:
-            items = json.loads(array_match.group())
+            items = json.loads(array_str)
         except json.JSONDecodeError:
             return defaults
 
@@ -438,9 +476,9 @@ class ComplianceChecker:
 
         try:
             result_text = call_claude(prompt, model=model, timeout=timeout, max_turns=1)
-            match = re.search(r"\{[^}]+\}", result_text, re.DOTALL)
-            if match:
-                data = json.loads(match.group())
+            obj_str = _extract_first_balanced(result_text, "{", "}")
+            if obj_str:
+                data = json.loads(obj_str)
                 return ComplianceResultItem(
                     instruction=instruction,
                     followed=bool(data.get("followed", False)),

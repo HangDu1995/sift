@@ -10,6 +10,7 @@ from skill_eval.compliance.extractor import InstructionExtractor
 from skill_eval.compliance.checker import (
     ComplianceChecker,
     _APPLICABILITY_VOTES,
+    _extract_first_balanced,
     clear_applicability_cache,
 )
 from skill_eval.calibration.calibrator import CalibrationChecker
@@ -490,3 +491,77 @@ class TestConstraintFiltering:
         filtered, n = checker._filter_constraint_candidates(instructions, model=None)
         assert n == 0  # 仅 1/3 成功,太薄 → 保守保留
         assert len(filtered) == 1
+
+
+class TestParseRobustness:
+    """贪婪正则 bug 回归(P-fix):LLM 在 JSON 后用 [N]/[0]-[4] 引用条目时,
+    旧贪婪正则 \\[[\\s\\S]*\\] 吞到文本末个 ] → json.loads 失败 → 默认全保留(适用性)/
+    全 False(遵循)。这被误判成"LLM 漂移"(探针 10/10 证实实为 parser bug)。新平衡
+    提取器须按括号深度配平 + 跳过字符串内括号,正确解析。"""
+
+    def test_extract_balanced_arrays(self):
+        assert _extract_first_balanced("[1, 2, 3]") == "[1, 2, 3]"
+        # evidence 字符串里的 [0] 不算结构括号
+        assert _extract_first_balanced('[{"e": "[0] 处"}]') == '[{"e": "[0] 处"}]'
+        # markdown 围栏
+        assert _extract_first_balanced("```json\n[1, 2]\n```") == "[1, 2]"
+        # 嵌套数组
+        assert _extract_first_balanced("[[1, 2], [3]]") == "[[1, 2], [3]]"
+
+    def test_extract_balanced_objects(self):
+        assert _extract_first_balanced('{"a": 1}', "{", "}") == '{"a": 1}'
+        # evidence 含 } 须不被截断(旧 [^}]+ 会截在首个 })
+        assert _extract_first_balanced('{"e": "dict {k: v}"}', "{", "}") == '{"e": "dict {k: v}"}'
+
+    def test_extract_balanced_edge_cases(self):
+        assert _extract_first_balanced("no array here") is None
+        assert _extract_first_balanced("[1, 2,") is None  # 不平衡
+        assert _extract_first_balanced("") is None
+        # 转义引号不破坏字符串边界
+        assert _extract_first_balanced(r'["a\"b]"]') == r'["a\"b]"]'
+
+    def test_applicability_bracket_reasoning_not_default_keep(self):
+        """GLM 返回 JSON + reasoning 含 [0]-[1] 引用 → 须解析为实际值(全 false),
+        不是解析失败回退的全保留。这是 §39 [6,6,0] 漂移的真因。"""
+        text = (
+            '[{"index": 0, "applicable": false},'
+            ' {"index": 1, "applicable": false}]\n\n'
+            "判定依据:\n- [0]-[1] 均为表格注记「(⚠️ 必须先读)」,非可遵循。"
+        )
+        mask = ComplianceChecker._parse_applicability(text, 2)
+        assert mask == [False, False]  # 旧贪婪正则:FAIL → 默认 [True, True]
+
+    def test_batch_bracket_evidence_not_default_false(self):
+        """batch evidence 含 [0] 引用 → 须正确解析,不退到默认全 False。"""
+        insts = [
+            InstructionCheck(
+                source=InstructionSource.CONSTRAINT, instruction_text="t0", section="S",
+                priority=InstructionPriority.REQUIRED, check_method=CheckMethod.LLM_JUDGE,
+            ),
+            InstructionCheck(
+                source=InstructionSource.CONSTRAINT, instruction_text="t1", section="S",
+                priority=InstructionPriority.REQUIRED, check_method=CheckMethod.LLM_JUDGE,
+            ),
+        ]
+        text = (
+            '[{"index": 0, "followed": true, "evidence": "见 [0] 处确认", "confidence": 0.9},'
+            ' {"index": 1, "followed": false, "evidence": "未提及", "confidence": 0.8}]'
+        )
+        items = ComplianceChecker._parse_batch_result(text, insts)
+        assert items[0].followed is True
+        assert items[1].followed is False
+
+    def test_single_brace_in_evidence(self, mocker):
+        """单条判定 evidence 含 } → 须正确解析(旧 [^}]+ 在首个 } 截断 → 解析失败)。"""
+        mocker.patch(
+            "skill_eval.compliance.checker.call_claude",
+            return_value='{"followed": true, "evidence": "dict {k: v} ok", "confidence": 0.9}',
+        )
+        checker = ComplianceChecker()
+        inst = InstructionCheck(
+            source=InstructionSource.CONSTRAINT, instruction_text="t", section="S",
+            priority=InstructionPriority.REQUIRED, check_method=CheckMethod.LLM_JUDGE,
+        )
+        item = checker._check_llm_single(inst, "transcript", None, 5)
+        assert item.followed is True
+        assert "dict {k: v} ok" in item.evidence
