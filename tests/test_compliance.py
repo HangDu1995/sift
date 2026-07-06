@@ -260,6 +260,38 @@ class TestComplianceChecker:
         )
         assert report.compliance_rate == 0.5
 
+    def test_dual_rate_split(self, mocker, tmp_path: Path):
+        """P0-1e: compliance_rate 拆 _programmatic(稳)+ _llm(漂,只看方向)。
+        混合场景两率分别报;某类无指令则该率 None(不报假 0)。"""
+        mocker.patch(
+            "skill_eval.compliance.checker.call_claude",
+            return_value='[{"index": 0, "followed": true, "evidence": "ok", "confidence": 0.9}]',
+        )
+        checker = ComplianceChecker()
+        instructions = [
+            InstructionCheck(  # 程序化,transcript 没提 Write → 不过
+                source=InstructionSource.TOOL_REQUIREMENT,
+                instruction_text="Use Write", section="S",
+                priority=InstructionPriority.REQUIRED,
+                check_method=CheckMethod.TOOL_CALL_CHECK,
+                params={"tool_name": "Write"},
+            ),
+            InstructionCheck(  # LLM_JUDGE,mock 判过
+                source=InstructionSource.HEADING_STEP,
+                instruction_text="Analyze the data", section="S",
+                priority=InstructionPriority.REQUIRED,
+                check_method=CheckMethod.LLM_JUDGE,
+            ),
+        ]
+        report = checker.check(
+            instructions=instructions,
+            transcript="nothing about tools here",
+            output_dir=tmp_path,
+        )
+        assert report.compliance_rate == 0.5  # 总:程序化 0 + LLM 1 = 1/2
+        assert report.compliance_rate_programmatic == 0.0  # Write 不过 → 0/1
+        assert report.compliance_rate_llm == 1.0  # mock 判过 → 1/1
+
     def test_reference_usage_tool_call_check(self, tmp_path: Path):
         """P0-1d: REFERENCE_USAGE 走 TOOL_CALL_CHECK —— tool_trace 里有 Read(ref) → followed;
         没读该 ref → not followed。替代旧 FILE_PRESENCE(P0-2 拷文件后恒真、无意义)。"""

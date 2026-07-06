@@ -128,6 +128,16 @@ class ComplianceChecker:
         required_items = [i for i in items if i.instruction.priority == InstructionPriority.REQUIRED]
         required_followed = sum(1 for i in required_items if i.followed)
 
+        # P0-1e: 按检查来源拆双率(programmatic 稳 / llm 漂)。None = 该类无指令。
+        prog_items = [i for i in items if i.source == "programmatic"]
+        llm_items = [i for i in items if i.source == "llm"]
+        prog_rate = (
+            sum(1 for i in prog_items if i.followed) / len(prog_items) if prog_items else None
+        )
+        llm_rate = (
+            sum(1 for i in llm_items if i.followed) / len(llm_items) if llm_items else None
+        )
+
         return ComplianceReport(
             skill_name="",
             total_instructions=total,
@@ -136,6 +146,8 @@ class ComplianceChecker:
             checks=items,
             warnings=[],
             filtered_count=filtered_count,
+            compliance_rate_programmatic=prog_rate,
+            compliance_rate_llm=llm_rate,
         )
 
     @staticmethod
