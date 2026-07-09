@@ -9,6 +9,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from skill_eval.models import ToolCallRecord
+
 _LINE_NUM_RE = re.compile(r"^\s*\d+\t", re.MULTILINE)
 
 _BASH_WRITE_RE = re.compile(
@@ -33,6 +35,9 @@ class SessionDigest(BaseModel):
     produced_files: list[FileContent] = Field(default_factory=list)
     unreconstructed: list[str] = Field(default_factory=list)
     commands: list[Command] = Field(default_factory=list)
+    # 以下两字段为 audit 命令重建(工具指令对账 / 文本回放)预留,默认空,非侵入。
+    tool_trace: list[ToolCallRecord] = Field(default_factory=list)
+    transcript_text: str = ""
 
     @property
     def manifest(self) -> set[str]:
@@ -111,6 +116,8 @@ def build_digest(transcript_path: Path, root: str | None = None) -> SessionDiges
     bash_touched: set[str] = set()
     commands: list[Command] = []
     all_paths: list[str] = []
+    tool_trace: list[ToolCallRecord] = []
+    transcript_text_parts: list[str] = []
 
     def remember(p: str) -> None:
         if p and p not in all_paths:
@@ -136,11 +143,26 @@ def build_digest(transcript_path: Path, root: str | None = None) -> SessionDiges
         if role != "assistant" or not isinstance(content, list):
             continue
         for b in content:
-            if not isinstance(b, dict) or b.get("type") != "tool_use":
+            if not isinstance(b, dict):
+                continue
+            btype = b.get("type")
+            if btype == "text":
+                if b.get("text"):
+                    transcript_text_parts.append(b.get("text", ""))
+                continue
+            if btype != "tool_use":
                 continue
             name = b.get("name", "")
             inp = b.get("input", {}) or {}
             tid = b.get("id", "")
+            # 无条件收集所有 tool_use 块(在按工具名分支之前):
+            # 现有分支只覆盖 Skill/Read/Write/Edit/MultiEdit/Bash,
+            # Glob/Grep/WebSearch 等会被忽略。tool_trace 必须收全部,
+            # audit 的工具指令对账才能按任意工具名匹配。
+            tool_trace.append(ToolCallRecord(
+                name=name,
+                input_summary=json.dumps(b.get("input") or {}, ensure_ascii=False)[:200],
+            ))
             if name == "Skill":
                 if not skill_used:
                     skill_used = inp.get("skill") or inp.get("name")
@@ -213,4 +235,5 @@ def build_digest(transcript_path: Path, root: str | None = None) -> SessionDiges
         skill_used=skill_used, user_turns=user_turns,
         input_files=inputs, produced_files=produced,
         unreconstructed=unrecon, commands=commands,
+        tool_trace=tool_trace, transcript_text="\n".join(transcript_text_parts),
     )
