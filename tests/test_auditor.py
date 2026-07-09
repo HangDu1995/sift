@@ -10,17 +10,19 @@ _judge_conditional: 条件性指令(TOOL_REQUIREMENT / REFERENCE_USAGE)的三态
 - 未命中 + LLM 抛 RuntimeError   → 保守 FAIL(低置信度)
 - 未命中 + LLM 解析失败          → 保守 FAIL
 - 混合(命中 PASS + 未命中走 LLM)→ 各自正确 verdict
-- 批量超 30 → 溢出条保守 FAIL("批量超限未判")
+- 批量超 30 → **分批循环处理**(每批 30 条,处理全部,无"批量超限"保守 FAIL)
+- 空 prohibition/step 桶 → 不调 call_claude(短路返回 [])
 - evidence 中文 / category 全 CONDITIONAL / transcript 字段填了 transcript_name
 """
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
-from skill_eval.audit.auditor import TranscriptAuditor
+from skill_eval.audit.auditor import _MAX_LLM_IN_BATCH, TranscriptAuditor
 from skill_eval.models import InstructionCheck
 from skill_eval.models.audit_models import AuditCategory, AuditReport, AuditVerdict
 from skill_eval.models.enums import (
@@ -278,25 +280,35 @@ class TestMixed:
             assert f.derived_from_transcript is False
 
 
-class TestBatchOverflow:
-    def test_over_30_overflow_conservative_fail(self, monkeypatch) -> None:
-        """32 条全未命中:前 30 走 LLM,后 2 → 保守 FAIL "批量超限未判"。"""
-        # LLM 只回 index 0;其余 1-29 未被提及 → None → 保守 FAIL(LLM 判定失败)
-        monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
-            lambda *a, **k: '[{"index": 0, "applicable": true}]',
-        )
+class TestBatching:
+    """分批判定:>_MAX_LLM_IN_BATCH(30)条时分批循环处理全部,无"批量超限"保守 FAIL。"""
+
+    def test_conditional_over_30_batched_all_judged(self, monkeypatch) -> None:
+        """32 条全未命中:分 2 批(30+2)各调一次 LLM,32 条全判,无溢出保守 FAIL。
+
+        mock 按每批 prompt 的条数返回全 applicable=false → 全 N/A;验证 call_claude
+        被调 2 次、32 条全 N/A、无"批量超限"/"保守"FAIL。
+        """
+        calls: list[int] = []
+
+        def fake(prompt, *a, **k):
+            m = re.search(r"待判指令 \((\d+) 条\)", prompt)
+            bn = int(m.group(1)) if m else 0
+            calls.append(bn)
+            return json.dumps([{"index": i, "applicable": False} for i in range(bn)])
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
         auditor = TranscriptAuditor()
         insts = [_tool_inst(tool_name=f"Tool{i}") for i in range(32)]
 
         findings = auditor._judge_conditional(insts, [], "大场景", "big.jsonl")
 
         assert len(findings) == 32
-        overflow = [f for f in findings if "批量超限" in f.evidence]
-        assert len(overflow) == 2
-        assert all(f.verdict == AuditVerdict.FAIL for f in overflow)
-        assert all(f.confidence <= 0.5 for f in overflow)
-        assert all(f.transcript == "big.jsonl" for f in overflow)
+        assert calls == [30, 2]  # 分 30 + 2 两批
+        # 全 N/A(applicable=false),无保守 FAIL / 无"批量超限"
+        assert all(f.verdict == AuditVerdict.NA for f in findings)
+        assert all("批量超限" not in f.evidence for f in findings)
+        assert all("保守" not in f.evidence for f in findings)
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +478,56 @@ class TestJudgeProhibition:
         assert f.source == "ANTI_FABRICATION"
         assert f.category == AuditCategory.PROHIBITION
 
+    def test_empty_instructions_no_llm(self, monkeypatch) -> None:
+        """空 prohibition 桶(0 条)→ 不调 call_claude,直接返回 [](短路)。
+
+        回归 Issue 1:空桶仍 spawn claude -p(生成"待判 0 条"prompt)浪费调用,
+        与 audit"零重跑低成本"相悖。短路后不再调 LLM。
+        """
+        calls = {"n": 0}
+
+        def fake(*a, **k):
+            calls["n"] += 1
+            return "[]"
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        auditor = TranscriptAuditor()
+
+        findings = auditor._judge_prohibition([], "某执行记录", "empty.jsonl")
+
+        assert findings == []
+        assert calls["n"] == 0  # 空桶短路,未 spawn LLM
+
+    def test_over_30_batched_all_judged(self, monkeypatch) -> None:
+        """35 条禁令:分 2 批(30+5)处理,全部判 PASS,无"批量超限"保守 FAIL。
+
+        回归 Issue 2:旧实现单次 30 截断、超限保守 FAIL("批量超限未判"),假 FAIL
+        淹没真问题。分批后 35 条全判(mock 按批返回 violated=false → 全 PASS)。
+        """
+        calls: list[int] = []
+
+        def fake(prompt, *a, **k):
+            m = re.search(r"待判禁令 \((\d+) 条\)", prompt)
+            bn = int(m.group(1)) if m else 0
+            calls.append(bn)
+            return json.dumps([
+                {"index": i, "violated": False, "evidence": "未违反"}
+                for i in range(bn)
+            ])
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        auditor = TranscriptAuditor()
+        insts = [_prohibition_inst(text=f"禁令 #{i}") for i in range(35)]
+
+        findings = auditor._judge_prohibition(insts, "某执行记录", "batch.jsonl")
+
+        assert len(findings) == 35
+        assert calls == [30, 5]  # 分 30 + 5 两批
+        assert all(f.verdict == AuditVerdict.PASS for f in findings)
+        assert all(f.category == AuditCategory.PROHIBITION for f in findings)
+        assert all("批量超限" not in f.evidence for f in findings)
+        assert all("保守" not in f.evidence for f in findings)
+
 
 # ---------------------------------------------------------------------------
 # _judge_step: 步骤类(HEADING_STEP)三态判定
@@ -558,6 +620,61 @@ class TestJudgeStep:
         f = auditor._judge_step([_step_inst()], "某执行记录", "s.jsonl")[0]
         assert f.verdict == AuditVerdict.FAIL
         assert f.confidence <= 0.5
+
+    def test_empty_instructions_no_llm(self, monkeypatch) -> None:
+        """空 step 桶(0 条)→ 不调 call_claude,直接返回 [](短路)。
+
+        回归 Issue 1:空桶仍 spawn claude -p 浪费调用。短路后不再调 LLM。
+        """
+        calls = {"n": 0}
+
+        def fake(*a, **k):
+            calls["n"] += 1
+            return "[]"
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        auditor = TranscriptAuditor()
+
+        findings = auditor._judge_step([], "某执行记录", "empty.jsonl")
+
+        assert findings == []
+        assert calls["n"] == 0  # 空桶短路,未 spawn LLM
+
+    def test_over_60_batched_three_calls_index_mapping(self, monkeypatch) -> None:
+        """62 条步骤:分 3 批(30+30+2)处理,3 次 call_claude,全判且 index 不错位。
+
+        回归 Issue 2 + 验证分批易错点(index 映射):mock 按调用次序把全局位置写进
+        evidence(批 k 的本地 i → 全局 k*30+i),据此验证批间 index 映射——批 2 本地
+        [0] 正确落到全局 [30]、批 3 本地 [0]→[60],而非覆盖 [0]。错位会把某批结果
+        写回错位置或漏写,被 evidence 的 global# 与原位置不一致抓出。
+        """
+        calls: list[int] = []
+
+        def fake(prompt, *a, **k):
+            m = re.search(r"待判步骤 \((\d+) 条\)", prompt)
+            bn = int(m.group(1)) if m else 0
+            call_idx = len(calls)
+            start = call_idx * _MAX_LLM_IN_BATCH
+            calls.append(bn)
+            return json.dumps([
+                {"index": i, "verdict": "pass", "evidence": f"global#{start + i}"}
+                for i in range(bn)
+            ])
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        auditor = TranscriptAuditor()
+        insts = [_step_inst(text=f"步骤 #{i}") for i in range(62)]
+
+        findings = auditor._judge_step(insts, "某执行记录", "big.jsonl")
+
+        assert len(findings) == 62
+        assert calls == [30, 30, 2]  # 3 批
+        assert all(f.verdict == AuditVerdict.PASS for f in findings)
+        assert all("批量超限" not in f.evidence for f in findings)
+        # index 映射:evidence 的 global# 与原位置严格一致
+        # (批 2 本地[0]→全局[30]、批 3 本地[0]→[60],不错位、不覆盖)
+        for i, f in enumerate(findings):
+            assert f.evidence == f"global#{i}", f"位置 {i} 映射错位: {f.evidence}"
 
 
 # ---------------------------------------------------------------------------

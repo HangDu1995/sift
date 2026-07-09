@@ -8,14 +8,15 @@
   - 未命中 → 批量交 LLM 判"场景是否该触发该指令":
     - applicable=true  → FAIL(该做没做)
     - applicable=false → N/A(场景不涉及)
-    - LLM 失败/异常/解析失败/批量超限 → **保守 FAIL**(不误判 N/A 放过疑似违规)
+    - LLM 失败/异常/解析失败 → **保守 FAIL**(不误判 N/A 放过疑似违规)
 - **禁令**(``_judge_prohibition``):CONSTRAINT / ANTI_FABRICATION
   - 批量交 LLM **主动检测违规是否发生**(不是判 followed):
     - violated=true  → FAIL(违规了)
     - violated=false → PASS(没违规)
-    - LLM 失败/异常/解析失败/批量超限/畸形值 → **保守 FAIL**(禁令违规严重,宁可标记让人工核实)
+    - LLM 失败/异常/解析失败/畸形值 → **保守 FAIL**(禁令违规严重,宁可标记让人工核实)
 - **步骤**(``_judge_step``):HEADING_STEP
   - 批量交 LLM 判三态:pass→PASS / fail→FAIL / na→N/A;未知值/异常 → 保守 FAIL
+  - 空桶(0 条)→ 短路返回 [],不调 LLM(同 prohibition)
 - **输出格式**(``_judge_output``):OUTPUT_FORMAT(PATTERN_MATCH)
   - 确定性子串判定(**不调 LLM**):sample 任一行(strip 后)在 transcript 命中 → PASS,否则 FAIL
 - ``classify`` 把 ``InstructionSource`` 路由到对应 ``AuditCategory``,供 Task 8 聚合主入口用。
@@ -49,7 +50,7 @@ from skill_eval.models.audit_models import (
 from skill_eval.utils import call_claude
 
 _MAX_LLM_IN_BATCH = 30  # 与 compliance.checker._MAX_LLM_IN_BATCH 对齐
-# 保守 FAIL 的置信度(LLM 判定失败 / 批量超限):低,表明不确定而非确证违规。
+# 保守 FAIL 的置信度(LLM 判定失败 / 解析失败 / 畸形值):低,表明不确定而非确证违规。
 _CONSERVATIVE_FAIL_CONFIDENCE = 0.3
 # LLM 给出明确 applicable 时的置信度(该做没做 / 场景不涉及 都是明确结论)。
 _RESOLVED_CONFIDENCE = 0.8
@@ -200,7 +201,8 @@ class TranscriptAuditor:
 
         每条指令先走确定性 ``match_tool_call``(命中 tool_trace → PASS,不调 LLM);
         未命中的批量交 LLM 判"场景是否该触发该指令",据此分 FAIL(该做没做) /
-        N/A(场景不涉及);LLM 失败/异常/解析失败/批量超限 → 保守 FAIL。
+        N/A(场景不涉及);LLM 失败/异常/解析失败 → 保守 FAIL。未命中全量交 LLM,
+        >_MAX_LLM_IN_BATCH 由 ``_llm_judge_applicable`` 内部分批循环(无超限保守 FAIL)。
 
         Args:
             instructions: 已筛出的条件性指令(params 含 tool_name 或 script_path)。
@@ -233,14 +235,13 @@ class TranscriptAuditor:
         if not unmatched:
             return [f for f in findings if f is not None]
 
-        batch = unmatched[:_MAX_LLM_IN_BATCH]
-        overflow = unmatched[_MAX_LLM_IN_BATCH:]
-
+        # 未命中全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_applicable 内部分批循环,
+        # 不再单次截断 + 超限保守 FAIL)。
         applicable_mask = self._llm_judge_applicable(
-            [inst for _, inst in batch], transcript_scene, model, timeout
+            [inst for _, inst in unmatched], transcript_scene, model, timeout
         )
 
-        for local_pos, (orig_i, inst) in enumerate(batch):
+        for local_pos, (orig_i, inst) in enumerate(unmatched):
             tool_name = inst.params.get("tool_name", "")
             script_path = inst.params.get("script_path", "")
             miss_desc = f"调用 {tool_name}" if tool_name else f"读取 {script_path}"
@@ -271,11 +272,6 @@ class TranscriptAuditor:
                     inst, transcript_name, "LLM 判定失败,保守判疑似违规"
                 )
 
-        for orig_i, inst in overflow:
-            findings[orig_i] = self._make_conservative_fail_finding(
-                inst, transcript_name, "批量超限未判"
-            )
-
         return [f for f in findings if f is not None]
 
     # ---- 禁令类:主动检测违规 -------------------------------------------------
@@ -295,8 +291,9 @@ class TranscriptAuditor:
         每条返回 ``{index, violated: bool, evidence}``:
         - violated=True  → FAIL(违规了)
         - violated=False → PASS(没违规)
-        - LLM 异常 / 解析失败 / 未提及 / 批量超限 / violated 缺键或非布尔 → **保守 FAIL**
+        - LLM 异常 / 解析失败 / 未提及 / violated 缺键或非布尔 → **保守 FAIL**
           (禁令违规严重,宁可标记让人工核实;严格 ``is True/is False`` 判断,畸形值不当 PASS)。
+          全量交 LLM,>_MAX_LLM_IN_BATCH 由 ``_llm_judge_prohibition`` 内部分批循环(无超限保守 FAIL)。
 
         Args:
             instructions: 已筛出的禁令类指令(CONSTRAINT / ANTI_FABRICATION)。
@@ -308,15 +305,17 @@ class TranscriptAuditor:
         Returns:
             每条指令一个 AuditFinding,顺序与输入一致;category 全 PROHIBITION。
         """
-        findings: list[AuditFinding | None] = [None] * len(instructions)
-        batch = instructions[:_MAX_LLM_IN_BATCH]
-        overflow = instructions[_MAX_LLM_IN_BATCH:]
+        if not instructions:
+            return []  # 空桶短路:不 spawn LLM(与 audit"零重跑低成本"相悖则不调)
 
+        findings: list[AuditFinding | None] = [None] * len(instructions)
+
+        # 全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_prohibition 内部分批循环)。
         violated_mask = self._llm_judge_prohibition(
-            batch, transcript_text, model, timeout
+            instructions, transcript_text, model, timeout
         )
 
-        for i, inst in enumerate(batch):
+        for i, inst in enumerate(instructions):
             violated, ev = violated_mask[i]
             if violated is True:
                 findings[i] = AuditFinding(
@@ -345,12 +344,6 @@ class TranscriptAuditor:
                     category=AuditCategory.PROHIBITION,
                 )
 
-        for offset, inst in enumerate(overflow):
-            findings[_MAX_LLM_IN_BATCH + offset] = self._make_conservative_fail_finding(
-                inst, transcript_name, "批量超限未判",
-                category=AuditCategory.PROHIBITION,
-            )
-
         return [f for f in findings if f is not None]
 
     # ---- 步骤类:三态判定 ----------------------------------------------------
@@ -370,9 +363,11 @@ class TranscriptAuditor:
         - pass → PASS
         - fail → FAIL
         - na   → N/A
-        - 未知 verdict / LLM 异常 / 解析失败 / 批量超限 → **保守 FAIL**(不误判 N/A 放过)。
+        - 未知 verdict / LLM 异常 / 解析失败 → **保守 FAIL**(不误判 N/A 放过)。
+          全量交 LLM,>_MAX_LLM_IN_BATCH 由 ``_llm_judge_step`` 内部分批循环(无超限保守 FAIL)。
 
         verdict 匹配大小写不敏感(strip+lower);未知值/非字符串 → 保守 FAIL。
+        空桶(0 条)→ 短路返回 [],不调 LLM。
 
         Args:
             instructions: 已筛出的步骤类指令(HEADING_STEP)。
@@ -384,13 +379,15 @@ class TranscriptAuditor:
         Returns:
             每条指令一个 AuditFinding,顺序与输入一致;category 全 STEP。
         """
+        if not instructions:
+            return []  # 空桶短路:不 spawn LLM
+
         findings: list[AuditFinding | None] = [None] * len(instructions)
-        batch = instructions[:_MAX_LLM_IN_BATCH]
-        overflow = instructions[_MAX_LLM_IN_BATCH:]
 
-        verdict_mask = self._llm_judge_step(batch, transcript_text, model, timeout)
+        # 全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_step 内部分批循环)。
+        verdict_mask = self._llm_judge_step(instructions, transcript_text, model, timeout)
 
-        for i, inst in enumerate(batch):
+        for i, inst in enumerate(instructions):
             v, ev = verdict_mask[i]
             if v == "pass":
                 findings[i] = AuditFinding(
@@ -428,12 +425,6 @@ class TranscriptAuditor:
                     inst, transcript_name, "LLM 判定失败,保守判疑似违规",
                     category=AuditCategory.STEP,
                 )
-
-        for offset, inst in enumerate(overflow):
-            findings[_MAX_LLM_IN_BATCH + offset] = self._make_conservative_fail_finding(
-                inst, transcript_name, "批量超限未判",
-                category=AuditCategory.STEP,
-            )
 
         return [f for f in findings if f is not None]
 
@@ -523,7 +514,7 @@ class TranscriptAuditor:
         evidence: str,
         category: AuditCategory = AuditCategory.CONDITIONAL,
     ) -> AuditFinding:
-        """保守 FAIL(LLM 失败 / 批量超限 / 解析失败):低置信度,不误判 N/A 放过疑似违规。
+        """保守 FAIL(LLM 失败 / 解析失败 / 畸形值):低置信度,不误判 N/A 放过疑似违规。
 
         ``category`` 默认 CONDITIONAL(条件性);prohibition / step 各自传入对应类别,
         以便 finding.category 反映真实指令类别而非恒为 conditional。
@@ -547,38 +538,51 @@ class TranscriptAuditor:
         model: str | None,
         timeout: int,
     ) -> list[bool | None]:
-        """单次 call_claude 判每条未命中指令在该场景是否"该触发"。
+        """分批 call_claude 判每条未命中指令在该场景是否"该触发"(每批 30 条,处理全部)。
 
         返回与 candidates 等长的列表:
         - True  = 该触发(→ FAIL,该做没做)
         - False = 不涉及(→ N/A,场景不触发)
         - None  = 判定失败(→ 保守 FAIL)
 
-        调用异常(RuntimeError,如 CLI 挂/超时)→ 全 None(全保守 FAIL)。
+        按 ``_MAX_LLM_IN_BATCH`` 分批循环:每批独立 call_claude + ``_parse_applicable``,
+        合并成完整 mask(长度=len(candidates))。批内 prompt 的 index 从 0 计(本地 index),
+        ``_parse_applicable`` 只认 ``[0, bn)`` 的本地 index;批结果按 ``mask[start:start+bn]``
+        写回全量 mask 的对应区段——**绝不**用批内 index 直接当下标(会错位/覆盖)。
+        某批调用异常(RuntimeError)→ 该批保持 None(保守 FAIL),其余批照常处理。
+        空 candidates → range 空 → 不调 LLM,返回 [](调用方 ``_judge_conditional`` 已在
+        unmatched 为空时短路,这里作兜底)。
         """
         n = len(candidates)
-        instruction_list = "".join(
-            f"[{i}] {inst.instruction_text}\n" for i, inst in enumerate(candidates)
-        )
-        prompt = (
-            "判断以下每条条件性指令在给定场景下是否应该被触发执行。\n\n"
-            "## 判定标准\n"
-            "- ✅ true(该触发):这个场景满足指令的隐含条件——执行者本应做该动作"
-            "(如场景涉及该工具应被调用、该参考文件应被读取),却没做 = 疑似违规。\n"
-            "- ❌ false(不涉及):这个场景根本不涉及该指令(场景未触及该工具 / 参考"
-            "文件的适用范围,本就不该触发)。\n\n"
-            f"## 场景描述\n{transcript_scene[:_SCENE_TRUNCATE]}\n\n"
-            f"## 待判指令 ({n} 条)\n{instruction_list}\n"
-            "## 输出格式\n"
-            '只返回 JSON 数组,每元素:{"index": 0, "applicable": true/false}\n'
-        )
-        try:
-            result_text = call_claude(
-                prompt, model=model, timeout=timeout, max_turns=1
+        mask: list[bool | None] = [None] * n
+        for start in range(0, n, _MAX_LLM_IN_BATCH):
+            batch = candidates[start:start + _MAX_LLM_IN_BATCH]
+            bn = len(batch)
+            instruction_list = "".join(
+                f"[{i}] {inst.instruction_text}\n" for i, inst in enumerate(batch)
             )
-        except RuntimeError:
-            return [None] * n  # LLM 不可用:全保守 FAIL(不误判 N/A 放过疑似违规)
-        return self._parse_applicable(result_text, n)
+            prompt = (
+                "判断以下每条条件性指令在给定场景下是否应该被触发执行。\n\n"
+                "## 判定标准\n"
+                "- ✅ true(该触发):这个场景满足指令的隐含条件——执行者本应做该动作"
+                "(如场景涉及该工具应被调用、该参考文件应被读取),却没做 = 疑似违规。\n"
+                "- ❌ false(不涉及):这个场景根本不涉及该指令(场景未触及该工具 / 参考"
+                "文件的适用范围,本就不该触发)。\n\n"
+                f"## 场景描述\n{transcript_scene[:_SCENE_TRUNCATE]}\n\n"
+                f"## 待判指令 ({bn} 条)\n{instruction_list}\n"
+                "## 输出格式\n"
+                '只返回 JSON 数组,每元素:{"index": 0, "applicable": true/false}\n'
+            )
+            try:
+                result_text = call_claude(
+                    prompt, model=model, timeout=timeout, max_turns=1
+                )
+            except RuntimeError:
+                continue  # 该批 LLM 不可用 → 保持 None(保守 FAIL),其余批继续
+            batch_mask = self._parse_applicable(result_text, bn)
+            for j, val in enumerate(batch_mask):
+                mask[start + j] = val  # 本地 j → 全量 start+j(批间 index 映射)
+        return mask
 
     @staticmethod
     def _parse_applicable(text: str, n: int) -> list[bool | None]:
@@ -623,38 +627,48 @@ class TranscriptAuditor:
         model: str | None,
         timeout: int,
     ) -> list[tuple[bool | None, str]]:
-        """单次 call_claude 判每条禁令在本次执行里是否被违反。
+        """分批 call_claude 判每条禁令在本次执行里是否被违反(每批 30 条,处理全部)。
 
         返回与 candidates 等长的列表,每元素 ``(violated, evidence)``:
         - (True, ev)  = 已违反(→ FAIL)
         - (False, ev) = 未违反(→ PASS)
         - (None, "")  = 判定失败/未提及/畸形值(→ 保守 FAIL)
 
-        调用异常(RuntimeError,如 CLI 挂/超时)→ 全 (None, "")(全保守 FAIL)。
+        分批模式同 ``_llm_judge_applicable``:每批独立 call_claude + ``_parse_prohibition``,
+        批内 index 从 0 计、结果按 ``results[start:start+bn]`` 写回全量(批间 index 映射,
+        绝不用批内 index 直接当下标)。某批 RuntimeError → 该批保持 (None, "")(保守 FAIL),
+        其余批继续。空 candidates → 不调 LLM,返回 []。
         """
         n = len(candidates)
-        instruction_list = "".join(
-            f"[{i}] {inst.instruction_text}\n" for i, inst in enumerate(candidates)
-        )
-        prompt = (
-            "判断以下每条禁令/约束在本次真实执行里是否被违反。\n\n"
-            "## 判定标准\n"
-            "- ✅ violated=true(已违反):这次执行里确实发生了违反该禁令/约束的行为"
-            "(如编造了数据、跳过了必须步骤、用了被禁止的做法)。\n"
-            "- ❌ violated=false(未违反):这次执行没有违反该禁令/约束。\n\n"
-            f"## 执行记录摘录\n{transcript_text[:_SCENE_TRUNCATE]}\n\n"
-            f"## 待判禁令 ({n} 条)\n{instruction_list}\n"
-            "## 输出格式\n"
-            '只返回 JSON 数组,每元素:'
-            '{"index": 0, "violated": true/false, "evidence": "中文简述为何违反/未违反"}\n'
-        )
-        try:
-            result_text = call_claude(
-                prompt, model=model, timeout=timeout, max_turns=1
+        results: list[tuple[bool | None, str]] = [(None, "")] * n
+        for start in range(0, n, _MAX_LLM_IN_BATCH):
+            batch = candidates[start:start + _MAX_LLM_IN_BATCH]
+            bn = len(batch)
+            instruction_list = "".join(
+                f"[{i}] {inst.instruction_text}\n" for i, inst in enumerate(batch)
             )
-        except RuntimeError:
-            return [(None, "")] * n  # LLM 不可用:全保守 FAIL(禁令违规严重,宁可标记让人工核实)
-        return self._parse_prohibition(result_text, n)
+            prompt = (
+                "判断以下每条禁令/约束在本次真实执行里是否被违反。\n\n"
+                "## 判定标准\n"
+                "- ✅ violated=true(已违反):这次执行里确实发生了违反该禁令/约束的行为"
+                "(如编造了数据、跳过了必须步骤、用了被禁止的做法)。\n"
+                "- ❌ violated=false(未违反):这次执行没有违反该禁令/约束。\n\n"
+                f"## 执行记录摘录\n{transcript_text[:_SCENE_TRUNCATE]}\n\n"
+                f"## 待判禁令 ({bn} 条)\n{instruction_list}\n"
+                "## 输出格式\n"
+                '只返回 JSON 数组,每元素:'
+                '{"index": 0, "violated": true/false, "evidence": "中文简述为何违反/未违反"}\n'
+            )
+            try:
+                result_text = call_claude(
+                    prompt, model=model, timeout=timeout, max_turns=1
+                )
+            except RuntimeError:
+                continue  # 该批 LLM 不可用 → 保持 (None, "")(保守 FAIL),其余批继续
+            batch_results = self._parse_prohibition(result_text, bn)
+            for j, val in enumerate(batch_results):
+                results[start + j] = val  # 本地 j → 全量 start+j
+        return results
 
     @staticmethod
     def _parse_prohibition(
@@ -700,7 +714,7 @@ class TranscriptAuditor:
         model: str | None,
         timeout: int,
     ) -> list[tuple[str | None, str]]:
-        """单次 call_claude 判每个步骤在本次执行里是否被走过。
+        """分批 call_claude 判每个步骤在本次执行里是否被走过(每批 30 条,处理全部)。
 
         返回与 candidates 等长的列表,每元素 ``(verdict, evidence)``:
         - ("pass", ev) = 走过(→ PASS)
@@ -708,31 +722,41 @@ class TranscriptAuditor:
         - ("na", ev)   = 场景不涉及(→ N/A)
         - (None, "")   = 判定失败/未提及/未知 verdict/非字符串(→ 保守 FAIL)
 
-        调用异常(RuntimeError)→ 全 (None, "")(全保守 FAIL)。
+        分批模式同 ``_llm_judge_applicable``:每批独立 call_claude + ``_parse_step``,
+        批内 index 从 0 计、结果按 ``results[start:start+bn]`` 写回全量(批间 index 映射,
+        绝不用批内 index 直接当下标)。某批 RuntimeError → 该批保持 (None, "")(保守 FAIL),
+        其余批继续。空 candidates → 不调 LLM,返回 []。
         """
         n = len(candidates)
-        instruction_list = "".join(
-            f"[{i}] {inst.instruction_text}\n" for i, inst in enumerate(candidates)
-        )
-        prompt = (
-            "判断以下每个步骤在本次执行里是否被走过。\n\n"
-            "## 判定标准\n"
-            "- pass:这次执行走过了这一步。\n"
-            "- fail:这个场景本该走这一步但没走。\n"
-            "- na:这个场景根本不涉及该步骤。\n\n"
-            f"## 执行记录摘录\n{transcript_text[:_SCENE_TRUNCATE]}\n\n"
-            f"## 待判步骤 ({n} 条)\n{instruction_list}\n"
-            "## 输出格式\n"
-            '只返回 JSON 数组,每元素:'
-            '{"index": 0, "verdict": "pass"|"fail"|"na", "evidence": "中文简述"}\n'
-        )
-        try:
-            result_text = call_claude(
-                prompt, model=model, timeout=timeout, max_turns=1
+        results: list[tuple[str | None, str]] = [(None, "")] * n
+        for start in range(0, n, _MAX_LLM_IN_BATCH):
+            batch = candidates[start:start + _MAX_LLM_IN_BATCH]
+            bn = len(batch)
+            instruction_list = "".join(
+                f"[{i}] {inst.instruction_text}\n" for i, inst in enumerate(batch)
             )
-        except RuntimeError:
-            return [(None, "")] * n  # LLM 不可用:全保守 FAIL
-        return self._parse_step(result_text, n)
+            prompt = (
+                "判断以下每个步骤在本次执行里是否被走过。\n\n"
+                "## 判定标准\n"
+                "- pass:这次执行走过了这一步。\n"
+                "- fail:这个场景本该走这一步但没走。\n"
+                "- na:这个场景根本不涉及该步骤。\n\n"
+                f"## 执行记录摘录\n{transcript_text[:_SCENE_TRUNCATE]}\n\n"
+                f"## 待判步骤 ({bn} 条)\n{instruction_list}\n"
+                "## 输出格式\n"
+                '只返回 JSON 数组,每元素:'
+                '{"index": 0, "verdict": "pass"|"fail"|"na", "evidence": "中文简述"}\n'
+            )
+            try:
+                result_text = call_claude(
+                    prompt, model=model, timeout=timeout, max_turns=1
+                )
+            except RuntimeError:
+                continue  # 该批 LLM 不可用 → 保持 (None, "")(保守 FAIL),其余批继续
+            batch_results = self._parse_step(result_text, bn)
+            for j, val in enumerate(batch_results):
+                results[start + j] = val  # 本地 j → 全量 start+j
+        return results
 
     @staticmethod
     def _parse_step(
