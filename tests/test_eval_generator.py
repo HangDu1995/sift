@@ -141,3 +141,36 @@ def test_generate_from_transcript_pipeline(monkeypatch, tmp_path):
     es = gen.generate_from_transcript(sp, tp)
     # manifest 含 cli.py(单文件->parent /proj 作 root),裸名保持;pipeline 跑通即过
     assert es.evals[0].assertions[0].params["filename"] == "cli.py"
+
+
+def test_enforce_keeps_pathless_contains_pattern():
+    ev = EvalCase(id=1, prompt="x", level="L1", assertions=[
+        Assertion(name="k", type=AssertionType.CONTAINS_PATTERN, params={"pattern": "keyword"})])  # no path
+    out = EvalInitGenerator._enforce_manifest(_es(ev), {"sub/cli.py"})
+    assert len(out.evals[0].assertions) == 1        # kept, not dropped
+    assert out.evals[0].flags == []                 # no drop flag
+
+def test_enforce_rewrites_json_has_field_filename():
+    ev = EvalCase(id=1, prompt="x", level="L2", assertions=[
+        Assertion(name="f", type=AssertionType.JSON_HAS_FIELD,
+                  params={"filename": "config.json", "field": "a.b"})])
+    out = EvalInitGenerator._enforce_manifest(_es(ev), {"sub/config.json"})
+    assert out.evals[0].assertions[0].params["filename"] == "sub/config.json"
+    assert out.evals[0].assertions[0].params["field"] == "a.b"   # untouched
+
+def test_enforce_drops_custom_script_resolves_but_no_fixture():
+    # script basename resolves to a manifest path, but eval ships no such fixture -> drop
+    ev = EvalCase(id=1, prompt="x", level="L2", assertions=[
+        Assertion(name="run", type=AssertionType.CUSTOM_SCRIPT, params={"script": "check.py"})],
+        fixtures=[])
+    out = EvalInitGenerator._enforce_manifest(_es(ev), {"sub/check.py"})  # manifest has it, fixture doesn't
+    assert out.evals[0].assertions == []
+    assert out.evals[0].flags
+
+def test_generate_from_transcript_missing_file_raises(tmp_path):
+    import pytest
+    from skill_eval.errors import SkillEvalError
+    sp = tmp_path / "skill"; sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n", encoding="utf-8")
+    with pytest.raises(SkillEvalError):
+        EvalInitGenerator().generate_from_transcript(sp, tmp_path / "nope.jsonl")

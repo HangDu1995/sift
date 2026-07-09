@@ -443,7 +443,7 @@ class EvalInitGenerator:
             dropped: list[str] = []
             for a in ev.assertions:
                 p = a.params
-                if a.type == AssertionType.FILE_EXISTS:
+                if a.type in (AssertionType.FILE_EXISTS, AssertionType.JSON_HAS_FIELD):
                     fn = resolve(p.get("filename", ""))
                     if fn:
                         p["filename"] = fn
@@ -451,16 +451,20 @@ class EvalInitGenerator:
                     else:
                         dropped.append(a.name)
                 elif a.type in (AssertionType.CONTAINS_PATTERN, AssertionType.NOT_CONTAINS):
-                    path = resolve(p.get("path", ""))
-                    if path:
-                        p["path"] = path
-                        kept.append(a)
+                    raw_path = p.get("path", "")
+                    if not raw_path:
+                        kept.append(a)          # path-less 合法(scorer rglob+transcript),L1 用
                     else:
-                        dropped.append(a.name)
+                        path = resolve(raw_path)
+                        if path:
+                            p["path"] = path
+                            kept.append(a)
+                        else:
+                            dropped.append(a.name)
                 elif a.type == AssertionType.CUSTOM_SCRIPT:
                     script = p.get("script", "")
                     resolved = resolve(script)
-                    if (resolved or script) in fixture_paths or resolved:
+                    if (resolved or script) in fixture_paths:
                         p["script"] = resolved or script
                         kept.append(a)
                     else:
@@ -619,6 +623,8 @@ class EvalInitGenerator:
 
     def generate_from_transcript(self, skill_path: Path, transcript_path: Path) -> EvalSet:
         from skill_eval.evals.transcript import build_digest
+        if not Path(transcript_path).exists():
+            raise SkillEvalError(f"transcript 文件不存在: {transcript_path}")
         name, description, _content, _frontmatter, body = parse_skill_md(skill_path)
         digest = build_digest(transcript_path)
         if not digest.user_turns and not digest.manifest:
