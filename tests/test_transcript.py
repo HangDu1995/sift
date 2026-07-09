@@ -1,7 +1,7 @@
 # tests/test_transcript.py
 import json
 from pathlib import Path
-from skill_eval.evals.transcript import build_digest, SessionDigest, _strip_line_numbers
+from skill_eval.evals.transcript import build_digest, SessionDigest, _strip_line_numbers, FileContent, Command
 
 def _write_jsonl(tmp_path: Path, records: list) -> Path:
     p = tmp_path / "t.jsonl"
@@ -38,3 +38,38 @@ def test_skill_used_extracted_from_skill_tool_use(tmp_path):
     ]
     d = build_digest(_write_jsonl(tmp_path, recs))
     assert d.skill_used == "my-skill"
+
+def _asst(tool_uses: list) -> dict:
+    return {"message": {"role": "assistant", "content": tool_uses}}
+
+def _tool_use(tid: str, name: str, inp: dict) -> dict:
+    return {"type": "tool_use", "id": tid, "name": name, "input": inp}
+
+def _tool_result(tid: str, text: str) -> dict:
+    return {"message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": tid, "content": text}]}}
+
+def test_read_becomes_input_file_with_line_numbers_stripped(tmp_path):
+    recs = [
+        _asst([_tool_use("r1", "Read", {"file_path": "/proj/calc.py"})]),
+        _tool_result("r1", "1\tx = 1\n2\ty = 2\n"),
+    ]
+    d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
+    assert d.input_files == [FileContent(path="calc.py", content="x = 1\ny = 2\n")]
+    assert d.produced_files == []
+
+def test_bash_recorded_as_command(tmp_path):
+    recs = [
+        _asst([_tool_use("b1", "Bash", {"command": "python cli.py '1+2*3'", "description": ""})]),
+        _tool_result("b1", "7\n"),
+    ]
+    d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
+    assert d.commands == [Command(cmd="python cli.py '1+2*3'", stdout="7\n")]
+
+def test_relativization_via_common_prefix_when_root_none(tmp_path):
+    recs = [
+        _asst([_tool_use("r1", "Read", {"file_path": "/proj/pkg/calc.py"})]),
+        _tool_result("r1", "1\tcore\n"),
+    ]
+    d = build_digest(_write_jsonl(tmp_path, recs))   # root=None
+    assert d.input_files[0].path == "calc.py"   # 单文件→parent 作 root
