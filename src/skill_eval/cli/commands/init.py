@@ -17,6 +17,10 @@ def init(
     generate_prompts: bool = typer.Option(True, "--generate-prompts/--no-generate-prompts", help="Use LLM to generate L1 unit-level evals"),
     model: Optional[str] = typer.Option(None, "--model", help="Model for LLM generation"),
     num_evals: Optional[int] = typer.Option(None, "--num-evals", help="Max number of eval cases to generate"),
+    from_transcript: Optional[Path] = typer.Option(
+        None, "--from-transcript",
+        help="从真实 session transcript 挖 evals(加料 SKILL.md,非替代)",
+    ),
 ):
     """Initialize evals.json for a Skill.
     
@@ -27,7 +31,10 @@ def init(
     try:
         gen = EvalInitGenerator(model=None, timeout=300)
 
-        if generate_prompts:
+        if from_transcript:
+            console.print(f"Mining evals from transcript [bold]{from_transcript}[/bold]...")
+            eval_set = gen.generate_from_transcript(skill_path, from_transcript)
+        elif generate_prompts:
             console.print("Generating L1 unit-level evals with LLM...")
             eval_set = gen.generate_with_llm(skill_path)
         else:
