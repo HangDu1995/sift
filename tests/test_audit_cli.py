@@ -1,0 +1,193 @@
+# tests/test_audit_cli.py
+"""audit 命令 CLI 接线测试。
+
+mock TranscriptAuditor.audit(不真跑 LLM/判定),验证:
+- 命令接线(parse_skill_md → TranscriptAuditor.audit → audit-report.json + console summary)
+- --transcript 可重复(多条 transcript)
+- 命令注册成功 + 现有命令非侵入仍在
+- skill_path 不存在 → SkillEvalError 友好错误(照 init/run 模式)
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from typer.testing import CliRunner
+
+from skill_eval.cli.main import app
+from skill_eval.models.audit_models import (
+    AuditCategory,
+    AuditFinding,
+    AuditReport,
+    AuditVerdict,
+)
+
+runner = CliRunner()
+
+
+def _skill_dir(tmp_path: Path) -> Path:
+    sp = tmp_path / "skill"
+    sp.mkdir()
+    (sp / "SKILL.md").write_text(
+        "---\nname: myskill\ndescription: d\n---\n# body\n",
+        encoding="utf-8",
+    )
+    return sp
+
+
+def _transcript(tmp_path: Path, name: str = "t.jsonl") -> Path:
+    tp = tmp_path / name
+    tp.write_text("{}\n", encoding="utf-8")
+    return tp
+
+
+def _fake_report() -> AuditReport:
+    return AuditReport(
+        skill_name="myskill",
+        transcripts=["t.jsonl"],
+        summary={"total": 3, "pass": 1, "fail": 1, "na": 1},
+        findings=[
+            AuditFinding(
+                instruction_text="必须做 X",
+                source="CONSTRAINT",
+                verdict=AuditVerdict.PASS,
+                category=AuditCategory.PROHIBITION,
+                evidence="未违反",
+                confidence=0.8,
+                transcript="t.jsonl",
+            ),
+            AuditFinding(
+                instruction_text="禁编造数据,违反",
+                source="CONSTRAINT",
+                verdict=AuditVerdict.FAIL,
+                category=AuditCategory.PROHIBITION,
+                evidence="执行中编造了数据",
+                confidence=0.8,
+                transcript="t.jsonl",
+            ),
+            AuditFinding(
+                instruction_text="步骤三",
+                source="HEADING_STEP",
+                verdict=AuditVerdict.NA,
+                category=AuditCategory.STEP,
+                evidence="场景不涉及该步",
+                confidence=0.8,
+                transcript="t.jsonl",
+            ),
+        ],
+        warnings=[],
+    )
+
+
+class _FakeAuditor:
+    """记录入参,返回构造报告(不真跑 LLM/判定)。"""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def audit(self, skill_name, skill_body, transcripts, model=None, timeout=120):
+        self.calls.append(
+            {
+                "skill_name": skill_name,
+                "skill_body": skill_body,
+                "transcripts": list(transcripts),
+                "model": model,
+            }
+        )
+        return _fake_report()
+
+
+def test_audit_writes_report_and_prints_summary(monkeypatch, tmp_path):
+    fake = _FakeAuditor()
+    monkeypatch.setattr(
+        "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
+    )
+
+    sp = _skill_dir(tmp_path)
+    tp = _transcript(tmp_path)
+    out = tmp_path / "out"
+
+    r = runner.invoke(
+        app,
+        ["audit", str(sp), "--transcript", str(tp), "-o", str(out)],
+    )
+    assert r.exit_code == 0, r.output
+
+    # audit-report.json 产出且是合法 AuditReport JSON
+    report_file = out / "audit-report.json"
+    assert report_file.exists()
+    data = json.loads(report_file.read_text(encoding="utf-8"))
+    assert data["skill_name"] == "myskill"
+    assert data["summary"] == {"total": 3, "pass": 1, "fail": 1, "na": 1}
+    assert len(data["findings"]) == 3
+
+    # console summary 含 pass/fail/na 计数
+    assert "Audited" in r.output
+    assert "pass=1" in r.output
+    assert "fail=1" in r.output
+    assert "na=1" in r.output
+
+    # TranscriptAuditor 被正确接入:skill_name + body + transcript 透传
+    assert len(fake.calls) == 1
+    call = fake.calls[0]
+    assert call["skill_name"] == "myskill"
+    assert "body" in call["skill_body"]
+    assert call["transcripts"] == [tp]
+
+
+def test_audit_multiple_transcripts_repeatable(monkeypatch, tmp_path):
+    fake = _FakeAuditor()
+    monkeypatch.setattr(
+        "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
+    )
+
+    sp = _skill_dir(tmp_path)
+    tp1 = _transcript(tmp_path, "a.jsonl")
+    tp2 = _transcript(tmp_path, "b.jsonl")
+    out = tmp_path / "out"
+
+    r = runner.invoke(
+        app,
+        [
+            "audit", str(sp),
+            "--transcript", str(tp1),
+            "--transcript", str(tp2),
+            "-o", str(out),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    assert fake.calls[0]["transcripts"] == [tp1, tp2]
+    # 报告依然写出
+    assert (out / "audit-report.json").exists()
+
+
+def test_audit_command_registered():
+    r = runner.invoke(app, ["--help"])
+    assert r.exit_code == 0
+    assert "audit" in r.output
+
+
+def test_existing_commands_still_present():
+    """非侵入:现有命令(init/run/report/vet/...)仍注册。"""
+    r = runner.invoke(app, ["--help"])
+    assert r.exit_code == 0
+    assert "run" in r.output
+    assert "init" in r.output
+    assert "report" in r.output
+
+
+def test_audit_skill_path_missing_friendly_error(tmp_path):
+    """skill_path 不存在 → parse_skill_md 抛 SkillParseError → 友好错误(非裸 traceback)。"""
+    missing = tmp_path / "does-not-exist"
+    tp = _transcript(tmp_path)
+    out = tmp_path / "out"
+
+    r = runner.invoke(
+        app,
+        ["audit", str(missing), "--transcript", str(tp), "-o", str(out)],
+    )
+    # SkillParseError 是 InputError 子类(exit_code=2)→ 被 except SkillEvalError 捕获
+    assert r.exit_code == 2
+    # console.print 过错误信息(证明走了友好错误路径,而非裸异常)
+    assert "SKILL.md" in r.output
+    assert "Error" in r.output
