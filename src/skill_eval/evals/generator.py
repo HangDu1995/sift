@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -410,6 +411,68 @@ class EvalInitGenerator:
                                    retry_on_uneval=True))
 
         return assertions
+
+    @staticmethod
+    def _enforce_manifest(eval_set: EvalSet, manifest: set[str]) -> EvalSet:
+        """确定性后处理:把裸名补全成 manifest 路径、scoped path、CUSTOM_SCRIPT↔fixture 配对;
+        解析不了的断言 drop 并在 eval.flags 标记。"""
+        # basename -> full(仅当唯一)
+        by_base: dict[str, str] = {}
+        ambig: set[str] = set()
+        for p in manifest:
+            b = os.path.basename(p)
+            if b in by_base:
+                ambig.add(b)
+            else:
+                by_base[b] = p
+        for b in ambig:
+            by_base.pop(b, None)
+
+        def resolve(raw: str) -> str | None:
+            if not raw:
+                return None
+            if raw in manifest:
+                return raw
+            base = os.path.basename(raw)
+            return by_base.get(base)
+
+        for ev in eval_set.evals:
+            fixture_paths = {f.path for f in ev.fixtures}
+            kept: list[Assertion] = []
+            dropped: list[str] = []
+            for a in ev.assertions:
+                p = a.params
+                if a.type == AssertionType.FILE_EXISTS:
+                    fn = resolve(p.get("filename", ""))
+                    if fn:
+                        p["filename"] = fn
+                        kept.append(a)
+                    else:
+                        dropped.append(a.name)
+                elif a.type in (AssertionType.CONTAINS_PATTERN, AssertionType.NOT_CONTAINS):
+                    path = resolve(p.get("path", ""))
+                    if path:
+                        p["path"] = path
+                        kept.append(a)
+                    else:
+                        dropped.append(a.name)
+                elif a.type == AssertionType.CUSTOM_SCRIPT:
+                    script = p.get("script", "")
+                    resolved = resolve(script)
+                    if (resolved or script) in fixture_paths or resolved:
+                        p["script"] = resolved or script
+                        kept.append(a)
+                    else:
+                        dropped.append(f"{a.name}(unpaired checker)")
+                else:
+                    kept.append(a)
+            ev.assertions = kept
+            for f in ev.fixtures:
+                if f.path not in manifest and resolve(f.path) is None:
+                    ev.flags.append(f"review:fixture-not-in-manifest:{f.path}")
+            if dropped:
+                ev.flags.append("review:dropped-assertions:" + ",".join(dropped))
+        return eval_set
 
     # ------------------------------------------------------------------
     # LLM-based generation

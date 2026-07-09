@@ -9,7 +9,7 @@ import yaml
 
 from skill_eval.config.loader import EvalConfig
 from skill_eval.evals.generator import EvalInitGenerator
-from skill_eval.models import EvalCase
+from skill_eval.models import Assertion, AssertionType, EvalCase, EvalSet, FixtureFile
 
 
 def _make_skill(tmp_path: Path, name: str = "test-skill", domain: str = "general",
@@ -71,3 +71,34 @@ class TestModeSupport:
 def test_evalcase_flags_default_empty():
     ev = EvalCase(id=1, prompt="x")
     assert ev.flags == []
+
+
+def _es(ev): return EvalSet(skill_name="s", evals=[ev])
+
+def test_enforce_rewrites_bare_filename_to_manifest_path():
+    ev = EvalCase(id=1, prompt="x", level="L2", assertions=[
+        Assertion(name="cli", type=AssertionType.FILE_EXISTS, params={"filename": "cli.py"})])
+    out = EvalInitGenerator._enforce_manifest(_es(ev), {"sub/cli.py", "calc.py"})
+    assert out.evals[0].assertions[0].params["filename"] == "sub/cli.py"
+
+def test_enforce_drops_custom_script_without_fixture():
+    ev = EvalCase(id=1, prompt="x", level="L2", assertions=[
+        Assertion(name="run", type=AssertionType.CUSTOM_SCRIPT, params={"script": "check.py"})],
+        fixtures=[])   # checker 没 ship
+    out = EvalInitGenerator._enforce_manifest(_es(ev), {"cli.py"})
+    assert out.evals[0].assertions == []
+    assert out.evals[0].flags  # 有标记
+
+def test_enforce_keeps_custom_script_when_fixture_shipped():
+    ev = EvalCase(id=1, prompt="x", level="L2", assertions=[
+        Assertion(name="run", type=AssertionType.CUSTOM_SCRIPT, params={"script": "check.py"})],
+        fixtures=[FixtureFile(path="check.py", content="")])
+    out = EvalInitGenerator._enforce_manifest(_es(ev), {"cli.py", "check.py"})
+    assert len(out.evals[0].assertions) == 1
+
+def test_enforce_scopes_contains_pattern_path():
+    ev = EvalCase(id=1, prompt="x", level="L2", assertions=[
+        Assertion(name="imp", type=AssertionType.CONTAINS_PATTERN,
+                  params={"pattern": "import", "path": "cli.py"})])
+    out = EvalInitGenerator._enforce_manifest(_es(ev), {"sub/cli.py"})
+    assert out.evals[0].assertions[0].params["path"] == "sub/cli.py"
