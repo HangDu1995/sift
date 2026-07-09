@@ -39,6 +39,7 @@ class EvalCase(BaseModel):
     source_dir: str = ""
     source_dir_as: str = ""
     timeout: int | None = None  # per-eval 覆盖全局 timeout(P1-3a);None 走 RunConfig.timeout_seconds
+    flags: list[str] = Field(default_factory=list)   # 后处理标记(如 degraded/review),默认空,向后兼容
 
     def get_name(self) -> str:
         return self.name or f"eval-{self.id}"

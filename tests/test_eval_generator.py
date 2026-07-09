@@ -9,6 +9,7 @@ import yaml
 
 from skill_eval.config.loader import EvalConfig
 from skill_eval.evals.generator import EvalInitGenerator
+from skill_eval.models import EvalCase
 
 
 def _make_skill(tmp_path: Path, name: str = "test-skill", domain: str = "general",
@@ -65,3 +66,8 @@ class TestModeSupport:
         skill_dir = _make_skill(tmp_path, body="- Step 1\n- Step 2")
         result = gen.generate_template(skill_dir)
         assert any(e.mode == "create" for e in result.evals)
+
+
+def test_evalcase_flags_default_empty():
+    ev = EvalCase(id=1, prompt="x")
+    assert ev.flags == []
