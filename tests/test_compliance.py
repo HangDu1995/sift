@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from skill_eval.compliance.extractor import InstructionExtractor
 from skill_eval.compliance.checker import (
     ComplianceChecker,
     _extract_first_balanced,
+    extract_first_balanced,
+    match_tool_call,
 )
 from skill_eval.calibration.calibrator import CalibrationChecker
 from skill_eval.models import (
@@ -21,6 +24,7 @@ from skill_eval.models import (
     InstructionPriority,
     InstructionSource,
     ConfidenceGrade,
+    ToolCallRecord,
 )
 
 
@@ -666,3 +670,88 @@ class TestParseRobustness:
         item = checker._check_llm_single(inst, "transcript", None, 5)
         assert item.followed is True
         assert "dict {k: v} ok" in item.evidence
+
+
+class TestMatchToolCall:
+    """Task 3: match_tool_call 公共谓词 —— tool_trace 命中判定(attr/dict 双兼容)。
+    供 audit/auditor.py 跨模块复用 checker 的工具调用匹配逻辑。"""
+
+    def test_hit_tool_name_attr_style(self):
+        """tool_name 命中 tc.name(attr 风格 ToolCallRecord)→ True。"""
+        trace = [ToolCallRecord(name="Read", input_summary="file.md")]
+        assert match_tool_call("Read", "", trace) is True
+
+    def test_hit_tool_name_dict_style(self):
+        """tool_name 命中 tc.name(dict 风格)→ True。"""
+        trace = [{"name": "Read", "input_summary": "file.md"}]
+        assert match_tool_call("Read", "", trace) is True
+
+    def test_hit_script_path_attr_style(self):
+        """script_path 命中 tc.input_summary(attr 风格)→ True。"""
+        trace = [ToolCallRecord(name="Read", input_summary="reading references/guide.md")]
+        assert match_tool_call("", "references/guide.md", trace) is True
+
+    def test_hit_script_path_dict_style(self):
+        """script_path 命中 tc.input_summary(dict 风格)→ True。"""
+        trace = [{"name": "Read", "input_summary": "reading references/guide.md"}]
+        assert match_tool_call("", "references/guide.md", trace) is True
+
+    def test_no_hit_returns_false(self):
+        """tool_name / script_path 都不命中 → False。"""
+        trace = [{"name": "Bash", "input_summary": "ls -la"}]
+        assert match_tool_call("Read", "references/guide.md", trace) is False
+
+    def test_empty_tool_trace(self):
+        """空 tool_trace → False。"""
+        assert match_tool_call("Read", "", []) is False
+
+    def test_none_tool_trace(self):
+        """None tool_trace → False。"""
+        assert match_tool_call("Read", "", None) is False
+
+    def test_case_insensitive(self):
+        """大小写不敏感:READ 匹配 read,file.md 匹配 FILE.md。"""
+        trace = [{"name": "read", "input_summary": "FILE.md"}]
+        assert match_tool_call("READ", "file.md", trace) is True
+
+    def test_namespace_attr_style(self):
+        """简单 namespace(有 .name/.input_summary)也能匹配。"""
+        trace = [SimpleNamespace(name="Write", input_summary="out.py")]
+        assert match_tool_call("Write", "", trace) is True
+
+    def test_partial_substring_match(self):
+        """子串匹配:tool_name 是 tc.name 的子串(MCP 工具名长前缀场景)。"""
+        trace = [{"name": "mcp__web_reader__webReader", "input_summary": "some url"}]
+        assert match_tool_call("webReader", "", trace) is True
+
+    def test_both_empty_returns_false(self):
+        """tool_name 和 script_path 都空 → 不可能命中 → False。"""
+        trace = [{"name": "Read", "input_summary": "file.md"}]
+        assert match_tool_call("", "", trace) is False
+
+    def test_first_match_wins_order(self):
+        """多条 trace:首个命中的就返回 True(遍历顺序)。"""
+        trace = [
+            {"name": "Bash", "input_summary": "ls"},
+            {"name": "Read", "input_summary": "wanted.md"},
+        ]
+        assert match_tool_call("Read", "", trace) is True
+
+
+class TestExtractFirstBalancedPublic:
+    """Task 3: extract_first_balanced 提为公共(供 audit 复用 JSON 抽取),
+    _extract_first_balanced 保留为别名 —— checker 内部调用点零改动。"""
+
+    def test_public_and_alias_are_same_object(self):
+        """_extract_first_balanced 是 extract_first_balanced 的别名(同一函数对象)。"""
+        assert _extract_first_balanced is extract_first_balanced
+
+    def test_public_works_array(self):
+        assert extract_first_balanced("[1, 2, 3]") == "[1, 2, 3]"
+
+    def test_public_works_object(self):
+        assert extract_first_balanced('{"a": 1}', "{", "}") == '{"a": 1}'
+
+    def test_alias_still_works(self):
+        """旧调用点走别名,行为不变。"""
+        assert _extract_first_balanced("[1, 2, 3]") == "[1, 2, 3]"

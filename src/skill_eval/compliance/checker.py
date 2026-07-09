@@ -24,7 +24,7 @@ _CONSTRAINT_MUST_KEYWORD = "必须"
 _PROHIBITIVE_CN: tuple[str, ...] = ("禁止", "严禁", "不得", "不应", "不可")
 
 
-def _extract_first_balanced(text: str, open_ch: str = "[", close_ch: str = "]") -> str | None:
+def extract_first_balanced(text: str, open_ch: str = "[", close_ch: str = "]") -> str | None:
     """提取首个平衡的 JSON 数组/对象(字符串感知)。
 
     旧贪婪正则 ``\\[[\\s\\S]*\\]`` 会从首个 ``[`` 一路吞到文本**末个** ``]``。当 LLM
@@ -61,6 +61,31 @@ def _extract_first_balanced(text: str, open_ch: str = "[", close_ch: str = "]") 
             if depth == 0:
                 return text[start : i + 1]
     return None
+
+
+# 公共名为 ``extract_first_balanced``(供 audit 等跨模块复用 JSON 抽取);
+# 保留 ``_extract_first_balanced`` 别名使 checker 内部现有调用点零改动。
+_extract_first_balanced = extract_first_balanced
+
+
+def match_tool_call(tool_name: str, script_path: str, tool_trace) -> bool:
+    """tool_trace 里是否存在匹配 tool_name(在 tc.name)或 script_path(在 tc.input_summary)的调用。
+
+    抽自 ``_check_tool_call`` 的 tool_trace 遍历段,供 audit 等跨模块复用同一命中判定。
+    tool_trace 元素支持 attr 风格(``tc.name``/``tc.input_summary``,如 ToolCallRecord)和
+    dict 风格(``tc.get(...)``)两种。匹配为子串包含、大小写不敏感;遍历完无命中 → False;
+    空 / None tool_trace → False。
+    """
+    if not tool_trace:
+        return False
+    for tc in tool_trace:
+        tc_name = tc.name if hasattr(tc, "name") else tc.get("name", "")
+        tc_input = tc.input_summary if hasattr(tc, "input_summary") else tc.get("input_summary", "")
+        if tool_name and tool_name.lower() in tc_name.lower():
+            return True
+        if script_path and script_path.lower() in tc_input.lower():
+            return True
+    return False
 
 
 class ComplianceChecker:
@@ -271,7 +296,9 @@ class ComplianceChecker:
         script_path = instruction.params.get("script_path", "")
         lower = transcript.lower()
 
-        if tool_trace:
+        if tool_trace and match_tool_call(tool_name, script_path, tool_trace):
+            # 命中判定走公共 match_tool_call;此处仅复用同一遍历取出命中 tc 造 evidence
+            # (followed/confidence/evidence 与重构前逐字一致)。
             for tc in tool_trace:
                 tc_name = tc.name if hasattr(tc, "name") else tc.get("name", "")
                 tc_input = tc.input_summary if hasattr(tc, "input_summary") else tc.get("input_summary", "")
