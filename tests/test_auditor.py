@@ -15,11 +15,14 @@ _judge_conditional: 条件性指令(TOOL_REQUIREMENT / REFERENCE_USAGE)的三态
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from skill_eval.audit.auditor import TranscriptAuditor
 from skill_eval.models import InstructionCheck
-from skill_eval.models.audit_models import AuditCategory, AuditVerdict
+from skill_eval.models.audit_models import AuditCategory, AuditReport, AuditVerdict
 from skill_eval.models.enums import (
     CheckMethod,
     InstructionPriority,
@@ -647,3 +650,199 @@ class TestJudgeOutput:
         for f in findings:
             assert f.category == AuditCategory.OUTPUT
             assert f.transcript == "o.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# audit: 聚合主入口(串联 InstructionExtractor + rebuild + derive + 四 _judge_*)
+# 全程 mock skill_eval.audit.auditor.call_claude —— 不真跑 LLM。
+# mock 设计:fake 返回一个覆盖 0..59 的 JSON 数组,每条同时给 applicable / violated /
+# verdict + evidence 三个键。三个 LLM 判定方法各只读自己关心的键(_parse_applicable 读
+# applicable、_parse_prohibition 读 violated、_parse_step 读 verdict),互不干扰 ——
+# 一个通用结构兼容三种判定格式,无需按 prompt 内容分支。
+# ---------------------------------------------------------------------------
+
+
+def _pass_fake():
+    """通用 mock call_claude:返回全"通过"语义的 JSON 数组(覆盖 0..59)。
+
+    - 条件性未命中 → applicable=false → N/A(场景不涉及)
+    - 禁令 → violated=false → PASS(没违规)
+    - 步骤 → verdict="pass" → PASS(走过了)
+
+    一个结构喂三个判定方法,便于聚合测试数 finding / 算 summary。
+    """
+    def fake(prompt, *a, **k):
+        return json.dumps([
+            {
+                "index": i,
+                "applicable": False,
+                "violated": False,
+                "verdict": "pass",
+                "evidence": "通过",
+            }
+            for i in range(60)
+        ])
+
+    return fake
+
+
+def _write_jsonl(path: Path, records: list[dict]) -> Path:
+    """把 records 写成 JSONL(每行一个 JSON 对象),返回该路径。"""
+    with open(path, "w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return path
+
+
+def _read_file_records(
+    file_path: str,
+    content: str = "文件内容",
+    user_text: str = "请分析这个文件",
+) -> list[dict]:
+    """造一组 session JSONL 记录:user turn + Read(file_path) + 其 tool_result。
+
+    让 build_digest 产出非空 digest:user_turns 非空、tool_trace 含 Read、
+    input_files 含 file_path(未被改写 → 计入输入),供反推/对账用。
+    """
+    return [
+        {"message": {"role": "user", "content": user_text}},
+        {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "Read",
+                        "input": {"file_path": file_path},
+                    }
+                ],
+            }
+        },
+        {
+            "message": {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": content}
+                ],
+            }
+        },
+    ]
+
+
+class TestAuditAggregate:
+    """audit 主入口:多 transcript 聚合、summary 计数、derived 标记、坏 transcript 降级。"""
+
+    def test_two_transcripts_aggregate_with_summary_and_derived(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """2 transcript 各 Read foo.md:每条产 2 finding(1 N/A + 1 PASS-derived),平铺 4 条。
+
+        - skill_body "use Bash" → 1 条 TOOL_REQUIREMENT(未命中 trace → LLM N/A);
+        - foo.md 不在 skill_body → derive_declarations 反推 "读取 foo.md"(REFERENCE_USAGE),
+          且 transcript 真读了 → 命中 trace → PASS,标 derived_from_transcript=True。
+        每 transcript 2 finding → 共 4;summary total/pass/fail/na 精确。
+        """
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+
+        foo = tmp_path / "foo.md"
+        tp1 = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records(str(foo)))
+        tp2 = _write_jsonl(tmp_path / "t2.jsonl", _read_file_records(str(foo)))
+
+        auditor = TranscriptAuditor()
+        report = auditor.audit("myskill", "use Bash", [tp1, tp2])
+
+        assert isinstance(report, AuditReport)
+        assert report.skill_name == "myskill"
+        # transcripts 字段含 2 个文件名(顺序与入参一致)
+        assert report.transcripts == ["t1.jsonl", "t2.jsonl"]
+        assert report.warnings == []
+
+        # 平铺 per-transcript:每 transcript 2 finding → 共 4
+        assert len(report.findings) == 4
+        # 每 transcript 的 finding 各自带正确的 transcript 名(2 + 2)
+        assert sorted(f.transcript for f in report.findings) == ["t1.jsonl", "t1.jsonl", "t2.jsonl", "t2.jsonl"]
+
+        # summary 精确:每 transcript (1 N/A [Bash 未调] + 1 PASS [读取 foo.md 命中])
+        assert report.summary == {"total": 4, "pass": 2, "fail": 0, "na": 2}
+
+        # derived 标记:2 个 PASS finding(读取 foo.md)标 derived_from_transcript=True,
+        # 2 个 N/A finding(use Bash,来自 skill_body 静态指令)保持 False
+        derived = [f for f in report.findings if f.derived_from_transcript]
+        assert len(derived) == 2
+        assert all(f.verdict == AuditVerdict.PASS for f in derived)
+        assert all(f.category == AuditCategory.CONDITIONAL for f in derived)
+        assert all("foo.md" in f.instruction_text for f in derived)
+        non_derived = [f for f in report.findings if not f.derived_from_transcript]
+        assert len(non_derived) == 2
+        assert all(f.verdict == AuditVerdict.NA for f in non_derived)
+
+    def test_bad_transcript_goes_to_warning_others_processed(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """坏 transcript(不存在的路径)→ rebuild 抛 SkillEvalError → 进 warnings、不崩;
+        好 transcript 照常处理(findings 正常产出)。"""
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+
+        foo = tmp_path / "foo.md"
+        good = _write_jsonl(tmp_path / "good.jsonl", _read_file_records(str(foo)))
+        bad = tmp_path / "missing.jsonl"  # 不存在
+
+        auditor = TranscriptAuditor()
+        report = auditor.audit("s", "use Bash", [good, bad])
+
+        # 好的正常处理(进 transcripts + findings)
+        assert report.transcripts == ["good.jsonl"]
+        assert len(report.findings) == 2  # good 的 2 finding
+        # 坏的不进 transcripts / findings
+        assert all("missing" not in f.transcript for f in report.findings)
+        # 坏的进 warnings(消息含文件名)
+        assert len(report.warnings) == 1
+        assert "missing.jsonl" in report.warnings[0]
+
+    def test_empty_transcripts_returns_empty_report(self, monkeypatch) -> None:
+        """空 transcripts 列表 → findings 空、summary 全 0、transcripts 空,不崩。"""
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+
+        auditor = TranscriptAuditor()
+        report = auditor.audit("s", "use Bash", [])
+
+        assert isinstance(report, AuditReport)
+        assert report.findings == []
+        assert report.transcripts == []
+        assert report.warnings == []
+        assert report.summary == {"total": 0, "pass": 0, "fail": 0, "na": 0}
+
+    def test_routes_each_category(self, tmp_path, monkeypatch) -> None:
+        """skill_body 含四类指令 + REFERENCES → 各自路由到正确 category 判定(覆盖四桶)。
+
+        TOOL_REQUIREMENT/REFERENCE_USAGE→CONDITIONAL、CONSTRAINT→PROHIBITION、
+        HEADING_STEP→STEP、OUTPUT_FORMAT→OUTPUT。
+        """
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+
+        body = (
+            "use Bash\n\n"
+            "NEVER delete production data\n\n"
+            "1. Analyze input format\n\n"
+            "```\nEXPECTED_TOKEN\n```\n\n"
+            "read references/design.md\n"
+        )
+        # 最小 transcript:仅 user turn(rebuild 非空即可;无工具 → 条件性全未命中走 LLM)
+        tp = _write_jsonl(
+            tmp_path / "only_user.jsonl",
+            [{"message": {"role": "user", "content": "hello"}}],
+        )
+
+        auditor = TranscriptAuditor()
+        report = auditor.audit("s", body, [tp])
+
+        # 四个类别都被路由到(各自走了对应的 _judge_*)
+        cats = {f.category for f in report.findings}
+        assert cats == {
+            AuditCategory.CONDITIONAL,
+            AuditCategory.PROHIBITION,
+            AuditCategory.STEP,
+            AuditCategory.OUTPUT,
+        }
+        assert len(report.findings) == 5  # 2 CONDITIONAL + 1 + 1 + 1

@@ -27,17 +27,23 @@
   但 audit 的语义是"实测里有没有发生某行为",且**默认值保守 FAIL**(compliance 解析失败
   默认保留 True 不误剔;audit 解析失败默认保守 FAIL 不误判 N/A / PASS 放过疑似违规)。
 
-聚合/路由主入口(把指令按 classify 分流到上述四法)留 Task 8。
+聚合/路由主入口 ``audit``:按 ``classify`` 把指令分到上述四法、标 derived、汇总 summary。
 """
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
+from skill_eval.audit.declare import derive_declarations
+from skill_eval.audit.rebuild import rebuild
 from skill_eval.compliance.checker import extract_first_balanced, match_tool_call
+from skill_eval.compliance.extractor import InstructionExtractor
+from skill_eval.errors import SkillEvalError
 from skill_eval.models import InstructionCheck, InstructionSource
 from skill_eval.models.audit_models import (
     AuditCategory,
     AuditFinding,
+    AuditReport,
     AuditVerdict,
 )
 from skill_eval.utils import call_claude
@@ -58,7 +64,7 @@ class TranscriptAuditor:
 
     含四条按类别分的判定路径(``_judge_conditional`` / ``_judge_prohibition`` /
     ``_judge_step`` / ``_judge_output``)+ ``classify`` 类别路由;
-    聚合/路由主入口留 Task 8。
+    ``audit`` 是聚合/路由主入口(串联上述件 + InstructionExtractor + rebuild + derive)。
     """
 
     @staticmethod
@@ -83,6 +89,103 @@ class TranscriptAuditor:
         if source == InstructionSource.OUTPUT_FORMAT:
             return AuditCategory.OUTPUT
         raise ValueError(f"未映射的 InstructionSource: {source!r}")
+
+    def audit(
+        self,
+        skill_name: str,
+        skill_body: str,
+        transcripts: list[Path],
+        model: str | None = None,
+        timeout: int = 120,
+    ) -> AuditReport:
+        """聚合主入口:把 skill 声明的指令 + transcript 反推声明逐条对账若干 transcript。
+
+        把 Task 1-7 的零件串起来。流程(每条 transcript 独立处理,findings 平铺
+        per-transcript,顺序与 transcripts 入参一致):
+
+        1. ``InstructionExtractor`` 从 skill_body 抽静态指令;
+        2. 每 transcript ``rebuild`` 重建(tool_trace / text / digest)——坏/空 transcript
+           抛 ``SkillEvalError`` → 进 warnings、跳过该条(不崩,其余继续);
+        3. ``derive_declarations`` 从 digest 反推"真实使用里确实需要的"补充指令(只增不减,
+           纯新增、去重 vs 静态指令);existing + derived 合并后按 ``classify`` 分四桶
+           (CONDITIONAL / PROHIBITION / STEP / OUTPUT);
+        4. 四个 ``_judge_*`` 各判各桶 → findings;derived 来的 finding 标
+           ``derived_from_transcript=True``(按 instruction_text 命中 derived_texts 集合);
+        5. 汇总 summary(total/pass/fail/na)+ warnings → ``AuditReport``。
+
+        Args:
+            skill_name: skill 名(填进 report.skill_name)。
+            skill_body: SKILL.md 正文(``InstructionExtractor.extract`` 的输入)。
+            transcripts: Claude Code session JSONL 路径列表(逐个 rebuild)。
+            model: LLM 模型名(None 走 call_claude 默认)。
+            timeout: LLM 调用超时秒数。
+
+        Returns:
+            ``AuditReport``:findings 为所有**有效** transcript 的平铺结果;坏/空 transcript
+            不进 findings,而是带文件名进 warnings。
+        """
+        instructions = InstructionExtractor().extract(skill_body)
+        warnings: list[str] = []
+        all_findings: list[AuditFinding] = []
+        transcript_names: list[str] = []
+
+        for tp in transcripts:
+            try:
+                tool_trace, transcript_text, digest = rebuild(tp)
+            except SkillEvalError as e:
+                # 坏/空 transcript:不崩,记 warning 跳过(其余 transcript 照常处理)。
+                warnings.append(f"{tp.name}: {e}")
+                continue
+
+            derived = derive_declarations(digest, instructions)
+            all_inst = instructions + derived
+            derived_texts = {d.instruction_text for d in derived}
+
+            buckets: dict[AuditCategory, list[InstructionCheck]] = {
+                AuditCategory.CONDITIONAL: [],
+                AuditCategory.PROHIBITION: [],
+                AuditCategory.STEP: [],
+                AuditCategory.OUTPUT: [],
+            }
+            for inst in all_inst:
+                buckets[self.classify(inst)].append(inst)
+
+            scene = "\n".join(digest.user_turns)
+
+            findings: list[AuditFinding] = []
+            findings += self._judge_conditional(
+                buckets[AuditCategory.CONDITIONAL], tool_trace, scene, tp.name, model, timeout
+            )
+            findings += self._judge_prohibition(
+                buckets[AuditCategory.PROHIBITION], transcript_text, tp.name, model, timeout
+            )
+            findings += self._judge_step(
+                buckets[AuditCategory.STEP], transcript_text, tp.name, model, timeout
+            )
+            findings += self._judge_output(
+                buckets[AuditCategory.OUTPUT], transcript_text, tp.name
+            )
+
+            for f in findings:
+                if f.instruction_text in derived_texts:
+                    f.derived_from_transcript = True
+
+            all_findings.extend(findings)
+            transcript_names.append(tp.name)
+
+        summary = {
+            "total": len(all_findings),
+            "pass": sum(1 for f in all_findings if f.verdict == AuditVerdict.PASS),
+            "fail": sum(1 for f in all_findings if f.verdict == AuditVerdict.FAIL),
+            "na": sum(1 for f in all_findings if f.verdict == AuditVerdict.NA),
+        }
+        return AuditReport(
+            skill_name=skill_name,
+            transcripts=transcript_names,
+            summary=summary,
+            findings=all_findings,
+            warnings=warnings,
+        )
 
     def _judge_conditional(
         self,
