@@ -1,5 +1,11 @@
 """Pydantic data models for skill-eval."""
 
+from skill_eval.models.audit_models import (
+    AuditCategory,
+    AuditFinding,
+    AuditReport,
+    AuditVerdict,
+)
 from skill_eval.models.analysis_models import (
     AnalysisImprovementSuggestion,
     AnalysisInstructionFollowing,
@@ -82,6 +88,11 @@ from skill_eval.models.grading_models import (
 )
 
 __all__ = [
+    # Audit models
+    "AuditCategory",
+    "AuditFinding",
+    "AuditReport",
+    "AuditVerdict",
     # Enums
     "AssertionTier",
     "AssertionType",
