@@ -11,6 +11,10 @@ from pydantic import BaseModel, Field
 
 _LINE_NUM_RE = re.compile(r"^\s*\d+\t", re.MULTILINE)
 
+_BASH_WRITE_RE = re.compile(
+    r"""(?:>>?\s*|tee\s+(?:-a\s+)?)['"]?([^\s'";|&]+)"""
+)
+
 
 class FileContent(BaseModel):
     path: str
@@ -103,6 +107,8 @@ def build_digest(transcript_path: Path, root: str | None = None) -> SessionDiges
     read_order: list[str] = []
     files: dict[str, str] = {}            # path -> 当前重建状态
     written: set[str] = set()
+    demoted: set[str] = set()
+    bash_touched: set[str] = set()
     commands: list[Command] = []
     all_paths: list[str] = []
 
@@ -146,16 +152,64 @@ def build_digest(transcript_path: Path, root: str | None = None) -> SessionDiges
                     read_order.append(fp)
                 if fp and fp not in files:
                     files[fp] = reads[fp]
+            elif name == "Write":
+                fp = inp.get("file_path", "")
+                remember(fp)
+                if fp:
+                    files[fp] = inp.get("content", "")
+                    written.add(fp)
+            elif name == "Edit":
+                fp = inp.get("file_path", "")
+                remember(fp)
+                old, new = inp.get("old_string", ""), inp.get("new_string", "")
+                if fp and fp in files and old in files[fp]:
+                    if inp.get("replace_all"):
+                        files[fp] = files[fp].replace(old, new)
+                    else:
+                        files[fp] = files[fp].replace(old, new, 1)
+                    written.add(fp)
+                elif fp:
+                    written.discard(fp)
+                    demoted.add(fp)
+            elif name == "MultiEdit":
+                fp = inp.get("file_path", "")
+                remember(fp)
+                edits = inp.get("edits", []) or []
+                cur, ok = files.get(fp), fp in files
+                if ok:
+                    for e in edits:
+                        o, n = e.get("old_string", ""), e.get("new_string", "")
+                        if o not in cur:
+                            ok = False
+                            break
+                        cur = cur.replace(o, n, 1)
+                if ok and fp:
+                    files[fp] = cur
+                    written.add(fp)
+                elif fp:
+                    written.discard(fp)
+                    demoted.add(fp)
             elif name == "Bash":
-                commands.append(Command(cmd=inp.get("command", ""), stdout=id2result.get(tid, "")[:2000]))
-            # Write/Edit/MultiEdit 在 Task 3 加
+                cmd = inp.get("command", "")
+                commands.append(Command(cmd=cmd, stdout=id2result.get(tid, "")[:2000]))
+                for m in _BASH_WRITE_RE.finditer(cmd):
+                    tgt = (m.group(1) or "").strip("'\"")
+                    if tgt:
+                        bash_touched.add(tgt)
 
     if root is None:
         root = _detect_root(all_paths)
 
+    produced = [FileContent(path=_rel(p, root), content=files.get(p, ""))
+                for p in sorted(written) if p not in demoted]
     inputs = [FileContent(path=_rel(p, root), content=reads[p])
-              for p in read_order if p not in written]
+              for p in read_order if p not in written and p not in demoted]
+    produced_paths = {f.path for f in produced}
+    unrecon = sorted({_rel(p, root) for p in (demoted | bash_touched) if p})
+    unrecon = [u for u in unrecon if u not in produced_paths]
+
     return SessionDigest(
         skill_used=skill_used, user_turns=user_turns,
-        input_files=inputs, produced_files=[], unreconstructed=[], commands=commands,
+        input_files=inputs, produced_files=produced,
+        unreconstructed=unrecon, commands=commands,
     )

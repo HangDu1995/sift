@@ -73,3 +73,43 @@ def test_relativization_via_common_prefix_when_root_none(tmp_path):
     ]
     d = build_digest(_write_jsonl(tmp_path, recs))   # root=None
     assert d.input_files[0].path == "calc.py"   # 单文件→parent 作 root
+
+def test_write_becomes_produced_file(tmp_path):
+    recs = [
+        _asst([_tool_use("w1", "Write", {"file_path": "/proj/cli.py", "content": "print('hi')\n"})]),
+    ]
+    d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
+    assert d.produced_files == [FileContent(path="cli.py", content="print('hi')\n")]
+    assert d.input_files == []
+
+def test_edit_replayed_on_read_seed(tmp_path):
+    recs = [
+        _asst([_tool_use("r1", "Read", {"file_path": "/proj/app.py"})]),
+        _tool_result("r1", "1\tTODO\n"),
+        _asst([_tool_use("e1", "Edit",
+              {"file_path": "/proj/app.py", "old_string": "TODO", "new_string": "DONE",
+               "replace_all": False})]),
+    ]
+    d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
+    assert d.produced_files == [FileContent(path="app.py", content="DONE\n")]
+    assert d.input_files == []                      # 被改过→不再是纯输入
+    assert d.unreconstructed == []
+
+def test_edit_with_missing_base_is_demoted(tmp_path):
+    recs = [
+        _asst([_tool_use("e1", "Edit",
+              {"file_path": "/proj/ghost.py", "old_string": "a", "new_string": "b",
+               "replace_all": False})]),
+    ]
+    d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
+    assert d.produced_files == []
+    assert d.unreconstructed == ["ghost.py"]
+
+def test_bash_only_file_is_flagged_unreconstructed(tmp_path):
+    recs = [
+        _asst([_tool_use("b1", "Bash", {"command": "echo x > /proj/out.txt", "description": ""})]),
+        _tool_result("b1", ""),
+    ]
+    d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
+    assert d.produced_files == []
+    assert d.unreconstructed == ["out.txt"]
