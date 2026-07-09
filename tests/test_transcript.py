@@ -113,3 +113,13 @@ def test_bash_only_file_is_flagged_unreconstructed(tmp_path):
     d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
     assert d.produced_files == []
     assert d.unreconstructed == ["out.txt"]
+
+def test_write_recovers_a_demoted_file(tmp_path):
+    recs = [
+        _asst([_tool_use("e1", "Edit", {"file_path": "/proj/r.py",
+              "old_string": "x", "new_string": "y", "replace_all": False})]),   # no base -> demoted
+        _asst([_tool_use("w1", "Write", {"file_path": "/proj/r.py", "content": "real\n"})]),  # Write recovers
+    ]
+    d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
+    assert d.produced_files == [FileContent(path="r.py", content="real\n")]
+    assert d.unreconstructed == []

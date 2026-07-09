@@ -158,6 +158,7 @@ def build_digest(transcript_path: Path, root: str | None = None) -> SessionDiges
                 if fp:
                     files[fp] = inp.get("content", "")
                     written.add(fp)
+                    demoted.discard(fp)
             elif name == "Edit":
                 fp = inp.get("file_path", "")
                 remember(fp)
