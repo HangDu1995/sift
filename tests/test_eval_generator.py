@@ -9,6 +9,7 @@ import yaml
 
 from skill_eval.config.loader import EvalConfig
 from skill_eval.evals.generator import EvalInitGenerator
+from skill_eval.evals.transcript import SessionDigest, FileContent
 from skill_eval.models import Assertion, AssertionType, EvalCase, EvalSet, FixtureFile
 
 
@@ -102,3 +103,41 @@ def test_enforce_scopes_contains_pattern_path():
                   params={"pattern": "import", "path": "cli.py"})])
     out = EvalInitGenerator._enforce_manifest(_es(ev), {"sub/cli.py"})
     assert out.evals[0].assertions[0].params["path"] == "sub/cli.py"
+
+
+def test_build_transcript_prompt_contains_manifest_schema_and_trapA():
+    gen = EvalInitGenerator()
+    digest = SessionDigest(
+        user_turns=["造一个 cli"],
+        input_files=[FileContent(path="calc.py", content="x=1")],
+        produced_files=[FileContent(path="sub/cli.py", content="print(1)")],
+    )
+    prompt = gen._build_transcript_prompt("calc", "a skill", "body", digest)
+    assert "sub/cli.py" in prompt and "calc.py" in prompt   # manifest
+    assert '"filename"' in prompt and '"path"' in prompt    # schema pin
+    assert "CUSTOM_SCRIPT" in prompt
+    assert "not ground truth" in prompt                     # trap-A
+
+
+def test_generate_from_transcript_pipeline(monkeypatch, tmp_path):
+    gen = EvalInitGenerator()
+    # 假 transcript: 一个 Write
+    import json
+    tp = tmp_path / "t.jsonl"
+    tp.write_text("\n".join(json.dumps(r) for r in [
+        {"message": {"role": "user", "content": "造 cli"}},
+        {"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "w1", "name": "Write",
+             "input": {"file_path": "/proj/cli.py", "content": "from calc import evaluate\n"}}]}},
+    ]), encoding="utf-8")
+    # mock LLM 返回带裸 filename 的 eval(应被 _enforce_manifest 处理)
+    fake = json.dumps({"skill_name": "calc", "evals": [{"id": 1, "name": "L2", "level": "L2",
+        "prompt": "p", "expected_output": "", "expectations": [],
+        "assertions": [{"name": "cli", "type": "FILE_EXISTS", "params": {"filename": "cli.py"}}],
+        "fixtures": []}]})
+    monkeypatch.setattr("skill_eval.evals.generator.call_claude", lambda *a, **k: fake)
+    sp = tmp_path / "skill"; sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: calc\ndescription: d\n---\n# body\n", encoding="utf-8")
+    es = gen.generate_from_transcript(sp, tp)
+    # manifest 含 cli.py(单文件->parent /proj 作 root),裸名保持;pipeline 跑通即过
+    assert es.evals[0].assertions[0].params["filename"] == "cli.py"

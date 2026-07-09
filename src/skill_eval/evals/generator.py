@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from skill_eval.errors import SkillEvalError
 from skill_eval.models import Assertion, AssertionTier, AssertionType, EvalCase, EvalSet
 from skill_eval.parser import parse_skill_md
 from skill_eval.utils import call_claude
@@ -611,3 +612,72 @@ class EvalInitGenerator:
                 pass
 
         return None
+
+    # ------------------------------------------------------------------
+    # Transcript-driven generation
+    # ------------------------------------------------------------------
+
+    def generate_from_transcript(self, skill_path: Path, transcript_path: Path) -> EvalSet:
+        from skill_eval.evals.transcript import build_digest
+        name, description, _content, _frontmatter, body = parse_skill_md(skill_path)
+        digest = build_digest(transcript_path)
+        if not digest.user_turns and not digest.manifest:
+            raise SkillEvalError("transcript 未产出可用内容(无 user turn 也无文件)")
+        prompt = self._build_transcript_prompt(name, description, body, digest)
+        try:
+            response = call_claude(prompt, model=self.model, timeout=self.timeout)
+        except RuntimeError:
+            return self._transcript_fallback(name, description, digest)
+        eval_set = self._parse_llm_response(response, name)
+        if eval_set is None:
+            return self._transcript_fallback(name, description, digest)
+        return self._enforce_manifest(eval_set, digest.manifest)
+
+    def _transcript_fallback(self, name: str, description: str, digest) -> EvalSet:
+        turns = digest.user_turns[:8] or [self._build_fallback_prompt(name, description)]
+        cases = [EvalCase(
+            id=i, name=f"transcript-turn-{i}", level="L1", prompt=t[:500],
+            expected_output="", expectations=["回应需贴合 transcript 里的真实任务"],
+            assertions=[], flags=["degraded:no-llm"],
+        ) for i, t in enumerate(turns, 1)]
+        return EvalSet(skill_name=name, evals=cases)
+
+    def _build_transcript_prompt(self, name: str, description: str, body: str, digest) -> str:
+        manifest = sorted(digest.manifest)
+        produced = sorted(f.path for f in digest.produced_files)
+        inputs = sorted(f.path for f in digest.input_files)
+        L: list[str] = []
+        L.append("You are an expert at creating evaluation test cases for AI coding assistants.\n")
+        L.append("下面是 (a) Skill 定义 与 (b) 一份该 skill 真实使用 session 的 transcript digest。从 transcript 挖真实 evals,别凭空造。\n")
+        L.append("## REAL USER REQUESTS\n")
+        for i, t in enumerate(digest.user_turns, 1):
+            L.append(f"[user {i}] {t[:1500]}\n")
+        if digest.skill_used:
+            L.append(f"\nSkill invoked: {digest.skill_used}\n")
+        L.append("\n## INPUT FILES (作 fixture stage,真实内容)\n")
+        for f in digest.input_files:
+            L.append(f"--- {f.path} ---\n{f.content[:2000]}\n")
+        L.append("\n## PRODUCED FILES (在其上断言 FILE_EXISTS / 内容)\n")
+        for f in digest.produced_files:
+            L.append(f"--- {f.path} ---\n{f.content[:2000]}\n")
+        if digest.commands:
+            L.append("\n## COMMANDS RUN + OUTPUTS (验证候选)\n")
+            for c in digest.commands[:10]:
+                L.append(f"$ {c.cmd[:300]}\n{c.stdout[:800]}\n")
+        if digest.unreconstructed:
+            L.append(f"\n## UNRECONSTRUCTED (Bash-only,别断言): {digest.unreconstructed}\n")
+        L.append(f"\n## PATH MANIFEST (断言/fixture 路径只能引用这些): {manifest}\n")
+        L.append(f"produced(FILE_EXISTS/内容目标): {produced}\ninput(fixtures): {inputs}\n")
+        L.append("\n## ASSERTION SCHEMA(scorer 读这些精确 key):\n"
+                 '- FILE_EXISTS: {"filename": "<manifest path>"}\n'
+                 '- CONTAINS_PATTERN / NOT_CONTAINS: {"pattern": "<regex>", "path": "<manifest path>"}(path 必填)\n'
+                 '- JSON_HAS_FIELD: {"filename": "...", "field": "..."}\n'
+                 '- CUSTOM_SCRIPT: {"script": "<checker .py>", "args": []}——checker 必须同时是该 eval 的 fixture\n')
+        L.append("\n## trap-A WARNING: transcript 是一次执行,not ground truth。别把它的错/绕路冻成期望;推导一般可验证的期望;不确定就略。\n")
+        L.append('\n## Output JSON ONLY(EvalSet schema): {"skill_name":"...","evals":'
+                 '[{"id":1,"name":"...","level":"L1|L2","prompt":"...","expected_output":"...",'
+                 '"expectations":["..."],"assertions":[{"name":"...","type":"...","params":{...}}],'
+                 '"fixtures":[{"path":"...","content":"..."}]}]}\n')
+        L.append("生成 5-8 条 eval(L1+L2 混)。语言同 transcript。\n")
+        L.append(f"\n## SKILL\nname: {name}\ndescription: {description}\n\n{body[:6000]}\n")
+        return "".join(L)
