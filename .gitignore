@@ -36,3 +36,8 @@ test-results/
 dist/
 build/
 skill-eval.spec
+
+# Local working files (internal references / personal conventions — do not publish)
+/CLAUDE.md
+/docs/skill-eval-analysis.md
+/docs/superpowers/
