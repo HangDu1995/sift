@@ -7,10 +7,10 @@ _judge_conditional: 条件性指令(TOOL_REQUIREMENT / REFERENCE_USAGE)的三态
 - 命中 tool_trace → PASS 且**不调** call_claude
 - 未命中 + LLM applicable=true  → FAIL
 - 未命中 + LLM applicable=false → N/A
-- 未命中 + LLM 抛 RuntimeError   → 保守 FAIL(低置信度)
-- 未命中 + LLM 解析失败          → 保守 FAIL
+- 未命中 + LLM 抛 RuntimeError(重试耗尽)→ N/A(低置信度,宁少报不乱报)
+- 未命中 + LLM 解析失败          → N/A
 - 混合(命中 PASS + 未命中走 LLM)→ 各自正确 verdict
-- 批量超 30 → **分批循环处理**(每批 30 条,处理全部,无"批量超限"保守 FAIL)
+- 批量超 _MAX_LLM_IN_BATCH(10)→ **分批循环处理**(每批 10 条,处理全部,无"批量超限"兜底)
 - 空 prohibition/step 桶 → 不调 call_claude(短路返回 [])
 - evidence 中文 / category 全 CONDITIONAL / transcript 字段填了 transcript_name
 """
@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from skill_eval.audit.auditor import _MAX_LLM_IN_BATCH, TranscriptAuditor
+from skill_eval.audit.auditor import _MAX_LLM_IN_BATCH, _LLM_RETRY_MAX, TranscriptAuditor
 from skill_eval.models import InstructionCheck
 from skill_eval.models.audit_models import AuditCategory, AuditReport, AuditVerdict
 from skill_eval.models.enums import (
@@ -30,6 +30,12 @@ from skill_eval.models.enums import (
     InstructionPriority,
     InstructionSource,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_llm_retry_sleep(monkeypatch) -> None:
+    """重试退避的 time.sleep → no-op,保持测试快(retry 逻辑由专门测试覆盖)。"""
+    monkeypatch.setattr("skill_eval.audit.auditor.time.sleep", lambda *a, **k: None)
 
 
 def _tool_inst(text: str = "必须使用 Bash 工具", tool_name: str = "Bash") -> InstructionCheck:
@@ -179,9 +185,12 @@ class TestUnmatchedLlm:
         assert abs(f.confidence - 0.8) < 1e-9
         assert "场景不涉及" in f.evidence
 
-    def test_runtime_error_conservative_fail(self, monkeypatch) -> None:
-        """call_claude 抛 RuntimeError → 保守 FAIL(低置信度,不误判 N/A)。"""
+    def test_runtime_error_unverifiable_na(self, monkeypatch) -> None:
+        """call_claude 持续抛 RuntimeError(重试耗尽)→ 标 N/A(宁少报不乱报)。"""
+        calls = {"n": 0}
+
         def boom(*a, **k):
+            calls["n"] += 1
             raise RuntimeError("claude CLI down")
 
         monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
@@ -190,13 +199,15 @@ class TestUnmatchedLlm:
         findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.FAIL
+        assert f.verdict == AuditVerdict.NA  # 不报 FAIL,标 N/A(判不准)
         assert f.category == AuditCategory.CONDITIONAL
-        assert f.confidence <= 0.5  # 低置信度(保守,非确证)
-        assert "保守" in f.evidence
+        assert f.confidence <= 0.5  # 低置信度(判不准兜底,非 LLM 明确判 N/A)
+        assert "无法确证" in f.evidence
+        # 重试耗尽:1 次首发 + _LLM_RETRY_MAX 次重试,全失败才兜底
+        assert calls["n"] == 1 + _LLM_RETRY_MAX
 
-    def test_parse_failure_conservative_fail(self, monkeypatch) -> None:
-        """LLM 返回非 JSON → 解析失败 → 保守 FAIL。"""
+    def test_parse_failure_unverifiable_na(self, monkeypatch) -> None:
+        """LLM 返回非 JSON → 解析失败 → 标 N/A(宁少报不乱报)。"""
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude", lambda *a, **k: "我觉得都不该触发"
         )
@@ -205,15 +216,16 @@ class TestUnmatchedLlm:
         findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.FAIL
-        assert "保守" in f.evidence
+        assert f.verdict == AuditVerdict.NA
+        assert "无法确证" in f.evidence
         assert f.confidence <= 0.5
 
-    def test_missing_applicable_key_is_conservative_fail(self, monkeypatch) -> None:
-        """条目有 index 但缺 applicable 键 → 不得当 N/A,保守 FAIL。
+    def test_missing_applicable_key_is_unverifiable_na(self, monkeypatch) -> None:
+        """条目有 index 但缺 applicable 键 → 标 N/A(宁少报不乱报)。
 
-        回归 I1:旧实现 ``bool(item.get("applicable"))`` = bool(None) = False
-        → 被错当成 N/A(场景不涉及),漏报疑似违规。修复后应保持 None → 保守 FAIL。
+        与 I1 当初相反:I1 担心"缺键被洗成 N/A → 漏报违规"故保守 FAIL;但用户原则
+        '宁可少报不能乱报'推翻之——LLM 没给明确 applicable = 判不准 = N/A,绝不报假 FAIL。
+        严格 ``is True/is False`` 判断保留(畸形值不洗成明确 N/A,仍走判不准兜底 N/A)。
         """
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude",
@@ -224,16 +236,15 @@ class TestUnmatchedLlm:
         findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.FAIL  # 保守 FAIL,不是 N/A
-        assert f.confidence <= 0.5  # 低置信度(保守,非确证)
-        assert "保守" in f.evidence
+        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A,不报 FAIL
+        assert f.confidence <= 0.5  # 低置信度(判不准兜底)
+        assert "无法确证" in f.evidence
 
-    def test_string_applicable_value_is_conservative_fail(self, monkeypatch) -> None:
-        """applicable 是字符串 "false"(非布尔)→ 保守 FAIL,不被 bool("false") 误判。
+    def test_string_applicable_value_is_unverifiable_na(self, monkeypatch) -> None:
+        """applicable 是字符串 "false"(非布尔)→ 标 N/A(宁少报不乱报)。
 
-        回归 M1:旧实现 ``bool("false")`` = True(非空串恒真)→ 错当 FAIL(方向碰巧
-        对,但原理是错的);更危险的是 "true"/"false" 都会变 True。畸形非布尔值一律
-        保持 None → 保守 FAIL。
+        回归 M1:旧实现 ``bool("false")`` = True(非空串恒真)会洗畸形值。现保留严格
+        ``is True/is False`` 判断(畸形非布尔值不当明确结论),落到判不准兜底 → N/A。
         """
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude",
@@ -244,9 +255,39 @@ class TestUnmatchedLlm:
         findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.FAIL  # 保守 FAIL,不是 N/A
-        assert f.confidence <= 0.5  # 低置信度
-        assert "保守" in f.evidence
+        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A,不报 FAIL
+        assert f.confidence <= 0.5
+        assert "无法确证" in f.evidence
+
+
+class TestRetryRecovery:
+    """整批 transient 失败时重试救回:前几次 RuntimeError、后续成功 → 正常判定,不兜底 N/A。
+
+    回归 audit-out3:2 个整批(25 条)撞限流直接放弃 → N/A。重试后 transient 失败大多
+    能救回,真判(给出 resolved verdict)而非兜底。
+    """
+
+    def test_retry_recovers_then_judges_normally(self, monkeypatch) -> None:
+        """call_claude 前 _LLM_RETRY_MAX 次 RuntimeError、第 3 次成功 → 重试救回,resolved N/A。"""
+        calls = {"n": 0}
+
+        def flaky(*a, **k):
+            calls["n"] += 1
+            if calls["n"] <= _LLM_RETRY_MAX:  # 前 _LLM_RETRY_MAX 次 transient 失败
+                raise RuntimeError("transient rate limit")
+            return '[{"index": 0, "applicable": false}]'  # 第 3 次:N/A resolved
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", flaky)
+        auditor = TranscriptAuditor()
+
+        findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
+
+        f = findings[0]
+        assert f.verdict == AuditVerdict.NA  # applicable=false → N/A
+        # 关键:resolved(0.8)而非兜底(0.3)→ 重试成功救回,真判了
+        assert f.confidence >= 0.7
+        assert "场景不涉及" in f.evidence  # LLM 给的 evidence,非"无法确证"兜底
+        assert calls["n"] == 1 + _LLM_RETRY_MAX  # 重试 _LLM_RETRY_MAX 次后第 3 次成功
 
 
 class TestMixed:
@@ -281,13 +322,13 @@ class TestMixed:
 
 
 class TestBatching:
-    """分批判定:>_MAX_LLM_IN_BATCH(30)条时分批循环处理全部,无"批量超限"保守 FAIL。"""
+    """分批判定:>_MAX_LLM_IN_BATCH(10)条时分批循环处理全部,无"批量超限"兜底 N/A。"""
 
-    def test_conditional_over_30_batched_all_judged(self, monkeypatch) -> None:
-        """32 条全未命中:分 2 批(30+2)各调一次 LLM,32 条全判,无溢出保守 FAIL。
+    def test_conditional_over_batch_size_batched_all_judged(self, monkeypatch) -> None:
+        """32 条全未命中:分 4 批(10+10+10+2)各调一次 LLM,32 条全判,无溢出兜底。
 
         mock 按每批 prompt 的条数返回全 applicable=false → 全 N/A;验证 call_claude
-        被调 2 次、32 条全 N/A、无"批量超限"/"保守"FAIL。
+        被调 4 次、32 条全 N/A、无"批量超限"/"无法确证"兜底。
         """
         calls: list[int] = []
 
@@ -304,11 +345,11 @@ class TestBatching:
         findings = auditor._judge_conditional(insts, [], "大场景", "big.jsonl")
 
         assert len(findings) == 32
-        assert calls == [30, 2]  # 分 30 + 2 两批
-        # 全 N/A(applicable=false),无保守 FAIL / 无"批量超限"
+        assert calls == [10, 10, 10, 2]  # 分 10+10+10+2 四批
+        # 全 N/A(applicable=false),无兜底 N/A / 无"批量超限"
         assert all(f.verdict == AuditVerdict.NA for f in findings)
         assert all("批量超限" not in f.evidence for f in findings)
-        assert all("保守" not in f.evidence for f in findings)
+        assert all("无法确证" not in f.evidence for f in findings)
 
 
 # ---------------------------------------------------------------------------
@@ -387,8 +428,8 @@ class TestJudgeProhibition:
         assert f.evidence == "未发现编造行为"
         assert abs(f.confidence - 0.8) < 1e-9
 
-    def test_runtime_error_conservative_fail(self, monkeypatch) -> None:
-        """call_claude 抛 RuntimeError → 保守 FAIL(低置信度,evidence 含'保守')。"""
+    def test_runtime_error_unverifiable_na(self, monkeypatch) -> None:
+        """call_claude 抛 RuntimeError → 标 N/A(宁少报不乱报:禁令也不在无确证时报 FAIL)。"""
         def boom(*a, **k):
             raise RuntimeError("claude CLI down")
 
@@ -400,13 +441,13 @@ class TestJudgeProhibition:
         )
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.FAIL  # 保守 FAIL
+        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A,不报假 FAIL
         assert f.category == AuditCategory.PROHIBITION
         assert f.confidence <= 0.5
-        assert "保守" in f.evidence
+        assert "无法确证" in f.evidence
 
-    def test_parse_failure_conservative_fail(self, monkeypatch) -> None:
-        """LLM 返回非 JSON → 保守 FAIL。"""
+    def test_parse_failure_unverifiable_na(self, monkeypatch) -> None:
+        """LLM 返回非 JSON → 解析失败 → 标 N/A(宁少报不乱报)。"""
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude", lambda *a, **k: "看起来没违规"
         )
@@ -417,12 +458,12 @@ class TestJudgeProhibition:
         )
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.FAIL
+        assert f.verdict == AuditVerdict.NA
         assert f.confidence <= 0.5
-        assert "保守" in f.evidence
+        assert "无法确证" in f.evidence
 
-    def test_missing_violated_key_is_conservative_fail(self, monkeypatch) -> None:
-        """条目有 index 但缺 violated 键 → 严格判断,保守 FAIL(不被误当 PASS)。"""
+    def test_missing_violated_key_is_unverifiable_na(self, monkeypatch) -> None:
+        """条目有 index 但缺 violated 键 → 严格判断,标 N/A(不被误当 PASS,也不报假 FAIL)。"""
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "evidence": "不确定"}]',
@@ -434,15 +475,16 @@ class TestJudgeProhibition:
         )
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.FAIL  # 保守 FAIL,不是 PASS
+        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A,既不当 PASS 也不报 FAIL
         assert f.confidence <= 0.5
-        assert "保守" in f.evidence
+        assert "无法确证" in f.evidence
 
-    def test_nonbool_violated_is_conservative_fail(self, monkeypatch) -> None:
-        """violated 是字符串 "true"(非布尔)→ 严格 is True/is False,保守 FAIL。
+    def test_nonbool_violated_is_unverifiable_na(self, monkeypatch) -> None:
+        """violated 是字符串 "true"(非布尔)→ 严格 is True/is False,标 N/A。
 
         回归:bool("true")=True 会把畸形值洗成 FAIL(方向碰巧对但原理错);
-        "false" 会被 bool() 洗成 True(非空串恒真)→ 错判违规。严格判断避免这类洗 N/A / 洗 PASS。
+        "false" 会被 bool() 洗成 True(非空串恒真)→ 错判违规。严格判断避免洗 PASS;
+        畸形值落判不准兜底 → N/A(宁少报不乱报,不报假 FAIL)。
         """
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude",
@@ -455,9 +497,9 @@ class TestJudgeProhibition:
         )
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.FAIL  # 保守 FAIL
+        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A
         assert f.confidence <= 0.5
-        assert "保守" in f.evidence
+        assert "无法确证" in f.evidence
 
     def test_anti_fabrication_source(self, monkeypatch) -> None:
         """ANTI_FABRICATION 也走 prohibition 判定。"""
@@ -498,11 +540,11 @@ class TestJudgeProhibition:
         assert findings == []
         assert calls["n"] == 0  # 空桶短路,未 spawn LLM
 
-    def test_over_30_batched_all_judged(self, monkeypatch) -> None:
-        """35 条禁令:分 2 批(30+5)处理,全部判 PASS,无"批量超限"保守 FAIL。
+    def test_over_batch_size_batched_all_judged(self, monkeypatch) -> None:
+        """35 条禁令:分 4 批(10+10+10+5)处理,全部判 PASS,无"批量超限"兜底。
 
-        回归 Issue 2:旧实现单次 30 截断、超限保守 FAIL("批量超限未判"),假 FAIL
-        淹没真问题。分批后 35 条全判(mock 按批返回 violated=false → 全 PASS)。
+        回归 Issue 2:旧实现单次截断、超限兜底("批量超限未判"),假 FAIL 淹没真问题。
+        分批后 35 条全判(mock 按批返回 violated=false → 全 PASS)。
         """
         calls: list[int] = []
 
@@ -522,7 +564,7 @@ class TestJudgeProhibition:
         findings = auditor._judge_prohibition(insts, "某执行记录", "batch.jsonl")
 
         assert len(findings) == 35
-        assert calls == [30, 5]  # 分 30 + 5 两批
+        assert calls == [10, 10, 10, 5]  # 分 10+10+10+5 四批
         assert all(f.verdict == AuditVerdict.PASS for f in findings)
         assert all(f.category == AuditCategory.PROHIBITION for f in findings)
         assert all("批量超限" not in f.evidence for f in findings)
@@ -584,8 +626,8 @@ class TestJudgeStep:
         auditor = TranscriptAuditor()
         assert auditor._judge_step([_step_inst()], "x", "s.jsonl")[0].verdict == AuditVerdict.PASS
 
-    def test_unknown_verdict_conservative_fail(self, monkeypatch) -> None:
-        """未知 verdict(如 'maybe')→ 保守 FAIL(不误判 N/A)。"""
+    def test_unknown_verdict_unverifiable_na(self, monkeypatch) -> None:
+        """未知 verdict(如 'maybe')→ 标 N/A(宁少报不乱报:判不准不报 FAIL)。"""
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "verdict": "maybe"}]',
@@ -593,12 +635,12 @@ class TestJudgeStep:
         auditor = TranscriptAuditor()
 
         f = auditor._judge_step([_step_inst()], "某执行记录", "s.jsonl")[0]
-        assert f.verdict == AuditVerdict.FAIL
+        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A,不报 FAIL
         assert f.category == AuditCategory.STEP
         assert f.confidence <= 0.5
-        assert "保守" in f.evidence
+        assert "无法确证" in f.evidence
 
-    def test_runtime_error_conservative_fail(self, monkeypatch) -> None:
+    def test_runtime_error_unverifiable_na(self, monkeypatch) -> None:
         def boom(*a, **k):
             raise RuntimeError("down")
 
@@ -606,11 +648,11 @@ class TestJudgeStep:
         auditor = TranscriptAuditor()
 
         f = auditor._judge_step([_step_inst()], "某执行记录", "s.jsonl")[0]
-        assert f.verdict == AuditVerdict.FAIL
+        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A
         assert f.confidence <= 0.5
-        assert "保守" in f.evidence
+        assert "无法确证" in f.evidence
 
-    def test_missing_verdict_key_conservative_fail(self, monkeypatch) -> None:
+    def test_missing_verdict_key_unverifiable_na(self, monkeypatch) -> None:
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "evidence": "?"}]',
@@ -618,8 +660,9 @@ class TestJudgeStep:
         auditor = TranscriptAuditor()
 
         f = auditor._judge_step([_step_inst()], "某执行记录", "s.jsonl")[0]
-        assert f.verdict == AuditVerdict.FAIL
+        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A
         assert f.confidence <= 0.5
+        assert "无法确证" in f.evidence
 
     def test_empty_instructions_no_llm(self, monkeypatch) -> None:
         """空 step 桶(0 条)→ 不调 call_claude,直接返回 [](短路)。
@@ -640,12 +683,12 @@ class TestJudgeStep:
         assert findings == []
         assert calls["n"] == 0  # 空桶短路,未 spawn LLM
 
-    def test_over_60_batched_three_calls_index_mapping(self, monkeypatch) -> None:
-        """62 条步骤:分 3 批(30+30+2)处理,3 次 call_claude,全判且 index 不错位。
+    def test_over_60_batched_index_mapping(self, monkeypatch) -> None:
+        """62 条步骤:分 7 批(10×6+2)处理,7 次 call_claude,全判且 index 不错位。
 
         回归 Issue 2 + 验证分批易错点(index 映射):mock 按调用次序把全局位置写进
-        evidence(批 k 的本地 i → 全局 k*30+i),据此验证批间 index 映射——批 2 本地
-        [0] 正确落到全局 [30]、批 3 本地 [0]→[60],而非覆盖 [0]。错位会把某批结果
+        evidence(批 k 的本地 i → 全局 k*10+i),据此验证批间 index 映射——批 2 本地
+        [0] 正确落到全局 [10]、批 7 本地 [0]→[60],而非覆盖 [0]。错位会把某批结果
         写回错位置或漏写,被 evidence 的 global# 与原位置不一致抓出。
         """
         calls: list[int] = []
@@ -668,11 +711,11 @@ class TestJudgeStep:
         findings = auditor._judge_step(insts, "某执行记录", "big.jsonl")
 
         assert len(findings) == 62
-        assert calls == [30, 30, 2]  # 3 批
+        assert calls == [10, 10, 10, 10, 10, 10, 2]  # 7 批(10×6+2)
         assert all(f.verdict == AuditVerdict.PASS for f in findings)
         assert all("批量超限" not in f.evidence for f in findings)
         # index 映射:evidence 的 global# 与原位置严格一致
-        # (批 2 本地[0]→全局[30]、批 3 本地[0]→[60],不错位、不覆盖)
+        # (批 2 本地[0]→全局[10]、批 7 本地[0]→[60],不错位、不覆盖)
         for i, f in enumerate(findings):
             assert f.evidence == f"global#{i}", f"位置 {i} 映射错位: {f.evidence}"
 

@@ -8,14 +8,16 @@
   - 未命中 → 批量交 LLM 判"场景是否该触发该指令":
     - applicable=true  → FAIL(该做没做)
     - applicable=false → N/A(场景不涉及)
-    - LLM 失败/异常/解析失败 → **保守 FAIL**(不误判 N/A 放过疑似违规)
+    - LLM 失败/异常/解析失败 → **N/A**(宁少报不乱报:判不准不报 FAIL;audit()
+      据低置信度 N/A 汇总"未判定" → 警告,提示本次结果可能不完整)
 - **禁令**(``_judge_prohibition``):CONSTRAINT / ANTI_FABRICATION
   - 批量交 LLM **主动检测违规是否发生**(不是判 followed):
     - violated=true  → FAIL(违规了)
     - violated=false → PASS(没违规)
-    - LLM 失败/异常/解析失败/畸形值 → **保守 FAIL**(禁令违规严重,宁可标记让人工核实)
+    - LLM 失败/异常/解析失败/畸形值 → **N/A**(宁少报不乱报:即便禁令也在无确证时
+      不报 FAIL;audit() 汇总"未判定" → 警告提示人工复核,不靠假 FAIL 充数)
 - **步骤**(``_judge_step``):HEADING_STEP
-  - 批量交 LLM 判三态:pass→PASS / fail→FAIL / na→N/A;未知值/异常 → 保守 FAIL
+  - 批量交 LLM 判三态:pass→PASS / fail→FAIL / na→N/A;未知值/异常 → N/A(宁少报不乱报)
   - 空桶(0 条)→ 短路返回 [],不调 LLM(同 prohibition)
 - **输出格式**(``_judge_output``):OUTPUT_FORMAT(PATTERN_MATCH)
   - 确定性子串判定(**不调 LLM**):sample 任一行(strip 后)在 transcript 命中 → PASS,否则 FAIL
@@ -24,15 +26,18 @@
 设计要点(对照 compliance.checker):
 - 复用 ``match_tool_call`` / ``extract_first_balanced``(Task 3 抽出的公共件),不重写。
 - OUTPUT 的子串判定**照** ``_check_programmatic`` 的 PATTERN_MATCH 分支逻辑。
-- LLM 批量 prompt + JSON 解析**仿** ``_check_llm_batch`` / ``_parse_applicability``,
-  但 audit 的语义是"实测里有没有发生某行为",且**默认值保守 FAIL**(compliance 解析失败
-  默认保留 True 不误剔;audit 解析失败默认保守 FAIL 不误判 N/A / PASS 放过疑似违规)。
+- LLM 批量 prompt + JSON 解析**仿** ``_check_llm_batch`` / ``_parse_applicability``。
+- **FAIL 必须站得住**(宁可少报不能乱报):只有 LLM 明确判"违规 / 该做没做"才报 FAIL;
+  LLM 不可用 / 解析失败 / 畸形值 / 未提及 → 一律 **N/A**(低置信度),``audit()`` 据低置信度
+  N/A 汇总"未判定"警告。与 compliance 解析失败默认保留(不误剔可遵循项)方向不同:
+  compliance 偏不漏(默认遵循),audit 偏不冤(LLM 判准才报 FAIL)。
 
 聚合/路由主入口 ``audit``:按 ``classify`` 把指令分到上述四法、标 derived、汇总 summary。
 """
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from skill_eval.audit.declare import derive_declarations
@@ -49,15 +54,46 @@ from skill_eval.models.audit_models import (
 )
 from skill_eval.utils import call_claude
 
-_MAX_LLM_IN_BATCH = 30  # 与 compliance.checker._MAX_LLM_IN_BATCH 对齐
-# 保守 FAIL 的置信度(LLM 判定失败 / 解析失败 / 畸形值):低,表明不确定而非确证违规。
-_CONSERVATIVE_FAIL_CONFIDENCE = 0.3
+# 每批交 LLM 判定的指令数上限。**小于** compliance.checker 的 30:audit 每条要 LLM 产出
+# "verdict + 中文 evidence"(输出量大),且 LLM 延迟方差极大(实测 ~10 条/批 40-257s)。
+# 30 条均值就 ~210s、慢尾更甚;10 条均值 ~117s、慢尾 ~257s,配 timeout=600 留足裕量
+# (慢尾 257s + ~340s 裕量,几乎不超时)。批数虽多但每批绝对时长低,远比 30 条稳。
+_MAX_LLM_IN_BATCH = 10
+# 无法确证(LLM 判定失败 / 解析失败 / 畸形值 / 未提及)→ 标 N/A 的置信度:低,表明
+# 不是"LLM 明确判 N/A(场景不涉及)",而是"判不准、宁少报不乱报"的兜底。
+# audit() 据此阈值(<= 本值)汇总"未判定"数 → 警告(避免把不完整结果误读成"0 FAIL=全过")。
+_UNVERIFIABLE_CONFIDENCE = 0.3
 # LLM 给出明确 applicable 时的置信度(该做没做 / 场景不涉及 都是明确结论)。
 _RESOLVED_CONFIDENCE = 0.8
 # 命中 tool_trace 是确定性程序判定,置信度满分。
 _MATCH_CONFIDENCE = 1.0
 # 防止场景描述过长撑爆 prompt(与 compliance 批量检查的 8000 截断一致)。
 _SCENE_TRUNCATE = 8000
+# 整批 LLM 判定 transient 失败(超时 / CLI 非零退出 / 限流)的重试次数与退避间隔。
+# call_claude 在超时 / 非零退出时抛 RuntimeError,多为 transient——重试大多能救回整批,
+# 避免单次抖动让一整批指令兜底 N/A(audit-out3 实测 2 个整批共 25 条因此放弃)。
+# 重试只针对 RuntimeError(语义错误重试无益,且 call_claude 也只抛这一种)。
+_LLM_RETRY_MAX = 2
+_LLM_RETRY_DELAY = 3.0
+
+
+def _call_claude_with_retry(prompt: str, model: str | None, timeout: int) -> str:
+    """call_claude + transient 重试。
+
+    RuntimeError(超时 / CLI 非零退出 / 限流)重试 ``_LLM_RETRY_MAX`` 次,线性退避
+    (``_LLM_RETRY_DELAY`` × 尝试序号);仍失败才抛出,由调用方 ``except RuntimeError``
+    兜底为 N/A。call_claude 只会抛 RuntimeError,故无需区分其他异常。
+    """
+    last_exc: RuntimeError | None = None
+    for attempt in range(_LLM_RETRY_MAX + 1):
+        try:
+            return call_claude(prompt, model=model, timeout=timeout, max_turns=1)
+        except RuntimeError as exc:
+            last_exc = exc
+            if attempt < _LLM_RETRY_MAX:
+                time.sleep(_LLM_RETRY_DELAY * (attempt + 1))
+    assert last_exc is not None  # range 至少迭代 1 次 → 必捕获过异常
+    raise last_exc
 
 
 class TranscriptAuditor:
@@ -97,7 +133,7 @@ class TranscriptAuditor:
         skill_body: str,
         transcripts: list[Path],
         model: str | None = None,
-        timeout: int = 120,
+        timeout: int = 600,
     ) -> AuditReport:
         """聚合主入口:把 skill 声明的指令 + transcript 反推声明逐条对账若干 transcript。
 
@@ -174,6 +210,21 @@ class TranscriptAuditor:
             all_findings.extend(findings)
             transcript_names.append(tp.name)
 
+        # 宁少报不乱报:LLM 判不准的指令标 N/A(低置信度),不报假 FAIL。这里汇总
+        # 未判定数 → 警告,让人知道本次结果可能不完整(而非误读"0 FAIL = 全过")。
+        # 唯一置信度 <= _UNVERIFIABLE_CONFIDENCE 的就是"判不准兜底 N/A"(LLM 明确判
+        # N/A 是 _RESOLVED_CONFIDENCE=0.8;命中/确定性是 1.0)→ 阈值不会误伤。
+        unverified = sum(
+            1 for f in all_findings
+            if f.verdict == AuditVerdict.NA
+            and f.confidence <= _UNVERIFIABLE_CONFIDENCE
+        )
+        if unverified:
+            warnings.append(
+                f"{unverified} 条指令因 LLM 判定失败标为 N/A"
+                "(本次结果可能不完整,建议重跑)"
+            )
+
         summary = {
             "total": len(all_findings),
             "pass": sum(1 for f in all_findings if f.verdict == AuditVerdict.PASS),
@@ -195,14 +246,14 @@ class TranscriptAuditor:
         transcript_scene: str,
         transcript_name: str,
         model: str | None = None,
-        timeout: int = 120,
+        timeout: int = 600,
     ) -> list[AuditFinding]:
         """判定条件性指令(TOOL_REQUIREMENT / REFERENCE_USAGE)的三态结论。
 
         每条指令先走确定性 ``match_tool_call``(命中 tool_trace → PASS,不调 LLM);
         未命中的批量交 LLM 判"场景是否该触发该指令",据此分 FAIL(该做没做) /
-        N/A(场景不涉及);LLM 失败/异常/解析失败 → 保守 FAIL。未命中全量交 LLM,
-        >_MAX_LLM_IN_BATCH 由 ``_llm_judge_applicable`` 内部分批循环(无超限保守 FAIL)。
+        N/A(场景不涉及);LLM 失败/异常/解析失败 → 标 N/A(宁少报不乱报)。未命中全量交 LLM,
+        >_MAX_LLM_IN_BATCH 由 ``_llm_judge_applicable`` 内部分批循环(无超限兜底 N/A)。
 
         Args:
             instructions: 已筛出的条件性指令(params 含 tool_name 或 script_path)。
@@ -267,9 +318,10 @@ class TranscriptAuditor:
                     transcript=transcript_name,
                 )
             else:
-                # None:LLM 未给明确结论(调用失败/解析失败/该条未被提及)→ 保守 FAIL
-                findings[orig_i] = self._make_conservative_fail_finding(
-                    inst, transcript_name, "LLM 判定失败,保守判疑似违规"
+                # None:LLM 未给明确结论(调用失败/解析失败/该条未被提及)→ 标 N/A
+                # (宁少报不乱报:判不准不报 FAIL,FAIL 只留给 LLM 明确判"该做没做")。
+                findings[orig_i] = self._make_unverifiable_na_finding(
+                    inst, transcript_name, "LLM 判定失败,无法确证 → N/A"
                 )
 
         return [f for f in findings if f is not None]
@@ -282,7 +334,7 @@ class TranscriptAuditor:
         transcript_text: str,
         transcript_name: str,
         model: str | None = None,
-        timeout: int = 120,
+        timeout: int = 600,
     ) -> list[AuditFinding]:
         """判定禁令类指令(CONSTRAINT / ANTI_FABRICATION)——**主动检测违规是否发生**。
 
@@ -291,9 +343,9 @@ class TranscriptAuditor:
         每条返回 ``{index, violated: bool, evidence}``:
         - violated=True  → FAIL(违规了)
         - violated=False → PASS(没违规)
-        - LLM 异常 / 解析失败 / 未提及 / violated 缺键或非布尔 → **保守 FAIL**
-          (禁令违规严重,宁可标记让人工核实;严格 ``is True/is False`` 判断,畸形值不当 PASS)。
-          全量交 LLM,>_MAX_LLM_IN_BATCH 由 ``_llm_judge_prohibition`` 内部分批循环(无超限保守 FAIL)。
+        - LLM 异常 / 解析失败 / 未提及 / violated 缺键或非布尔 → **N/A**(宁少报不乱报:
+          即便禁令也在无确证时不报 FAIL;严格 ``is True/is False`` 判断,畸形值不当 PASS)。
+          全量交 LLM,>_MAX_LLM_IN_BATCH 由 ``_llm_judge_prohibition`` 内部分批循环(无超限兜底 N/A)。
 
         Args:
             instructions: 已筛出的禁令类指令(CONSTRAINT / ANTI_FABRICATION)。
@@ -338,9 +390,11 @@ class TranscriptAuditor:
                     transcript=transcript_name,
                 )
             else:
-                # None:LLM 未给明确结论(调用失败/解析失败/未提及/畸形值)→ 保守 FAIL
-                findings[i] = self._make_conservative_fail_finding(
-                    inst, transcript_name, "LLM 判定失败,保守判疑似违规",
+                # None:LLM 未给明确结论(调用失败/解析失败/未提及/畸形值)→ 标 N/A
+                # (宁少报不乱报:即便禁令也在无确证时不报 FAIL;audit() 汇总"未判定"
+                # 警告提示人工复核,不靠假 FAIL 充数)。
+                findings[i] = self._make_unverifiable_na_finding(
+                    inst, transcript_name, "LLM 判定失败,无法确证是否违规 → N/A",
                     category=AuditCategory.PROHIBITION,
                 )
 
@@ -354,7 +408,7 @@ class TranscriptAuditor:
         transcript_text: str,
         transcript_name: str,
         model: str | None = None,
-        timeout: int = 120,
+        timeout: int = 600,
     ) -> list[AuditFinding]:
         """判定步骤类指令(HEADING_STEP)的三态结论。
 
@@ -363,10 +417,10 @@ class TranscriptAuditor:
         - pass → PASS
         - fail → FAIL
         - na   → N/A
-        - 未知 verdict / LLM 异常 / 解析失败 → **保守 FAIL**(不误判 N/A 放过)。
-          全量交 LLM,>_MAX_LLM_IN_BATCH 由 ``_llm_judge_step`` 内部分批循环(无超限保守 FAIL)。
+        - 未知 verdict / LLM 异常 / 解析失败 → **N/A**(宁少报不乱报:判不准不报 FAIL)。
+          全量交 LLM,>_MAX_LLM_IN_BATCH 由 ``_llm_judge_step`` 内部分批循环(无超限兜底 N/A)。
 
-        verdict 匹配大小写不敏感(strip+lower);未知值/非字符串 → 保守 FAIL。
+        verdict 匹配大小写不敏感(strip+lower);未知值/非字符串 → 标 N/A。
         空桶(0 条)→ 短路返回 [],不调 LLM。
 
         Args:
@@ -420,9 +474,9 @@ class TranscriptAuditor:
                     transcript=transcript_name,
                 )
             else:
-                # None/未知值/非字符串 → 保守 FAIL(不误判 N/A 放过)
-                findings[i] = self._make_conservative_fail_finding(
-                    inst, transcript_name, "LLM 判定失败,保守判疑似违规",
+                # None/未知值/非字符串 → 标 N/A(宁少报不乱报:判不准不报 FAIL)
+                findings[i] = self._make_unverifiable_na_finding(
+                    inst, transcript_name, "LLM 判定失败,无法确证 → N/A",
                     category=AuditCategory.STEP,
                 )
 
@@ -508,24 +562,26 @@ class TranscriptAuditor:
         )
 
     @staticmethod
-    def _make_conservative_fail_finding(
+    def _make_unverifiable_na_finding(
         inst: InstructionCheck,
         transcript_name: str,
         evidence: str,
         category: AuditCategory = AuditCategory.CONDITIONAL,
     ) -> AuditFinding:
-        """保守 FAIL(LLM 失败 / 解析失败 / 畸形值):低置信度,不误判 N/A 放过疑似违规。
+        """无法确证(LLM 失败 / 解析失败 / 畸形值 / 未提及)→ 标 N/A(宁少报不乱报)。
 
-        ``category`` 默认 CONDITIONAL(条件性);prohibition / step 各自传入对应类别,
-        以便 finding.category 反映真实指令类别而非恒为 conditional。
+        与 §48 当初的"保守 FAIL"相反:判不准时**不报 FAIL**(FAIL 必须站得住——LLM
+        明确判违规 / 该做没做)。判不准 → N/A,低置信度(= ``_UNVERIFIABLE_CONFIDENCE``),
+        ``audit()`` 据此汇总"未判定"警告让人知道本次结果可能不完整。``category`` 默认
+        CONDITIONAL,prohibition / step 各自传入对应类别,以反映真实指令类别。
         """
         return AuditFinding(
             instruction_text=inst.instruction_text,
             source=inst.source.value,
-            verdict=AuditVerdict.FAIL,
+            verdict=AuditVerdict.NA,
             category=category,
             evidence=evidence,
-            confidence=_CONSERVATIVE_FAIL_CONFIDENCE,
+            confidence=_UNVERIFIABLE_CONFIDENCE,
             transcript=transcript_name,
         )
 
@@ -549,7 +605,8 @@ class TranscriptAuditor:
         合并成完整 mask(长度=len(candidates))。批内 prompt 的 index 从 0 计(本地 index),
         ``_parse_applicable`` 只认 ``[0, bn)`` 的本地 index;批结果按 ``mask[start:start+bn]``
         写回全量 mask 的对应区段——**绝不**用批内 index 直接当下标(会错位/覆盖)。
-        某批调用异常(RuntimeError)→ 该批保持 None(保守 FAIL),其余批照常处理。
+        某批调用异常(RuntimeError)→ 先重试 ``_LLM_RETRY_MAX`` 次,仍失败则该批保持
+        None(调用方标 N/A + audit 汇总未判定警告),其余批照常处理。
         空 candidates → range 空 → 不调 LLM,返回 [](调用方 ``_judge_conditional`` 已在
         unmatched 为空时短路,这里作兜底)。
         """
@@ -574,11 +631,9 @@ class TranscriptAuditor:
                 '只返回 JSON 数组,每元素:{"index": 0, "applicable": true/false}\n'
             )
             try:
-                result_text = call_claude(
-                    prompt, model=model, timeout=timeout, max_turns=1
-                )
+                result_text = _call_claude_with_retry(prompt, model, timeout)
             except RuntimeError:
-                continue  # 该批 LLM 不可用 → 保持 None(保守 FAIL),其余批继续
+                continue  # 重试仍失败 → 保持 None(调用方标 N/A + audit 汇总未判定警告)
             batch_mask = self._parse_applicable(result_text, bn)
             for j, val in enumerate(batch_mask):
                 mask[start + j] = val  # 本地 j → 全量 start+j(批间 index 映射)
@@ -636,7 +691,8 @@ class TranscriptAuditor:
 
         分批模式同 ``_llm_judge_applicable``:每批独立 call_claude + ``_parse_prohibition``,
         批内 index 从 0 计、结果按 ``results[start:start+bn]`` 写回全量(批间 index 映射,
-        绝不用批内 index 直接当下标)。某批 RuntimeError → 该批保持 (None, "")(保守 FAIL),
+        绝不用批内 index 直接当下标)。某批 RuntimeError → 先重试 ``_LLM_RETRY_MAX`` 次,
+        仍失败则该批保持 (None, "")(调用方标 N/A + 未判定警告),
         其余批继续。空 candidates → 不调 LLM,返回 []。
         """
         n = len(candidates)
@@ -660,11 +716,9 @@ class TranscriptAuditor:
                 '{"index": 0, "violated": true/false, "evidence": "中文简述为何违反/未违反"}\n'
             )
             try:
-                result_text = call_claude(
-                    prompt, model=model, timeout=timeout, max_turns=1
-                )
+                result_text = _call_claude_with_retry(prompt, model, timeout)
             except RuntimeError:
-                continue  # 该批 LLM 不可用 → 保持 (None, "")(保守 FAIL),其余批继续
+                continue  # 重试仍失败 → 保持 (None, "")(调用方标 N/A + 未判定警告)
             batch_results = self._parse_prohibition(result_text, bn)
             for j, val in enumerate(batch_results):
                 results[start + j] = val  # 本地 j → 全量 start+j
@@ -724,7 +778,8 @@ class TranscriptAuditor:
 
         分批模式同 ``_llm_judge_applicable``:每批独立 call_claude + ``_parse_step``,
         批内 index 从 0 计、结果按 ``results[start:start+bn]`` 写回全量(批间 index 映射,
-        绝不用批内 index 直接当下标)。某批 RuntimeError → 该批保持 (None, "")(保守 FAIL),
+        绝不用批内 index 直接当下标)。某批 RuntimeError → 先重试 ``_LLM_RETRY_MAX`` 次,
+        仍失败则该批保持 (None, "")(调用方标 N/A + 未判定警告),
         其余批继续。空 candidates → 不调 LLM,返回 []。
         """
         n = len(candidates)
@@ -748,11 +803,9 @@ class TranscriptAuditor:
                 '{"index": 0, "verdict": "pass"|"fail"|"na", "evidence": "中文简述"}\n'
             )
             try:
-                result_text = call_claude(
-                    prompt, model=model, timeout=timeout, max_turns=1
-                )
+                result_text = _call_claude_with_retry(prompt, model, timeout)
             except RuntimeError:
-                continue  # 该批 LLM 不可用 → 保持 (None, "")(保守 FAIL),其余批继续
+                continue  # 重试仍失败 → 保持 (None, "")(调用方标 N/A + 未判定警告)
             batch_results = self._parse_step(result_text, bn)
             for j, val in enumerate(batch_results):
                 results[start + j] = val  # 本地 j → 全量 start+j

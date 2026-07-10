@@ -30,8 +30,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from skill_eval.audit.auditor import TranscriptAuditor
 from skill_eval.models.audit_models import AuditCategory, AuditReport, AuditVerdict
+
+
+@pytest.fixture(autouse=True)
+def _no_llm_retry_sleep(monkeypatch) -> None:
+    """重试退避的 time.sleep → no-op,保持闭环测试快(retry 逻辑由 test_auditor 覆盖)。"""
+    monkeypatch.setattr("skill_eval.audit.auditor.time.sleep", lambda *a, **k: None)
 
 
 # ---- 合成 transcript JSONL 辅助(仿 test_transcript.py / test_auditor.py)---------
@@ -245,3 +253,46 @@ class TestConditionalNaPath:
         # (auditor 对空桶也调一次 call_claude、不在空 batch 短路,故实际调用 ≥1;
         #  这里只断言"走过 LLM"这一事实,不绑定空桶调用次数以免耦合实现细节。)
         assert calls["n"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# LLM 判定失败(transient 不可用)→ 不报假 FAIL,标 N/A + 警告(宁少报不乱报)
+# ---------------------------------------------------------------------------
+
+
+class TestUnverifiableNoFalseFail:
+    """LLM 不可用时绝不产假 FAIL,而是 N/A + "未判定"警告。
+
+    回归 audit-out2 实况:LLM 抖动一次,49 条全保守 FAIL = 乱报,结果不可信。修复后
+    判不准 → N/A(低置信度),summary.fail 只含 LLM 明确判的违规;低置信度 N/A 由
+    audit() 汇总成警告,让人知道本次结果可能不完整(而非误读"0 FAIL = 全过")。
+    """
+
+    def test_llm_down_no_false_fail_but_warns(self, tmp_path, monkeypatch) -> None:
+        def boom(*a, **k):
+            raise RuntimeError("claude CLI down")
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        # 不含 OUTPUT_FORMAT(确定性判定,会真 FAIL,干扰"LLM 挂→0 假 FAIL"的隔离):
+        # 只放条件性 + 禁令 + 步骤,三者都走 LLM → 全挂 → 全 N/A。
+        body = (
+            "use Bash\n\n"
+            "NEVER delete production data\n\n"
+            "## 步骤一:分析问题\n"
+            "1. Analyze the input format carefully\n"
+        )
+        tp = _write_jsonl(tmp_path / "down.jsonl", [_user("某场景"), _asst_text("执行记录")])
+
+        report = TranscriptAuditor().audit("s", body, [tp])
+
+        # 关键:LLM 全挂 → 0 假 FAIL(旧保守 FAIL 会产出 N 条 FAIL = 乱报)
+        assert report.summary["fail"] == 0
+        assert report.summary["pass"] == 0
+        # 三条指令(条件性未命中 + 禁令 + 步骤)全标 N/A
+        assert report.summary["na"] == 3
+        # 全是低置信度兜底 N/A(非 LLM 明确判的 resolved N/A=0.8)
+        assert all(f.confidence <= 0.3 for f in report.findings)
+        # 低置信度 N/A 汇总成警告:提示结果不完整、建议重跑
+        assert len(report.warnings) == 1
+        assert "3 条" in report.warnings[0]
+        assert "建议重跑" in report.warnings[0]
