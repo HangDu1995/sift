@@ -43,6 +43,7 @@ from pathlib import Path
 from skill_eval.audit.declare import derive_declarations
 from skill_eval.audit.rebuild import rebuild
 from skill_eval.compliance.checker import extract_first_balanced, match_tool_call
+from skill_eval.audit.aggregate import aggregate_by_instruction
 from skill_eval.compliance.extractor import InstructionExtractor
 from skill_eval.errors import SkillEvalError
 from skill_eval.models import InstructionCheck, InstructionSource
@@ -237,6 +238,7 @@ class TranscriptAuditor:
             transcripts=transcript_names,
             summary=summary,
             findings=all_findings,
+            by_instruction=aggregate_by_instruction(all_findings),
             warnings=warnings,
         )
 

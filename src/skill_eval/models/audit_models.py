@@ -51,6 +51,20 @@ class AuditFinding(BaseModel):
     derived_from_transcript: bool = False  # 反推声明来的指令标 True
 
 
+class InstructionAggregate(BaseModel):
+    """单条指令跨 transcript 的对账聚合(见 audit.aggregate.aggregate_by_instruction)。"""
+
+    instruction_text: str
+    source: str
+    category: AuditCategory
+    pass_count: int
+    fail_count: int
+    na_count: int
+    total: int
+    fail_rate: float  # fail_count / total(total=0 时 0.0)
+    fail_in_transcripts: list[str]  # 哪些 transcript 里判 FAIL(定位用)
+
+
 class AuditReport(BaseModel):
     """一个 skill 一次 audit 的完整报告。"""
 
@@ -58,4 +72,6 @@ class AuditReport(BaseModel):
     transcripts: list[str]
     summary: dict  # {"total": N, "pass": X, "fail": Y, "na": Z}
     findings: list[AuditFinding]
+    # 多 transcript 对账的指令级聚合(按 fail_rate 降序);单 transcript 也有(每指令 1 verdict)。
+    by_instruction: list[InstructionAggregate] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
