@@ -439,3 +439,57 @@ class TestABTestRunnerRetry:
 
         # 2 job × (1 + 2 retry) = 6 次调用
         assert call_count[0] == 6, f"max_retries=2 该 3 次/job,期望 6 次调用(2 job),实际 {call_count[0]}"
+
+
+class TestRunDumpsTranscript:
+    """run 把 raw stream-json dump 成 transcript.jsonl,打通 live 真跑→audit 闭环。
+
+    背景:`_parse_stream_json` 只把 assistant text 块拼进 transcript、tool_use 只记截断
+    input_summary,丢了 tool_use 完整 input + tool_result 配对;而 audit 的 build_digest
+    需要完整配对。解法:额外 dump raw stream-json 成 transcript.jsonl。stream-json 的
+    assistant/user event 本身带 message 字段 → build_digest 可直接解析(result event
+    无 message,自动跳过)。使 `run`(路径1/3)产物能喂 `audit`(路径2)/`init --from-transcript`。
+    """
+
+    @staticmethod
+    def _make_skill(tmp_path: Path) -> Path:
+        skill = tmp_path / "skill"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: t\ndescription: test skill\n---\nbody\n", encoding="utf-8"
+        )
+        return skill
+
+    def test_dumps_transcript_parsable_by_build_digest(self, tmp_path: Path):
+        from skill_eval.execution.runner import ABTestRunner
+        from skill_eval.models import RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase
+        from skill_eval.evals.transcript import build_digest
+
+        # 仿 claude -p --output-format stream-json 的 stdout:assistant(tool_use Read)
+        # + user(tool_result) + result(无 message,build_digest 应跳过)
+        stream_json = "\n".join([
+            '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"read it"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/x/f.txt"}}]}}',
+            '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"hello"}]}}',
+            '{"type":"result","result":"done","usage":{"input_tokens":10,"output_tokens":5},"num_turns":1,"stop_reason":"end_turn"}',
+        ])
+
+        def fake_run(self, prompt, skill_path=None, **kwargs):
+            return RunOutput(exit_code=0, stdout=stream_json, transcript="read it", result_text="done")
+
+        skill = self._make_skill(tmp_path)
+        config = RunConfig(
+            runs_per_config=1, output_dir=tmp_path / "out",
+            skip_compliance=True, skip_calibration=True, max_workers=1,
+        )
+        runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
+        eval_set = EvalSet(skill_name="t", evals=[EvalCase(id=1, prompt="x")])
+        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+            runner.run_ab_test(skill, eval_set)
+
+        tp = tmp_path / "out" / "iteration-1" / "with_skill" / "eval-1" / "run-1" / "transcript.jsonl"
+        assert tp.exists(), "run 应 dump transcript.jsonl(raw stream-json stdout)"
+        # build_digest 直接解析 stream-json(assistant/user event 带 message;result 跳过)
+        d = build_digest(tp)
+        assert any(t.name == "Read" for t in d.tool_trace), \
+            f"build_digest 应从 stream-json 解析出 Read,实际 tool_trace={d.tool_trace}"
+        assert "read it" in d.transcript_text

@@ -277,6 +277,16 @@ class ABTestRunner:
                 (config_dir / "run_debug.json").write_text(
                     json.dumps(run_debug, indent=2, ensure_ascii=False), encoding="utf-8"
                 )
+                # dump raw stream-json 成 transcript.jsonl,打通 live 真跑→audit 闭环:
+                # _parse_stream_json 只留 assistant text + 截断的 tool_trace,丢了 tool_use
+                # 完整 input 与 tool_result 配对;而 audit 的 build_digest 需要完整配对重建
+                # digest。stream-json 的 assistant/user event 本身带 message 字段 → build_digest
+                # 可直接解析(result event 无 message,自动跳过)。使 run(路径1/3)产物能喂
+                # audit(路径2)/ init --from-transcript(路径3)。
+                if run_output.stdout:
+                    (config_dir / "transcript.jsonl").write_text(
+                        run_output.stdout, encoding="utf-8"
+                    )
 
                 run_duration = time.time() - run_start
 

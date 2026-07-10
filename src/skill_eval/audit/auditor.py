@@ -197,7 +197,8 @@ class TranscriptAuditor:
                 buckets[AuditCategory.PROHIBITION], transcript_text, tp.name, model, timeout
             )
             findings += self._judge_step(
-                buckets[AuditCategory.STEP], transcript_text, tp.name, model, timeout
+                buckets[AuditCategory.STEP], transcript_text, tp.name, model, timeout,
+                tool_trace=tool_trace,
             )
             findings += self._judge_output(
                 buckets[AuditCategory.OUTPUT], transcript_text, tp.name
@@ -409,6 +410,7 @@ class TranscriptAuditor:
         transcript_name: str,
         model: str | None = None,
         timeout: int = 600,
+        tool_trace: list | None = None,
     ) -> list[AuditFinding]:
         """判定步骤类指令(HEADING_STEP)的三态结论。
 
@@ -439,7 +441,7 @@ class TranscriptAuditor:
         findings: list[AuditFinding | None] = [None] * len(instructions)
 
         # 全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_step 内部分批循环)。
-        verdict_mask = self._llm_judge_step(instructions, transcript_text, model, timeout)
+        verdict_mask = self._llm_judge_step(instructions, transcript_text, model, timeout, tool_trace)
 
         for i, inst in enumerate(instructions):
             v, ev = verdict_mask[i]
@@ -767,6 +769,7 @@ class TranscriptAuditor:
         transcript_text: str,
         model: str | None,
         timeout: int,
+        tool_trace: list | None = None,
     ) -> list[tuple[str | None, str]]:
         """分批 call_claude 判每个步骤在本次执行里是否被走过(每批 30 条,处理全部)。
 
@@ -790,6 +793,16 @@ class TranscriptAuditor:
             instruction_list = "".join(
                 f"[{i}] {inst.instruction_text}\n" for i, inst in enumerate(batch)
             )
+            # tool_trace 进 prompt:判涉及工具的步骤时让 LLM 看到实际工具调用,而非只凭
+            # assistant 文字声称(canary 暴露的缺口 —— 否则"Read input log"步骤明明调了
+            # Read 却因 transcript_text 只剩文字声称而误判 FAIL)。
+            tool_section = ""
+            if tool_trace:
+                tool_lines = "\n".join(f"- {t.name}: {t.input_summary}" for t in tool_trace)
+                tool_section = (
+                    "## 实际工具调用记录(判涉及工具的步骤时以此为准,勿只凭文字声称)\n"
+                    f"{tool_lines}\n\n"
+                )
             prompt = (
                 "判断以下每个步骤在本次执行里是否被走过。\n\n"
                 "## 判定标准\n"
@@ -797,6 +810,7 @@ class TranscriptAuditor:
                 "- fail:这个场景本该走这一步但没走。\n"
                 "- na:这个场景根本不涉及该步骤。\n\n"
                 f"## 执行记录摘录\n{transcript_text[:_SCENE_TRUNCATE]}\n\n"
+                f"{tool_section}"
                 f"## 待判步骤 ({bn} 条)\n{instruction_list}\n"
                 "## 输出格式\n"
                 '只返回 JSON 数组,每元素:'

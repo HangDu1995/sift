@@ -626,6 +626,43 @@ class TestJudgeStep:
         auditor = TranscriptAuditor()
         assert auditor._judge_step([_step_inst()], "x", "s.jsonl")[0].verdict == AuditVerdict.PASS
 
+    def test_tool_trace_included_in_prompt(self, monkeypatch) -> None:
+        """涉及工具的步骤,tool_trace 应进 prompt 让 LLM 看到实际工具调用。
+
+        canary(log-error-analyzer)暴露的缺口:Read input log 步骤明明调了 Read,
+        但 transcript_text 只剩 assistant 文字声称 → LLM 看不到实际调用 → 假 FAIL。
+        修复:tool_trace 进 step 判定 prompt。
+        """
+        from skill_eval.models import ToolCallRecord
+
+        captured: dict = {}
+
+        def fake(prompt, *a, **k):
+            captured["prompt"] = prompt
+            return '[{"index": 0, "verdict": "pass", "evidence": "走过"}]'
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        auditor = TranscriptAuditor()
+        trace = [ToolCallRecord(name="Read", input_summary='{"file_path": "/x/logs/app.log"}')]
+
+        auditor._judge_step([_step_inst()], "执行记录", "s.jsonl", tool_trace=trace)
+
+        assert "app.log" in captured["prompt"], "tool_trace 应进 step 判定 prompt"
+        assert "Read" in captured["prompt"]
+
+    def test_no_tool_trace_omits_section(self, monkeypatch) -> None:
+        """不传 tool_trace 时 prompt 不含工具调用段(向后兼容,现有调用不破)。"""
+        captured: dict = {}
+
+        def fake(prompt, *a, **k):
+            captured["prompt"] = prompt
+            return '[{"index": 0, "verdict": "pass", "evidence": "走过"}]'
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        auditor = TranscriptAuditor()
+        auditor._judge_step([_step_inst()], "执行记录", "s.jsonl")
+        assert "工具调用记录" not in captured["prompt"]
+
     def test_unknown_verdict_unverifiable_na(self, monkeypatch) -> None:
         """未知 verdict(如 'maybe')→ 标 N/A(宁少报不乱报:判不准不报 FAIL)。"""
         monkeypatch.setattr(
