@@ -101,6 +101,26 @@ class TestInstructionExtractor:
             assert tr.check_method == CheckMethod.TOOL_CALL_CHECK
             assert "tool_name" in tr.params
 
+    def test_tool_requirement_filters_stopword_garbage(self):
+        """停用词碎片(use when / run concurrently / use of)不当 TOOL_REQUIREMENT 抽。
+
+        回归:audit 实测 "use when" 被抽成 tool_name="when",LLM 判"该用工具 when 但没用"
+        → 假 FAIL。动词+停用词的 match 一律滤掉;真工具(npu-smi / Bash 等)不受影响。
+        """
+        ext = InstructionExtractor()
+        body = (
+            "Use when facing 2+ independent tasks\n"   # use when → 停用词,不抽
+            "run concurrently with others\n"           # run concurrently → 停用词,不抽
+            "use of this tool is required\n"           # use of → 停用词,不抽
+            "run npu-smi to check the card\n"          # npu-smi → 真工具,抽
+            "use Bash to list files\n"                 # Bash → 真工具,抽
+        )
+        tool_reqs = [c for c in ext.extract(body) if c.source == InstructionSource.TOOL_REQUIREMENT]
+        tools = sorted(c.params["tool_name"] for c in tool_reqs)
+        assert tools == ["Bash", "npu-smi"]  # 只剩真工具;when/concurrently/of 被滤
+        assert "when" not in tools
+        assert "concurrently" not in tools
+
     def test_extracts_constraints(self):
         ext = InstructionExtractor()
         checks = ext.extract(SAMPLE_BODY)

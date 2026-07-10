@@ -15,6 +15,16 @@ from skill_eval.models import (
 # 中文关键词 — extractor 独用(单模块词表留原处);反捏造词已移至 skill_eval.i18n 共享(P2-13)。
 _CONSTRAINT_KEYWORDS_CN: tuple[str, ...] = ("禁止", "严禁", "不得", "不应", "不可", "必须")
 _TOOL_VERBS_CN: tuple[str, ...] = ("运行", "执行", "调用", "启动")
+# TOOL_REQUIREMENT 停用词:"动词(use/run/...)+ 这些词"构成的 match 不是真工具名。
+# audit 实测 "use when" / "run concurrently" 被抽成 tool_name="when"/"concurrently",
+# LLM 判"该用工具 when 但没用"→ 假 FAIL。跨 104 skill 验证 0 假阴性(删的全是碎片,
+# 真工具名含 -/. 或非常用词,如 npu-smi / check_env.sh,均不在表中)。
+_TOOL_STOPWORDS: frozenset[str] = frozenset({
+    "when", "and", "the", "a", "an", "full", "all", "this", "that", "it", "they",
+    "you", "your", "their", "concurrently", "simultaneously", "together", "in",
+    "on", "at", "to", "of", "for", "with", "by", "from", "both", "each", "some",
+    "any", "more",
+})
 
 
 class InstructionExtractor:
@@ -92,6 +102,9 @@ class InstructionExtractor:
         for pattern in patterns:
             for match in pattern.finditer(text):
                 tool_name = match.group(1)
+                # 停用词过滤:"use when"/"run concurrently" 等碎片不是真工具(见 _TOOL_STOPWORDS)。
+                if tool_name.lower() in _TOOL_STOPWORDS:
+                    continue
                 checks.append(InstructionCheck(
                     source=InstructionSource.TOOL_REQUIREMENT,
                     instruction_text=match.group(0).strip(),
