@@ -55,6 +55,22 @@ fixtures/example-skills/log-error-analyzer/
 
 修复:`tool_trace` 进 step 判定 prompt(`auditor.py`),修复后 "Read input log" 正确 **PASS**,证据"实际工具调用记录中有 Read /tmp/.../app.log"。详见 `tests/test_auditor.py::TestJudgeStep::test_tool_trace_included_in_prompt`。
 
+## 中文版与中英对比
+
+`log-error-analyzer-zh` 是英文版的**中文对照**(同 3 步骤/同 reference/同 3 违规,全中文),覆盖中文 extractor 分支(`禁止/必须` 约束 + `调用` 工具词 + `编造` 反捏造)——这些分支在英文 example 上从未触发。
+
+中英 audit 结果**完全一致**(都 pass=3/fail=6/na=1),3 个植入违规都抓到,中文证据同样具体可核对(E-FAKE-999 暗示 FAKE、"第1行"不算引用原文)。**LLM 对中文判定没有退化**。
+
+## 复杂 skill:extractor 容忍度
+
+`release-checklist-zh` 是**受控版 dispatching**——故意复杂(7 步骤 + 3 reference + 嵌套条件 + 代码块 + 示例列表),测 audit 在真实复杂 skill 下真违规能否穿透 extractor 噪音被抓。
+
+extractor 抽出 28 条,含可预见噪音:5 个**示例当步骤**(`breaking change 时 MAJOR 加一`、`<新功能>`、`<bug 修复>` 等)+ 1 个**代码块当 OUTPUT_FORMAT**(Bug B)+ 工具词重复(`调用 Bash`+`运行 pytest` 各抽一次)。
+
+audit 结果(pass=11/fail=12/na=5):**真违规大多穿透噪音被抓**——没查 lint、没读 references、breaking change 没审批、没生成 changelog、没更新版本号都 FAIL,证据靠 `tool_trace` 修复精准定位"文字声称但无实际调用"。但有噪音代价:3 个假 FAIL(`运行 pytest/ruff/git` 被当独立工具,实际是 Bash 子命令,match 不命中)+ 1 个 OUTPUT_FORMAT 假 FAIL(Bug B);1 个漏报(谎报 lint 的禁令没抓,但"查 lint"步骤角度补救了)。
+
+**结论:简单 skill 干净准确(3 违规全抓、0 假);复杂 skill 信噪比下降,但真违规仍可抓。** 这是 audit 的真实上限——复杂 skill 的噪音是 extractor 已知局限(治本要等结构化声明),audit 的价值在于真违规仍能穿透噪音被定位。
+
 ## 怎么跑
 
 ```bash
