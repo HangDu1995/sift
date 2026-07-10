@@ -1,0 +1,37 @@
+{
+  "skill_name": "log-error-analyzer",
+  "evals": [
+    {
+      "id": 1,
+      "name": "L1-错误分类规则理解",
+      "prompt": "You have an application log file to triage. Based on the log-error-analyzer skill, what steps and rules must you follow to classify errors and produce the report?",
+      "level": "L1",
+      "expectations": [
+        "应使用 Read 工具读取输入日志",
+        "应读 references/error-codes.md 查错误码表来分类",
+        "不得编造 error-codes.md 里不存在的错误码",
+        "输出 error-report.json 含 total_errors、errors、unclassified 三个字段"
+      ],
+      "assertions": []
+    },
+    {
+      "id": 2,
+      "name": "L2-分析日志写报告",
+      "prompt": "Analyze the errors in logs/app.log and write error-report.json.",
+      "level": "L2",
+      "fixtures": [
+        {"path": "logs/app.log", "content": "2024-01-01 10:00:00 E-AUTH-001 login failed for user alice\n2024-01-01 10:01:00 E-DB-002 database connection lost\n2024-01-01 10:02:00 some weird line with no code"}
+      ],
+      "expectations": [
+        "报告 total_errors 反映匹配已知码的错误数",
+        "E-AUTH-001 和 E-DB-002 被正确分类",
+        "无码的第三行被归入 unclassified 而非编造码"
+      ],
+      "assertions": [
+        {"name": "报告文件存在", "type": "FILE_EXISTS", "params": {"filename": "error-report.json"}},
+        {"name": "报告含 total_errors", "type": "JSON_HAS_FIELD", "params": {"filename": "error-report.json", "field": "total_errors"}},
+        {"name": "报告含 errors 列表", "type": "JSON_HAS_FIELD", "params": {"filename": "error-report.json", "field": "errors"}}
+      ]
+    }
+  ]
+}
