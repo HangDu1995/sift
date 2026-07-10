@@ -324,6 +324,39 @@ class TestComplianceChecker:
         )
         assert report.followed_count == 0
 
+    def test_check_tool_call_bash_subcommand_evidence(self):
+        """Bash 子命令:_check_tool_call 命中 input_summary 时 followed=True +
+        evidence 提到命令匹配(命中 tool_trace),而非走 transcript fallback。
+
+        防回归:match_tool_call 加 input_summary 分支后,_check_tool_call 的 evidence
+        遍历(L302-320)须同步加分支——否则 match 命中但取不到命中 tc → 落 fallback →
+        行为不一致(transcript 不含 tool_name 时甚至报假 FAIL)。transcript 故意不含
+        tool_name,逼出走 tool_trace 命中分支。"""
+        checker = ComplianceChecker()
+        instructions = [
+            InstructionCheck(
+                source=InstructionSource.TOOL_REQUIREMENT,
+                instruction_text="运行 pytest",
+                section="Workflow",
+                priority=InstructionPriority.REQUIRED,
+                check_method=CheckMethod.TOOL_CALL_CHECK,
+                params={"tool_name": "pytest"},
+            ),
+        ]
+        tool_trace = [ToolCallRecord(name="Bash", input_summary='{"command": "pytest"}')]
+        report = checker.check(
+            instructions=instructions,
+            transcript="开始自检,先跑测试。",  # 不含 pytest,逼走 tool_trace 命中分支
+            output_dir=Path("/tmp"),
+            tool_trace=tool_trace,
+        )
+        assert report.followed_count == 1
+        item = report.checks[0]
+        assert item.followed is True
+        assert item.confidence == 1.0
+        # evidence 提到命令匹配(命中 tool_trace),非 fallback 的 "not found in transcript"
+        assert "pytest" in item.evidence
+
     def test_check_file_presence(self, tmp_path: Path):
         (tmp_path / "output.json").write_text("{}", encoding="utf-8")
         checker = ComplianceChecker()
@@ -756,6 +789,23 @@ class TestMatchToolCall:
             {"name": "Read", "input_summary": "wanted.md"},
         ]
         assert match_tool_call("Read", "", trace) is True
+
+    def test_tool_name_matches_command_in_input_summary(self):
+        """tool_name 作为命令词在 tc.input_summary 命中 → True。
+
+        Bash 子命令场景:SKILL.md「运行 pytest」抽出 tool_name=pytest,Claude 用 Bash
+        跑 pytest(input_summary='{"command": "pytest"}')。旧逻辑只查 tc.name(bash)→
+        漏判→假 FAIL;新分支按词边界查 input_summary 命中。"""
+        trace = [{"name": "Bash", "input_summary": '{"command": "pytest"}'}]
+        assert match_tool_call("pytest", "", trace) is True
+
+    def test_tool_name_word_boundary_no_false_positive(self):
+        """词边界防假 PASS:'git' 不命中 'cd widgets'(widgets 含 git 子串但非命令词)。
+
+        裸子串会把 widgets / digital / concat.py 里的命令名词误判命中 → 漏报真违规。
+        \\b 词边界:tool_name 须作为独立命令词出现(前后非字母数字)。"""
+        trace = [{"name": "Bash", "input_summary": '{"command": "cd widgets && ls"}'}]
+        assert match_tool_call("git", "", trace) is False
 
 
 class TestExtractFirstBalancedPublic:

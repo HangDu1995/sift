@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from skill_eval.models import (
@@ -68,22 +69,46 @@ def extract_first_balanced(text: str, open_ch: str = "[", close_ch: str = "]") -
 _extract_first_balanced = extract_first_balanced
 
 
-def match_tool_call(tool_name: str, script_path: str, tool_trace) -> bool:
-    """tool_trace 里是否存在匹配 tool_name(在 tc.name)或 script_path(在 tc.input_summary)的调用。
+def _command_word_re(tool_name: str):
+    """tool_name 的"命令词"匹配正则(词边界,大小写不敏感);tool_name 空则返回 None。
 
-    抽自 ``_check_tool_call`` 的 tool_trace 遍历段,供 audit 等跨模块复用同一命中判定。
+    供 ``match_tool_call`` 与 ``_check_tool_call`` 的 input_summary 命中判定复用,确保两处
+    用同一词边界口径(避免命中判定与 evidence 取值不一致)。用 ``\\b`` 而非裸子串:tool_name
+    须作为独立命令词出现在 input_summary 里,避免 ``git`` 命中 ``cd widgets``、``cat`` 命中
+    ``concat.py`` 这类命令名词子串误判(假 PASS)。
+    """
+    if not tool_name:
+        return None
+    return re.compile(r"\b" + re.escape(tool_name) + r"\b", re.IGNORECASE)
+
+
+def match_tool_call(tool_name: str, script_path: str, tool_trace) -> bool:
+    """tool_trace 里是否存在匹配的调用,三条件任一命中即 True(大小写不敏感):
+
+    1. ``tool_name`` 出现在某 ``tc.name``(子串,如 MCP 长工具名前缀
+       ``webReader`` ∈ ``mcp__web_reader__webReader``)。
+    2. ``script_path`` 出现在某 ``tc.input_summary``(子串,文件路径匹配)。
+    3. ``tool_name`` 作为**命令词**出现在某 ``tc.input_summary``(**词边界**,非裸子串)。
+
+    第 3 条是 Bash 子命令场景:SKILL.md「运行 pytest」抽出 tool_name=pytest,Claude 用 Bash
+    跑该命令(input_summary='{"command": "pytest"}')。tc.name 是 "Bash" 而非 "pytest",条件 1
+    漏判 → 假 FAIL;按词边界查 input_summary 命中。用词边界而非裸子串,避免 ``git`` 误命中
+    ``cd widgets`` 这类命令名词子串(假 PASS)。
+
     tool_trace 元素支持 attr 风格(``tc.name``/``tc.input_summary``,如 ToolCallRecord)和
-    dict 风格(``tc.get(...)``)两种。匹配为子串包含、大小写不敏感;遍历完无命中 → False;
-    空 / None tool_trace → False。
+    dict 风格(``tc.get(...)``)两种。遍历完无命中 → False;空 / None tool_trace → False。
     """
     if not tool_trace:
         return False
+    cmd_re = _command_word_re(tool_name)
     for tc in tool_trace:
         tc_name = tc.name if hasattr(tc, "name") else tc.get("name", "")
         tc_input = tc.input_summary if hasattr(tc, "input_summary") else tc.get("input_summary", "")
         if tool_name and tool_name.lower() in tc_name.lower():
             return True
         if script_path and script_path.lower() in tc_input.lower():
+            return True
+        if cmd_re and cmd_re.search(tc_input):
             return True
     return False
 
@@ -295,10 +320,12 @@ class ComplianceChecker:
         tool_name = instruction.params.get("tool_name", "")
         script_path = instruction.params.get("script_path", "")
         lower = transcript.lower()
+        cmd_re = _command_word_re(tool_name)
 
         if tool_trace and match_tool_call(tool_name, script_path, tool_trace):
             # 命中判定走公共 match_tool_call;此处仅复用同一遍历取出命中 tc 造 evidence
-            # (followed/confidence/evidence 与重构前逐字一致)。
+            # (followed/confidence/evidence 与重构前逐字一致)。三分支与 match_tool_call 同口径:
+            # tool_name∈name / script_path∈input / tool_name 命令词∈input(词边界,见 _command_word_re)。
             for tc in tool_trace:
                 tc_name = tc.name if hasattr(tc, "name") else tc.get("name", "")
                 tc_input = tc.input_summary if hasattr(tc, "input_summary") else tc.get("input_summary", "")
@@ -315,6 +342,14 @@ class ComplianceChecker:
                         instruction=instruction,
                         followed=True,
                         evidence=f"Script path '{script_path}' found in tool call '{tc_name}': {tc_input[:100]}",
+                        confidence=1.0,
+                        source="programmatic",
+                    )
+                if cmd_re and cmd_re.search(tc_input):
+                    return ComplianceResultItem(
+                        instruction=instruction,
+                        followed=True,
+                        evidence=f"Command '{tool_name}' run via '{tc_name}': {tc_input[:100]}",
                         confidence=1.0,
                         source="programmatic",
                     )
