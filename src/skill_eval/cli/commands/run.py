@@ -39,6 +39,14 @@ def _render_security_report(report, console: Console) -> None:
 def run(
     skill_path: Path = typer.Argument(..., help="Path to skill directory"),
     evals: Optional[Path] = typer.Option(None, "--evals", help="Path to evals.json"),
+    task: Optional[str] = typer.Option(
+        None, "--task",
+        help="路径1 真任务模式:直接 spawn 跑此真实任务(不读 evals.json)。给 --task 即 live 真任务模式,产物 run-*/transcript.jsonl 可喂 audit",
+    ),
+    cwd: Optional[Path] = typer.Option(
+        None, "--cwd",
+        help="路径1 真任务模式工作目录(任务材料真实文件);拷贝隔离,cc 不碰原目录",
+    ),
     runs: int = typer.Option(1, "--runs", help="Number of runs per configuration"),
     model: Optional[str] = typer.Option(None, "--model", help="Model for claude -p"),
     workers: int = typer.Option(4, "--workers", help="Max parallel workers"),
@@ -54,7 +62,7 @@ def run(
     format: str = typer.Option("table", "--format", help="Output format"),
     eval_samples: Optional[str] = typer.Option(None, "--eval-samples", help="Number or pct of evals to run (e.g. 10 or 0.25)"),
 ):
-    """Run A/B evaluation of a Skill."""
+    """Run A/B evaluation of a Skill, or path-1 live task (--task)."""
     from skill_eval.evals.loader import EvalLoader
     _check_claude_or_exit()
 
@@ -64,6 +72,32 @@ def run(
         _render_security_report(vet_report, console)
         if vet_report.verdict in ("BLOCKED", "REVIEW_NEEDED"):
             raise typer.Exit(code=1)
+
+    # 路径1 真任务模式:--task 直接 spawn 真实任务(--cwd 拷贝隔离),不走 evals.json
+    if task:
+        from skill_eval.execution.live_runner import run_live_task
+        if not output_dir:
+            output_dir = Path("output")
+        run_live_task(
+            skill_path=skill_path,
+            task=task,
+            cwd=cwd,
+            runs=runs,
+            model=model,
+            timeout=timeout,
+            max_turns=max_turns,
+            output_dir=output_dir,
+        )
+        transcripts = sorted(output_dir.glob("run-*/transcript.jsonl"))
+        console.print(f"\n[bold]Live task:[/bold] {runs} run(s) → {len(transcripts)} transcript(s)")
+        for t in transcripts:
+            console.print(f"  [dim]{t}[/dim]")
+        if transcripts:
+            args = " ".join(f"--transcript {t}" for t in transcripts)
+            console.print(
+                f"\n[dim]Audit skill 遵循性:[/dim]\n  skill-eval audit {skill_path} {args} -o /tmp/live-audit"
+            )
+        return
 
     evals_path = evals or _discover_evals(skill_path)
     if not evals_path:

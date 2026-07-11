@@ -11,15 +11,19 @@ audit(路径2)的有效性需要正面验证:**真 LLM 在干净输入下能不�
 
 log-error-analyzer 量身定做:SKILL.md 写得 extractor 友好(真步骤/禁令/reference,**无代码块**避 OUTPUT_FORMAT 假阳性),合成 transcript 植入**真实感**违规,真 LLM 跑 audit 看抓不抓得到。
 
-## 三路径共用
+## 三路径共用(任务源不同)
 
-| 路径 | 命令 | 用 example skill 的什么 |
-|---|---|---|
-| 路径1 live | `init` → `run` | `SKILL.md` + `evals/evals.json` |
-| 路径2 audit | `audit --transcript` | `SKILL.md` + `transcripts/synthetic-violation.jsonl` |
-| 路径3 fixture | `init --from-transcript` → `run` | `SKILL.md` + transcript |
+example skill 的 `SKILL.md` 可被三条评测路径复用,但**任务源不同**(三路径定义见 `skill-eval-analysis.md` §48):
 
-路径2 和路径3 **共用同一份 transcript**(audit 对账它、init --from-transcript 挖它)。
+| 路径 | 怎么跑 | example skill 用什么 | 状态 |
+|---|---|---|---|
+| 路径3 fixture run(当前主路) | `init` → `run`(evals.json 剧本 spawn;`--from-transcript` 是剧本来自 transcript 的变体) | `SKILL.md` + `evals.json` / transcript | ✅ 已验证 |
+| 路径2 audit(对账) | `audit --transcript`(不 run,审历史 trace) | `SKILL.md` + `transcripts/synthetic-violation.jsonl` | ✅ 已验证(canary) |
+| 路径1 live 真任务模式 | `run --task/--cwd` spawn cc 在真任务上真跑(--cwd 拷贝隔离),审 re-run 的新 trace | `SKILL.md` + `--task`(真任务)+ `--cwd`(真代码库/真数据,非 fixture) | ✅ 已实现(code-review-auditor 验证) |
+
+> **路径1 澄清(2026-07-11 更新)**:`run --task/--cwd` 是路径1 真任务模式——不读 evals.json,直接 spawn cc 跑真任务(--cwd 真代码库/真数据,拷贝隔离)。example skill 自带的 `evals.json` 仍是 fixture(用它 `run` = 路径3)。路径1 用 example skill 的 `SKILL.md` 当被测对象,配 `--task`(真任务)+ `--cwd`(真材料)——code-review-auditor 即此模式的验证(审 skill-eval 真代码)。真环境侧(cannbot 生产自然任务)仍待 P0-3 driver 适配。
+>
+> 路径2 和路径3 的 `--from-transcript` 变体**共用同一份 transcript**(audit 对账它、init --from-transcript 挖它)。
 
 ## 文件结构
 
@@ -101,3 +105,34 @@ audit 这个真实 transcript:**total=10, pass=10, fail=0, na=0**——全 PASS,
 技术闭环也验证通:`run` dump 的 stream-json transcript(`Task 3`)被 audit 的 `build_digest` 正确解析——live 真跑产物能直接喂 audit。
 
 scoring 层印证:with_skill 83% vs without_skill 54%(盲比较 with_skill 胜)——example skill 真实有用。
+
+## code-review-auditor:路径1 真任务模式验证
+
+`code-review-auditor` 是专为**路径1**设计的 example skill——审 Python 代码找 bug/坏味道,任务天然对口真代码库(不像 log-error-analyzer 审日志)。用它验证 `run --task/--cwd` 真任务模式端到端。
+
+### 三路径分工
+- 路径3(evals.json fixture):log-error-analyzer 已验(合成 + live)。
+- 路径2(audit 对账):log-error-analyzer 合成违规已验(canary)。
+- **路径1(真任务模式)**:code-review-auditor + `run --task/--cwd`——本节。
+
+### 怎么跑(路径1)
+
+```bash
+# spawn cc with code-review-auditor,审 skill-eval 真代码(--cwd 拷贝隔离不碰原)
+.venv/bin/skill-eval run fixtures/example-skills/code-review-auditor/ \
+  --task "审 audit/aggregate.py 找 bug 写 review-report.json" \
+  --cwd src/skill_eval --runs 2 --max-turns 15 -o /tmp/cra-live
+
+# audit 审真任务产出的 trace(--task 模式 dump 的 run-*/transcript.jsonl)
+.venv/bin/skill-eval audit fixtures/example-skills/code-review-auditor/ \
+  --transcript /tmp/cra-live/run-1/transcript.jsonl \
+  --transcript /tmp/cra-live/run-2/transcript.jsonl -o /tmp/live-audit
+```
+
+### 端到端验证结论
+- **cc 真实行为**:Read 目标代码 → Read `code-patterns.md` → 深入 grep/Read 核实 → Write `review-report.json`。报告**真问题引用行**(L17 未用 import、L65-66 bare else 静默归 NA 等),没编造。
+- **audit**:total=35 pass=35 fail=0,证据硬(每条 Read/Write 命中 tool_trace、行号具体、NEVER fabricate 证据"grep 校验 import 确实未用"),**不是漏审的全 PASS 假象**。
+- **验证面**:路径1 真实性的"干净会话不乱报"——cc 真遵循 skill → audit 全 PASS 证据硬,与 log-error-analyzer 合成验证("违规抓得到")互补。
+
+### 通用性
+`run --task/--cwd` 对任何 skill 通用(code-review 审代码 / 算子生成按规格 / 日志分析),同一套参数。`--cwd` 是工作目录(任务材料),不绑代码——材料是目录里的真实文件,`--task` 决定怎么用。
