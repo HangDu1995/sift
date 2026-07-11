@@ -35,3 +35,35 @@ def test_init_with_from_transcript_routes(monkeypatch, tmp_path):
     r = runner.invoke(app, ["init", str(sp), "--from-transcript", str(tp), "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
     assert called.get("tp") == tp and "default" not in called
+
+
+def _fake_evalset_degraded():
+    return EvalSet(skill_name="s", evals=[
+        EvalCase(id=1, name="transcript-turn-1", prompt="p", level="L1", flags=["degraded:no-llm"])
+    ])
+
+
+def test_init_warns_on_fallback_flag(monkeypatch, tmp_path):
+    printed = []
+    monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
+                        lambda *a, **k: printed.append(str(a)))
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript",
+                        lambda self, sp, tp: _fake_evalset_degraded())
+    sp = _skill_dir(tmp_path)
+    tp = tmp_path / "t.jsonl"; tp.write_text("{}", encoding="utf-8")
+    r = runner.invoke(app, ["init", str(sp), "--from-transcript", str(tp), "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert any("no-llm" in p for p in printed), printed
+
+
+def test_init_no_warning_without_fallback_flag(monkeypatch, tmp_path):
+    printed = []
+    monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
+                        lambda *a, **k: printed.append(str(a)))
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript",
+                        lambda self, sp, tp: _fake_evalset())
+    sp = _skill_dir(tmp_path)
+    tp = tmp_path / "t.jsonl"; tp.write_text("{}", encoding="utf-8")
+    r = runner.invoke(app, ["init", str(sp), "--from-transcript", str(tp), "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert not any("no-llm" in p for p in printed), printed

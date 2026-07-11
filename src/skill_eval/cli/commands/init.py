@@ -59,6 +59,12 @@ def init(
         )
 
         console.print(f"Generated [green]{len(eval_set.evals)}[/green] eval cases for [bold]{eval_set.skill_name}[/bold]")
+        degraded = [(e, f) for e in eval_set.evals for f in (e.flags or []) if f.startswith("degraded:")]
+        if degraded:
+            console.print(f"[yellow]⚠️  {len(degraded)} 个 eval 为 degraded fallback(LLM 失败,未挖到结构化信号,assertions 可能为空):[/yellow]")
+            for e, f in degraded:
+                console.print(f"[yellow]   - {e.name}: {f}[/yellow]")
+            console.print("[yellow]建议重跑,或检查 claude CLI 可用性。[/yellow]")
         for e in eval_set.evals:
             level = getattr(e, 'level', 'L1')
             console.print(f"  [{level}] {e.name}: {len(e.expectations)} expectations" +
