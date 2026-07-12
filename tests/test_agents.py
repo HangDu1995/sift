@@ -171,8 +171,8 @@ class TestBlindComparator:
     def test_translate_with_is_a_true(self):
         c = BlindComparator()
         raw = ComparisonResult.model_validate(json.loads(VALID_COMPARISON_JSON))  # winner A
-        out = c._translate(raw, with_is_a=True)
-        # with 在 A 位,LLM 判 A 胜 → 胜者翻成 with
+        out = c._translate(raw, side0_is_posA=True)
+        # side0 在 A 位,LLM 判 A 胜 → 胜者翻成 label_a(default with)
         assert out.winner == "with"
         assert out.rubric["with"].overall_score == 9.0
         assert out.rubric["without"].overall_score == 5.4
@@ -182,8 +182,8 @@ class TestBlindComparator:
     def test_translate_with_is_a_false(self):
         c = BlindComparator()
         raw = ComparisonResult.model_validate(json.loads(VALID_COMPARISON_JSON))  # winner A
-        out = c._translate(raw, with_is_a=False)
-        # with 在 B 位,LLM 判 A 胜 → A 是 without → 胜者翻成 without
+        out = c._translate(raw, side0_is_posA=False)
+        # side0 在 B 位,LLM 判 A 胜 → A 是 side1=without → 胜者翻成 without
         assert out.winner == "without"
         assert out.rubric["without"].overall_score == 9.0
         assert out.rubric["with"].overall_score == 5.4
@@ -191,14 +191,14 @@ class TestBlindComparator:
     def test_translate_tie_and_expectation_remap(self):
         c = BlindComparator()
         raw = ComparisonResult.model_validate(json.loads(VALID_COMPARISON_WITH_EXPECTATIONS))
-        out = c._translate(raw, with_is_a=True)
+        out = c._translate(raw, side0_is_posA=True)
         assert out.winner == "with"
         assert out.expectation_results["with"].pass_rate == 0.8
         assert out.expectation_results["without"].pass_rate == 0.6
-        # tie 与 with_is_a 无关
+        # tie 与 side0_is_posA 无关
         raw_tie = ComparisonResult(winner="TIE", reasoning="eq")
-        assert c._translate(raw_tie, with_is_a=True).winner == "tie"
-        assert c._translate(raw_tie, with_is_a=False).winner == "tie"
+        assert c._translate(raw_tie, side0_is_posA=True).winner == "tie"
+        assert c._translate(raw_tie, side0_is_posA=False).winner == "tie"
 
     @patch("skill_eval.scoring.comparator.call_claude", return_value=VALID_COMPARISON_JSON)
     def test_compare_end_to_end(self, mock_claude):
@@ -252,6 +252,28 @@ class TestBlindComparator:
         result = c.compare("with", "without", "prompt")
         assert result.winner == "tie"  # 旧契约保留(降级 tie)
         assert result.failed is True   # 但标 failed → 可被 _compare_with_retry 重试
+
+    # ── label 参数化(块 B:v1/v2 双 skill)──
+
+    @patch("skill_eval.scoring.comparator.call_claude", return_value=VALID_COMPARISON_JSON)
+    def test_compare_v1v2_labels(self, mock_claude):
+        """label_a/b 驱动 winner + dict key 语义:v1/v2 替代 with/without。"""
+        c = BlindComparator(rng=_FixedRng(True))  # side0(output_a)放 A 位
+        result = c.compare("v1-output", "v2-output", "eval prompt", ["exp"],
+                           label_a="v1", label_b="v2")
+        # LLM 判 position A 胜;A 位是 side0 → 胜者 = label_a = v1
+        assert result.winner == "v1"
+        assert result.rubric["v1"].overall_score == 9.0   # A → label_a
+        assert result.rubric["v2"].overall_score == 5.4   # B → label_b
+        assert "with" not in result.rubric and "without" not in result.rubric
+
+    @patch("skill_eval.scoring.comparator.call_claude", return_value=VALID_COMPARISON_JSON)
+    def test_compare_default_labels_unchanged(self, mock_claude):
+        """默认 label_a/b=with/without → 行为与改前一致(向后兼容)。"""
+        c = BlindComparator(rng=_FixedRng(True))
+        result = c.compare("with-output", "without-output", "eval prompt")
+        assert result.winner == "with"
+        assert result.rubric["with"].overall_score == 9.0
 
 
 class TestPosthocAnalyzer:

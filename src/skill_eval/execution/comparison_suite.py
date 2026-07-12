@@ -54,8 +54,8 @@ def _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectat
     """
     for attempt in range(max_retries):
         result = comparator.compare(
-            output_with=ws_output,
-            output_without=wos_output,
+            output_a=ws_output,
+            output_b=wos_output,
             eval_prompt=eval_prompt,
             expectations=expectations if expectations else None,
         )

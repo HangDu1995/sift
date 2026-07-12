@@ -354,8 +354,8 @@ class TestComparisonPairing:
             def __init__(self, *a, **kw):
                 pass
 
-            def compare(self, output_with, output_without, eval_prompt=None, expectations=None):
-                calls.append((output_with, output_without))
+            def compare(self, output_a, output_b, eval_prompt=None, expectations=None):
+                calls.append((output_a, output_b))
                 return ComparisonResult(winner="with", reasoning="ok")
 
         def _tok(s: str) -> str:
@@ -428,7 +428,7 @@ class TestComparisonRetry:
         attempts = []
 
         class _Flaky:
-            def compare(self, output_with=None, output_without=None, eval_prompt=None, expectations=None):
+            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None):
                 attempts.append(len(attempts) + 1)
                 if len(attempts) < 3:
                     return ComparisonResult(winner="tie", reasoning="无法解析", failed=True)
@@ -444,7 +444,7 @@ class TestComparisonRetry:
         attempts = []
 
         class _AlwaysFail:
-            def compare(self, output_with=None, output_without=None, eval_prompt=None, expectations=None):
+            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None):
                 attempts.append(1)
                 return ComparisonResult(winner="tie", reasoning="对比调用失败", failed=True)
 
@@ -458,7 +458,7 @@ class TestComparisonRetry:
         attempts = []
 
         class _Ok:
-            def compare(self, output_with=None, output_without=None, eval_prompt=None, expectations=None):
+            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None):
                 attempts.append(1)
                 return ComparisonResult(winner="with", reasoning="ok", failed=False)
 
@@ -474,7 +474,7 @@ class TestComparisonRetry:
             def __init__(self, *a, **kw):
                 pass
 
-            def compare(self, output_with=None, output_without=None, eval_prompt=None, expectations=None):
+            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None):
                 return ComparisonResult(winner="tie", reasoning="对比调用失败", failed=True)
 
         monkeypatch.setattr(comparison_suite, "BlindComparator", _AlwaysFails)
