@@ -1188,6 +1188,7 @@
       const metadata = data.metadata || {};
       const notes = data.notes || [];
       const comparisons = data.comparisons || [];
+      const compSummary = data.comparison_summary || null;
       const analysis = data.analysis || null;
 
       let html = "";
@@ -1369,6 +1370,21 @@
       if (comparisons.length > 0) {
         html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
         html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">盲评对比</div>';
+
+        // 主观侧主位头条:win-rate 有效分母含 genuine tie、failed 排除(失败≠打平)
+        if (compSummary) {
+          const wr = compSummary.win_rate;
+          const wrPct = wr != null ? (wr * 100).toFixed(0) + "%" : "—";
+          const wrColor = wr == null ? "var(--text-muted)"
+            : wr >= 0.6 ? "var(--green)" : wr >= 0.4 ? "var(--accent)" : "var(--red)";
+          const failNote = compSummary.failed > 0
+            ? ' · <span style="color:var(--red);font-weight:600;">' + compSummary.failed + '失败</span>' : "";
+          html += '<div style="text-align:center;padding:0.75rem 1rem;margin-bottom:1rem;background:var(--bg);border-radius:var(--radius);">';
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);">主观侧主位 · With Skill 盲评胜率</div>';
+          html += '<div style="font-size:1.75rem;font-weight:700;color:' + wrColor + ';">★ ' + wrPct + '</div>';
+          html += '<div style="font-size:0.8125rem;color:var(--text-muted);">' + compSummary.with_wins + '胜 / ' + compSummary.without_wins + '负 / ' + compSummary.ties + '平' + failNote + '</div>';
+          html += '</div>';
+        }
 
         for (let ci = 0; ci < comparisons.length; ci++) {
           const comp = comparisons[ci];
