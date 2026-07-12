@@ -129,7 +129,7 @@ def run_comparisons(aggregator, iteration_dir: Path) -> list:
         if result is None:
             with lock:
                 failures[0] += 1
-            result = ComparisonResult(winner="tie", reasoning="comparison failed after retries")
+            result = ComparisonResult(winner="tie", reasoning="comparison failed after retries", failed=True)
 
         eval_name = ws_run.parent.name
         suffix = f"{eval_name}-" if eval_name.startswith("eval-") else ""

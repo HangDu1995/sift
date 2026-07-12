@@ -466,6 +466,31 @@ class TestComparisonRetry:
         assert result.winner == "with"
         assert len(attempts) == 1
 
+    def test_exhausted_degradation_marked_failed(self, tmp_path: Path, monkeypatch):
+        """compare 恒 failed → _compare_with_retry 耗尽 None → run_comparisons 降级 tie 必带
+        failed=True(否则失败混进 genuine-tie 桶,污染 win-rate 分母)。复用 TestComparisonPairing
+        的 _make_run + run_comparisons 范式。"""
+        class _AlwaysFails:
+            def __init__(self, *a, **kw):
+                pass
+
+            def compare(self, output_with=None, output_without=None, eval_prompt=None, expectations=None):
+                return ComparisonResult(winner="tie", reasoning="对比调用失败", failed=True)
+
+        monkeypatch.setattr(comparison_suite, "BlindComparator", _AlwaysFails)
+        TestComparisonPairing._make_run(tmp_path / "with_skill" / "run-1", "w")
+        TestComparisonPairing._make_run(tmp_path / "without_skill" / "run-1", "wo")
+
+        class _Agg:
+            enable_llm = True
+            model = None
+            timeout = 10
+
+        with patch.object(comparison_suite, "time"):  # 跳 backoff sleep
+            results = run_comparisons(_Agg(), tmp_path)
+        assert len(results) == 1
+        assert results[0].failed is True  # 修复前为 False
+
 
 class TestCopySkillReferences:
     """_copy_skill_references:把 skill 的 references/ 拷进考场(P0-2 核心逻辑)."""
