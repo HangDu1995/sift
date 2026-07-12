@@ -116,6 +116,67 @@ class TestBenchmarkAggregator:
         assert len(benchmark.runs) == 2
         assert benchmark.run_summary["delta"]["pass_rate"] == "+1.00"
 
+    def test_aggregate_dual_rate_delta(self, tmp_path: Path):
+        """双率:grading summary 含 pass_rate_programmatic/_llm → run_summary + delta 双率。"""
+        iteration = tmp_path / "iteration-1"
+        iteration.mkdir(parents=True)
+        summaries = {
+            "with_skill": {"passed": 2, "failed": 1, "total": 3, "pass_rate": 2 / 3,
+                           "pass_rate_programmatic": 1.0, "pass_rate_llm": 0.5},
+            "without_skill": {"passed": 1, "failed": 2, "total": 3, "pass_rate": 1 / 3,
+                              "pass_rate_programmatic": 0.5, "pass_rate_llm": 0.0},
+        }
+        for config in ("with_skill", "without_skill"):
+            config_dir = iteration / config / "run-1"
+            config_dir.mkdir(parents=True)
+            (config_dir / "outputs").mkdir()
+            (config_dir / "grading.json").write_text(json.dumps({
+                "expectations": [{"text": "t", "passed": True, "evidence": "e"}],
+                "summary": summaries[config],
+            }), encoding="utf-8")
+            (config_dir / "timing.json").write_text(json.dumps({
+                "total_tokens": 100, "duration_ms": 5000, "total_duration_seconds": 5.0,
+            }), encoding="utf-8")
+
+        agg = BenchmarkAggregator()
+        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+            benchmark = agg.aggregate(iteration, tmp_path)
+
+        ws = benchmark.run_summary["with_skill"]
+        assert ws["pass_rate_programmatic"]["mean"] == 1.0
+        assert ws["pass_rate_llm"]["mean"] == 0.5
+        d = benchmark.run_summary["delta"]
+        assert d["pass_rate_programmatic"] == "+0.50"  # with 1.0 - without 0.5
+        assert d["pass_rate_llm"] == "+0.50"  # with 0.5 - without 0.0
+
+    def test_aggregate_dual_rate_null_when_class_missing(self, tmp_path: Path):
+        """某类 expectation 全无(pass_rate_xx 缺)→ 该双率 stats None、delta 该项 None。"""
+        iteration = tmp_path / "iteration-1"
+        iteration.mkdir(parents=True)
+        for config in ("with_skill", "without_skill"):
+            config_dir = iteration / config / "run-1"
+            config_dir.mkdir(parents=True)
+            (config_dir / "outputs").mkdir()
+            (config_dir / "grading.json").write_text(json.dumps({
+                "expectations": [{"text": "t", "passed": True, "evidence": "e", "source": "programmatic"}],
+                "summary": {"passed": 1, "failed": 0, "total": 1, "pass_rate": 1.0,
+                            "pass_rate_programmatic": 1.0},  # 无 pass_rate_llm
+            }), encoding="utf-8")
+            (config_dir / "timing.json").write_text(json.dumps({
+                "total_tokens": 100, "duration_ms": 5000, "total_duration_seconds": 5.0,
+            }), encoding="utf-8")
+
+        agg = BenchmarkAggregator()
+        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+            benchmark = agg.aggregate(iteration, tmp_path)
+
+        ws = benchmark.run_summary["with_skill"]
+        assert ws["pass_rate_programmatic"]["mean"] == 1.0
+        assert ws["pass_rate_llm"] is None  # 无 llm expectation
+        assert benchmark.run_summary["delta"]["pass_rate_llm"] is None
+
     def test_aggregate_empty(self, tmp_path: Path):
         iteration = tmp_path / "iteration-1"
         iteration.mkdir()

@@ -124,6 +124,8 @@ class BenchmarkAggregator:
 
                 entry_data = {
                     "pass_rate": summary.get("pass_rate", 0.0),
+                    "pass_rate_programmatic": summary.get("pass_rate_programmatic"),
+                    "pass_rate_llm": summary.get("pass_rate_llm"),
                     "time_seconds": time_seconds,
                     "tokens": tokens,
                 }
@@ -328,6 +330,8 @@ class BenchmarkAggregator:
             if not entries:
                 run_summary[config] = {
                     "pass_rate": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0},
+                    "pass_rate_programmatic": None,
+                    "pass_rate_llm": None,
                     "time_seconds": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0},
                     "tokens": {"mean": 0, "stddev": 0, "min": 0, "max": 0},
                 }
@@ -336,9 +340,14 @@ class BenchmarkAggregator:
             pr = calculate_stats([e["pass_rate"] for e in entries])
             ts = calculate_stats([e["time_seconds"] for e in entries])
             tk = calculate_stats([float(e["tokens"]) for e in entries])
+            # 双率:过滤 None(该 run 无该类 expectation),与 compliance 双率同构
+            prog_vals = [e["pass_rate_programmatic"] for e in entries if e.get("pass_rate_programmatic") is not None]
+            llm_vals = [e["pass_rate_llm"] for e in entries if e.get("pass_rate_llm") is not None]
 
             run_summary[config] = {
                 "pass_rate": pr.model_dump(),
+                "pass_rate_programmatic": calculate_stats(prog_vals).model_dump() if prog_vals else None,
+                "pass_rate_llm": calculate_stats(llm_vals).model_dump() if llm_vals else None,
                 "time_seconds": ts.model_dump(),
                 "tokens": tk.model_dump(),
             }
@@ -349,8 +358,19 @@ class BenchmarkAggregator:
             dpr = a.get("pass_rate", {}).get("mean", 0) - b.get("pass_rate", {}).get("mean", 0)
             dts = a.get("time_seconds", {}).get("mean", 0) - b.get("time_seconds", {}).get("mean", 0)
             dtk = a.get("tokens", {}).get("mean", 0) - b.get("tokens", {}).get("mean", 0)
+
+            def _dual_delta(field):
+                # 任一 config 无该类 expectation → delta 该项 None(不报假 0)
+                av = a.get(field)
+                bv = b.get(field)
+                if not av or not bv:
+                    return None
+                return f"{av.get('mean', 0) - bv.get('mean', 0):+.2f}"
+
             run_summary["delta"] = {
                 "pass_rate": f"{dpr:+.2f}",
+                "pass_rate_programmatic": _dual_delta("pass_rate_programmatic"),
+                "pass_rate_llm": _dual_delta("pass_rate_llm"),
                 "time_seconds": f"{dts:+.1f}",
                 "tokens": f"{dtk:+.0f}",
             }

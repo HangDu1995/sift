@@ -1341,6 +1341,19 @@
       html += "<td>" + fmtStat(a.pass_rate, true) + "</td>";
       html += "<td>" + fmtStat(b.pass_rate, true) + "</td>";
       html += '<td class="' + deltaClass(delta.pass_rate) + '">' + (delta.pass_rate || "—") + "</td></tr>";
+      // 双率(与 compliance 双率同构):programmatic(客观,稳)/ llm(主观,漂)。只在任一 config 有该类时显
+      if (a.pass_rate_programmatic || b.pass_rate_programmatic) {
+        html += "<tr><td>　程序化通过率 <span style=\"font-size:0.7rem;color:var(--text-muted);\">(稳)</span></td>";
+        html += "<td>" + fmtStat(a.pass_rate_programmatic, true) + "</td>";
+        html += "<td>" + fmtStat(b.pass_rate_programmatic, true) + "</td>";
+        html += '<td class="' + deltaClass(delta.pass_rate_programmatic) + '">' + (delta.pass_rate_programmatic || "—") + "</td></tr>";
+      }
+      if (a.pass_rate_llm || b.pass_rate_llm) {
+        html += "<tr><td>　LLM 通过率 <span style=\"font-size:0.7rem;color:var(--text-muted);\">(漂,看方向)</span></td>";
+        html += "<td>" + fmtStat(a.pass_rate_llm, true) + "</td>";
+        html += "<td>" + fmtStat(b.pass_rate_llm, true) + "</td>";
+        html += '<td class="' + deltaClass(delta.pass_rate_llm) + '">' + (delta.pass_rate_llm || "—") + "</td></tr>";
+      }
 
       if (a.time_seconds || b.time_seconds) {
         html += "<tr><td><strong>耗时 (秒)</strong></td><td>" + fmtStat(a.time_seconds, false) + "</td><td>" + fmtStat(b.time_seconds, false) + "</td>";

@@ -202,16 +202,9 @@ class ABTestRunner:
                     stop_reason=run_output.stop_reason,
                 )
 
-                passed = sum(1 for e in all_expectations if e.passed)
-                total_exp = len(all_expectations)
                 overall_grading = GradingResult(
                     expectations=all_expectations,
-                    summary=GradingSummary(
-                        passed=passed,
-                        failed=total_exp - passed,
-                        total=total_exp,
-                        pass_rate=passed / total_exp if total_exp > 0 else 0.0,
-                    ),
+                    summary=GradingSummary.from_expectations(all_expectations),
                 )
                 (config_dir / "grading.json").write_text(overall_grading.model_dump_json(indent=2), encoding="utf-8")
                 (config_dir / "checkpoints.json").write_text(

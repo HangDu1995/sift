@@ -82,6 +82,32 @@ class TestGradingModels:
         assert "evidence" in data["expectations"][0]
         assert "pass_rate" in data["summary"]
 
+    def test_grading_summary_dual_rate_from_expectations(self):
+        # 双率:按 ExpectationResult.source 拆(与 compliance 双率 P0-1e 同构)。
+        # programmatic(客观 Tier1/2)稳、可信;llm(主观 Tier3)漂,只看方向。
+        exps = [
+            ExpectationResult(text="客观1", passed=True, evidence="", source="programmatic"),
+            ExpectationResult(text="客观2", passed=False, evidence="", source="programmatic"),
+            ExpectationResult(text="主观1", passed=True, evidence="", source="llm"),
+            ExpectationResult(text="错误", passed=False, evidence="", source="error"),
+        ]
+        s = GradingSummary.from_expectations(exps)
+        # 总率(含 error,兼容历史)
+        assert s.passed == 2 and s.total == 4 and abs(s.pass_rate - 0.5) < 1e-9
+        # programmatic 双率(只数 source=programmatic)
+        assert s.passed_programmatic == 1 and s.total_programmatic == 2
+        assert abs(s.pass_rate_programmatic - 0.5) < 1e-9
+        # llm 双率(只数 source=llm)
+        assert s.passed_llm == 1 and s.total_llm == 1
+        assert abs(s.pass_rate_llm - 1.0) < 1e-9
+
+    def test_grading_summary_dual_rate_null_when_no_class(self):
+        # 无该类 expectation → None(不报假 0),与 compliance 双率一致
+        exps = [ExpectationResult(text="客观", passed=True, evidence="", source="programmatic")]
+        s = GradingSummary.from_expectations(exps)
+        assert s.pass_rate_programmatic == 1.0
+        assert s.pass_rate_llm is None and s.total_llm is None
+
 
 class TestBenchmarkModels:
     def test_benchmark_roundtrip(self):

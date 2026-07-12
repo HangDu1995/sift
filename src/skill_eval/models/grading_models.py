@@ -28,6 +28,43 @@ class GradingSummary(BaseModel):
     failed: int
     total: int
     pass_rate: float
+    # 双率:按 ExpectationResult.source 拆(与 compliance 双率 P0-1e 同构)。
+    # programmatic(Tier1/2 客观)稳、可信;llm(Tier3 主观)漂,只看方向。
+    # None = 该类无 expectation(不报假 0)。
+    passed_programmatic: int | None = None
+    total_programmatic: int | None = None
+    pass_rate_programmatic: float | None = None
+    passed_llm: int | None = None
+    total_llm: int | None = None
+    pass_rate_llm: float | None = None
+
+    @classmethod
+    def from_expectations(cls, expectations: list) -> "GradingSummary":
+        """从 expectations 聚合 summary,含按 source 拆的双率。
+
+        总 pass_rate 数全部(含 source=error 等异常项,兼容历史);
+        双率只数 source=programmatic / source=llm,该类为空 → None。
+        """
+        total = len(expectations)
+        passed = sum(1 for e in expectations if e.passed)
+        prog = [e for e in expectations if getattr(e, "source", None) == "programmatic"]
+        llm = [e for e in expectations if getattr(e, "source", None) == "llm"]
+
+        def _rate(items: list) -> float | None:
+            return (sum(1 for e in items if e.passed) / len(items)) if items else None
+
+        return cls(
+            passed=passed,
+            failed=total - passed,
+            total=total,
+            pass_rate=passed / total if total > 0 else 0.0,
+            passed_programmatic=sum(1 for e in prog if e.passed) if prog else None,
+            total_programmatic=len(prog) if prog else None,
+            pass_rate_programmatic=_rate(prog),
+            passed_llm=sum(1 for e in llm if e.passed) if llm else None,
+            total_llm=len(llm) if llm else None,
+            pass_rate_llm=_rate(llm),
+        )
 
 
 class ExpectationResult(BaseModel):
