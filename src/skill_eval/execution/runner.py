@@ -51,6 +51,25 @@ def _copy_skill_references(skill_path: Path | None, work_dir: Path) -> None:
     shutil.copytree(src, dst)
 
 
+def build_sides(
+    skill_path: Path,
+    skill_b: Path | None,
+    label_a: str | None,
+    label_b: str | None,
+) -> list[tuple[str, Path | None, str]]:
+    """构建 sides spec:[(config_name, inject_skill, comp_label), ...]。
+
+    - skill_b=None → 默认 with/without(side B 注入 None = skill 关 / baseline)
+    - skill_b 给定 → v1/v2(两边都注入各自 skill,都开)
+    v1/v2 的 config_name/label 默认取 skill 目录 basename,可被 label_a/b 覆盖。
+    side A 恒为 positional skill(skill_path)。"""
+    if skill_b is None:
+        return [("with_skill", skill_path, "with"), ("without_skill", None, "without")]
+    la = label_a or skill_path.name
+    lb = label_b or skill_b.name
+    return [(la, skill_path, la), (lb, skill_b, lb)]
+
+
 class ABTestRunner:
     def __init__(
         self,
@@ -63,9 +82,11 @@ class ABTestRunner:
         self.runner = ClaudeRunner()
         self.on_progress = on_progress
 
-    def run_ab_test(self, skill_path: Path, eval_set: EvalSet) -> Path:
+    def run_ab_test(self, skill_path: Path, eval_set: EvalSet, sides: list | None = None) -> Path:
+        if sides is None:
+            sides = build_sides(skill_path, None, None, None)
         evals_to_run = self._sample_evals(eval_set.evals)
-        return self._run_per_eval(skill_path, eval_set, evals_to_run)
+        return self._run_per_eval(skill_path, eval_set, evals_to_run, sides)
 
     def _sample_evals(self, evals: list[EvalCase]) -> list[EvalCase]:
         if not self.config.eval_samples:
@@ -78,18 +99,18 @@ class ABTestRunner:
         import random
         return random.sample(evals, count)
 
-    def _run_per_eval(self, skill_path: Path, eval_set: EvalSet, evals: list[EvalCase]) -> Path:
+    def _run_per_eval(self, skill_path: Path, eval_set: EvalSet, evals: list[EvalCase], sides: list) -> Path:
         output_dir = self.config.output_dir
         iteration_dir = output_dir / "iteration-1"
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
-        total_jobs = len(evals) * 2 * self.config.runs_per_config
+        total_jobs = len(evals) * len(sides) * self.config.runs_per_config
         completed = [0]
         lock = threading.Lock()
 
         max_retries = self.config.max_retries_per_eval
 
-        def run_single_eval(eval_case: EvalCase, config_name: str, run_num: int, retry_num: int = 0) -> str:
+        def run_single_eval(eval_case: EvalCase, config_name: str, inject_skill: Path | None, run_num: int, retry_num: int = 0) -> str:
             run_label = f"{eval_case.get_name()}::{config_name}::run-{run_num}"
             if retry_num > 0:
                 run_label += f"::retry-{retry_num}"
@@ -119,13 +140,15 @@ class ABTestRunner:
             outputs_dir = config_dir / "outputs"
             outputs_dir.mkdir(exist_ok=True)
             eval_case.setup_fixtures(outputs_dir)
+            # setup_source 钉主 skill(positional skill_path)对两边都用 —— 同卷保证:
+            # v1/v2 只注入的 skill body 不同,源材料恒同(各用各的 skill dir 会拿不同 fixture)。
             source_path, source_name = eval_case.setup_source(skill_path, outputs_dir)
-            # references/ 是 skill body 常引用的领域知识;仅 with_skill 注入 body 时才拷进考场(P0-2)。
-            if config_name == "with_skill":
-                _copy_skill_references(skill_path, outputs_dir)
+            # references/ 是该 side 注入的 skill body 常引用的领域知识;有注入才拷(默认 without 注入 None→不拷)。
+            if inject_skill:
+                _copy_skill_references(inject_skill, outputs_dir)
 
             run_start = time.time()
-            use_skill = skill_path if config_name == "with_skill" else None
+            use_skill = inject_skill
             prompt = eval_case.prompt
             if source_path:
                 prompt += f"\n\nSOURCE PROJECT AVAILABLE: '{source_name}' copied to working directory at {source_path}"
@@ -168,7 +191,7 @@ class ABTestRunner:
                         phase="retrying",
                         substep=f"error, retry {retry_num+1}/{max_retries}",
                     )
-                    return run_single_eval(eval_case, config_name, run_num, retry_num + 1)
+                    return run_single_eval(eval_case, config_name, inject_skill, run_num, retry_num + 1)
                 with lock:
                     completed[0] += 1
                 self._emit_progress(
@@ -212,7 +235,9 @@ class ABTestRunner:
                 )
 
                 compliance_report = None
-                if config_name == "with_skill" and skill_path and not self.config.skip_compliance:
+                # compliance 按"该 side 注入的 skill"判:凡 inject_skill 非空且未 skip 就跑
+                # (默认 with→跑、without→不跑;v1/v2 两边都跑)。extract body 取自 inject_skill。
+                if inject_skill and not self.config.skip_compliance:
                     self._emit_progress(
                         eval_case.get_name(), config_name,
                         eval_case.id, len(evals),
@@ -223,7 +248,7 @@ class ABTestRunner:
                     from skill_eval.compliance.checker import ComplianceChecker
 
                     extractor = InstructionExtractor()
-                    _, _, _, _, skill_body = parse_skill_md(skill_path)
+                    _, _, _, _, skill_body = parse_skill_md(inject_skill)
                     instructions = extractor.extract(skill_body)
                     if instructions:
                         log_path = config_dir / "compliance.log"
@@ -296,7 +321,7 @@ class ABTestRunner:
                         overall_grading, run_duration, run_output,
                         phase="retrying", substep=f"{uneval_count} UNEVAL assertions, retry {retry_num+1}/{self.config.max_retries_per_eval}",
                     )
-                    return run_single_eval(eval_case, config_name, run_num, retry_num + 1)
+                    return run_single_eval(eval_case, config_name, inject_skill, run_num, retry_num + 1)
 
                 with lock:
                     completed[0] += 1
@@ -335,9 +360,9 @@ class ABTestRunner:
 
         jobs = []
         for eval_case in evals:
-            for config_name in ("with_skill", "without_skill"):
+            for config_name, inject_skill, _comp_label in sides:
                 for run_num in range(1, self.config.runs_per_config + 1):
-                    jobs.append((eval_case, config_name, run_num))
+                    jobs.append((eval_case, config_name, inject_skill, run_num))
 
         with ThreadPoolExecutor(max_workers=self.config.max_workers) as pool:
             futures = {pool.submit(run_single_eval, *job): job for job in jobs}

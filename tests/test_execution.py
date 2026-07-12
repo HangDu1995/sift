@@ -649,6 +649,130 @@ class TestABTestRunnerReferencesAutoCopy:
         assert not without_ref.exists(), "without_skill 不注入 body,不该拷 references/"
 
 
+class TestBuildSides:
+    """build_sides:sides spec 单一事实源(块 B v1/v2)。"""
+
+    def test_default_with_without(self, tmp_path):
+        from skill_eval.execution.runner import build_sides
+        sk = tmp_path / "sk"
+        sides = build_sides(sk, skill_b=None, label_a=None, label_b=None)
+        assert sides == [("with_skill", sk, "with"), ("without_skill", None, "without")]
+
+    def test_v1v2_basename_default_label(self, tmp_path):
+        from skill_eval.execution.runner import build_sides
+        a, b = tmp_path / "sk-a", tmp_path / "sk-b"
+        a.mkdir(); b.mkdir()
+        sides = build_sides(a, skill_b=b, label_a=None, label_b=None)
+        assert sides == [("sk-a", a, "sk-a"), ("sk-b", b, "sk-b")]  # basename 作 label
+
+    def test_v1v2_explicit_labels(self, tmp_path):
+        from skill_eval.execution.runner import build_sides
+        a, b = tmp_path / "sk-a", tmp_path / "sk-b"
+        a.mkdir(); b.mkdir()
+        sides = build_sides(a, skill_b=b, label_a="v1", label_b="v2")
+        assert sides == [("v1", a, "v1"), ("v2", b, "v2")]
+
+
+class TestABTestRunnerV1v2:
+    """块 B:v1/v2 双 skill —— 两边各注入对应 skill,setup_source 钉主 skill 同卷。"""
+
+    @staticmethod
+    def _make_skill(path: Path, name: str, body: str = "body") -> Path:
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: test\n---\n{body}\n", encoding="utf-8"
+        )
+        return path
+
+    def test_v1v2_injects_both_skills_and_uses_label_dirs(self, tmp_path):
+        from skill_eval.execution.runner import ABTestRunner
+        from skill_eval.models import RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase
+
+        skill_a = self._make_skill(tmp_path / "v1", "v1")
+        skill_b = self._make_skill(tmp_path / "v2", "v2")
+
+        injected: list = []  # 捕获每个 run 注入的 skill_path(side A=skill_a, side B=skill_b)
+
+        def fake_run(self, prompt, skill_path=None, **kwargs):
+            injected.append(skill_path)
+            return RunOutput(exit_code=0, stdout="ok", transcript="done", result_text="done")
+
+        config = RunConfig(
+            runs_per_config=1, output_dir=tmp_path / "out",
+            skip_compliance=True, skip_calibration=True, max_workers=1,
+        )
+        runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
+        eval_set = EvalSet(skill_name="v1", evals=[EvalCase(id=1, prompt="do it")])
+        sides = [("v1", skill_a, "v1"), ("v2", skill_b, "v2")]
+        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+            runner.run_ab_test(skill_a, eval_set, sides=sides)
+
+        # 两边都注入了各自的 skill(非 None)
+        assert skill_a in injected and skill_b in injected, f"应各注入 skill_a/skill_b,实得 {injected}"
+        # dir 名用 label
+        assert (tmp_path / "out" / "iteration-1" / "v1").is_dir()
+        assert (tmp_path / "out" / "iteration-1" / "v2").is_dir()
+        assert not (tmp_path / "out" / "iteration-1" / "with_skill").exists()
+
+    def test_same_paper_setup_source_pinned_to_primary(self, tmp_path):
+        """setup_source 钉主 skill:两边 outputs 里 source fixture 都来自 skill_a(同卷)。"""
+        from skill_eval.execution.runner import ABTestRunner
+        from skill_eval.models import RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase
+
+        skill_a = self._make_skill(tmp_path / "v1", "v1")
+        (skill_a / "data").mkdir()
+        (skill_a / "data" / "log.txt").write_text("A-MARKER", encoding="utf-8")
+        skill_b = self._make_skill(tmp_path / "v2", "v2")  # 无 data/
+        # skill_b 放不同的 data 内容(若不钉主 skill,side B 会拿到 B-MARKER)
+        (skill_b / "data").mkdir()
+        (skill_b / "data" / "log.txt").write_text("B-MARKER", encoding="utf-8")
+
+        def fake_run(self, prompt, skill_path=None, **kwargs):
+            return RunOutput(exit_code=0, stdout="ok", transcript="done", result_text="done")
+
+        config = RunConfig(
+            runs_per_config=1, output_dir=tmp_path / "out",
+            skip_compliance=True, skip_calibration=True, max_workers=1,
+        )
+        runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
+        eval_set = EvalSet(skill_name="v1", evals=[EvalCase(id=1, prompt="analyze", source_dir="data")])
+        sides = [("v1", skill_a, "v1"), ("v2", skill_b, "v2")]
+        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+            runner.run_ab_test(skill_a, eval_set, sides=sides)
+
+        a_log = (tmp_path / "out" / "iteration-1" / "v1" / "eval-1" / "run-1" / "outputs" / "data" / "log.txt")
+        b_log = (tmp_path / "out" / "iteration-1" / "v2" / "eval-1" / "run-1" / "outputs" / "data" / "log.txt")
+        assert a_log.exists() and b_log.exists()
+        # 两边都应是主 skill(skill_a)的 A-MARKER —— 同卷保证
+        assert a_log.read_text(encoding="utf-8") == "A-MARKER"
+        assert b_log.read_text(encoding="utf-8") == "A-MARKER", "side B 应钉主 skill 拿同一份源材料,非 skill_b 的"
+
+    def test_default_mode_injects_none_for_without(self, tmp_path):
+        """默认 sides(with/without):without 侧注入 None(skill 关),向后兼容。"""
+        from skill_eval.execution.runner import ABTestRunner
+        from skill_eval.models import RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase
+
+        skill = self._make_skill(tmp_path / "sk", "sk")
+        injected: list = []
+
+        def fake_run(self, prompt, skill_path=None, **kwargs):
+            injected.append(skill_path)
+            return RunOutput(exit_code=0, stdout="ok", transcript="done", result_text="done")
+
+        config = RunConfig(
+            runs_per_config=1, output_dir=tmp_path / "out",
+            skip_compliance=True, skip_calibration=True, max_workers=1,
+        )
+        runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
+        eval_set = EvalSet(skill_name="sk", evals=[EvalCase(id=1, prompt="do")])
+        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+            runner.run_ab_test(skill, eval_set)  # 默认 sides=None
+
+        assert skill in injected and None in injected, f"默认应注入 skill + None,实得 {injected}"
+        assert (tmp_path / "out" / "iteration-1" / "with_skill").is_dir()
+        assert (tmp_path / "out" / "iteration-1" / "without_skill").is_dir()
+
+
 class TestABTestRunnerPerEvalTimeout:
     """P1-3a: per-eval timeout 覆盖全局(混跑时重任务给大、轻任务走默认)。"""
 
