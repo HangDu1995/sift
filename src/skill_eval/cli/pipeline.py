@@ -147,11 +147,4 @@ def _run_ab_eval(
 
         console.print(f"\nBenchmark saved to: {benchmark_path}")
 
-    # Exit code:暂只看客观侧 pass_rate delta(comparison gate 阈值归块 C 参数化,
-    # 此处不强加主观判决)。旧 winner=="A"/"B" 是 stale 死代码(total_comps 恒 0),已清。
-    pr = delta.get("pass_rate", "+0.00")
-    is_fail = isinstance(pr, str) and pr.startswith("-") or isinstance(pr, (int, float)) and pr < 0
-    if is_fail:
-        raise typer.Exit(code=1)
-
     return benchmark, iteration_dir

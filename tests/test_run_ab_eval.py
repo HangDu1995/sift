@@ -118,3 +118,36 @@ def test_run_cli_v1v2_end_to_end(tmp_path):
     summary = bench["run_summary"]
     assert "v1" in summary and "v2" in summary
     assert "delta" in summary
+
+
+def test_run_does_not_exit_on_negative_delta(tmp_path):
+    """块 C:run 退役 delta 退出码——负 delta 仍 exit 0(判决归 gate)。"""
+    from skill_eval.models import BenchmarkData, BenchmarkMetadata
+    skill = _skill(tmp_path, "sk")
+    eval_set = EvalSet(skill_name="sk", evals=[EvalCase(id=1, prompt="do")])
+    iter_dir = tmp_path / "out" / "iteration-1"
+    iter_dir.mkdir(parents=True)
+
+    def fake_run_ab_test(self, skill_path, eval_set, sides=None):
+        return iter_dir
+
+    # 构造负 delta benchmark(候选 v1 比 v2 差)——旧逻辑会 exit 1,退役后应正常返回
+    neg_bench = BenchmarkData(
+        metadata=BenchmarkMetadata(skill_name="sk"),
+        run_summary={"v1": {"pass_rate": {"mean": 0.4}},
+                     "v2": {"pass_rate": {"mean": 0.8}},
+                     "delta": {"pass_rate": "-0.40", "pass_rate_programmatic": "-0.40"}},
+    )
+
+    def fake_aggregate(self, iteration_dir, skill_path=Path(), sides=None):
+        return neg_bench
+
+    with patch("skill_eval.execution.runner.ABTestRunner.run_ab_test", fake_run_ab_test), \
+         patch("skill_eval.execution.benchmark.BenchmarkAggregator.aggregate", fake_aggregate):
+        # 不应抛 typer.Exit(1);应正常返回
+        bench, _ = _run_ab_eval(
+            skill_path=skill, eval_set=eval_set, runs=1, model=None, workers=1,
+            timeout=10, max_turns=2, scoring="hybrid", no_calibration=True,
+            skip_compliance=True, output_dir=tmp_path / "out", fmt="json",
+        )
+    assert bench is not None  # 到这行 = 没 exit
