@@ -36,9 +36,11 @@ def calculate_stats(values: list[float]) -> StatsValue:
 
 
 class BenchmarkAggregator:
-    def __init__(self, model: str | None = None, timeout: int = 120):
+    def __init__(self, model: str | None = None, timeout: int = 120, enable_llm: bool = True):
         self.model = model
         self.timeout = timeout
+        # 盲比较只服务于主观题;programmatic-only(enable_llm=False)时 run_comparisons 跳过
+        self.enable_llm = enable_llm
 
     def aggregate(self, iteration_dir: Path, skill_path: Path = Path()) -> BenchmarkData:
         import sys

@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from skill_eval.models import ComparisonResult
+from skill_eval.scoring.comparator import BlindComparator
 
 
 def _load_grading(run_dir: Path) -> dict | None:
@@ -62,7 +63,12 @@ def run_comparisons(aggregator, iteration_dir: Path) -> list:
     import time
     import threading
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from skill_eval.scoring.comparator import BlindComparator
+
+    # 盲比较只服务于主观题(LLM 打分);programmatic-only 无主观输出,跳过省 LLM 调用
+    if not getattr(aggregator, "enable_llm", True):
+        sys.stderr.write("comparison skipped: programmatic-only scoring (enable_llm=False)\n")
+        sys.stderr.flush()
+        return []
 
     with_skill_dir = iteration_dir / "with_skill"
     without_skill_dir = iteration_dir / "without_skill"

@@ -77,7 +77,7 @@ def _run_ab_eval(
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=exc.exit_code)
 
-    agg = BenchmarkAggregator(model=model)
+    agg = BenchmarkAggregator(model=model, enable_llm=scoring_config.enable_llm)
     try:
         benchmark = agg.aggregate(iteration_dir, skill_path)
     except Exception as exc:

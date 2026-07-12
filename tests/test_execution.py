@@ -11,7 +11,8 @@ import pytest
 from skill_eval.evals.loader import EvalLoader
 from skill_eval.errors import EvalValidationError
 from skill_eval.execution.benchmark import BenchmarkAggregator, calculate_stats
-from skill_eval.models import EvalSet, StatsValue
+from skill_eval.execution.comparison_suite import run_comparisons
+from skill_eval.models import ComparisonResult, EvalSet, StatsValue
 
 
 class TestEvalLoader:
@@ -268,6 +269,29 @@ class TestBenchmarkAggregator:
         assert len(benchmark.runs) == 2
         assert benchmark.comparisons is None or benchmark.comparisons == []
         assert benchmark.analysis is None
+
+
+class TestComparisonSkipWhenProgrammaticOnly:
+    """④ 盲比较 programmatic-only 跳过:enable_llm=False 时 run_comparisons 直接返回 []。"""
+
+    def test_skips_when_enable_llm_false(self, tmp_path: Path):
+        # with/without run 目录齐备(若无门禁会进入比较流程)
+        (tmp_path / "with_skill" / "run-1").mkdir(parents=True)
+        (tmp_path / "without_skill" / "run-1").mkdir(parents=True)
+        agg = BenchmarkAggregator(model="m", enable_llm=False)
+        with patch("skill_eval.execution.comparison_suite.BlindComparator") as mock_cmp:
+            assert run_comparisons(agg, tmp_path) == []
+        mock_cmp.assert_not_called()  # 门禁在 BlindComparator 实例化之前
+
+    def test_proceeds_when_enable_llm_true(self, tmp_path: Path):
+        (tmp_path / "with_skill" / "run-1").mkdir(parents=True)
+        (tmp_path / "without_skill" / "run-1").mkdir(parents=True)
+        agg = BenchmarkAggregator(model="m", enable_llm=True)
+        with patch("skill_eval.execution.comparison_suite.BlindComparator") as mock_cmp:
+            mock_cmp.return_value.compare.return_value = ComparisonResult(winner="with", reasoning="t")
+            result = run_comparisons(agg, tmp_path)
+        assert mock_cmp.called  # 门禁放行,BlindComparator 被实例化
+        assert len(result) == 1
 
 
 class TestCopySkillReferences:
