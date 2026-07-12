@@ -1,0 +1,77 @@
+"""gate 命令 CLI 测试(块 C)。"""
+import json
+from typer.testing import CliRunner
+from skill_eval.cli.main import app
+
+cli = CliRunner()
+
+
+def _write_bench(path, delta_prog="+0.27", cs=None):
+    bench = {"metadata": {"skill_name": "sk"},
+             "runs": [],
+             "run_summary": {"v1": {"pass_rate": {"mean": 0.8}},
+                             "v2": {"pass_rate": {"mean": 0.6}},
+                             "delta": {"pass_rate_programmatic": delta_prog}}}
+    if cs is not None:
+        bench["comparison_summary"] = cs
+    path.write_text(json.dumps(bench), encoding="utf-8")
+    return path
+
+
+def test_gate_pass_exit0(tmp_path):
+    bp = _write_bench(tmp_path / "benchmark.json", "+0.27")
+    r = cli.invoke(app, ["gate", str(bp), "-o", str(tmp_path / "gate.json")])
+    assert r.exit_code == 0, r.output
+    g = json.loads((tmp_path / "gate.json").read_text())
+    assert g["decision"] == "PASS" and g["exit_code"] == 0
+    assert g["candidate"] == "v1" and g["baseline"] == "v2"
+
+
+def test_gate_fail_regression_exit1(tmp_path):
+    bp = _write_bench(tmp_path / "benchmark.json", "-0.10")
+    r = cli.invoke(app, ["gate", str(bp), "-o", str(tmp_path / "g.json")])
+    assert r.exit_code == 1
+
+
+def test_gate_NA_exit2(tmp_path):
+    """纯主观题(programmatic null)+ 无主观请求 → N/A。"""
+    bp = _write_bench(tmp_path / "benchmark.json", None)
+    r = cli.invoke(app, ["gate", str(bp), "-o", str(tmp_path / "g.json")])
+    assert r.exit_code == 2
+    g = json.loads((tmp_path / "g.json").read_text())
+    assert g["decision"] == "N/A"
+
+
+def test_gate_comparison_threshold(tmp_path):
+    cs = {"a_wins": 2, "b_wins": 6, "ties": 0, "failed": 0, "valid": 8,
+          "win_rate": None, "label_a": "v1", "label_b": "v2"}
+    bp = _write_bench(tmp_path / "benchmark.json", "+0.27", cs)
+    r = cli.invoke(app, ["gate", str(bp), "--min-win-rate", "0.5",
+                         "-o", str(tmp_path / "g.json")])
+    assert r.exit_code == 1  # 主观 0.25 < 0.5 → FAIL
+    g = json.loads((tmp_path / "g.json").read_text())
+    assert g["axes"]["comparison"]["win_rate"] == 0.25
+
+
+def test_gate_missing_file_exit2_no_gatejson(tmp_path):
+    """文件不存在 → exit 2 且不写 gate.json(与 N/A 的 exit 2 由 gate.json 是否存在区分)。"""
+    r = cli.invoke(app, ["gate", str(tmp_path / "nope.json"),
+                         "-o", str(tmp_path / "g.json")])
+    assert r.exit_code == 2
+    assert not (tmp_path / "g.json").exists()
+
+
+def test_gate_corrupt_json_exit2(tmp_path):
+    """benchmark.json 解析失败 → exit 2 且不写 gate.json(使用错误,非判决)。"""
+    bp = tmp_path / "benchmark.json"
+    bp.write_text("{bad json", encoding="utf-8")
+    r = cli.invoke(app, ["gate", str(bp), "-o", str(tmp_path / "g.json")])
+    assert r.exit_code == 2
+    assert not (tmp_path / "g.json").exists()
+
+
+def test_gate_default_out_path(tmp_path):
+    """不给 -o → gate.json 落 benchmark.json 同目录。"""
+    bp = _write_bench(tmp_path / "benchmark.json", "+0.27")
+    cli.invoke(app, ["gate", str(bp)])
+    assert (tmp_path / "gate.json").exists()
