@@ -463,7 +463,9 @@ skill-eval batch-report batch-workspace/ --open
 
 **建议**：对真正想验证的关键产出，在 `evals.json` 里**同时**写一条 `assertion`（可机械验证）和一条 `expectation`（语义描述）、两者指向同一件事，让校准有双判数据。例：验证"生成了排序脚本" → 既写 `{"type": "FILE_EXISTS", "params": {"filename": "sort.py"}}`，又写 expectation `"实现了排序算法"`。
 
-> 注：不双判时 calibration 显式标 `agreement_rate: null` 并在 recommendations 提示"无双判数据"，不会假报"0% 一致"。
+> 注：不双判时 calibration 显式标 `agreement_rate: null` 并在 recommendations 提示“无双判数据”，不会假报“0% 一致”。
+
+除 `grade`/`agreement_rate` 外，calibration.json 还携带三层诊断，报告直接渲染：`confidence_signals`（影响置信度的信号，如“6/6 项为单一来源评测 impact -0.1”，常驻有值，解释 `overall_confidence` 怎么来的）、`disagreements`（双判项里程序化与 LLM 打架的 expectation + 裁决策略 + 证据分析，仅双判时非空）、双判计数（`both_evaluated`/`programmatic_only_count`/`llm_only_count`，解释 `agreement_rate` 为何为 null）。
 
 ---
 

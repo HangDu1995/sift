@@ -936,6 +936,33 @@
         html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
         html += '<strong>校准等级：</strong> <span style="color:' + gradeColor + ';font-weight:600;">' + (cal.grade || "—") + '</span>';
         html += '（一致性：' + (cal.agreement_rate != null ? (cal.agreement_rate * 100).toFixed(0) + '%' : '—') + '，整体置信度：' + (cal.overall_confidence != null ? cal.overall_confidence.toFixed(2) : '—') + '）';
+        // 计数行(常显):双判/仅程序/仅LLM;agreement_rate 为 null 时正好解释为何一致性显 "—"
+        html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">双判 ' + (cal.both_evaluated != null ? cal.both_evaluated : 0) + ' · 仅程序 ' + (cal.programmatic_only_count != null ? cal.programmatic_only_count : 0) + ' · 仅LLM ' + (cal.llm_only_count != null ? cal.llm_only_count : 0) + '</div>';
+        // confidence_signals(非空时显):只 description + impact 色片,不显 signal_type 枚举码
+        if (cal.confidence_signals && cal.confidence_signals.length) {
+          html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
+          for (const s of cal.confidence_signals) {
+            let impactColor = "var(--text-muted)";
+            if (s.impact != null) {
+              if (s.impact < 0) impactColor = s.impact <= -0.15 ? "var(--red)" : "var(--accent)";
+              else if (s.impact > 0) impactColor = "var(--green)";
+            }
+            const impactTag = (s.impact != null) ? '<span style="color:' + impactColor + ';margin-left:0.25rem;">(' + (s.impact > 0 ? '+' : '') + s.impact.toFixed(2) + ')</span>' : '';
+            html += '<li>' + escapeHtml(s.description || '') + impactTag + '</li>';
+          }
+          html += '</ul>';
+        }
+        // disagreements(仅非空时显;空时完全不渲染,计数行已解释无双判)
+        if (cal.disagreements && cal.disagreements.length) {
+          const fmtVerdict = (v) => v === true ? '通过' : (v === false ? '失败' : '—');
+          html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
+          for (const d of cal.disagreements) {
+            html += '<li>' + escapeHtml(d.expectation_text || '') + '<span style="color:var(--text-muted);margin-left:0.25rem;">（程序判 ' + fmtVerdict(d.programmatic_verdict) + ' / LLM判 ' + fmtVerdict(d.llm_verdict) + (d.resolution ? ' · ' + escapeHtml(d.resolution) : '') + '）</span>';
+            if (d.evidence_analysis) html += '<div style="color:var(--text-muted);margin-top:0.15rem;">' + escapeHtml(d.evidence_analysis) + '</div>';
+            html += '</li>';
+          }
+          html += '</ul>';
+        }
         if (cal.recommendations && cal.recommendations.length) {
           html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
           for (const r of cal.recommendations) html += '<li>' + escapeHtml(r) + '</li>';

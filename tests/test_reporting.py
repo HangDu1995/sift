@@ -175,6 +175,45 @@ class TestReportGeneratorStatic:
         # 数据流断言(文档性):verdict 真嵌入了 EMBEDDED_DATA
         assert '"verdict": "UNEVAL"' in html
 
+    def test_generate_html_calibration_diagnostics(self, tmp_path):
+        """calibration 块补 confidence_signals / disagreements / 双判计数展示。
+
+        RED 驱动:renderGrades 的 calibration 块循环变量是 cal(别处没有 cal. 前缀),
+        锚定 cal.confidence_signals / cal.disagreements 避免撞别处字面量(改前 grep=0)。
+        """
+        workspace = tmp_path / "iteration-1"
+        ws_dir = workspace / "with_skill" / "run-1"
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "outputs").mkdir()
+        (ws_dir / "outputs" / "out.txt").write_text("hello")
+        (ws_dir / "calibration.json").write_text(json.dumps({
+            "grade": "LOW",
+            "agreement_rate": None,
+            "overall_confidence": 0.6,
+            "recommendations": ["增加双判样本"],
+            "both_evaluated": 1,
+            "programmatic_only_count": 0,
+            "llm_only_count": 0,
+            "confidence_signals": [
+                {"signal_type": "GRADER_SKIPPED_CHECKS",
+                 "description": "测试信号", "impact": -0.1},
+            ],
+            "disagreements": [
+                {"expectation_text": "disagree one",
+                 "programmatic_verdict": False, "llm_verdict": True,
+                 "resolution": "TRUST_PROGRAMMATIC",
+                 "evidence_analysis": "程序化断言更可靠"},
+            ],
+        }))
+
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, None)
+        # RED 驱动断言:calibration 块现引用 cal.confidence_signals / cal.disagreements
+        assert "cal.confidence_signals" in html
+        assert "cal.disagreements" in html
+        # 数据流断言(文档性,改前改后都通过):confidence_signals 描述真嵌入了 EMBEDDED_DATA
+        assert "测试信号" in html
+
     def test_generate_html_renders_comparison_labels(self, tmp_path):
         """comparison_summary 的 label_a/b 驱动盲评头条显示(块 B v1/v2 真标签)。"""
         workspace = tmp_path / "iteration-1"
