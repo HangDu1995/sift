@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from skill_eval.cli.pipeline import _run_ab_eval
-from skill_eval.models import EvalSet, EvalCase, BenchmarkData, BenchmarkMetadata
+from skill_eval.models import EvalSet, EvalCase, BenchmarkData, BenchmarkMetadata, RunOutput
 
 
 def _skill(tmp_path: Path, name: str) -> Path:
@@ -71,3 +71,50 @@ def test_default_no_skill_b_threads_with_without_sides(tmp_path):
     expected = [("with_skill", skill, "with"), ("without_skill", None, "without")]
     assert captured["runner_sides"] == expected
     assert captured["agg_sides"] == expected
+
+
+def test_run_cli_v1v2_end_to_end(tmp_path):
+    """CLI 级端到端:run --skill-b 跑通整链,产出 v1/v2 dir + run_summary 用 label key。
+    mock ClaudeRunner(免真 LLM);programmatic scoring 免 grader/comparator LLM。"""
+    import json
+    from typer.testing import CliRunner
+    from skill_eval.cli.main import app
+
+    def _skill(p, name):
+        p.mkdir(parents=True, exist_ok=True)
+        (p / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: t\n---\nbody\n", encoding="utf-8")
+        return p
+
+    skill_a = _skill(tmp_path / "v1", "v1")
+    skill_b = _skill(tmp_path / "v2", "v2")
+    evals_path = tmp_path / "evals.json"
+    evals_path.write_text(json.dumps({
+        "skill_name": "v1",
+        "evals": [{"id": 1, "prompt": "do the task"}],
+    }), encoding="utf-8")
+    out = tmp_path / "out"
+
+    def fake_run(self, prompt, skill_path=None, **kwargs):
+        return RunOutput(exit_code=0, stdout="ok", transcript="done", result_text="done")
+
+    cli = CliRunner()
+    with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run), \
+         patch("skill_eval.cli.commands.run._check_claude_or_exit"):
+        r = cli.invoke(app, [
+            "run", str(skill_a), "--skill-b", str(skill_b),
+            "--evals", str(evals_path), "--scoring", "programmatic",
+            "--runs", "1", "-o", str(out),
+            "--no-compliance", "--no-calibration",
+        ])
+
+    assert r.exit_code == 0, f"CLI 失败:{r.output}\n{r.exception}"
+    # v1/v2 dir(label 作 config 名,非 with_skill/without_skill)
+    assert (out / "iteration-1" / "v1").is_dir()
+    assert (out / "iteration-1" / "v2").is_dir()
+    assert not (out / "iteration-1" / "with_skill").exists()
+    # run_summary 用 v1/v2 key + delta(config-agnostic 聚合生效)
+    bench = json.loads((out / "iteration-1" / "benchmark.json").read_text(encoding="utf-8"))
+    summary = bench["run_summary"]
+    assert "v1" in summary and "v2" in summary
+    assert "delta" in summary
