@@ -53,3 +53,55 @@ def test_programmatic_guard_disabled_makes_axis_not_applicable():
     assert r.axes["programmatic"].applicable is False
     assert r.decision == "N/A"  # 客观关 + comparison 桩未介入 → 无适用轴
     assert r.exit_code == 2
+
+
+def _cs(a_wins, b_wins, ties=0, label_a="v1", label_b="v2"):
+    return {"a_wins": a_wins, "b_wins": b_wins, "ties": ties, "failed": 0,
+            "valid": a_wins + b_wins + ties, "win_rate": None,
+            "label_a": label_a, "label_b": label_b}
+
+
+def test_comparison_pass():
+    r = evaluate_gate(_bench("+0.27", _cs(6, 2)), min_win_rate=0.5, min_valid=3)
+    assert r.decision == "PASS"
+    cv = r.axes["comparison"]
+    assert cv.verdict == "PASS" and cv.win_rate == 0.75 and cv.decisive == 8
+
+
+def test_comparison_boundary_at_threshold_is_pass():
+    """wr == min_win_rate → PASS(>= 语义:达标即过,边界不算失败)。"""
+    r = evaluate_gate(_bench("+0.27", _cs(3, 3)), min_win_rate=0.5, min_valid=3)
+    assert r.axes["comparison"].verdict == "PASS"
+    assert r.axes["comparison"].win_rate == 0.5
+
+
+def test_comparison_fail_below_threshold():
+    r = evaluate_gate(_bench("+0.27", _cs(2, 6)), min_win_rate=0.5, min_valid=3)
+    assert r.decision == "FAIL"  # 主观不过 → 整体 FAIL(客观虽 PASS)
+    assert r.axes["comparison"].verdict == "FAIL"
+
+
+def test_comparison_NA_insufficient_sample():
+    r = evaluate_gate(_bench("+0.27", _cs(2, 0)), min_win_rate=0.5, min_valid=3)
+    assert r.axes["comparison"].verdict == "N/A"  # decisive 2 < min_valid 3
+    assert r.decision == "N/A"  # 客观 PASS 但主观样本不足 → N/A
+
+
+def test_comparison_NA_all_ties():
+    r = evaluate_gate(_bench("+0.27", _cs(0, 0, ties=5)), min_win_rate=0.5, min_valid=3)
+    assert r.axes["comparison"].verdict == "N/A"  # decisive 0
+
+
+def test_comparison_not_requested_is_not_applicable():
+    """未给 --min-win-rate → comparison 不介入,只走客观。"""
+    r = evaluate_gate(_bench("+0.27", _cs(6, 2)))
+    assert r.axes["comparison"].applicable is False
+    assert r.decision == "PASS"  # 仅客观
+
+
+def test_comparison_requested_but_summary_missing_warns():
+    """请求了主观 gate 但 comparison_summary 缺失 → 不介入 + 警告;落回客观。"""
+    r = evaluate_gate(_bench("+0.27"), min_win_rate=0.5)  # 无 comparison_summary
+    assert r.axes["comparison"].applicable is False
+    assert len(r.warnings) == 1
+    assert r.decision == "PASS"  # 仅客观判

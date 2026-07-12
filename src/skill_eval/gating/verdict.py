@@ -39,8 +39,30 @@ def _eval_programmatic(benchmark: dict, guard_on: bool) -> AxisVerdict:
 
 def _eval_comparison(benchmark: dict, min_win_rate: float | None, min_valid: int,
                      warnings: list[str]) -> AxisVerdict:
-    # Task 2 实现;此处桩 → 不介入。
-    return AxisVerdict(verdict="N/A", applicable=False, reason="主观 gate 未请求")
+    if min_win_rate is None:
+        return AxisVerdict(verdict="N/A", applicable=False, reason="主观 gate 未请求(未给 --min-win-rate)")
+    cs = benchmark.get("comparison_summary")
+    if not cs:
+        warnings.append("主观 gate 已请求但 comparison_summary 缺失(纯客观题 / 旧数据 / 比较失败)——落回客观侧")
+        return AxisVerdict(verdict="N/A", applicable=False,
+                           reason="主观 gate 已请求但 comparison_summary 缺失")
+    a_wins = int(cs.get("a_wins") or 0)
+    b_wins = int(cs.get("b_wins") or 0)
+    ties = int(cs.get("ties") or 0)
+    decisive = a_wins + b_wins  # tie-排除:tie 不进胜率分母
+    common = dict(win_rate=None, decisive=decisive, a_wins=a_wins, b_wins=b_wins, ties=ties)
+    if decisive == 0:
+        return AxisVerdict(verdict="N/A", applicable=True, reason="无决定性比较(全 tie/failed)", **common)
+    wr = a_wins / decisive
+    common["win_rate"] = wr
+    if decisive < min_valid:
+        return AxisVerdict(verdict="N/A", applicable=True,
+                           reason=f"样本不足({decisive} 决定性 < --min-valid {min_valid})", **common)
+    if wr < min_win_rate:
+        return AxisVerdict(verdict="FAIL", applicable=True,
+                           reason=f"主观胜率 {wr:.2f} < {min_win_rate:.2f}({decisive} 决定性)", **common)
+    return AxisVerdict(verdict="PASS", applicable=True,
+                       reason=f"主观胜率 {wr:.2f} >= {min_win_rate:.2f}({decisive} 决定性)", **common)
 
 
 def evaluate_gate(
