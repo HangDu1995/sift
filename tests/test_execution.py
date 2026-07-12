@@ -11,6 +11,7 @@ import pytest
 from skill_eval.evals.loader import EvalLoader
 from skill_eval.errors import EvalValidationError
 from skill_eval.execution.benchmark import BenchmarkAggregator, calculate_stats
+import skill_eval.execution.comparison_suite as comparison_suite
 from skill_eval.execution.comparison_suite import run_comparisons
 from skill_eval.models import ComparisonResult, EvalSet, StatsValue
 
@@ -292,6 +293,92 @@ class TestComparisonSkipWhenProgrammaticOnly:
             result = run_comparisons(agg, tmp_path)
         assert mock_cmp.called  # 门禁放行,BlindComparator 被实例化
         assert len(result) == 1
+
+
+class TestComparisonPairing:
+    """配对 bug 回归:run_comparisons 必须按 (eval, run) 显式配对、
+    with 侧有 retry 目录时取最终 retry,不能 glob+zip 错位(原 bug:retry 目录混入
+    glob → 排序后 zip 把 with 多出的 retry 配给 without 的下一个 eval → 跨 eval 伪 tie)。"""
+
+    @staticmethod
+    def _make_run(base: Path, marker: str, expectations_text: str | None = None) -> None:
+        (base / "outputs").mkdir(parents=True, exist_ok=True)
+        (base / "outputs" / "out.txt").write_text(marker, encoding="utf-8")
+        if expectations_text is not None:
+            (base / "grading.json").write_text(
+                json.dumps({"expectations": [{"text": expectations_text}], "summary": {}}),
+                encoding="utf-8",
+            )
+
+    @staticmethod
+    def _fake_comparator_factory(calls: list, markers: tuple[str, ...]):
+        class _FakeComparator:
+            def __init__(self, *a, **kw):
+                pass
+
+            def compare(self, output_with, output_without, eval_prompt=None, expectations=None):
+                calls.append((output_with, output_without))
+                return ComparisonResult(winner="with", reasoning="ok")
+
+        def _tok(s: str) -> str:
+            return next(m for m in markers if m in s)
+
+        return _FakeComparator, _tok
+
+    def test_pairs_by_eval_and_run_taking_final_retry(self, tmp_path: Path, monkeypatch):
+        """with 侧 eval-1 有 run-1(base)+ run-1-retry-1(最终应取 retry-1)。
+        旧 glob+zip:ws_runs=[e1/r1, e1/r1-retry1, e2/r1] 配 wos_runs=[e1/r1, e2/r1]
+        → 错位成 [(base, wos-e1), (retry, wos-e2)] 跨 eval。修复后按 (eval,run) 对齐。"""
+        markers = ("W-E1-R1-BASE", "W-E1-R1-RETRY", "W-E2-R1", "WO-E1-R1", "WO-E2-R1")
+        calls: list[tuple[str, str]] = []
+        fake_cmp, _tok = self._fake_comparator_factory(calls, markers)
+        monkeypatch.setattr(comparison_suite, "BlindComparator", fake_cmp)
+
+        # with:eval-1 双层(base + retry)、eval-2 单层
+        self._make_run(tmp_path / "with_skill" / "eval-1" / "run-1", "W-E1-R1-BASE")
+        self._make_run(tmp_path / "with_skill" / "eval-1" / "run-1-retry-1", "W-E1-R1-RETRY")
+        self._make_run(tmp_path / "with_skill" / "eval-2" / "run-1", "W-E2-R1")
+        # without:无 retry
+        self._make_run(tmp_path / "without_skill" / "eval-1" / "run-1", "WO-E1-R1")
+        self._make_run(tmp_path / "without_skill" / "eval-2" / "run-1", "WO-E2-R1")
+
+        class _Agg:
+            enable_llm = True
+            model = None
+            timeout = 10
+
+        results = run_comparisons(_Agg(), tmp_path)
+        assert len(results) == 2  # 只 (eval-1,run-1) + (eval-2,run-1) 两对
+
+        pairings = sorted((_tok(w), _tok(wo)) for w, wo in calls)
+        assert pairings == [
+            ("W-E1-R1-RETRY", "WO-E1-R1"),  # eval-1/run-1:with 取最终 retry-1,非 base
+            ("W-E2-R1", "WO-E2-R1"),        # eval-2/run-1:各自对齐
+        ]
+        all_with = [_tok(c[0]) for c in calls]
+        assert "W-E1-R1-BASE" not in all_with  # retry 覆盖 base,base 不进比较
+
+    def test_pairs_flat_structure_no_retry(self, tmp_path: Path, monkeypatch):
+        """flat 结构(with_skill/run-N,无 eval 分层)配对不回归。"""
+        markers = ("W-R1", "W-R2", "WO-R1", "WO-R2")
+        calls: list[tuple[str, str]] = []
+        fake_cmp, _tok = self._fake_comparator_factory(calls, markers)
+        monkeypatch.setattr(comparison_suite, "BlindComparator", fake_cmp)
+
+        self._make_run(tmp_path / "with_skill" / "run-1", "W-R1")
+        self._make_run(tmp_path / "with_skill" / "run-2", "W-R2")
+        self._make_run(tmp_path / "without_skill" / "run-1", "WO-R1")
+        self._make_run(tmp_path / "without_skill" / "run-2", "WO-R2")
+
+        class _Agg:
+            enable_llm = True
+            model = None
+            timeout = 10
+
+        results = run_comparisons(_Agg(), tmp_path)
+        assert len(results) == 2
+        pairings = sorted((_tok(w), _tok(wo)) for w, wo in calls)
+        assert pairings == [("W-R1", "WO-R1"), ("W-R2", "WO-R2")]
 
 
 class TestCopySkillReferences:
