@@ -712,11 +712,10 @@
       // Prompt
       document.getElementById("prompt-text").textContent = run.prompt;
 
-      // Config badge
+      // Config badge(用 run.config 字段,覆盖 with_skill/without_skill 与 v1/v2 等任意 side label)
       const badge = document.getElementById("config-badge");
-      const configMatch = run.id.match(/(with_skill|without_skill|new_skill|old_skill)/);
-      if (configMatch) {
-        const config = configMatch[1];
+      const config = run.config;
+      if (config && config !== "unknown") {
         const isBaseline = config === "without_skill" || config === "old_skill";
         badge.textContent = config.replace(/_/g, " ");
         badge.className = "config-badge " + (isBaseline ? "config-baseline" : "config-primary");
@@ -1219,7 +1218,7 @@
         prGood ? "var(--green)" : prNum < -0.05 ? "var(--red)" : "var(--text-muted)");
 
       if (metadata.runs_per_configuration) {
-        html += mkCard("每组运行次数", metadata.runs_per_configuration, "with_skill / without_skill", "var(--text)");
+        html += mkCard("每组运行次数", metadata.runs_per_configuration, Object.keys(summary).filter(k => k !== "delta").join(" / "), "var(--text)");
       }
       if (metadata.evals_run && metadata.evals_run.length) {
         html += mkCard("评测数", metadata.evals_run.length, metadata.evals_run.join(", "), "var(--text)");

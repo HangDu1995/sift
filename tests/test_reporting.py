@@ -170,6 +170,16 @@ class TestReportGeneratorStatic:
         assert "compSummary.label_a" in html
         assert "主观侧主位 · With Skill 盲评胜率" not in html  # 硬编码字面量已去
 
+    def test_viewer_run_badge_uses_config_field(self, tmp_path):
+        """run-listing config badge 用 run.config 字段(非 run.id 正则)→ v1/v2 也能显示 badge。"""
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        benchmark = {"metadata": {"skill_name": "x"}, "runs": [], "run_summary": {}}
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        assert "run.config" in html                       # 用 config 字段驱动 badge
+        assert "run.id.match(/(with_skill" not in html    # 旧 run.id 正则已去(v1/v2 不匹配)
+
 
 class TestLoadAuxData:
     def test_load_vet_report(self, tmp_path: Path):
