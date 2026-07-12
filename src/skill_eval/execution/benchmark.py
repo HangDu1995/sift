@@ -11,6 +11,7 @@ from skill_eval.models import (
     AnomalyReport,
     BenchmarkData,
     BenchmarkMetadata,
+    ComparisonSummary,
     RunAnomaly,
     RunResultEntry,
     RunResultMetrics,
@@ -281,6 +282,7 @@ class BenchmarkAggregator:
                 main_benchmark = main_benchmark.model_copy(
                     update={
                         "comparisons": comparisons,
+                        "comparison_summary": ComparisonSummary.from_comparisons(comparisons),
                         "metadata": main_benchmark.metadata.model_copy(update={"comparator_model": self.model or "default"}),
                     }
                 )
