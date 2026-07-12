@@ -41,35 +41,46 @@ class BenchmarkMetadata(BaseModel):
 
 
 class ComparisonSummary(BaseModel):
-    """盲比较聚合(主观侧并列主位)。win-rate 有效分母 = with+without+genuine tie;
-    failed(调用/解析失败、重试耗尽)排除出分母——失败≠打平。"""
+    """盲比较聚合(主观侧并列主位)。win-rate 有效分母 = a+b+genuine tie;
+    failed(调用/解析失败、重试耗尽)排除出分母——失败≠打平。
+
+    a/b = side A/B。label_a/b 默认 "with"/"without"(with/without 模式);
+    v1/v2 模式传 v1/v2。win_rate 恒为 side A 胜率(a_wins/valid)。"""
     total: int = 0
-    with_wins: int = 0
-    without_wins: int = 0
+    a_wins: int = 0
+    b_wins: int = 0
     ties: int = 0          # genuine tie(有效,计入分母)
     failed: int = 0        # 无信号,排除出分母
-    valid: int = 0         # with_wins + without_wins + ties
-    win_rate: float | None = None  # with_wins / valid;valid==0 → None
+    valid: int = 0         # a_wins + b_wins + ties
+    win_rate: float | None = None  # a_wins / valid;valid==0 → None
+    label_a: str = "with"
+    label_b: str = "without"
 
     @classmethod
-    def from_comparisons(cls, comparisons: list) -> "ComparisonSummary | None":
+    def from_comparisons(
+        cls,
+        comparisons: list,
+        label_a: str = "with",
+        label_b: str = "without",
+    ) -> "ComparisonSummary | None":
         if not comparisons:
             return None
 
         def _is(c, w):
             return c.winner == w and not getattr(c, "failed", False)
 
-        with_wins = sum(1 for c in comparisons if _is(c, "with"))
-        without_wins = sum(1 for c in comparisons if _is(c, "without"))
-        # genuine tie:winner 非 with/without 且非 failed(失败-tie 因 failed=True 被排除)
+        a_wins = sum(1 for c in comparisons if _is(c, label_a))
+        b_wins = sum(1 for c in comparisons if _is(c, label_b))
+        # genuine tie:winner 非 label_a/b 且非 failed(失败-tie 因 failed=True 被排除)
         ties = sum(1 for c in comparisons
-                   if c.winner not in ("with", "without") and not getattr(c, "failed", False))
+                   if c.winner not in (label_a, label_b) and not getattr(c, "failed", False))
         failed = sum(1 for c in comparisons if getattr(c, "failed", False))
-        valid = with_wins + without_wins + ties
+        valid = a_wins + b_wins + ties
         return cls(
-            total=len(comparisons), with_wins=with_wins, without_wins=without_wins,
+            total=len(comparisons), a_wins=a_wins, b_wins=b_wins,
             ties=ties, failed=failed, valid=valid,
-            win_rate=with_wins / valid if valid else None,
+            win_rate=a_wins / valid if valid else None,
+            label_a=label_a, label_b=label_b,
         )
 
 

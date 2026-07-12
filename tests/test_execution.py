@@ -506,9 +506,10 @@ class TestComparisonSummary:
         from skill_eval.models import ComparisonSummary
         s = ComparisonSummary.from_comparisons(comps)
         assert s.total == 4
-        assert (s.with_wins, s.without_wins, s.ties, s.failed) == (1, 1, 1, 1)
+        assert (s.a_wins, s.b_wins, s.ties, s.failed) == (1, 1, 1, 1)
         assert s.valid == 3            # genuine tie 计入,failed 排除
         assert s.win_rate == 1 / 3
+        assert s.label_a == "with" and s.label_b == "without"  # 默认 label
 
     def test_genuine_tie_counts_in_denominator(self):
         # 2 with / 0 without / 3 tie → win_rate 2/5(打平算一场比过)
@@ -526,6 +527,21 @@ class TestComparisonSummary:
         assert s.valid == 0
         assert s.win_rate is None      # 不报假 0%
         assert s.failed == 3
+
+    def test_v1v2_label_bucketing(self):
+        """v1/v2 模式:label_a/b 驱动分桶;win_rate 恒为 side A(v1)胜率。"""
+        comps = [
+            ComparisonResult(winner="v1", reasoning=""),
+            ComparisonResult(winner="v2", reasoning=""),
+            ComparisonResult(winner="v1", reasoning=""),
+            ComparisonResult(winner="tie", reasoning="等价"),
+        ]
+        from skill_eval.models import ComparisonSummary
+        s = ComparisonSummary.from_comparisons(comps, label_a="v1", label_b="v2")
+        assert (s.a_wins, s.b_wins, s.ties, s.failed) == (2, 1, 1, 0)
+        assert s.valid == 4
+        assert s.win_rate == 0.5       # a_wins(2)/valid(4)
+        assert s.label_a == "v1" and s.label_b == "v2"
 
     def test_empty_returns_none(self):
         from skill_eval.models import ComparisonSummary

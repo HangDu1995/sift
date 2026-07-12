@@ -430,7 +430,7 @@
           if (csum) {
             const wrPct = csum.win_rate != null ? (csum.win_rate * 100).toFixed(0) + "%" : "—";
             const failNote = csum.failed > 0 ? " · " + csum.failed + "失败" : "";
-            html += '<div style="font-size:0.8125rem;margin-bottom:0.5rem;"><strong>盲评胜率</strong> <span style="font-weight:600;">' + wrPct + '</span>（' + csum.with_wins + '胜/' + csum.without_wins + '负/' + csum.ties + '平' + failNote + '）</div>';
+            html += '<div style="font-size:0.8125rem;margin-bottom:0.5rem;"><strong>盲评胜率</strong> <span style="font-weight:600;">' + wrPct + '</span>（' + csum.a_wins + '胜/' + csum.b_wins + '负/' + csum.ties + '平' + failNote + '）</div>';
           }
           for (const comp of comps) {
             const wBadge = comp.winner === "with" ? "With Skill" : comp.winner === "without" ? "Without Skill" : "平局";
