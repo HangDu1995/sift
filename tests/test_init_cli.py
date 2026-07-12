@@ -67,3 +67,20 @@ def test_init_no_warning_without_fallback_flag(monkeypatch, tmp_path):
     r = runner.invoke(app, ["init", str(sp), "--from-transcript", str(tp), "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
     assert not any("no-llm" in p for p in printed), printed
+
+
+def test_init_threads_model_flag_to_generator(monkeypatch, tmp_path):
+    """init --model 接线:flag 须透到 EvalInitGenerator(model=...)。曾硬编码 model=None,
+    flag 是静默 no-op 死标志(对照 add 已正确接线)。"""
+    captured = {}
+
+    def fake_init(self, model=None, timeout=300, **_kw):
+        captured["model"] = model
+
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.__init__", fake_init)
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp: _fake_evalset())
+    sp = _skill_dir(tmp_path)
+    r = runner.invoke(app, ["init", str(sp), "--model", "sonnet", "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert captured.get("model") == "sonnet", f"--model 没透到 generator: {captured}"

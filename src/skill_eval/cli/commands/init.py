@@ -29,7 +29,7 @@ def init(
     from skill_eval.evals.generator import EvalInitGenerator
 
     try:
-        gen = EvalInitGenerator(model=None, timeout=300)
+        gen = EvalInitGenerator(model=model, timeout=300)
 
         if from_transcript:
             console.print(f"Mining evals from transcript [bold]{from_transcript}[/bold]...")
