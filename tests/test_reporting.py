@@ -180,6 +180,44 @@ class TestReportGeneratorStatic:
         assert "run.config" in html                       # 用 config 字段驱动 badge
         assert "run.id.match(/(with_skill" not in html    # 旧 run.id 正则已去(v1/v2 不匹配)
 
+    def test_gate_badge_embedded_when_gate_json_present(self, tmp_path):
+        """gate.json 在 iteration 目录 → 嵌入 EMBEDDED_DATA.gate + 模板引用(块 C 徽章)。"""
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        (workspace / "gate.json").write_text(json.dumps({
+            "decision": "PASS", "exit_code": 0, "reason": "ok",
+            "candidate": "v1", "baseline": "v2",
+        }))
+        benchmark = {"metadata": {"skill_name": "x"}, "runs": [], "run_summary": {}}
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        # ① gate 判决连同 decision 嵌入 EMBEDDED_DATA
+        assert '"decision": "PASS"' in html
+        assert '"candidate": "v1"' in html
+        # ② 模板用 EMBEDDED_DATA.gate 渲染徽章(非硬编码)
+        assert "EMBEDDED_DATA.gate" in html
+        assert "gate-badge" in html
+
+    def test_no_gate_json_no_crash(self, tmp_path):
+        """无 gate.json → 不崩溃,徽章隐藏。"""
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, {"metadata": {"skill_name": "x"}, "runs": [], "run_summary": {}})
+        assert "EMBEDDED_DATA.gate" in html  # 模板逻辑仍在
+
+    def test_gate_badge_finds_gate_json_in_iteration_subdir(self, tmp_path):
+        """canonical 流:gate.json 落 iteration-1/(gate 默认写 benchmark_path.parent),
+        report workspace 是父目录 → 仍能找到(与 _load_vet_report 同款 fallback)。"""
+        workspace = tmp_path / "out"           # report 的 workspace(输出目录)
+        (workspace / "iteration-1").mkdir(parents=True)
+        (workspace / "iteration-1" / "gate.json").write_text(json.dumps({
+            "decision": "FAIL", "exit_code": 1, "reason": "regressed",
+        }))
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, {"metadata": {"skill_name": "x"}, "runs": [], "run_summary": {}})
+        assert '"decision": "FAIL"' in html   # 从 iteration-1/gate.json 读到
+
 
 class TestLoadAuxData:
     def test_load_vet_report(self, tmp_path: Path):

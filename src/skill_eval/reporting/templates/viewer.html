@@ -545,7 +545,7 @@
   <div id="app" style="height:100vh; display:flex; flex-direction:column;">
     <div class="header">
       <div>
-        <h1>评测回顾：<span id="skill-name"></span></h1>
+        <h1>评测回顾：<span id="skill-name"></span><span id="gate-badge" style="display:none; font-weight:bold; margin-left:12px; padding:2px 10px; border-radius:4px;"></span></h1>
         <div class="instructions">查看每条输出并在下方留下反馈。使用方向键或按钮导航。完成后，复制反馈并粘贴到 Claude Code。</div>
       </div>
       <div class="progress" id="progress"></div>
@@ -673,6 +673,16 @@
       }
 
       document.getElementById("skill-name").textContent = EMBEDDED_DATA.skill_name;
+      const gate = EMBEDDED_DATA.gate;
+      if (gate && gate.decision) {
+          const styles = {PASS: {c:"green", bg:"#163a1f"}, FAIL: {c:"red", bg:"#3a1616"}, "N/A": {c:"yellow", bg:"#3a3a16"}};
+          const s = styles[gate.decision] || {c:"var(--text)", bg:"transparent"};
+          const el = document.getElementById("gate-badge");
+          el.textContent = "门禁 " + gate.decision;
+          el.style.color = s.c; el.style.background = s.bg;
+          el.title = gate.reason || "";
+          el.style.display = "inline-block";
+      }
       showRun(0);
 
       // Wire up feedback auto-save

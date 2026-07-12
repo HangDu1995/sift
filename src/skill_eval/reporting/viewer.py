@@ -210,6 +210,18 @@ def _load_vet_report(workspace: Path) -> dict | None:
     return None
 
 
+def _load_gate_verdict(root: Path) -> dict | None:
+    # 与 _load_vet_report / benchmark 查找同款双位置 fallback:gate.json 落在
+    # iteration-1/(gate 默认写 benchmark_path.parent),而 report workspace 常是父目录。
+    for candidate in [root / "gate.json", root / "iteration-1" / "gate.json"]:
+        if candidate.exists():
+            try:
+                return json.loads(candidate.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+    return None
+
+
 def load_previous_iteration(workspace: Path) -> dict | None:
     for name in ("previous", "previous_iteration"):
         prev_dir = workspace / name
@@ -276,6 +288,7 @@ class ReportGenerator:
             "benchmark": benchmark,
             "scorecard": scorecard,
             "vet_report": _load_vet_report(workspace),
+            "gate": _load_gate_verdict(workspace),
         }
 
         json_data = json.dumps(data, ensure_ascii=False)
