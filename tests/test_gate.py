@@ -105,3 +105,40 @@ def test_comparison_requested_but_summary_missing_warns():
     assert r.axes["comparison"].applicable is False
     assert len(r.warnings) == 1
     assert r.decision == "PASS"  # 仅客观判
+
+
+def test_programmatic_fail_overrides_comparison_pass():
+    """客观回归压倒主观胜率:delta<0 直接 FAIL。"""
+    r = evaluate_gate(_bench("-0.10", _cs(6, 2)), min_win_rate=0.5)
+    assert r.decision == "FAIL" and r.exit_code == 1
+
+
+def test_no_programmatic_guard_only_comparison():
+    r = evaluate_gate(_bench("-0.10", _cs(6, 2)),
+                      min_win_rate=0.5, programmatic_guard=False)
+    assert r.axes["programmatic"].applicable is False
+    assert r.decision == "PASS"  # 只看主观,客观回归被关
+
+
+def test_no_engaged_axis_is_NA():
+    """客观 null + 守卫关 + 无主观请求 → 无适用轴 → N/A。"""
+    r = evaluate_gate(_bench(None), programmatic_guard=False)
+    assert r.decision == "N/A" and r.exit_code == 2
+
+
+def test_candidate_override():
+    r = evaluate_gate(_bench("+0.27", _cs(6, 2, label_a="v1", label_b="v2")),
+                      min_win_rate=0.5, candidate="custom-cand")
+    assert r.candidate == "custom-cand"
+    assert r.baseline == "v2"  # label_b 仍取 comparison_summary
+
+
+def test_candidate_resolution_from_side_keys():
+    """无 comparison_summary → 候选/基线从 run_summary side key 取。"""
+    r = evaluate_gate(_bench("+0.27"))  # 无 cs
+    assert r.candidate == "v1" and r.baseline == "v2"
+
+
+def test_thresholds_recorded():
+    r = evaluate_gate(_bench("+0.27", _cs(6, 2)), min_win_rate=0.6, min_valid=5)
+    assert r.thresholds == {"min_win_rate": 0.6, "min_valid": 5, "programmatic_guard": True}
