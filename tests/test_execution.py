@@ -354,7 +354,7 @@ class TestComparisonPairing:
             def __init__(self, *a, **kw):
                 pass
 
-            def compare(self, output_a, output_b, eval_prompt=None, expectations=None):
+            def compare(self, output_a, output_b, eval_prompt=None, expectations=None, label_a=None, label_b=None):
                 calls.append((output_a, output_b))
                 return ComparisonResult(winner="with", reasoning="ok")
 
@@ -419,6 +419,63 @@ class TestComparisonPairing:
         assert pairings == [("W-R1", "WO-R1"), ("W-R2", "WO-R2")]
 
 
+class TestComparisonSides:
+    """块 B:sides 驱动 run_comparisons —— 读 side dir + 透 comp_label 给 comparator。"""
+
+    @staticmethod
+    def _make_run(base: Path, marker: str) -> None:
+        (base / "outputs").mkdir(parents=True, exist_ok=True)
+        (base / "outputs" / "out.txt").write_text(marker, encoding="utf-8")
+
+    def test_v1v2_sides_drive_dirs_and_labels(self, tmp_path: Path, monkeypatch):
+        seen_labels: list[tuple] = []
+
+        class _FakeComparator:
+            def __init__(self, *a, **kw):
+                pass
+
+            def compare(self, output_a, output_b, eval_prompt=None, expectations=None, label_a=None, label_b=None):
+                seen_labels.append((label_a, label_b))
+                return ComparisonResult(winner=label_a, reasoning="ok")  # side A 胜
+
+        monkeypatch.setattr(comparison_suite, "BlindComparator", _FakeComparator)
+
+        self._make_run(tmp_path / "v1" / "eval-1" / "run-1", "V1-OUT")
+        self._make_run(tmp_path / "v2" / "eval-1" / "run-1", "V2-OUT")
+
+        class _Agg:
+            enable_llm = True
+            model = None
+            timeout = 10
+
+        results = run_comparisons(_Agg(), tmp_path, sides=[("v1", None, "v1"), ("v2", None, "v2")])
+        assert len(results) == 1
+        assert results[0].winner == "v1"          # winner 用 v1 label,非 with
+        assert seen_labels == [("v1", "v2")]      # comp_label 透到 comparator
+
+    def test_default_sides_none_falls_back_to_with_without(self, tmp_path: Path, monkeypatch):
+        """sides=None → 默认 with_skill/without_skill dir + with/without label(向后兼容)。"""
+        class _FakeComparator:
+            def __init__(self, *a, **kw):
+                pass
+
+            def compare(self, output_a, output_b, eval_prompt=None, expectations=None, label_a=None, label_b=None):
+                return ComparisonResult(winner=label_a, reasoning="ok")
+
+        monkeypatch.setattr(comparison_suite, "BlindComparator", _FakeComparator)
+        self._make_run(tmp_path / "with_skill" / "eval-1" / "run-1", "W")
+        self._make_run(tmp_path / "without_skill" / "eval-1" / "run-1", "WO")
+
+        class _Agg:
+            enable_llm = True
+            model = None
+            timeout = 10
+
+        results = run_comparisons(_Agg(), tmp_path)  # sides 默认 None
+        assert len(results) == 1
+        assert results[0].winner == "with"           # 默认 label
+
+
 class TestComparisonRetry:
     """_compare_with_retry 重试机制:compare() 返回 failed=True(调用/解析失败)时重试。
     旧实现 try/except 重试,但 compare() 把失败吞成 TIE 永不抛 → 重试循环是死代码。"""
@@ -428,7 +485,7 @@ class TestComparisonRetry:
         attempts = []
 
         class _Flaky:
-            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None):
+            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None, label_a=None, label_b=None):
                 attempts.append(len(attempts) + 1)
                 if len(attempts) < 3:
                     return ComparisonResult(winner="tie", reasoning="无法解析", failed=True)
@@ -444,7 +501,7 @@ class TestComparisonRetry:
         attempts = []
 
         class _AlwaysFail:
-            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None):
+            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None, label_a=None, label_b=None):
                 attempts.append(1)
                 return ComparisonResult(winner="tie", reasoning="对比调用失败", failed=True)
 
@@ -458,7 +515,7 @@ class TestComparisonRetry:
         attempts = []
 
         class _Ok:
-            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None):
+            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None, label_a=None, label_b=None):
                 attempts.append(1)
                 return ComparisonResult(winner="with", reasoning="ok", failed=False)
 
@@ -474,7 +531,7 @@ class TestComparisonRetry:
             def __init__(self, *a, **kw):
                 pass
 
-            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None):
+            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None, label_a=None, label_b=None):
                 return ComparisonResult(winner="tie", reasoning="对比调用失败", failed=True)
 
         monkeypatch.setattr(comparison_suite, "BlindComparator", _AlwaysFails)

@@ -44,7 +44,7 @@ class BenchmarkAggregator:
         # 盲比较只服务于主观题;programmatic-only(enable_llm=False)时 run_comparisons 跳过
         self.enable_llm = enable_llm
 
-    def aggregate(self, iteration_dir: Path, skill_path: Path = Path()) -> BenchmarkData:
+    def aggregate(self, iteration_dir: Path, skill_path: Path = Path(), sides: list | None = None) -> BenchmarkData:
         import sys
         sys.stderr.write("aggregate: reading run results...\n")
         sys.stderr.flush()
@@ -277,12 +277,15 @@ class BenchmarkAggregator:
             main_benchmark = main_benchmark.model_copy(update={"notes": checkpoints_data})
 
         try:
-            comparisons = run_comparisons(self, iteration_dir)
+            comparisons = run_comparisons(self, iteration_dir, sides=sides)
             if comparisons:
+                # label 从 sides 透到 ComparisonSummary(默认 with/without)
+                label_a = sides[0][2] if sides else "with"
+                label_b = sides[1][2] if sides else "without"
                 main_benchmark = main_benchmark.model_copy(
                     update={
                         "comparisons": comparisons,
-                        "comparison_summary": ComparisonSummary.from_comparisons(comparisons),
+                        "comparison_summary": ComparisonSummary.from_comparisons(comparisons, label_a, label_b),
                         "metadata": main_benchmark.metadata.model_copy(update={"comparator_model": self.model or "default"}),
                     }
                 )

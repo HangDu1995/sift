@@ -44,7 +44,7 @@ def _progress_bar(current, total, width) -> str:
     return f" {bar} {pct*100:.0f}%"
 
 
-def _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectations, max_retries=3):
+def _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectations, label_a="with", label_b="without", max_retries=3):
     """盲比较带重试:compare() 返回 failed=True(调用/解析失败)时重试,成功即返回。
 
     失败判定靠 ComparisonResult.failed 标志(_parse 在调用/解析失败时设 True)。
@@ -58,6 +58,8 @@ def _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectat
             output_b=wos_output,
             eval_prompt=eval_prompt,
             expectations=expectations if expectations else None,
+            label_a=label_a,
+            label_b=label_b,
         )
         if not getattr(result, "failed", False):
             return result
@@ -66,7 +68,7 @@ def _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectat
     return None
 
 
-def run_comparisons(aggregator, iteration_dir: Path) -> list:
+def run_comparisons(aggregator, iteration_dir: Path, sides: list | None = None) -> list:
     import sys
     import time
     import threading
@@ -78,18 +80,22 @@ def run_comparisons(aggregator, iteration_dir: Path) -> list:
         sys.stderr.flush()
         return []
 
-    with_skill_dir = iteration_dir / "with_skill"
-    without_skill_dir = iteration_dir / "without_skill"
-    if not with_skill_dir.is_dir() or not without_skill_dir.is_dir():
+    # sides = [(config_name, inject_skill, comp_label), ...];None → 默认 with/without(向后兼容)
+    if sides is None:
+        sides = [("with_skill", None, "with"), ("without_skill", None, "without")]
+    side_a_dir = iteration_dir / sides[0][0]
+    side_b_dir = iteration_dir / sides[1][0]
+    if not side_a_dir.is_dir() or not side_b_dir.is_dir():
         return []
 
+    label_a, label_b = sides[0][2], sides[1][2]
     comparator = BlindComparator(model=aggregator.model, timeout=aggregator.timeout)
 
     # 按 (eval_name, run_n) 显式配对,各自取最终 retry 目录。
     # 旧 glob("eval-*/run-*")+zip 会把 retry 目录混入(run-1、run-1-retry-1 都匹配),
     # with 侧多出的 retry 排序后错位配给 without 的下一个 run → 跨 eval 伪 tie。
-    ws_index = index_runs(with_skill_dir, is_nested(with_skill_dir))
-    wos_index = index_runs(without_skill_dir, is_nested(without_skill_dir))
+    ws_index = index_runs(side_a_dir, is_nested(side_a_dir))
+    wos_index = index_runs(side_b_dir, is_nested(side_b_dir))
     common = sorted(set(ws_index) & set(wos_index))
     pairs = [(ws_index[k], wos_index[k]) for k in common]
     total = len(pairs)
@@ -125,7 +131,7 @@ def run_comparisons(aggregator, iteration_dir: Path) -> list:
         if ws_grading:
             expectations = [e.get("text", "") for e in ws_grading.get("expectations", []) if e.get("text")]
 
-        result = _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectations)
+        result = _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectations, label_a, label_b)
         if result is None:
             with lock:
                 failures[0] += 1
