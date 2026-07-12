@@ -19,6 +19,7 @@ from skill_eval.models import (
 from skill_eval.parser import parse_skill_md
 from skill_eval.execution.comparison_suite import run_comparisons
 from skill_eval.execution.analysis_suite import run_analysis
+from skill_eval.execution.run_paths import index_runs, is_nested
 
 
 def calculate_stats(values: list[float]) -> StatsValue:
@@ -61,10 +62,9 @@ class BenchmarkAggregator:
                 continue
             config_name = config_dir.name
 
-            run_dirs = sorted(config_dir.glob("run-*"))
-            nested = sorted(p for p in config_dir.glob("eval-*/run-*") if p.is_dir())
-            if nested:
-                run_dirs = nested
+            # 一个 run = (eval, run_number) 的最终尝试;glob 会匹配 retry 目录,
+            # 用 index_runs 只取最终 retry(否则被取代的失败 base 当独立低分 run 计入)。
+            run_dirs = list(index_runs(config_dir, is_nested(config_dir)).values())
             if not run_dirs:
                 continue
 
@@ -216,8 +216,7 @@ class BenchmarkAggregator:
             if not config_dir.is_dir():
                 continue
             config_name = config_dir.name
-            nested = sorted(p for p in config_dir.glob("eval-*/run-*") if p.is_dir())
-            for run_dir in nested:
+            for run_dir in index_runs(config_dir, is_nested(config_dir)).values():
                 debug_path = run_dir / "run_debug.json"
                 if debug_path.exists():
                     try:
@@ -310,11 +309,7 @@ class BenchmarkAggregator:
         for config_dir in sorted(iteration_dir.iterdir()):
             if not config_dir.is_dir():
                 continue
-            run_dirs = sorted(config_dir.glob("run-*"))
-            nested = sorted(p for p in config_dir.glob("eval-*/run-*") if p.is_dir())
-            if nested:
-                run_dirs = nested
-            for run_dir in run_dirs:
+            for run_dir in index_runs(config_dir, is_nested(config_dir)).values():
                 cp_path = run_dir / "checkpoints.json"
                 if cp_path.exists():
                     try:

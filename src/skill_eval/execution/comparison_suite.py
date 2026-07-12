@@ -1,48 +1,9 @@
 from __future__ import annotations
 import json
-import re
 from pathlib import Path
 from skill_eval.models import ComparisonResult
 from skill_eval.scoring.comparator import BlindComparator
-
-# run 目录名:run-1(基)或 run-1-retry-2(重试)。retry 计数大 = 最终尝试 = 该 run 的有效产物。
-_RUN_RE = re.compile(r"^run-(\d+)(?:-retry-(\d+))?$")
-
-
-def _retry_count(name: str) -> int:
-    """run 目录名的 retry 计数(run-1 → 0,run-1-retry-2 → 2);非 run 目录 → -1。"""
-    m = _RUN_RE.match(name)
-    if not m:
-        return -1
-    return int(m.group(2)) if m.group(2) else 0
-
-
-def _index_runs(config_dir: Path, nested: bool) -> dict[tuple[str | None, int], Path]:
-    """把一侧(with/without)的 run 目录按 (eval_name, run_n) 索引到**最终 retry** 目录。
-
-    nested=True  → config_dir/eval-{name}/run-{n}[-retry-{k}]
-    nested=False → config_dir/run-{n}[-retry-{k}](eval_name=None 单桶)
-    同一 (eval_name, run_n) 有基 + 多个 retry 时,保留 retry 计数最大的(= 最终成功尝试)。
-    不匹配 run 命名的目录被忽略(防 glob 杂项混入)。
-    """
-    indexed: dict[tuple[str | None, int], Path] = {}
-    if nested:
-        parents = [(d.name, d) for d in sorted(config_dir.glob("eval-*"), key=lambda p: p.name) if d.is_dir()]
-    else:
-        parents = [(None, config_dir)]
-    for eval_name, parent in parents:
-        for run_dir in sorted(parent.glob("run-*"), key=lambda p: p.name):
-            if not run_dir.is_dir():
-                continue
-            m = _RUN_RE.match(run_dir.name)
-            if not m:
-                continue
-            run_n = int(m.group(1))
-            key = (eval_name, run_n)
-            existing = indexed.get(key)
-            if existing is None or _retry_count(run_dir.name) > _retry_count(existing.name):
-                indexed[key] = run_dir
-    return indexed
+from skill_eval.execution.run_paths import index_runs, is_nested
 
 
 def _load_grading(run_dir: Path) -> dict | None:
@@ -120,10 +81,8 @@ def run_comparisons(aggregator, iteration_dir: Path) -> list:
     # 按 (eval_name, run_n) 显式配对,各自取最终 retry 目录。
     # 旧 glob("eval-*/run-*")+zip 会把 retry 目录混入(run-1、run-1-retry-1 都匹配),
     # with 侧多出的 retry 排序后错位配给 without 的下一个 run → 跨 eval 伪 tie。
-    ws_nested = any(d.is_dir() for d in with_skill_dir.glob("eval-*"))
-    wos_nested = any(d.is_dir() for d in without_skill_dir.glob("eval-*"))
-    ws_index = _index_runs(with_skill_dir, ws_nested)
-    wos_index = _index_runs(without_skill_dir, wos_nested)
+    ws_index = index_runs(with_skill_dir, is_nested(with_skill_dir))
+    wos_index = index_runs(without_skill_dir, is_nested(without_skill_dir))
     common = sorted(set(ws_index) & set(wos_index))
     pairs = [(ws_index[k], wos_index[k]) for k in common]
     total = len(pairs)

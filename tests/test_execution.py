@@ -179,6 +179,44 @@ class TestBenchmarkAggregator:
         assert ws["pass_rate_llm"] is None  # 无 llm expectation
         assert benchmark.run_summary["delta"]["pass_rate_llm"] is None
 
+    def test_aggregate_ignores_superseded_retry_base(self, tmp_path: Path):
+        """benchmark 聚合 retry-glob bug 回归:被 retry 取代的失败 base 不当独立 run 计入。
+        with eval-1 有 run-1(base 0.0)+ run-1-retry-1(最终 0.75),聚合应只算 retry-1。
+        旧 glob("eval-*/run-*") 两条都读 → with 均值被失败 base 拖低 → delta 失真。"""
+        iteration = tmp_path / "iteration-1"
+        iteration.mkdir(parents=True)
+
+        def make(run_dir: Path, pass_rate: float) -> None:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "outputs").mkdir(exist_ok=True)
+            (run_dir / "grading.json").write_text(json.dumps({
+                "expectations": [{"text": "t", "passed": pass_rate >= 0.5, "evidence": "e"}],
+                "summary": {"passed": 0, "failed": 1, "total": 1, "pass_rate": pass_rate,
+                            "pass_rate_llm": pass_rate},
+            }), encoding="utf-8")
+            (run_dir / "timing.json").write_text(json.dumps({
+                "total_tokens": 100, "duration_ms": 5000, "total_duration_seconds": 5.0,
+            }), encoding="utf-8")
+
+        # with:eval-1 run-1 base(失败)+ run-1-retry-1(最终);eval-2 run-1
+        make(iteration / "with_skill" / "eval-1" / "run-1", 0.0)
+        make(iteration / "with_skill" / "eval-1" / "run-1-retry-1", 0.75)
+        make(iteration / "with_skill" / "eval-2" / "run-1", 1.0)
+        # without:eval-1/eval-2 各 run-1(无 retry)
+        make(iteration / "without_skill" / "eval-1" / "run-1", 0.25)
+        make(iteration / "without_skill" / "eval-2" / "run-1", 0.5)
+
+        agg = BenchmarkAggregator()
+        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+            benchmark = agg.aggregate(iteration, tmp_path)
+
+        # with 只 2 条最终尝试(eval-1/run-1→retry 0.75 + eval-2/run-1 1.0),非 3 条
+        assert len(benchmark.runs) == 4  # with 2 + without 2,不含被取代的 base
+        assert benchmark.run_summary["with_skill"]["pass_rate"]["mean"] == pytest.approx((0.75 + 1.0) / 2)
+        # delta 用最终尝试:with mean 0.875 - without mean 0.375 = +0.50
+        assert benchmark.run_summary["delta"]["pass_rate"] == "+0.50"
+
     def test_aggregate_empty(self, tmp_path: Path):
         iteration = tmp_path / "iteration-1"
         iteration.mkdir()
