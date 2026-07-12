@@ -1372,19 +1372,28 @@
 
         for (let ci = 0; ci < comparisons.length; ci++) {
           const comp = comparisons[ci];
+          // comparator 现打乱 position 并把 A/B 翻成语义 with/without;此处归一兼容老数据
+          // (老数据 winner=A/B 且 A 恒=with,故 A→with、B→without 对老数据也正确)
+          if (comp.winner === "A") comp.winner = "with";
+          else if (comp.winner === "B") comp.winner = "without";
+          else if (comp.winner === "TIE") comp.winner = "tie";
+          for (const _f of ["rubric", "output_quality", "expectation_results"]) {
+            const _d = comp[_f];
+            if (_d) { if (_d.A && !_d.with) _d.with = _d.A; if (_d.B && !_d.without) _d.without = _d.B; }
+          }
           if (ci > 0) html += '<hr style="border:0;border-top:1px solid var(--border);margin:1rem 0;">';
 
-          const wBadge = comp.winner === "A" ? "With Skill" : comp.winner === "B" ? "Without Skill" : "平局";
-          const wColor = comp.winner === "A" ? "var(--green)" : comp.winner === "B" ? "var(--red)" : "var(--text-muted)";
+          const wBadge = comp.winner === "with" ? "With Skill" : comp.winner === "without" ? "Without Skill" : "平局";
+          const wColor = comp.winner === "with" ? "var(--green)" : comp.winner === "without" ? "var(--red)" : "var(--text-muted)";
           html += '<div style="margin-bottom:0.75rem;"><strong>胜者：</strong> <span style="color:' + wColor + ';font-weight:600;">' + wBadge + '</span></div>';
           html += '<div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:0.75rem;">' + escapeHtml(comp.reasoning || "") + '</div>';
 
           // Rubric scores
-          if (comp.rubric && (comp.rubric.A || comp.rubric.B)) {
+          if (comp.rubric && (comp.rubric.with || comp.rubric.without)) {
             html += '<div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem;">';
-            for (const side of ["A", "B"]) {
+            for (const side of ["with", "without"]) {
               const r = comp.rubric[side] || {};
-              const label = side === "A" ? "With Skill" : "Without Skill";
+              const label = side === "with" ? "With Skill" : "Without Skill";
               const scoreColor = r.overall_score >= 8 ? "var(--green)" : r.overall_score >= 5 ? "var(--accent)" : "var(--red)";
               html += '<div style="flex:1;min-width:180px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;">';
               html += '<div style="font-weight:600;margin-bottom:0.5rem;">' + label + ' <span style="color:' + scoreColor + ';font-size:1.1rem;">' + (r.overall_score || "?").toFixed(1) + '</span>/10</div>';
@@ -1397,11 +1406,11 @@
           }
 
           // Quality highlights
-          if (comp.output_quality && (comp.output_quality.A || comp.output_quality.B)) {
+          if (comp.output_quality && (comp.output_quality.with || comp.output_quality.without)) {
             html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">';
-            for (const side of ["A", "B"]) {
+            for (const side of ["with", "without"]) {
               const q = comp.output_quality[side] || {};
-              const label = side === "A" ? "A" : "B";
+              const label = side === "with" ? "With Skill" : "Without Skill";
               html += '<div style="flex:1;min-width:160px;font-size:0.75rem;">';
               html += '<strong>' + label + '</strong>: ' + (q.score || "?") + '/10';
               if (q.strengths && q.strengths.length) html += '<br><span style="color:var(--green);">+</span> ' + escapeHtml(q.strengths[0]);

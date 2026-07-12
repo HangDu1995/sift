@@ -112,6 +112,16 @@ class TestAnalysisResultModel:
         assert r.improvement_suggestions == []
 
 
+class _FixedRng:
+    """测试用确定性 rng:random() < 0.5 → with 放 A 位(with_is_a=True)。"""
+
+    def __init__(self, with_is_a: bool):
+        self._with_is_a = with_is_a
+
+    def random(self) -> float:
+        return 0.0 if self._with_is_a else 0.99
+
+
 class TestBlindComparator:
     def test_loads_prompt_template(self):
         c = BlindComparator()
@@ -154,18 +164,73 @@ class TestBlindComparator:
         result = c._parse("not json at all")
         assert result.winner == "TIE"
 
+    # ── position 随机化 + 语义翻译(梯队一③)──
+    # comparator 内部随机决定 with 放 A/B 位(消 LLM position bias),_parse 仍返回
+    # raw A/B/TIE,compare() 经 _translate 翻成语义 with/without/tie + dict key 重映射。
+
+    def test_translate_with_is_a_true(self):
+        c = BlindComparator()
+        raw = ComparisonResult.model_validate(json.loads(VALID_COMPARISON_JSON))  # winner A
+        out = c._translate(raw, with_is_a=True)
+        # with 在 A 位,LLM 判 A 胜 → 胜者翻成 with
+        assert out.winner == "with"
+        assert out.rubric["with"].overall_score == 9.0
+        assert out.rubric["without"].overall_score == 5.4
+        assert out.output_quality["with"].score == 9
+        assert out.output_quality["without"].score == 5
+
+    def test_translate_with_is_a_false(self):
+        c = BlindComparator()
+        raw = ComparisonResult.model_validate(json.loads(VALID_COMPARISON_JSON))  # winner A
+        out = c._translate(raw, with_is_a=False)
+        # with 在 B 位,LLM 判 A 胜 → A 是 without → 胜者翻成 without
+        assert out.winner == "without"
+        assert out.rubric["without"].overall_score == 9.0
+        assert out.rubric["with"].overall_score == 5.4
+
+    def test_translate_tie_and_expectation_remap(self):
+        c = BlindComparator()
+        raw = ComparisonResult.model_validate(json.loads(VALID_COMPARISON_WITH_EXPECTATIONS))
+        out = c._translate(raw, with_is_a=True)
+        assert out.winner == "with"
+        assert out.expectation_results["with"].pass_rate == 0.8
+        assert out.expectation_results["without"].pass_rate == 0.6
+        # tie 与 with_is_a 无关
+        raw_tie = ComparisonResult(winner="TIE", reasoning="eq")
+        assert c._translate(raw_tie, with_is_a=True).winner == "tie"
+        assert c._translate(raw_tie, with_is_a=False).winner == "tie"
+
     @patch("skill_eval.scoring.comparator.call_claude", return_value=VALID_COMPARISON_JSON)
     def test_compare_end_to_end(self, mock_claude):
-        c = BlindComparator()
-        result = c.compare("output A", "output B", "eval prompt", ["exp 1"])
-        assert result.winner == "A"
+        c = BlindComparator(rng=_FixedRng(True))  # with 放 A 位
+        result = c.compare("with-output", "without-output", "eval prompt", ["exp 1"])
+        # LLM 判 position A 胜;with 在 A → 胜者翻成 with
+        assert result.winner == "with"
+        assert result.rubric["with"].overall_score == 9.0
         mock_claude.assert_called_once()
+
+    @patch("skill_eval.scoring.comparator.call_claude", return_value=VALID_COMPARISON_JSON)
+    def test_compare_position_flip_flips_winner(self, mock_claude):
+        # 同一份 LLM 响应(判 A 胜):with 放 A → with 胜;with 放 B → without 胜
+        r_a = BlindComparator(rng=_FixedRng(True)).compare("w", "wo", "p")
+        r_b = BlindComparator(rng=_FixedRng(False)).compare("w", "wo", "p")
+        assert r_a.winner == "with"
+        assert r_b.winner == "without"
+
+    @patch("skill_eval.scoring.comparator.call_claude", return_value=VALID_COMPARISON_JSON)
+    def test_compare_shuffle_swaps_prompt_position(self, mock_claude):
+        # with_is_a=False → without 放 OUTPUT A、with 放 OUTPUT B(证明 position 真打乱)
+        BlindComparator(rng=_FixedRng(False)).compare("WITH-MARKER", "WITHOUT-MARKER", "p")
+        sent = mock_claude.call_args[0][0]
+        assert "OUTPUT A ---\nWITHOUT-MARKER" in sent
+        assert "OUTPUT B ---\nWITH-MARKER" in sent
 
     @patch("skill_eval.scoring.comparator.call_claude", side_effect=RuntimeError("timeout"))
     def test_compare_call_failure(self, mock_claude):
         c = BlindComparator()
-        result = c.compare("A", "B", "prompt")
-        assert result.winner == "TIE"
+        result = c.compare("with", "without", "prompt")
+        # _call 抛错 → _parse("") raw winner TIE → 翻成 tie
+        assert result.winner == "tie"
 
 
 class TestPosthocAnalyzer:

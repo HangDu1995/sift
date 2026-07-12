@@ -45,8 +45,8 @@ def _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectat
     for attempt in range(max_retries):
         try:
             return comparator.compare(
-                output_a=ws_output,
-                output_b=wos_output,
+                output_with=ws_output,
+                output_without=wos_output,
                 eval_prompt=eval_prompt,
                 expectations=expectations if expectations else None,
             )
@@ -118,7 +118,7 @@ def run_comparisons(aggregator, iteration_dir: Path) -> list:
         if result is None:
             with lock:
                 failures[0] += 1
-            result = ComparisonResult(winner="TIE", reasoning="comparison failed after retries")
+            result = ComparisonResult(winner="tie", reasoning="comparison failed after retries")
 
         comp_path = ws_run.parent.parent / f"comparison-run{ws_run.name.split('-')[1]}.json"
         comp_path.write_text(

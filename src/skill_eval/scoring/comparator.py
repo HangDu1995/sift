@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 
 from skill_eval.models import ComparisonResult
@@ -10,9 +11,11 @@ from skill_eval.utils import call_claude
 
 
 class BlindComparator:
-    def __init__(self, model: str | None = None, timeout: int = 120):
+    def __init__(self, model: str | None = None, timeout: int = 120, rng: random.Random | None = None):
         self.model = model
         self.timeout = timeout
+        # position 打乱用;默认非确定,测试可注入 seeded/stub rng
+        self._rng = rng if rng is not None else random.Random()
         self._prompt_template = self._load_prompt_template()
 
     def _load_prompt_template(self) -> str:
@@ -23,14 +26,28 @@ class BlindComparator:
 
     def compare(
         self,
-        output_a: str,
-        output_b: str,
+        output_with: str,
+        output_without: str,
         eval_prompt: str,
         expectations: list[str] | None = None,
     ) -> ComparisonResult:
+        """盲比较 with/without 两份输出。
+
+        position 随机化:每次随机决定 with 放 LLM 看到的 A 位还是 B 位(消 position
+        bias——LLM 可能偏好首位/末位,恒把 with 放 A 会让偏差系统性偏向/偏离 with)。
+        LLM 只看到 position A/B(保持盲);_parse 返回 raw A/B 标签;_translate 在边界
+        把 winner 和 rubric/output_quality/expectation_results 的 key 翻成语义 with/without,
+        使 ComparisonResult 自描述、viewer 无需知道当次映射。
+        """
+        with_is_a = self._rng.random() < 0.5
+        if with_is_a:
+            output_a, output_b = output_with, output_without
+        else:
+            output_a, output_b = output_without, output_with
         prompt = self._build_prompt(output_a, output_b, eval_prompt, expectations)
         response = self._call(prompt)
-        return self._parse(response)
+        raw = self._parse(response)
+        return self._translate(raw, with_is_a=with_is_a)
 
     def _build_prompt(
         self,
@@ -82,3 +99,36 @@ class BlindComparator:
                 except Exception:
                     pass
             return ComparisonResult(winner="TIE", reasoning="无法解析对比响应")
+
+    def _translate(self, raw: ComparisonResult, with_is_a: bool) -> ComparisonResult:
+        """把 LLM 的 position 标签(A/B/TIE)翻成语义 with/without/tie。
+
+        - winner: A→with(若 with 在 A 位)否则 without;TIE/异常→tie
+        - rubric/output_quality/expectation_results: dict key A/B→with/without
+        """
+        a_key = "with" if with_is_a else "without"
+        b_key = "without" if with_is_a else "with"
+
+        def _remap(d: dict | None) -> dict | None:
+            if not d:
+                return d
+            out: dict = {}
+            for k, v in d.items():
+                ku = (k or "").strip().upper()
+                out[a_key if ku == "A" else b_key if ku == "B" else k] = v
+            return out
+
+        w = (raw.winner or "").strip().upper()
+        if w == "A":
+            winner = a_key
+        elif w == "B":
+            winner = b_key
+        else:  # TIE / 空 / 异常值
+            winner = "tie"
+
+        return raw.model_copy(update={
+            "winner": winner,
+            "rubric": _remap(raw.rubric),
+            "output_quality": _remap(raw.output_quality),
+            "expectation_results": _remap(raw.expectation_results),
+        })
