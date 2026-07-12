@@ -426,11 +426,19 @@
 
         // Comparison details
         if (comps.length > 0) {
+          const csum = bench.comparison_summary;
+          if (csum) {
+            const wrPct = csum.win_rate != null ? (csum.win_rate * 100).toFixed(0) + "%" : "—";
+            const failNote = csum.failed > 0 ? " · " + csum.failed + "失败" : "";
+            html += '<div style="font-size:0.8125rem;margin-bottom:0.5rem;"><strong>盲评胜率</strong> <span style="font-weight:600;">' + wrPct + '</span>（' + csum.with_wins + '胜/' + csum.without_wins + '负/' + csum.ties + '平' + failNote + '）</div>';
+          }
           for (const comp of comps) {
-            const wBadge = comp.winner === "A" ? "With Skill" : comp.winner === "B" ? "Without Skill" : "平局";
-            const wColor = comp.winner === "A" ? "var(--green)" : comp.winner === "B" ? "var(--red)" : "var(--text-muted)";
+            const wBadge = comp.winner === "with" ? "With Skill" : comp.winner === "without" ? "Without Skill" : "平局";
+            const wColor = comp.winner === "with" ? "var(--green)" : comp.winner === "without" ? "var(--red)" : "var(--text-muted)";
             html += '<div style="font-size:0.75rem;margin-bottom:0.5rem;"><strong>对比：</strong>胜者 <span style="color:' + wColor + ';">' + wBadge + '</span>';
-            if (comp.rubric && comp.rubric.A) html += ' (A: ' + (comp.rubric.A.overall_score || "?").toFixed(1) + '/10, B: ' + (comp.rubric.B ? comp.rubric.B.overall_score : "?").toFixed(1) + '/10)';
+            const rw = (comp.rubric && (comp.rubric.with || comp.rubric.A)) || null;
+            const rwo = (comp.rubric && (comp.rubric.without || comp.rubric.B)) || null;
+            if (rw) html += ' (with: ' + ((rw.overall_score || 0)).toFixed(1) + '/10, without: ' + (rwo ? (rwo.overall_score || 0).toFixed(1) : "?") + '/10)';
             html += '</div>';
           }
         }
