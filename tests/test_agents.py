@@ -232,6 +232,27 @@ class TestBlindComparator:
         # _call 抛错 → _parse("") raw winner TIE → 翻成 tie
         assert result.winner == "tie"
 
+    # ── failed 标志(让 _compare_with_retry 能识别失败并重试,修死循环 bug)──
+
+    def test_parse_sets_failed_on_empty_response(self):
+        c = BlindComparator()
+        assert c._parse("").failed is True  # 调用失败 → ""
+
+    def test_parse_sets_failed_on_garbage(self):
+        c = BlindComparator()
+        assert c._parse("not json, no braces at all").failed is True
+
+    def test_parse_no_failed_on_valid(self):
+        c = BlindComparator()
+        assert c._parse(VALID_COMPARISON_JSON).failed is False
+
+    @patch("skill_eval.scoring.comparator.call_claude", side_effect=RuntimeError("timeout"))
+    def test_compare_marks_failed_on_call_failure(self, mock_claude):
+        c = BlindComparator()
+        result = c.compare("with", "without", "prompt")
+        assert result.winner == "tie"  # 旧契约保留(降级 tie)
+        assert result.failed is True   # 但标 failed → 可被 _compare_with_retry 重试
+
 
 class TestPosthocAnalyzer:
     def test_loads_prompt_template(self):

@@ -12,7 +12,7 @@ from skill_eval.evals.loader import EvalLoader
 from skill_eval.errors import EvalValidationError
 from skill_eval.execution.benchmark import BenchmarkAggregator, calculate_stats
 import skill_eval.execution.comparison_suite as comparison_suite
-from skill_eval.execution.comparison_suite import run_comparisons
+from skill_eval.execution.comparison_suite import run_comparisons, _compare_with_retry
 from skill_eval.models import ComparisonResult, EvalSet, StatsValue
 
 
@@ -417,6 +417,54 @@ class TestComparisonPairing:
         assert len(results) == 2
         pairings = sorted((_tok(w), _tok(wo)) for w, wo in calls)
         assert pairings == [("W-R1", "WO-R1"), ("W-R2", "WO-R2")]
+
+
+class TestComparisonRetry:
+    """_compare_with_retry 重试机制:compare() 返回 failed=True(调用/解析失败)时重试。
+    旧实现 try/except 重试,但 compare() 把失败吞成 TIE 永不抛 → 重试循环是死代码。"""
+
+    def test_retries_until_success(self):
+        """前 2 次 failed、第 3 次成功 → 重试到成功即返回。"""
+        attempts = []
+
+        class _Flaky:
+            def compare(self, output_with=None, output_without=None, eval_prompt=None, expectations=None):
+                attempts.append(len(attempts) + 1)
+                if len(attempts) < 3:
+                    return ComparisonResult(winner="tie", reasoning="无法解析", failed=True)
+                return ComparisonResult(winner="with", reasoning="ok", failed=False)
+
+        with patch.object(comparison_suite, "time"):  # 跳过 backoff sleep
+            result = _compare_with_retry(_Flaky(), "ws", "wos", "ep", None, max_retries=3)
+        assert result.winner == "with"
+        assert len(attempts) == 3  # 重试了 2 次
+
+    def test_exhausts_to_none_when_all_fail(self):
+        """每次都 failed → 耗尽 max_retries 返回 None(由调用方降级 tie)。"""
+        attempts = []
+
+        class _AlwaysFail:
+            def compare(self, output_with=None, output_without=None, eval_prompt=None, expectations=None):
+                attempts.append(1)
+                return ComparisonResult(winner="tie", reasoning="对比调用失败", failed=True)
+
+        with patch.object(comparison_suite, "time"):
+            result = _compare_with_retry(_AlwaysFail(), "ws", "wos", "ep", None, max_retries=3)
+        assert result is None
+        assert len(attempts) == 3
+
+    def test_no_retry_on_success(self):
+        """成功(failed=False)→ 立即返回,不重试。"""
+        attempts = []
+
+        class _Ok:
+            def compare(self, output_with=None, output_without=None, eval_prompt=None, expectations=None):
+                attempts.append(1)
+                return ComparisonResult(winner="with", reasoning="ok", failed=False)
+
+        result = _compare_with_retry(_Ok(), "ws", "wos", "ep", None, max_retries=3)
+        assert result.winner == "with"
+        assert len(attempts) == 1
 
 
 class TestCopySkillReferences:

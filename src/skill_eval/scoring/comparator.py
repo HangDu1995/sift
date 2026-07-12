@@ -86,7 +86,7 @@ class BlindComparator:
 
     def _parse(self, response: str) -> ComparisonResult:
         if not response:
-            return ComparisonResult(winner="TIE", reasoning="对比调用失败")
+            return ComparisonResult(winner="TIE", reasoning="对比调用失败", failed=True)
         try:
             data = json.loads(response)
             return ComparisonResult.model_validate(data)
@@ -98,7 +98,7 @@ class BlindComparator:
                     return ComparisonResult.model_validate(json.loads(match.group()))
                 except Exception:
                     pass
-            return ComparisonResult(winner="TIE", reasoning="无法解析对比响应")
+            return ComparisonResult(winner="TIE", reasoning="无法解析对比响应", failed=True)
 
     def _translate(self, raw: ComparisonResult, with_is_a: bool) -> ComparisonResult:
         """把 LLM 的 position 标签(A/B/TIE)翻成语义 with/without/tie。

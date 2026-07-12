@@ -49,3 +49,6 @@ class ComparisonResult(BaseModel):
     rubric: dict[str, ComparisonOutputRubric] = Field(default_factory=dict)
     output_quality: dict[str, ComparisonOutputQuality] = Field(default_factory=dict)
     expectation_results: dict[str, ComparisonExpectationResults] | None = None
+    # failed=True 表示这次比较本身失败(调用失败/解析失败),winner 降级 tie。
+    # 供 _compare_with_retry 识别并重试(否则失败被吞成静默 tie,重试循环成死代码)。
+    failed: bool = False

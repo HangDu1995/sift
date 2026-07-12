@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import time
 from pathlib import Path
 from skill_eval.models import ComparisonResult
 from skill_eval.scoring.comparator import BlindComparator
@@ -44,18 +45,24 @@ def _progress_bar(current, total, width) -> str:
 
 
 def _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectations, max_retries=3):
+    """盲比较带重试:compare() 返回 failed=True(调用/解析失败)时重试,成功即返回。
+
+    失败判定靠 ComparisonResult.failed 标志(_parse 在调用/解析失败时设 True)。
+    旧实现 try/except 重试,但 compare() 把失败吞成静默 TIE、永不抛 → 重试循环是
+    死代码(实测 30% 失败率里无一条触发过重试,reasoning 全是 _parse 的降级串)。
+    耗尽 max_retries 返回 None,由调用方降级 tie。
+    """
     for attempt in range(max_retries):
-        try:
-            return comparator.compare(
-                output_with=ws_output,
-                output_without=wos_output,
-                eval_prompt=eval_prompt,
-                expectations=expectations if expectations else None,
-            )
-        except Exception:
-            if attempt < max_retries - 1:
-                import time
-                time.sleep(2 ** attempt)
+        result = comparator.compare(
+            output_with=ws_output,
+            output_without=wos_output,
+            eval_prompt=eval_prompt,
+            expectations=expectations if expectations else None,
+        )
+        if not getattr(result, "failed", False):
+            return result
+        if attempt < max_retries - 1:
+            time.sleep(2 ** attempt)
     return None
 
 
