@@ -147,6 +147,34 @@ class TestReportGeneratorStatic:
         assert "test-skill" in html
         assert "benchmark" in html.lower()
 
+    def test_generate_html_grading_verdict_aware(self, tmp_path):
+        """grading 主列表 verdict 感知:UNEVAL/TIMEOUT/ERROR 不再被混成红 ✗(与 checkpoints 对齐)。
+
+        RED 驱动:renderGrades 循环变量是 exp(checkpoints 用 e./a.),锚定 exp.verdict/exp.source
+        避开 checkpoints 已含的 无法评估/超时/错误 字面量(改前就 true = 假绿)。
+        """
+        workspace = tmp_path / "iteration-1"
+        ws_dir = workspace / "with_skill" / "run-1"
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "outputs").mkdir()
+        (ws_dir / "outputs" / "out.txt").write_text("hello")
+        (ws_dir / "grading.json").write_text(json.dumps({
+            "summary": {"pass_rate": 0.33, "passed": 1, "failed": 2, "total": 3},
+            "expectations": [
+                {"text": "uneval one", "passed": False, "verdict": "UNEVAL", "source": "llm"},
+                {"text": "error one", "passed": False, "verdict": "ERROR", "source": "programmatic"},
+                {"text": "pass one", "passed": True, "verdict": "PASS", "source": "programmatic"},
+            ],
+        }))
+
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, None)
+        # RED 驱动断言:renderGrades 现引用了 verdict/source(checkpoints 用 e./a. 不污染)
+        assert "exp.verdict" in html
+        assert "exp.source" in html
+        # 数据流断言(文档性):verdict 真嵌入了 EMBEDDED_DATA
+        assert '"verdict": "UNEVAL"' in html
+
     def test_generate_html_renders_comparison_labels(self, tmp_path):
         """comparison_summary 的 label_a/b 驱动盲评头条显示(块 B v1/v2 真标签)。"""
         workspace = tmp_path / "iteration-1"

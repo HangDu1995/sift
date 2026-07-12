@@ -527,6 +527,8 @@ skill-eval batch-report batch-workspace/ --open
 }
 ```
 
+每条 expectation 带 `verdict`（`PASS`/`FAIL`/`UNEVAL`/`TIMEOUT`/`ERROR`）与 `source`（`programmatic`/`llm`）。报告里 UNEVAL/TIMEOUT/ERROR 与 FAIL **区分显示**（?/⏱/!），不会被混成红 ✗——"没评出来/超时/出错"不是"失败"。
+
 `summary` 的双率字段（`*_programmatic` / `*_llm`）按 expectation 的 `source` 分桶；某类无 expectation 时为 `null`（不报假 0）。
 
 ### benchmark.json

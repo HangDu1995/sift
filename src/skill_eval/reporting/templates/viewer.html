@@ -962,11 +962,28 @@
 
         html += '<ul class="assertion-list">';
         for (const exp of expectations) {
-          const statusClass = exp.passed ? "pass" : "fail";
-          const statusIcon = exp.passed ? "\u2713" : "\u2717";
+          // verdict \u611f\u77e5(\u4e0e checkpoints \u5757 e./a. \u540c\u6b3e icon/title):UNEVAL/TIMEOUT/ERROR \u4e0d\u6df7\u6210\u7ea2 \u2717
+          let statusClass, statusIcon, styleAttr = "", titleAttr = "";
+          if (exp.verdict === "UNEVAL") {
+            statusClass = ""; statusIcon = "?";
+            styleAttr = ' style="color:var(--accent);"'; titleAttr = ' title="\u65e0\u6cd5\u8bc4\u4f30"';
+          } else if (exp.verdict === "TIMEOUT") {
+            statusClass = ""; statusIcon = "\u23f1";
+            styleAttr = ' style="color:var(--accent);"'; titleAttr = ' title="\u8d85\u65f6"';
+          } else if (exp.verdict === "ERROR") {
+            statusClass = ""; statusIcon = "!";
+            styleAttr = ' style="color:var(--red);"'; titleAttr = ' title="\u9519\u8bef"';
+          } else {
+            statusClass = exp.passed ? "pass" : "fail";
+            statusIcon = exp.passed ? "\u2713" : "\u2717";
+          }
+          // source \u5c0f\u6807\u7b7e(\u540c compliance \u5757 L910 \u6837\u5f0f):programmatic\u2192\u7a0b\u5e8f\u5316\u3001llm\u2192LLM
+          const srcTag = exp.source === "programmatic"
+            ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">\u7a0b\u5e8f\u5316</span>'
+            : (exp.source === "llm" ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">LLM</span>' : '');
           html += '<li class="assertion-item">';
-          html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
-          html += '<span>' + escapeHtml(exp.text) + '</span>';
+          html += '<span class="assertion-status ' + statusClass + '"' + styleAttr + titleAttr + '>' + statusIcon + '</span>';
+          html += '<span>' + escapeHtml(exp.text) + srcTag + '</span>';
           if (exp.evidence) {
             html += '<div class="assertion-evidence">' + escapeHtml(exp.evidence) + '</div>';
           }
@@ -1614,8 +1631,19 @@
                 for (const run of runsWithExpectations[config]) {
                   const exp = (run.expectations || []).find(e => e.text === assertionText);
                   if (exp) {
-                    const cls = exp.passed ? "benchmark-delta-positive" : "benchmark-delta-negative";
-                    html += '<span class="' + cls + '">' + (exp.passed ? "✓" : "✗") + '</span> ';
+                    // verdict 感知图标(与 grading 主列表 + checkpoints 三处统一);紧凑表不加 source 标签
+                    let cls, icon, styleAttr = "";
+                    if (exp.verdict === "UNEVAL") {
+                      cls = ""; icon = "?"; styleAttr = ' style="color:var(--accent);font-weight:600;" title="无法评估"';
+                    } else if (exp.verdict === "TIMEOUT") {
+                      cls = ""; icon = "⏱"; styleAttr = ' style="color:var(--accent);font-weight:600;" title="超时"';
+                    } else if (exp.verdict === "ERROR") {
+                      cls = ""; icon = "!"; styleAttr = ' style="color:var(--red);font-weight:600;" title="错误"';
+                    } else {
+                      cls = exp.passed ? "benchmark-delta-positive" : "benchmark-delta-negative";
+                      icon = exp.passed ? "✓" : "✗";
+                    }
+                    html += '<span class="' + cls + '"' + styleAttr + '>' + icon + '</span> ';
                   } else {
                     html += '— ';
                   }
