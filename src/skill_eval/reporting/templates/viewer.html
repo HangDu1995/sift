@@ -1380,7 +1380,7 @@
           const failNote = compSummary.failed > 0
             ? ' · <span style="color:var(--red);font-weight:600;">' + compSummary.failed + '失败</span>' : "";
           html += '<div style="text-align:center;padding:0.75rem 1rem;margin-bottom:1rem;background:var(--bg);border-radius:var(--radius);">';
-          html += '<div style="font-size:0.75rem;color:var(--text-muted);">主观侧主位 · With Skill 盲评胜率</div>';
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);">主观侧主位 · ' + (compSummary.label_a || 'With Skill') + ' 盲评胜率</div>';
           html += '<div style="font-size:1.75rem;font-weight:700;color:' + wrColor + ';">★ ' + wrPct + '</div>';
           html += '<div style="font-size:0.8125rem;color:var(--text-muted);">' + compSummary.a_wins + '胜 / ' + compSummary.b_wins + '负 / ' + compSummary.ties + '平' + failNote + '</div>';
           html += '</div>';
@@ -1388,31 +1388,32 @@
 
         for (let ci = 0; ci < comparisons.length; ci++) {
           const comp = comparisons[ci];
-          // comparator 现打乱 position 并把 A/B 翻成语义 with/without;此处归一兼容老数据
-          // (老数据 winner=A/B 且 A 恒=with,故 A→with、B→without 对老数据也正确)
-          if (comp.winner === "A") comp.winner = "with";
-          else if (comp.winner === "B") comp.winner = "without";
+          const la = (compSummary && compSummary.label_a) || 'with';
+          const lb = (compSummary && compSummary.label_b) || 'without';
+          // comparator 现打乱 position 并把 A/B 翻成语义 label_a/label_b;此处归一兼容老数据
+          // (老数据 winner=A/B 且 A 恒=side A,故 A→la、B→lb 对老数据也正确)
+          if (comp.winner === "A") comp.winner = la;
+          else if (comp.winner === "B") comp.winner = lb;
           else if (comp.winner === "TIE") comp.winner = "tie";
           for (const _f of ["rubric", "output_quality", "expectation_results"]) {
             const _d = comp[_f];
-            if (_d) { if (_d.A && !_d.with) _d.with = _d.A; if (_d.B && !_d.without) _d.without = _d.B; }
+            if (_d) { if (_d.A && !_d[la]) _d[la] = _d.A; if (_d.B && !_d[lb]) _d[lb] = _d.B; }
           }
           if (ci > 0) html += '<hr style="border:0;border-top:1px solid var(--border);margin:1rem 0;">';
 
-          const wBadge = comp.winner === "with" ? "With Skill" : comp.winner === "without" ? "Without Skill" : "平局";
-          const wColor = comp.winner === "with" ? "var(--green)" : comp.winner === "without" ? "var(--red)" : "var(--text-muted)";
+          const wBadge = comp.winner === la ? la : comp.winner === lb ? lb : "平局";
+          const wColor = comp.winner === la ? "var(--green)" : comp.winner === lb ? "var(--red)" : "var(--text-muted)";
           html += '<div style="margin-bottom:0.75rem;"><strong>胜者：</strong> <span style="color:' + wColor + ';font-weight:600;">' + wBadge + '</span></div>';
           html += '<div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:0.75rem;">' + escapeHtml(comp.reasoning || "") + '</div>';
 
           // Rubric scores
-          if (comp.rubric && (comp.rubric.with || comp.rubric.without)) {
+          if (comp.rubric && (comp.rubric[la] || comp.rubric[lb])) {
             html += '<div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem;">';
-            for (const side of ["with", "without"]) {
+            for (const side of [la, lb]) {
               const r = comp.rubric[side] || {};
-              const label = side === "with" ? "With Skill" : "Without Skill";
               const scoreColor = r.overall_score >= 8 ? "var(--green)" : r.overall_score >= 5 ? "var(--accent)" : "var(--red)";
               html += '<div style="flex:1;min-width:180px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;">';
-              html += '<div style="font-weight:600;margin-bottom:0.5rem;">' + label + ' <span style="color:' + scoreColor + ';font-size:1.1rem;">' + (r.overall_score || "?").toFixed(1) + '</span>/10</div>';
+              html += '<div style="font-weight:600;margin-bottom:0.5rem;">' + side + ' <span style="color:' + scoreColor + ';font-size:1.1rem;">' + (r.overall_score || "?").toFixed(1) + '</span>/10</div>';
               if (r.content) {
               html += '<div style="font-size:0.75rem;color:var(--text-muted);">内容：' + r.content_score.toFixed(1) + '/5 · 结构：' + r.structure_score.toFixed(1) + '/5</div>';
               }
@@ -1422,13 +1423,12 @@
           }
 
           // Quality highlights
-          if (comp.output_quality && (comp.output_quality.with || comp.output_quality.without)) {
+          if (comp.output_quality && (comp.output_quality[la] || comp.output_quality[lb])) {
             html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">';
-            for (const side of ["with", "without"]) {
+            for (const side of [la, lb]) {
               const q = comp.output_quality[side] || {};
-              const label = side === "with" ? "With Skill" : "Without Skill";
               html += '<div style="flex:1;min-width:160px;font-size:0.75rem;">';
-              html += '<strong>' + label + '</strong>: ' + (q.score || "?") + '/10';
+              html += '<strong>' + side + '</strong>: ' + (q.score || "?") + '/10';
               if (q.strengths && q.strengths.length) html += '<br><span style="color:var(--green);">+</span> ' + escapeHtml(q.strengths[0]);
               if (q.weaknesses && q.weaknesses.length) html += '<br><span style="color:var(--red);">-</span> ' + escapeHtml(q.weaknesses[0]);
               html += '</div>';

@@ -147,6 +147,29 @@ class TestReportGeneratorStatic:
         assert "test-skill" in html
         assert "benchmark" in html.lower()
 
+    def test_generate_html_renders_comparison_labels(self, tmp_path):
+        """comparison_summary 的 label_a/b 驱动盲评头条显示(块 B v1/v2 真标签)。"""
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        benchmark = {
+            "metadata": {"skill_name": "myskill"},
+            "runs": [],
+            "run_summary": {},
+            "comparisons": [{"winner": "v1", "reasoning": "ok"}],
+            "comparison_summary": {
+                "a_wins": 3, "b_wins": 1, "ties": 0, "failed": 0,
+                "valid": 4, "win_rate": 0.75, "label_a": "v1", "label_b": "v2",
+            },
+        }
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        # headline 是 JS 运行时构建,静态 HTML 不含渲染产物;验数据流 + 模板逻辑:
+        # ① comparison_summary 连同 label_a 嵌入 EMBEDDED_DATA
+        assert '"label_a": "v1"' in html
+        # ② 模板用 compSummary.label_a 渲染头条(非硬编码)
+        assert "compSummary.label_a" in html
+        assert "主观侧主位 · With Skill 盲评胜率" not in html  # 硬编码字面量已去
+
 
 class TestLoadAuxData:
     def test_load_vet_report(self, tmp_path: Path):
