@@ -14,6 +14,7 @@ from skill_eval.models.analysis_models import (
 from skill_eval.models.batch_models import (
     BenchmarkData,
     BenchmarkMetadata,
+    CalibrationReport,
     ComparisonSummary,
     ComplianceReport,
     ComplianceResultItem,
