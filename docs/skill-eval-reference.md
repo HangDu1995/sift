@@ -565,6 +565,8 @@ skill-eval batch-report batch-workspace/ --open
 }
 ```
 
+每条 `comparisons` 还携带 `rubric`（两侧 overall/content/structure 分）、`output_quality`（score + strengths/weaknesses 数组）、`expectation_results`（两侧 passed/total + 逐 expectation `{text, passed}` 明细）——报告逐条比较渲染这些；`analysis.transcript_insights`（dict）、`metadata` 的 `executor_model`/`analyzer_model`/`comparator_model` 也一并展示。
+
 - 每个 config 的 `run_summary` 含 `pass_rate` / `pass_rate_programmatic` / `pass_rate_llm`（后两者可能为 `null`）+ `time_seconds` / `tokens`。
 - `delta` 全为有符号字符串（`+0.27`），= `configs[0] - configs[1]`（候选 - 基线）；双率项可能为 `null`。
 - `comparison_summary.win_rate` = `a_wins/valid`（tie-计入）；`gate` 用 tie-排除版自行算。

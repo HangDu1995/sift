@@ -285,6 +285,116 @@ class TestReportGeneratorStatic:
         html = gen.generate_html(workspace, {"metadata": {"skill_name": "x"}, "runs": [], "run_summary": {}})
         assert '"decision": "FAIL"' in html   # 从 iteration-1/gate.json 读到
 
+    def test_generate_html_comparison_quality_shows_all_strengths_weaknesses(self, tmp_path):
+        """A: comparison 的 strengths/weaknesses 上游是 list[str] 可多项,viewer 旧实现只显首项 [0] → 显全部。
+
+        RED 锚点(负向):改前模板含 q.strengths[0]/q.weaknesses[0](只取首项)→
+        断言 "not in" 失败 = RED;改后移除 [0] 改循环 → GREEN。
+        """
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        benchmark = {
+            "metadata": {"skill_name": "x"},
+            "runs": [],
+            "run_summary": {},
+            "comparisons": [{
+                "winner": "with",
+                "reasoning": "ok",
+                "output_quality": {
+                    "with": {"score": 8, "strengths": ["优点一", "优点二"],
+                             "weaknesses": ["缺点一", "缺点二"]},
+                    "without": {"score": 5, "strengths": ["w优点"], "weaknesses": ["w缺点"]},
+                },
+            }],
+        }
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        # RED 锚点:不再只取首项 [0]
+        assert "q.strengths[0]" not in html
+        assert "q.weaknesses[0]" not in html
+        # 数据流(文档性,改前改后都通过):多项值真嵌入 EMBEDDED_DATA
+        assert "优点二" in html and "缺点二" in html
+
+    def test_generate_html_analysis_renders_transcript_insights(self, tmp_path):
+        """B: analysis.transcript_insights (dict[str,str]) 旧实现完全没显 → 补一段展示。
+
+        RED 锚点:改前模板不引用 analysis.transcript_insights(改前 grep=0)→
+        断言 "in" 失败 = RED;改后 GREEN。
+        """
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        benchmark = {
+            "metadata": {"skill_name": "x"},
+            "runs": [],
+            "run_summary": {},
+            "analysis": {
+                "winner_strengths": ["胜者优势"],
+                "transcript_insights": {
+                    "winner_execution_pattern": "探索工作目录 → 读取 error-codes.md",
+                },
+            },
+        }
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        # RED 锚点:模板引用 analysis.transcript_insights
+        assert "analysis.transcript_insights" in html
+        # 数据流(文档性):insights 真嵌入 EMBEDDED_DATA
+        assert "winner_execution_pattern" in html
+
+    def test_generate_html_comparison_renders_expectation_results(self, tmp_path):
+        """C: comparison.expectation_results (dict[label→{passed,total,pass_rate,details}]) 旧只 normalize 不渲染 → 补展示。
+
+        RED 锚点:改前 normalize 循环用的是 comp[_f] 方括号,点号 comp.expectation_results 改前 grep=0 →
+        断言 "in" 失败 = RED;改后(渲染写 comp.expectation_results[la])GREEN。
+        """
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        benchmark = {
+            "metadata": {"skill_name": "x"},
+            "runs": [],
+            "run_summary": {},
+            "comparisons": [{
+                "winner": "with",
+                "reasoning": "ok",
+                "expectation_results": {
+                    "with": {"passed": 2, "total": 4, "pass_rate": 0.5,
+                             "details": [{"text": "exp1", "passed": True},
+                                         {"text": "exp2", "passed": False}]},
+                    "without": {"passed": 0, "total": 4, "pass_rate": 0.0,
+                                "details": [{"text": "exp1", "passed": False}]},
+                },
+            }],
+        }
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        # RED 锚点:模板用点号引用 comp.expectation_results
+        assert "comp.expectation_results" in html
+        # 数据流(文档性):details 文本真嵌入 EMBEDDED_DATA
+        assert "exp1" in html and "exp2" in html
+
+    def test_generate_html_metadata_renders_models(self, tmp_path):
+        """D: metadata 的 comparator/analyzer/executor model 字段(str,可能空)旧没显 → 显非空项。
+
+        RED 锚点:改前模板不引用 metadata.comparator_model(改前 grep=0)→
+        断言 "in" 失败 = RED;改后 GREEN。
+        """
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        benchmark = {
+            "metadata": {
+                "skill_name": "x",
+                "executor_model": "",
+                "analyzer_model": "default",
+                "comparator_model": "default",
+            },
+            "runs": [],
+            "run_summary": {},
+        }
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        # RED 锚点:模板引用 metadata.comparator_model
+        assert "metadata.comparator_model" in html
+
 
 class TestLoadAuxData:
     def test_load_vet_report(self, tmp_path: Path):

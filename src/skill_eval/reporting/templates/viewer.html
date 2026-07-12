@@ -1280,6 +1280,11 @@
       if (metadata.skill_name) {
         html += mkCard("Skill", metadata.skill_name, "", "var(--accent)");
       }
+      const modelParts = [];
+      if (metadata.executor_model) modelParts.push("执行 " + metadata.executor_model);
+      if (metadata.analyzer_model) modelParts.push("分析 " + metadata.analyzer_model);
+      if (metadata.comparator_model) modelParts.push("对比 " + metadata.comparator_model);
+      if (modelParts.length) html += mkCard("模型", modelParts.join(" / "), "", "var(--text)");
       html += "</div>";
 
       // ── Anomaly Report ──
@@ -1482,8 +1487,29 @@
               const q = comp.output_quality[side] || {};
               html += '<div style="flex:1;min-width:160px;font-size:0.75rem;">';
               html += '<strong>' + side + '</strong>: ' + (q.score || "?") + '/10';
-              if (q.strengths && q.strengths.length) html += '<br><span style="color:var(--green);">+</span> ' + escapeHtml(q.strengths[0]);
-              if (q.weaknesses && q.weaknesses.length) html += '<br><span style="color:var(--red);">-</span> ' + escapeHtml(q.weaknesses[0]);
+              if (q.strengths && q.strengths.length) html += '<br><span style="color:var(--green);">+</span> ' + escapeHtml(q.strengths.join("、"));
+              if (q.weaknesses && q.weaknesses.length) html += '<br><span style="color:var(--red);">-</span> ' + escapeHtml(q.weaknesses.join("、"));
+              html += '</div>';
+            }
+            html += '</div>';
+          }
+
+          // Expectation results (两侧 passed/total + per-expectation ✓/✗)
+          if (comp.expectation_results && (comp.expectation_results[la] || comp.expectation_results[lb])) {
+            html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.5rem;font-size:0.75rem;">';
+            for (const side of [la, lb]) {
+              const er = comp.expectation_results[side] || {};
+              const erPct = er.total ? Math.round((er.pass_rate || 0) * 100) : 0;
+              html += '<div style="flex:1;min-width:160px;background:var(--bg);border-radius:var(--radius);padding:0.5rem;">';
+              html += '<strong>' + side + '</strong>: ' + (er.passed || 0) + '/' + (er.total || 0) + ' (' + erPct + '%)';
+              if (er.details && er.details.length) {
+                html += '<div style="margin-top:0.25rem;">';
+                for (const d of er.details) {
+                  const erIcon = d.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
+                  html += '<div>' + erIcon + ' ' + escapeHtml(d.text || "") + '</div>';
+                }
+                html += '</div>';
+              }
               html += '</div>';
             }
             html += '</div>';
@@ -1530,6 +1556,15 @@
             html += '<td style="font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(s.expected_impact || "") + '</td></tr>';
           }
           html += '</tbody></table>';
+        }
+
+        if (analysis.transcript_insights && Object.keys(analysis.transcript_insights).length) {
+          html += '<div style="margin-top:0.75rem;font-size:0.75rem;color:var(--text-muted);">';
+          html += '<strong>transcript 洞察</strong>';
+          for (const k in analysis.transcript_insights) {
+            html += '<div style="margin-top:0.25rem;"><strong>' + escapeHtml(k) + '</strong>: ' + escapeHtml(analysis.transcript_insights[k]) + '</div>';
+          }
+          html += '</div>';
         }
         html += '</div>';
       }
