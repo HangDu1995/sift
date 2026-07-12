@@ -12,6 +12,8 @@ from skill_eval.cli.main import app, console
 from skill_eval.cli.pipeline import _run_ab_eval
 from skill_eval.env_check import check_skill_env, check_eval_env
 from skill_eval.errors import SkillEvalError
+from skill_eval.evals.baseline import skill_name_mismatch
+from skill_eval.parser import parse_skill_md
 
 
 def _render_security_report(report, console: Console) -> None:
@@ -109,6 +111,16 @@ def run(
     except SkillEvalError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=exc.exit_code)
+
+    # 冻结基线 skill_name 轻校验:baseline 是 skill-A 的却考 skill-B → 警告(不阻断)。
+    # 普通 evals.json 无 sidecar → 不校验;同 skill 不同版本(skill_name 相同)放行。
+    try:
+        _running_name = parse_skill_md(skill_path)[0]
+    except Exception:
+        _running_name = ""
+    _baseline_warn = skill_name_mismatch(evals_path, _running_name)
+    if _baseline_warn:
+        console.print(f"[yellow]Warning:[/yellow] {_baseline_warn}")
 
     if not output_dir:
         output_dir = Path("output")
