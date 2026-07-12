@@ -27,9 +27,15 @@ def _run_ab_eval(
     fmt: str = "table",
     eval_samples: int | float | None = None,
     max_retries: int = 2,
+    skill_b: Path | None = None,
+    label_a: str | None = None,
+    label_b: str | None = None,
 ) -> tuple:
-    from skill_eval.execution.runner import ABTestRunner
+    from skill_eval.execution.runner import ABTestRunner, build_sides
     from skill_eval.execution.benchmark import BenchmarkAggregator
+
+    # sides spec 单一事实源:skill_b 给定 → v1/v2 两 skill;None → 默认 with/without。
+    sides = build_sides(skill_path, skill_b, label_a, label_b)
 
     lc = _log_console(fmt)
     total_evals = len(eval_set.evals)
@@ -72,14 +78,14 @@ def _run_ab_eval(
 
     try:
         ab = ABTestRunner(run_config, scoring_config, on_progress=on_progress)
-        iteration_dir = ab.run_ab_test(skill_path, eval_set)
+        iteration_dir = ab.run_ab_test(skill_path, eval_set, sides=sides)
     except SkillEvalError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=exc.exit_code)
 
     agg = BenchmarkAggregator(model=model, enable_llm=scoring_config.enable_llm)
     try:
-        benchmark = agg.aggregate(iteration_dir, skill_path)
+        benchmark = agg.aggregate(iteration_dir, skill_path, sides=sides)
     except Exception as exc:
         console.print(f"[red]Error:[/red] Benchmark aggregation failed: {exc}")
         console.print(f"  iteration_dir: {iteration_dir}")
@@ -100,44 +106,36 @@ def _run_ab_eval(
 
     summary = benchmark.run_summary
     delta = summary.get("delta", {})
-    comparisons = getattr(benchmark, "comparisons", []) or []
     analysis = getattr(benchmark, "analysis", None)
+    cs = getattr(benchmark, "comparison_summary", None)  # 主观侧主位
 
     if fmt == "json":
         console.print(json.dumps(benchmark.model_dump(mode="json"), indent=2, ensure_ascii=False))
     else:
-        ws = summary.get("with_skill", {}).get("pass_rate", {})
-        wos = summary.get("without_skill", {}).get("pass_rate", {})
-        ws_mean = ws.get("mean", 0) * 100
-        wos_mean = wos.get("mean", 0) * 100
+        # side key 配置无关地从 run_summary 取(with_skill/without_skill 或 v1/v2)
+        side_keys = [k for k in summary.keys() if k != "delta"]
+        a_mean = (summary.get(side_keys[0], {}).get("pass_rate", {}).get("mean", 0) * 100) if side_keys else 0
+        b_mean = (summary.get(side_keys[1], {}).get("pass_rate", {}).get("mean", 0) * 100) if len(side_keys) > 1 else 0
         pr_delta = delta.get("pass_rate", "—")
-
-        # Count blind comparison wins
-        a_wins = sum(1 for c in comparisons if getattr(c, "winner", None) == "A")
-        b_wins = sum(1 for c in comparisons if getattr(c, "winner", None) == "B")
-        total_comps = a_wins + b_wins
+        la = cs.label_a if cs else (side_keys[0] if side_keys else "side A")
+        lb = cs.label_b if cs else (side_keys[1] if len(side_keys) > 1 else "side B")
 
         console.print(f"\n[bold]Results:[/bold]")
 
-        # 1. Quality — blind comparison (primary metric)
-        if total_comps > 0:
-            if a_wins > b_wins:
-                console.print(f"  [green]Quality:[/green]   with_skill wins blind comparison ({a_wins}/{total_comps})")
-            elif b_wins > a_wins:
-                console.print(f"  [yellow]Quality:[/yellow]   without_skill wins blind comparison ({b_wins}/{total_comps})")
-            else:
-                console.print(f"  Quality:   tie ({a_wins}/{total_comps})")
+        # 1. Quality — blind comparison (主观侧主位)
+        if cs and cs.valid > 0:
+            console.print(f"  [green]Quality:[/green]   {la} 盲评胜率 {cs.win_rate*100:.0f}% ({cs.a_wins}/{cs.valid})")
         else:
             console.print(f"  Quality:   (add --model for blind comparison)")
 
-        # 2. Pass rate — mechanical assertions (secondary)
+        # 2. Pass rate — mechanical assertions (客观侧)
         delta_color = ""
         if isinstance(pr_delta, (int, float)) and pr_delta < 0:
             delta_color = "red"
         elif isinstance(pr_delta, str) and pr_delta.startswith("-"):
             delta_color = "red"
         delta_str = f"[{delta_color}]({pr_delta})[/{delta_color}]" if delta_color else f"({pr_delta})"
-        console.print(f"  Pass rate:  with_skill {ws_mean:.0f}% vs without_skill {wos_mean:.0f}% {delta_str}")
+        console.print(f"  Pass rate:  {la} {a_mean:.0f}% vs {lb} {b_mean:.0f}% {delta_str}")
 
         # 3. Analysis insights
         if analysis and isinstance(analysis, dict):
@@ -149,16 +147,10 @@ def _run_ab_eval(
 
         console.print(f"\nBenchmark saved to: {benchmark_path}")
 
-    # Exit code: blind comparison wins (primary), fallback to pass rate delta
-    is_fail = False
-    if total_comps > 0 and b_wins >= a_wins:
-        is_fail = True
-    else:
-        pr = delta.get("pass_rate", "+0.00")
-        if isinstance(pr, str) and pr.startswith("-"):
-            is_fail = True
-        elif isinstance(pr, (int, float)) and pr < 0:
-            is_fail = True
+    # Exit code:暂只看客观侧 pass_rate delta(comparison gate 阈值归块 C 参数化,
+    # 此处不强加主观判决)。旧 winner=="A"/"B" 是 stale 死代码(total_comps 恒 0),已清。
+    pr = delta.get("pass_rate", "+0.00")
+    is_fail = isinstance(pr, str) and pr.startswith("-") or isinstance(pr, (int, float)) and pr < 0
     if is_fail:
         raise typer.Exit(code=1)
 

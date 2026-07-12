@@ -63,6 +63,12 @@ def run(
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
     format: str = typer.Option("table", "--format", help="Output format"),
     eval_samples: Optional[str] = typer.Option(None, "--eval-samples", help="Number or pct of evals to run (e.g. 10 or 0.25)"),
+    skill_b: Optional[Path] = typer.Option(
+        None, "--skill-b",
+        help="v1/v2 模式:第二个 skill 路径(两边都注入各自 skill);不给则默认 with/without(同一 skill 开/关)",
+    ),
+    label_a: Optional[str] = typer.Option(None, "--label-a", help="v1/v2 模式 side A 显示标签(默认 skill 目录 basename)"),
+    label_b: Optional[str] = typer.Option(None, "--label-b", help="v1/v2 模式 side B 显示标签(默认 skill 目录 basename)"),
 ):
     """Run A/B evaluation of a Skill, or path-1 live task (--task)."""
     from skill_eval.evals.loader import EvalLoader
@@ -161,4 +167,7 @@ def run(
         fmt=format,
         eval_samples=_parse_eval_samples(eval_samples),
         max_retries=max_retries,
+        skill_b=skill_b,
+        label_a=label_a,
+        label_b=label_b,
     )
