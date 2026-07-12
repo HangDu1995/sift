@@ -40,12 +40,46 @@ class BenchmarkMetadata(BaseModel):
     runs_per_configuration: int = 3
 
 
+class ComparisonSummary(BaseModel):
+    """盲比较聚合(主观侧并列主位)。win-rate 有效分母 = with+without+genuine tie;
+    failed(调用/解析失败、重试耗尽)排除出分母——失败≠打平。"""
+    total: int = 0
+    with_wins: int = 0
+    without_wins: int = 0
+    ties: int = 0          # genuine tie(有效,计入分母)
+    failed: int = 0        # 无信号,排除出分母
+    valid: int = 0         # with_wins + without_wins + ties
+    win_rate: float | None = None  # with_wins / valid;valid==0 → None
+
+    @classmethod
+    def from_comparisons(cls, comparisons: list) -> "ComparisonSummary | None":
+        if not comparisons:
+            return None
+
+        def _is(c, w):
+            return c.winner == w and not getattr(c, "failed", False)
+
+        with_wins = sum(1 for c in comparisons if _is(c, "with"))
+        without_wins = sum(1 for c in comparisons if _is(c, "without"))
+        # genuine tie:winner 非 with/without 且非 failed(失败-tie 因 failed=True 被排除)
+        ties = sum(1 for c in comparisons
+                   if c.winner not in ("with", "without") and not getattr(c, "failed", False))
+        failed = sum(1 for c in comparisons if getattr(c, "failed", False))
+        valid = with_wins + without_wins + ties
+        return cls(
+            total=len(comparisons), with_wins=with_wins, without_wins=without_wins,
+            ties=ties, failed=failed, valid=valid,
+            win_rate=with_wins / valid if valid else None,
+        )
+
+
 class BenchmarkData(BaseModel):
     metadata: BenchmarkMetadata
     runs: list[RunResultEntry] = Field(default_factory=list)
     run_summary: dict[str, Any] = Field(default_factory=dict)
     notes: list[Any] = Field(default_factory=list)
     comparisons: list[ComparisonResult] = Field(default_factory=list)
+    comparison_summary: ComparisonSummary | None = None
     analysis: AnalysisResult | None = None
     anomaly_report: AnomalyReport | None = None
 

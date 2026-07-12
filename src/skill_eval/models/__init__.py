@@ -14,7 +14,7 @@ from skill_eval.models.analysis_models import (
 from skill_eval.models.batch_models import (
     BenchmarkData,
     BenchmarkMetadata,
-    CalibrationReport,
+    ComparisonSummary,
     ComplianceReport,
     ComplianceResultItem,
     ConfidenceSignal,
@@ -154,6 +154,7 @@ __all__ = [
     # Batch + remaining models
     "BenchmarkData",
     "BenchmarkMetadata",
+    "ComparisonSummary",
     "CalibrationReport",
     "ComplianceReport",
     "ComplianceResultItem",

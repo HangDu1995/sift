@@ -492,6 +492,46 @@ class TestComparisonRetry:
         assert results[0].failed is True  # 修复前为 False
 
 
+class TestComparisonSummary:
+    """ComparisonSummary.from_comparisons:win-rate 有效分母 = with+without+genuine tie,
+    failed 排除(失败≠打平)。"""
+
+    def test_mixed_win_rate_excludes_failed(self):
+        comps = [
+            ComparisonResult(winner="with", reasoning=""),
+            ComparisonResult(winner="without", reasoning=""),
+            ComparisonResult(winner="tie", reasoning="等价"),              # genuine tie
+            ComparisonResult(winner="tie", reasoning="耗尽", failed=True),  # 失败
+        ]
+        from skill_eval.models import ComparisonSummary
+        s = ComparisonSummary.from_comparisons(comps)
+        assert s.total == 4
+        assert (s.with_wins, s.without_wins, s.ties, s.failed) == (1, 1, 1, 1)
+        assert s.valid == 3            # genuine tie 计入,failed 排除
+        assert s.win_rate == 1 / 3
+
+    def test_genuine_tie_counts_in_denominator(self):
+        # 2 with / 0 without / 3 tie → win_rate 2/5(打平算一场比过)
+        comps = [ComparisonResult(winner="with", reasoning="")] * 2 \
+            + [ComparisonResult(winner="tie", reasoning="")] * 3
+        from skill_eval.models import ComparisonSummary
+        s = ComparisonSummary.from_comparisons(comps)
+        assert s.win_rate == 2 / 5
+        assert s.valid == 5
+
+    def test_all_failed_win_rate_none(self):
+        comps = [ComparisonResult(winner="tie", reasoning="x", failed=True) for _ in range(3)]
+        from skill_eval.models import ComparisonSummary
+        s = ComparisonSummary.from_comparisons(comps)
+        assert s.valid == 0
+        assert s.win_rate is None      # 不报假 0%
+        assert s.failed == 3
+
+    def test_empty_returns_none(self):
+        from skill_eval.models import ComparisonSummary
+        assert ComparisonSummary.from_comparisons([]) is None
+
+
 class TestCopySkillReferences:
     """_copy_skill_references:把 skill 的 references/ 拷进考场(P0-2 核心逻辑)."""
 
