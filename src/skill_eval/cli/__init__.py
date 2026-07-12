@@ -8,3 +8,4 @@ import skill_eval.cli.commands.run  # noqa: F401
 import skill_eval.cli.commands.report  # noqa: F401
 import skill_eval.cli.commands.batch  # noqa: F401
 import skill_eval.cli.commands.audit  # noqa: F401
+import skill_eval.cli.commands.inspect  # noqa: F401
