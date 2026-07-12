@@ -877,10 +877,41 @@
         const target = 0.8;
         const met = cr.compliance_rate >= target;
         const rateColor = met ? "var(--green)" : cr.compliance_rate >= 0.5 ? "var(--accent)" : "var(--red)";
+        const fmtPct = v => (v != null ? (v * 100).toFixed(0) + '%' : '—');
         html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
-        html += '<strong>遵循度：</strong> <span style="color:' + rateColor + ';font-weight:600;">' + (cr.compliance_rate != null ? (cr.compliance_rate * 100).toFixed(0) + '%' : '—') + '</span>';
+        html += '<strong>遵循度：</strong> <span style="color:' + rateColor + ';font-weight:600;">' + fmtPct(cr.compliance_rate) + '</span>';
         html += ' <span style="font-size:0.75rem;color:var(--text-muted);">（目标 ≥ ' + (target * 100).toFixed(0) + '%' + (met ? ' ✓' : '') + '）</span>';
         html += ' <span style="font-size:0.75rem;color:var(--text-muted);">' + (cr.followed_count || 0) + '/' + (cr.total_instructions || 0) + ' 条指令已遵循</span>';
+        // P0-1e 双率:programmatic(稳、可信)/ llm(漂、看方向)。None=该类无指令。
+        if (cr.compliance_rate_programmatic != null || cr.compliance_rate_llm != null) {
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">拆双率：程序化 ' + fmtPct(cr.compliance_rate_programmatic) + '（稳） · LLM ' + fmtPct(cr.compliance_rate_llm) + '（漂，看方向）</div>';
+        }
+        if (cr.filtered_count) {
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);">精筛剔除 ' + cr.filtered_count + ' 条非可遵循项（路由提示/描述语）</div>';
+        }
+        // per-instruction 明细(照 grading 的 assertion-list 风格):哪条指令遵循、证据、来源、置信度
+        const checks = cr.checks || [];
+        if (checks.length) {
+          html += '<ul class="assertion-list" style="margin-top:0.5rem;">';
+          for (const c of checks) {
+            const ok = c.followed;
+            const statusClass = ok ? "pass" : "fail";
+            const statusIcon = ok ? "✓" : "✗";
+            const instrText = (c.instruction && c.instruction.instruction_text) ? c.instruction.instruction_text : '(未命名)';
+            const srcTag = c.source === "programmatic"
+              ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">程序化</span>'
+              : (c.source === "llm" ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">LLM</span>' : '');
+            const confTag = (c.confidence != null && c.confidence < 1) ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:0.25rem;">置信 ' + c.confidence.toFixed(2) + '</span>' : '';
+            html += '<li class="assertion-item">';
+            html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
+            html += '<span>' + escapeHtml(instrText) + srcTag + confTag + '</span>';
+            if (c.evidence) {
+              html += '<div class="assertion-evidence">' + escapeHtml(c.evidence) + '</div>';
+            }
+            html += '</li>';
+          }
+          html += '</ul>';
+        }
         if (cr.warnings && cr.warnings.length) {
           html += '<ul style="font-size:0.75rem;color:var(--accent);margin:0.25rem 0 0 1.25rem;">';
           for (const w of cr.warnings) html += '<li>' + escapeHtml(w) + '</li>';
