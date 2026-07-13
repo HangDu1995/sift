@@ -395,6 +395,46 @@ class TestReportGeneratorStatic:
         # RED 锚点:模板引用 metadata.comparator_model
         assert "metadata.comparator_model" in html
 
+    def test_generate_html_anomaly_header_shows_denominator(self, tmp_path):
+        """anomaly 标题加分母 total_runs:"X 个异常" → "X 个异常 / 共 Y 次"(一眼判严重度)。
+
+        total_runs 有真实 writer(benchmark.py:252 = len(runs)),非死字段(对照梯队二①
+        retry_count 死字段教训——恒 0 不渲染,这里恒有值才渲染)。每条 detail(含 value/
+        threshold)L1298 已显;unresolved_count 与 anomaly_count 恒等(benchmark.py:249/253)
+        冗余不显。真缺口仅报告级分母。
+
+        RED 锚点:改前标题只拼 anomaly_count,无 total_runs → 断言 "共 20 次" 失败 = RED;
+        改后 GREEN。
+        """
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        benchmark = {
+            "metadata": {"skill_name": "x"},
+            "runs": [],
+            "run_summary": {},
+            "anomaly_report": {
+                "anomalies": [{
+                    "eval_id": 1, "eval_name": "e", "configuration": "with",
+                    "run_number": 1, "anomaly_type": "outlier",
+                    "detail": "Duration 123s > median 45s + 3×MAD 12s",
+                    "value": 123.0, "threshold": 57.0,
+                }],
+                "total_runs": 20,
+                "anomaly_count": 1,
+                "retried_count": 0,
+                "unresolved_count": 1,
+            },
+        }
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        # RED 锚点:模板引用 anomalyReport.total_runs(改前只拼 anomaly_count,grep=0 → RED;
+        # 改后 GREEN)。注:viewer 是 client-side JS,"共 20 次" 是运行时拼接的连续串,
+        # pytest 读静态 HTML(JS 不执行)验不了——只能验"模板是否引用该字段"(JS 源码表达式
+        # 子串),同 metadata.comparator_model 锚点模式。运行时正确性靠 node --check + 人审。
+        assert "anomalyReport.total_runs" in html
+        # 数据流(文档性,改前改后都过):detail 嵌入 EMBEDDED_DATA
+        assert "Duration 123s" in html
+
 
 class TestLoadAuxData:
     def test_load_vet_report(self, tmp_path: Path):

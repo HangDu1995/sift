@@ -1291,7 +1291,7 @@
       const anomalyReport = data.anomaly_report;
       if (anomalyReport && anomalyReport.anomalies && anomalyReport.anomalies.length > 0) {
         html += '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
-        html += '<div style="font-family:Poppins,sans-serif;font-size:0.8rem;font-weight:600;color:#856404;margin-bottom:0.5rem;">⚠ 异常检测 (' + anomalyReport.anomaly_count + ' 个异常)</div>';
+        html += '<div style="font-family:Poppins,sans-serif;font-size:0.8rem;font-weight:600;color:#856404;margin-bottom:0.5rem;">⚠ 异常检测 (' + anomalyReport.anomaly_count + ' 个异常' + (anomalyReport.total_runs ? ' / 共 ' + anomalyReport.total_runs + ' 次' : '') + ')</div>';
         for (const a of anomalyReport.anomalies) {
           html += '<div style="font-size:0.75rem;color:#856404;margin-bottom:0.25rem;">';
           html += '<strong>' + escapeHtml(a.anomaly_type || "?") + '</strong>: Eval ' + a.eval_id + ' ' + escapeHtml(a.eval_name || "") + ' / ' + escapeHtml(a.configuration || "") + ' run-' + a.run_number;
