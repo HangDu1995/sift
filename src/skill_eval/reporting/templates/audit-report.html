@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>audit report</title>
+  <style>
+    /* :root 变量拷自 viewer.html,保持与路径3 scoring report 同一套配色 */
+    :root {
+      --bg: #faf9f5;
+      --surface: #ffffff;
+      --border: #e8e6dc;
+      --text: #141413;
+      --text-muted: #b0aea5;
+      --accent: #d97757;
+      --accent-hover: #c4613f;
+      --green: #788c5d;
+      --green-bg: #eef2e8;
+      --red: #c44;
+      --red-bg: #fceaea;
+      --header-bg: #141413;
+      --header-text: #faf9f5;
+      --radius: 6px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Lora', Georgia, serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 2rem;
+    }
+
+    #audit-root {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem;
+      max-width: 960px;
+    }
+
+    h1 {
+      font-family: 'Poppins', system-ui, sans-serif;
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+
+    .transcripts {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 1.25rem;
+      word-break: break-all;
+    }
+
+    .summary {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.95rem;
+    }
+    .summary span { margin-right: 0.8rem; }
+
+    .badge-pass { color: var(--green); font-weight: 600; }
+    .badge-fail { color: var(--red); font-weight: 600; }
+    .badge-na { color: var(--accent); font-weight: 600; }
+
+    .derived { color: var(--text-muted); font-size: 0.9em; font-weight: normal; }
+
+    .findings, .warnings { margin-top: 1.5rem; }
+    .findings h2, .warnings h2 { font-family: 'Poppins', system-ui, sans-serif; font-size: 1.1rem; margin-bottom: 0.5rem; }
+    .finding { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem; margin-bottom: 0.5rem; }
+    .finding-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; font-size: 0.85rem; margin-bottom: 0.25rem; }
+    .finding-head .cat, .finding-head .src { color: var(--text-muted); background: var(--bg); padding: 0.05rem 0.4rem; border-radius: 3px; }
+    .finding-head .conf { color: var(--text-muted); margin-left: auto; }
+    .finding.FAIL { border-left: 3px solid var(--red); }
+    .finding.PASS { border-left: 3px solid var(--green); }
+    .finding.NA { border-left: 3px solid var(--accent); }
+    .instruction { font-weight: 600; margin: 0.25rem 0; }
+    .evidence { color: var(--text-muted); font-size: 0.9rem; margin: 0.25rem 0; }
+    .transcript { color: var(--text-muted); font-size: 0.8rem; }
+    .low-conf { color: var(--red); font-size: 0.8em; }
+    .warnings { background: var(--red-bg); border: 1px solid var(--red); border-radius: var(--radius); padding: 0.75rem 1rem; }
+    .warnings ul { margin-top: 0.25rem; padding-left: 1.25rem; }
+    .warnings li { color: var(--text); margin: 0.15rem 0; }
+
+    .header { margin-bottom: 0.5rem; }
+    .by-instruction { margin-top: 1.5rem; }
+    .by-instruction h2 { font-family: 'Poppins', system-ui, sans-serif; font-size: 1.1rem; margin-bottom: 0.5rem; }
+    .by-instruction table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+    .by-instruction th, .by-instruction td { border: 1px solid var(--border); padding: 0.4rem 0.6rem; text-align: left; }
+    .by-instruction th { background: var(--bg); font-weight: 600; }
+    .by-instruction td.badge-fail { color: var(--red); font-weight: 600; }
+    .by-instruction td.badge-na { color: var(--accent); font-weight: 600; }
+    .findings-grouped { margin-top: 1.5rem; }
+    .findings-grouped h2 { font-family: 'Poppins', system-ui, sans-serif; font-size: 1.1rem; margin-bottom: 0.5rem; }
+    .findings-grouped details { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; }
+    .findings-grouped summary { font-weight: 600; cursor: pointer; margin-bottom: 0.4rem; }
+    .findings-grouped details[open] { border-left: 3px solid var(--accent); }
+    .findings-grouped .finding { margin-bottom: 0.4rem; }
+  </style>
+</head>
+<body>
+  <div id="audit-root"></div>
+  <script>
+    /*__EMBEDDED_DATA__*/;
+    (function () {
+      // escapeHtml:防 evidence/instruction 里的 < > & " ' 破坏页面。放 IIFE 顶部(function 声明会提升,放最顶部最稳)。
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+      }
+
+      // 单个 finding 的内层 HTML(finding-head + instruction + evidence + transcript)。多/单分支共用,DRY。
+      function renderFinding(f) {
+        var cls = f.verdict === 'PASS' ? 'badge-pass' : (f.verdict === 'FAIL' ? 'badge-fail' : 'badge-na');
+        var icon = f.verdict === 'PASS' ? '✓' : (f.verdict === 'FAIL' ? '✗' : '❓');
+        var lowConf = (typeof f.confidence === 'number' && f.confidence <= 0.3) ? ' <span class="low-conf">低置信</span>' : '';
+        var derived = f.derived_from_transcript ? ' <span class="derived">↺ 反推</span>' : '';
+        return '<div class="finding-head"><span class="' + cls + '">' + icon + ' ' + escapeHtml(f.verdict) + '</span>' +
+          '<span class="cat">' + escapeHtml(f.category || '') + '</span>' +
+          '<span class="src">' + escapeHtml(f.source || '') + '</span>' + derived + lowConf +
+          '<span class="conf">置信 ' + (f.confidence != null ? f.confidence : '—') + '</span></div>' +
+          '<div class="instruction">' + escapeHtml(f.instruction_text || '') + '</div>' +
+          '<div class="evidence">' + escapeHtml(f.evidence || '') + '</div>' +
+          '<div class="transcript">@ ' + escapeHtml(f.transcript || '') + '</div>';
+      }
+
+      // 包一层带 verdict 边框色的 div
+      function findingRow(f) {
+        var row = document.createElement('div');
+        row.className = 'finding ' + String(f.verdict).replace('/', '');  // "N/A"→"NA" 匹配 CSS .finding.NA(replace 去斜杠,非替下划线)
+        row.innerHTML = renderFinding(f);
+        return row;
+      }
+
+      var root = document.getElementById('audit-root');
+      var findings = EMBEDDED_DATA.findings || [];
+      var multi = (EMBEDDED_DATA.transcripts || []).length > 1;
+
+      // ① header(skill_name + transcripts + summary 徽章 + derived 计数)
+      var derivedCount = findings.filter(function (f) { return f.derived_from_transcript; }).length;
+      var s = EMBEDDED_DATA.summary || {};
+      root.insertAdjacentHTML('beforeend',
+        '<div class="header">' +
+          '<h1>' + escapeHtml(EMBEDDED_DATA.skill_name || '') + '</h1>' +
+          '<div class="transcripts">' + (EMBEDDED_DATA.transcripts || []).map(escapeHtml).join(' · ') + '</div>' +
+          '<div class="summary">' +
+            '<span class="badge-pass">✅ 通过 ' + (s.pass || 0) + '</span>' +
+            '<span class="badge-fail">❌ 失败 ' + (s.fail || 0) + '</span>' +
+            '<span class="badge-na">❓ N/A ' + (s.na || 0) + '</span>' +
+            '<span>共 ' + (s.total || 0) + '</span>' +
+            (derivedCount ? ' · <span class="derived">↺ ' + derivedCount + ' 条由 transcript 反推</span>' : '') +
+          '</div>' +
+        '</div>');
+
+      // ② warnings(有才显)
+      var warns = EMBEDDED_DATA.warnings || [];
+      if (warns.length) {
+        root.insertAdjacentHTML('beforeend',
+          '<div id="audit-warnings" class="warnings"><h2>⚠️ 警告</h2><ul>' +
+          warns.map(function (x) { return '<li>' + escapeHtml(x) + '</li>'; }).join('') +
+          '</ul></div>');
+      }
+
+      // ③ by_instruction 系统性表(仅多 transcript 且有聚合)
+      if (multi && (EMBEDDED_DATA.by_instruction || []).length) {
+        var rows = EMBEDDED_DATA.by_instruction.filter(function (a) {
+          return a.fail_count > 0 || a.na_count > 0;  // 全 PASS 不列(同终端)
+        }).map(function (a) {
+          var pct = Math.round((a.fail_rate || 0) * 100);
+          var colorCls = (a.fail_rate || 0) >= 0.5 ? 'badge-fail' : 'badge-na';
+          return '<tr><td class="' + colorCls + '">' + pct + '%</td>' +
+            '<td>' + escapeHtml(a.instruction_text || '') + '</td>' +
+            '<td>' + escapeHtml(a.category || '') + '</td>' +
+            '<td>' + (a.fail_count || 0) + '/' + (a.total || 0) + '</td>' +
+            '<td>' + escapeHtml((a.fail_in_transcripts || []).join(', ')) + '</td></tr>';
+        }).join('');
+        if (rows) {
+        root.insertAdjacentHTML('beforeend',
+          '<div id="audit-by-instruction" class="by-instruction">' +
+            '<h2>系统性聚合(跨 ' + EMBEDDED_DATA.transcripts.length + ' transcript)</h2>' +
+            '<table><thead><tr><th>fail%</th><th>指令</th><th>类别</th><th>fail/total</th><th>fail in transcripts</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody></table>' +
+          '</div>');
+        }
+      }
+
+      // ④ findings:多 transcript → 按指令分组(可折叠);单 transcript → 扁平
+      var ORDER = { 'FAIL': 0, 'N/A': 1, 'PASS': 2 };
+      if (multi) {
+        root.insertAdjacentHTML('beforeend',
+          '<div id="audit-findings-grouped" class="findings-grouped"><h2>明细(按指令分组)</h2></div>');
+        var gc = document.getElementById('audit-findings-grouped');
+        var grouped = {};
+        findings.forEach(function (f) {
+          var key = f.instruction_text || '(空)';
+          (grouped[key] = grouped[key] || []).push(f);
+        });
+        Object.keys(grouped).forEach(function (key) {
+          var fs = grouped[key];
+          var hasFailOrNa = fs.some(function (f) { return f.verdict !== 'PASS'; });
+          var details = document.createElement('details');
+          if (hasFailOrNa) details.setAttribute('open', '');  // FAIL/NA 组默认展开,全 PASS 折叠
+          var sum = document.createElement('summary');
+          sum.textContent = key;  // textContent 自动转义,无 XSS
+          details.appendChild(sum);
+          fs.forEach(function (f) { details.appendChild(findingRow(f)); });
+          gc.appendChild(details);
+        });
+      } else {
+        root.insertAdjacentHTML('beforeend',
+          '<div id="audit-findings" class="findings"><h2>明细(findings 全集)</h2></div>');
+        var fc = document.getElementById('audit-findings');  // M1: getElementById 而非 lastElementChild
+        findings.slice().sort(function (a, b) {
+          return (ORDER[a.verdict] || 9) - (ORDER[b.verdict] || 9);
+        }).forEach(function (f) { fc.appendChild(findingRow(f)); });
+      }
+    })();
+  </script>
+</body>
+</html>

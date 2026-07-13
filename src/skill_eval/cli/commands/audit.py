@@ -47,6 +47,9 @@ def audit(
     ),
     model: Optional[str] = typer.Option(None, "--model", help="语义判定 LLM"),
     format: str = typer.Option("table", "--format", help="table|json"),
+    open_browser: bool = typer.Option(
+        False, "--open", help="生成后用浏览器打开 audit-report.html"
+    ),
 ):
     """Audit real session transcript(s) against SKILL.md(不 re-run,直接对账真实历史执行)。"""
     try:
@@ -60,6 +63,11 @@ def audit(
     out.mkdir(parents=True, exist_ok=True)
     report_path = out / "audit-report.json"
     report_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+
+    # HTML 报告(与 JSON 并列,always 写;对齐路径3 scoring report 视觉)
+    from skill_eval.reporting.audit_viewer import AuditReportGenerator
+    html_path = out / "audit-report.html"
+    AuditReportGenerator().write_html(report, html_path)
 
     summary = report.summary
     total = summary.get("total", 0)
@@ -129,3 +137,8 @@ def audit(
         console.print(table)
 
     console.print(f"Written to {report_path}")
+    console.print(f"Report written to {html_path}")
+
+    if open_browser:
+        import webbrowser
+        webbrowser.open(f"file://{html_path.resolve()}")

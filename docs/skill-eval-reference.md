@@ -288,8 +288,11 @@ skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl --form
 | `--output` / `-o` | ./output | 输出目录 |
 | `--model` | 默认 | 语义判定 LLM |
 | `--format` | table | table / json |
+| `--open` | 关闭 | 生成后浏览器打开 `audit-report.html` |
 
 判定分四类（必令 / 步骤 / 输出格式 / 条件性指令），条件性指令走三态（遵循/违反/N/A）。判不准报 N/A + 警告，不保守 FAIL。
+
+产出 `<out>/audit-report.json`（机器读）+ `<out>/audit-report.html`（人读，**always 写**，与 JSON 并列，对齐 scoring report 视觉）。HTML 自上而下：① 头部（skill / summary 计数徽章 / 反推指令数）② 警告框（可信度，低置信 N/A 等）③ 系统性聚合表（**仅多 transcript**，跨会话 fail% + fail in transcripts）④ findings 全集（**含 PASS**，每条带 evidence / confidence / verdict 徽章 / category / source；多 transcript 按指令分组可折叠，FAIL/N/A 默认展开）。
 
 ### `report` — HTML 报告
 

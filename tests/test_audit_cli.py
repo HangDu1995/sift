@@ -176,6 +176,44 @@ def test_existing_commands_still_present():
     assert "report" in r.output
 
 
+def test_audit_writes_html_alongside_json(monkeypatch, tmp_path):
+    """audit 命令写完 JSON 后也写 audit-report.html(与 JSON 并列,always 写)。
+
+    复用 _FakeAuditor 模式(不调真 LLM);HTML JS 抽出跑 node --check 验语法。
+    """
+    fake = _FakeAuditor()
+    monkeypatch.setattr(
+        "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
+    )
+
+    sp = _skill_dir(tmp_path)
+    tp = _transcript(tmp_path)
+    out = tmp_path / "out"
+
+    r = runner.invoke(
+        app,
+        ["audit", str(sp), "--transcript", str(tp), "-o", str(out)],
+    )
+    assert r.exit_code == 0, r.output
+
+    # 1. HTML 产出(与 JSON 并列)
+    html_path = out / "audit-report.html"
+    assert html_path.exists()
+
+    # 2. JSON 没被挤掉(HTML 是追加,非替代)
+    assert (out / "audit-report.json").exists()
+
+    # 3. HTML 内 <script> JS 语法合法(node --check 退码 0)
+    import re
+    import subprocess
+    html = html_path.read_text(encoding="utf-8")
+    js = "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", html, re.DOTALL))
+    jsfile = tmp_path / "check.js"
+    jsfile.write_text(js, encoding="utf-8")
+    result = subprocess.run(["node", "--check", str(jsfile)])
+    assert result.returncode == 0, f"node --check failed:\n{result.stderr}"
+
+
 def test_audit_skill_path_missing_friendly_error(tmp_path):
     """skill_path 不存在 → parse_skill_md 抛 SkillParseError → 友好错误(非裸 traceback)。"""
     missing = tmp_path / "does-not-exist"
