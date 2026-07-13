@@ -217,7 +217,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 **两种模式**：
 
 - **默认 A/B**（无 `--task`）：位置参数 skill = 候选（side A）。不给 `--skill-b` → with/without 对照（同 skill 开/关）；给 `--skill-b <dir>` → v1/v2 双 skill 对照（两边各注入各自的 skill，标签默认取目录名）。
-- **路径 1 真任务模式**（给 `--task`）：忽略 evals.json，spawn cc 在 `--cwd`（拷贝隔离）跑真任务，产 `run-*/transcript.jsonl`，结尾打印 `audit` 命令提示。此模式 `--evals`/`--scoring`/`--workers` 等大多不生效。
+- **路径 1 真任务模式**（给 `--task`）：忽略 evals.json，spawn cc 在 `--cwd`（拷贝隔离）跑真任务，产 `run-*/transcript.jsonl`，结尾打印 `audit` 命令提示。每 run 另在终端打印 operational 摘要（耗时 / turns / tokens / stop_reason / tool_calls + 结果头部，读自 `run-*/run_debug.json`）。此模式 `--evals`/`--scoring`/`--workers` 等大多不生效。
 
 > **退出码**：`run` 是纯数据生产者——exit 0 = 产数据成功，2 = 输入错误，3 = 执行错误。**通过/失败判决不再由 `run` 的退出码决定**（旧版读混合 `delta.pass_rate<0` 退 1 的逻辑已退役），改由独立 [`gate`](#gate--通过失败判决) 命令出。`--security-gate` 触发时仍退 1。
 

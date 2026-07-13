@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -14,6 +15,41 @@ from skill_eval.env_check import check_skill_env, check_eval_env
 from skill_eval.errors import SkillEvalError
 from skill_eval.evals.baseline import skill_name_mismatch
 from skill_eval.parser import parse_skill_md
+
+
+def _format_run_summary(run_debug: dict) -> str:
+    """格式化单次 live run 的 console 摘要行(从 run_debug.json dict)。纯函数(可单测,不 spawn cc)。
+
+    run --task 跑完逐 run 打印,让 operational metrics(duration/tokens/turns/stop/tool_calls)
+    + 结果头部不再静默孤儿(§50:run_debug 写出后零消费者)。tool_calls 是 dict[str,int]
+    (工具名→次数),摘要取 sum(values)=总调用次数。
+    """
+    run_num = run_debug.get("run_num", "?")
+    duration_ms = run_debug.get("duration_ms") or 0
+    num_turns = run_debug.get("num_turns") or 0
+    total_tokens = run_debug.get("total_tokens") or 0
+    stop_reason = run_debug.get("stop_reason") or "—"
+    tool_calls = run_debug.get("tool_calls")
+    if isinstance(tool_calls, dict):
+        tc = sum(int(v) for v in tool_calls.values())
+    elif isinstance(tool_calls, list):
+        tc = len(tool_calls)
+    elif isinstance(tool_calls, (int, float)):
+        tc = int(tool_calls)
+    else:
+        tc = 0
+    line = (
+        f"run-{run_num}: 耗时 {duration_ms / 1000:.1f}s · "
+        f"{num_turns} turns · {total_tokens} tokens · "
+        f"stop: {stop_reason} · {tc} tool_calls"
+    )
+    result = (run_debug.get("result_text") or "").strip()
+    if result:
+        flat = result.replace("\n", " ").strip()
+        if len(flat) > 200:
+            flat = flat[:199] + "…"
+        line += f"\n      结果: {flat}"
+    return line
 
 
 def _render_security_report(report, console: Console) -> None:
@@ -97,6 +133,12 @@ def run(
         )
         transcripts = sorted(output_dir.glob("run-*/transcript.jsonl"))
         console.print(f"\n[bold]Live task:[/bold] {runs} run(s) → {len(transcripts)} transcript(s)")
+        # 每 run 的 operational 摘要(读 run-N/run_debug.json;解 §50 "run_debug 孤儿")
+        for debug_path in sorted(output_dir.glob("run-*/run_debug.json")):
+            try:
+                console.print(_format_run_summary(json.loads(debug_path.read_text(encoding="utf-8"))))
+            except Exception:
+                pass
         for t in transcripts:
             console.print(f"  [dim]{t}[/dim]")
         if transcripts:

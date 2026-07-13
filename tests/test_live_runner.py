@@ -113,3 +113,42 @@ def test_live_task_no_cwd_uses_skill_dir(tmp_path: Path) -> None:
         run_live_task(skill_path=skill, task="t", cwd=None, runs=1, output_dir=out)
 
     assert cr.return_value.run.call_args.kwargs["cwd"] == skill
+
+
+def test_format_run_summary_renders_metrics_and_result_head():
+    """_format_run_summary 把 run_debug dict 格式化成 console 摘要行。
+
+    解 §50 "run_debug operational metrics 孤儿":run --task 跑完逐 run 打印一行,
+    让 duration/tokens/turns/stop/tool_calls + 结果头部不再静默。纯函数(不 spawn cc)。
+    tool_calls 是 dict[str,int](工具名→次数),摘要用 sum(values)=总调用次数。
+    """
+    from skill_eval.cli.commands.run import _format_run_summary
+
+    d = {
+        "run_num": 2,
+        "duration_ms": 12345,
+        "num_turns": 5,
+        "total_tokens": 4321,
+        "stop_reason": "end_turn",
+        "tool_calls": {"Read": 3, "Write": 1},
+        "result_text": "任务完成\n产物已写: report.json",
+    }
+    s = _format_run_summary(d)
+    assert "run-2" in s
+    assert "12.3s" in s  # 12345ms → 12.3s
+    assert "5 turns" in s
+    assert "4321 tokens" in s
+    assert "end_turn" in s
+    assert "4 tool_calls" in s  # sum(dict values) = 3 + 1
+    assert "report.json" in s  # 结果头部(result_text 单行化)
+
+
+def test_format_run_summary_handles_missing_fields():
+    """缺字段不崩,给合理默认(0 / —)。"""
+    from skill_eval.cli.commands.run import _format_run_summary
+
+    s = _format_run_summary({})
+    assert "run-?" in s  # run_num 缺省
+    assert "0 tokens" in s
+    assert "0 tool_calls" in s
+    assert "—" in s  # stop_reason 缺省
