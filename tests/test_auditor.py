@@ -1160,3 +1160,60 @@ class TestProgressCallback:
         auditor = TranscriptAuditor()
         findings = auditor._judge_prohibition([_prohibition_inst()], "记录", "t.jsonl")
         assert len(findings) == 1  # 不传 on_progress 也能正常判定
+
+    def test_failure_progress_includes_reason(self, monkeypatch) -> None:
+        """整批 LLM 失败时,进度行要带**原因**(str(exc)),不只'兜底 N/A'。
+
+        回归真实痛点:旧版 ``except RuntimeError: continue`` 把异常吞了,进度只写
+        '失败(整批兜底 N/A)'——用户看到'都判定失败'却不知为什么(超时?exit 1?限流?)。
+        带 str(exc) 后,失败原因(如 'Reached max turns' / 'timed out after 600s')
+        即时可见,才好诊断"都判定失败"的根因。
+        """
+        def boom(*a, **k):
+            raise RuntimeError("claude CLI failed (exit 1): Reached max turns (1)")
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        msgs: list[str] = []
+        auditor = TranscriptAuditor()
+        findings = auditor._judge_prohibition(
+            [_prohibition_inst()], "记录", "t.jsonl", on_progress=msgs.append,
+        )
+        flat = " ".join(msgs)
+        assert "失败" in flat
+        assert "Reached max turns" in flat  # 原因带出来了,不只'兜底 N/A'
+        # 判定本身仍兜底为 N/A(失败不报假 FAIL)
+        assert findings[0].verdict == AuditVerdict.NA
+
+    def test_zero_parsed_batch_emits_warning_prohibition(self, monkeypatch) -> None:
+        """调用成功但整批 0 条解析成功(LLM 输出畸形/空)→ 打可见警告,不只静默 N/A。
+
+        回归盲点:批"完成 ⏱ Xs"看着像成功,实则 LLM 返回畸形/截断/空数组 → _parse_*
+        全 None → 全兜底 N/A,却**毫无信号**(失败原因日志只覆盖 RuntimeError 调用失败,
+        不覆盖这种"调用成功但解析为空")。补一条 ⚠ 警告,让静默 N/A 可见。
+        """
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude", lambda *a, **k: "[]",  # 空数组 → 0 条解析
+        )
+        msgs: list[str] = []
+        auditor = TranscriptAuditor()
+        findings = auditor._judge_prohibition(
+            [_prohibition_inst(), _prohibition_inst()], "记录", "t.jsonl", on_progress=msgs.append,
+        )
+        flat = " ".join(msgs)
+        assert "完成" in flat  # 调用确实成功了(不是 RuntimeError)
+        assert "0 条解析成功" in flat  # ⚠ 但解析为空,可见警告
+        assert all(f.verdict == AuditVerdict.NA for f in findings)  # 仍兜底 N/A
+
+    def test_zero_parsed_batch_emits_warning_conditional(self, monkeypatch) -> None:
+        """条件性批(标量 mask 形状)同样:0 条解析成功 → ⚠ 警告。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude", lambda *a, **k: "[]",  # 空数组 → mask 全 None
+        )
+        msgs: list[str] = []
+        auditor = TranscriptAuditor()
+        findings = auditor._judge_conditional(
+            [_tool_inst(), _tool_inst()], [], "场景", "t.jsonl", on_progress=msgs.append,
+        )
+        flat = " ".join(msgs)
+        assert "0 条解析成功" in flat
+        assert all(f.verdict == AuditVerdict.NA for f in findings)

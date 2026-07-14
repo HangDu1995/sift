@@ -661,11 +661,15 @@ class TranscriptAuditor:
             t0 = time.monotonic()
             try:
                 result_text = _call_claude_with_retry(prompt, model, timeout)
-            except RuntimeError:
-                _emit(on_progress, f"  [{k}/{total}] 判定条件性 失败(整批兜底 N/A)")
+            except RuntimeError as exc:
+                _emit(on_progress, f"  [{k}/{total}] 判定条件性 失败: {str(exc)[:120]}(整批兜底 N/A)")
                 continue  # 重试仍失败 → 保持 None(调用方标 N/A + audit 汇总未判定警告)
             _emit(on_progress, f"  [{k}/{total}] 判定条件性 完成 ⏱ {time.monotonic() - t0:.0f}s")
             batch_mask = self._parse_applicable(result_text, bn)
+            if bn and all(v is None for v in batch_mask):
+                # 调用成功但整批 0 条解析成功(LLM 输出畸形/截断/空)→ 静默兜底 N/A 毫无信号,
+                # 补 ⚠ 让用户知道这批 N/A 是解析失败而非真判定(可重跑救回)。
+                _emit(on_progress, f"  [{k}/{total}] ⚠ 判定条件性 完成,但 0 条解析成功(LLM 输出畸形/截断?)→ 本批 {bn} 条全兜底 N/A")
             for j, val in enumerate(batch_mask):
                 mask[start + j] = val  # 本地 j → 全量 start+j(批间 index 映射)
         return mask
@@ -753,11 +757,13 @@ class TranscriptAuditor:
             t0 = time.monotonic()
             try:
                 result_text = _call_claude_with_retry(prompt, model, timeout)
-            except RuntimeError:
-                _emit(on_progress, f"  [{k}/{total}] 判定禁令 失败(整批兜底 N/A)")
+            except RuntimeError as exc:
+                _emit(on_progress, f"  [{k}/{total}] 判定禁令 失败: {str(exc)[:120]}(整批兜底 N/A)")
                 continue  # 重试仍失败 → 保持 (None, "")(调用方标 N/A + 未判定警告)
             _emit(on_progress, f"  [{k}/{total}] 判定禁令 完成 ⏱ {time.monotonic() - t0:.0f}s")
             batch_results = self._parse_prohibition(result_text, bn)
+            if bn and all(v[0] is None for v in batch_results):
+                _emit(on_progress, f"  [{k}/{total}] ⚠ 判定禁令 完成,但 0 条解析成功(LLM 输出畸形/截断?)→ 本批 {bn} 条全兜底 N/A")
             for j, val in enumerate(batch_results):
                 results[start + j] = val  # 本地 j → 全量 start+j
         return results
@@ -859,11 +865,13 @@ class TranscriptAuditor:
             t0 = time.monotonic()
             try:
                 result_text = _call_claude_with_retry(prompt, model, timeout)
-            except RuntimeError:
-                _emit(on_progress, f"  [{k}/{total}] 判定步骤 失败(整批兜底 N/A)")
+            except RuntimeError as exc:
+                _emit(on_progress, f"  [{k}/{total}] 判定步骤 失败: {str(exc)[:120]}(整批兜底 N/A)")
                 continue  # 重试仍失败 → 保持 (None, "")(调用方标 N/A + 未判定警告)
             _emit(on_progress, f"  [{k}/{total}] 判定步骤 完成 ⏱ {time.monotonic() - t0:.0f}s")
             batch_results = self._parse_step(result_text, bn)
+            if bn and all(v[0] is None for v in batch_results):
+                _emit(on_progress, f"  [{k}/{total}] ⚠ 判定步骤 完成,但 0 条解析成功(LLM 输出畸形/截断?)→ 本批 {bn} 条全兜底 N/A")
             for j, val in enumerate(batch_results):
                 results[start + j] = val  # 本地 j → 全量 start+j
         return results
