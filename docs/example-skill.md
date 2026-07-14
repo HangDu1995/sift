@@ -51,6 +51,8 @@ fixtures/example-skills/log-error-analyzer/
 
 做对的也正确 **PASS**(Read 工具命中、Read 日志步骤、反推 app.log);`security-policy.md` 正确 **N/A**(日志无安全事件,场景不触发)。
 
+> **fail=6 怎么来的**(标准答案要数全,不是只数植入的):3 个植入违规之外,规则"必须引用日志原文行"也被违反(助手只报"第 1 行"行号、没引原文)→ 第 4 个 FAIL;再加上同句"禁止编造"被 extractor 抽成 `CONSTRAINT` + `ANTI_FABRICATION` 两条**同文重复**(+1),共 **6 条 FAIL = 4 个行为**。即 fail 条数 > 真实违规数——读 evidence 对照**行为**,别数条数。(跨类扇出另一处:没读 error-codes.md 同时违反 REFERENCE_USAGE + HEADING_STEP 两条不同规则。)
+
 **这是首次正面证明:真 LLM 在干净输入下能抓违规。** 此前 dispatching(伪指令污染)和 mock 测试(mock LLM)都没覆盖。
 
 ### 验证中暴露并修复的 audit 缺口

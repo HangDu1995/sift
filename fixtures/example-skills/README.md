@@ -27,6 +27,15 @@ skill-eval audit fixtures/example-skills/log-error-analyzer/ \
   --transcript fixtures/example-skills/log-error-analyzer/transcripts/synthetic-violation.jsonl   # 路径2
 ```
 
+> **预期 audit 结果(跑完对照)**:这份 transcript 是合成违规会话,audit 应抓到 **3 个植入违规**——
+> - **没读 `references/error-codes.md` 就分类**(步骤2 要求读码表)→ FAIL(evidence:tool_trace 无 Read 该文件)
+> - **编造 `E-FAKE-999`**(第 3 行无码应标未分类,却发明了不存在的码)→ FAIL(evidence:码带 FAKE、标 unknown failure)
+> - **没写 `error-report.json`**,只口头总结(步骤3 + 输出要求)→ FAIL(evidence:明说 skip writing)
+>
+> 另:规则"必须引用日志原文行",助手只报"第 1 行/第 2 行"行号、没引原文 → **通常也 FAIL**(LLM 判,偶有方差)。做对的 **PASS**(读日志步骤,tool_trace 命中 Read app.log);`security-policy.md` **N/A**(日志没提安全事件,条件不触发)。
+>
+> 计数 **pass≈3 / fail≈6 / na≈1**——但 fail=6 只代表 **4 个行为**,不是 6 个问题,膨胀有二:① 编造那句被 extractor 抽成 `CONSTRAINT` + `ANTI_FABRICATION` 两条**同文重复**(+1,纯重复);② 没读码表同时违反"该读参考(条件性)"+"步骤2 读码表(步骤)"两条**不同**规则(+1,跨类扇出)。LLM 有 run-to-run 方差,**对照"3 个植入违规是否都出现在 FAIL、evidence 是否点中"即可,别钉精确条数**。
+
 ### log-error-analyzer-zh(中文 audit 示例)
 
 自带 transcript(中文对账),无 evals.json——走 audit;要 run 得先 `init` 生成中文 evals.json:
@@ -40,6 +49,8 @@ skill-eval init fixtures/example-skills/log-error-analyzer-zh/          # 方式
 skill-eval init fixtures/example-skills/log-error-analyzer-zh/ \
   --from-transcript fixtures/example-skills/log-error-analyzer-zh/transcripts/synthetic-violation.jsonl   # 方式2:从 transcript 挖
 ```
+
+> **预期 audit 结果**:与上面英文版**完全一致**(同 3 步骤 / 同 reference / 全中文)——3 个植入违规都 **FAIL**(没读 error-codes.md、编造 E-FAKE-999、没写 error-report.json),外加"没引日志原文行"通常也 FAIL;读日志步骤 **PASS**,安全策略 **N/A**。计数与膨胀拆解同英文版(pass≈3 / fail≈6 / na≈1,4 个行为);LLM 对中文判定不退化(中英对照已验),同样别钉精确条数。
 
 ### code-review-auditor(路径1 真任务)
 
@@ -68,5 +79,13 @@ skill-eval init fixtures/example-skills/release-checklist-zh/           # 方式
 skill-eval init fixtures/example-skills/release-checklist-zh/ \
   --from-transcript fixtures/example-skills/release-checklist-zh/transcripts/synthetic-violation.jsonl   # 方式2:从 transcript 挖
 ```
+
+> **预期 audit 结果(跑完对照)**:这份 transcript 跑了测试 + 打了 tag(这两步该 **PASS**),但应抓到这些违规——
+> - **breaking change 没审批**(承认有 breaking change 却"直接打 tag 发布",没等用户确认)→ **FAIL**
+> - **没查 lint**(没跑 ruff check)/ **谎报 lint·依赖通过**(没读 dependency-policy.md 却说"确认过了")→ **FAIL**
+> - **没读 references**(dependency-policy / changelog-format / version-rules 都没读)→ **FAIL**(evidence:tool_trace 无 Read)
+> - **没生成 changelog、没更新 version.py** → **FAIL**
+>
+> 典型计数 **pass≈11 / fail≈12 / na≈5**(total≈28)。这个 skill 故意复杂(7 步骤 + 代码块 + 示例列表),extractor 会把"示例当步骤、代码块当输出格式"抽成噪音,所以信噪比低于简单 skill、会出现少量假 FAIL;但真违规仍穿透噪音被抓。同样别钉精确条数,对照"上面这些违规是否都出现在 FAIL"即可。
 
 > analyze / vet 默认只终端输出(显式 `-o` 才落盘);run 默认产齐 benchmark + scorecard + vet-report 到 `output/iteration-1/`,随后 `skill-eval report output/iteration-1/` 出自包含 HTML 报告。完整命令参考 [skill-eval-guide](../../tools/skills/skill-eval-guide/SKILL.md)。
