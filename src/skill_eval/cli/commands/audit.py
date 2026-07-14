@@ -55,7 +55,11 @@ def audit(
     skill_path = resolve_skill_dir(skill_path)
     try:
         name, _desc, _content, _frontmatter, body = parse_skill_md(skill_path)
-        report = TranscriptAuditor().audit(name, body, transcript, model=model)
+        # on_progress:audit 每批 LLM 判定 40-257s,边跑边报进度(transcript 头 + 每批 [k/总] + 耗时),
+        # 否则全程静默、用户不知是否在跑。console.print 即时 flush,长跑也实时可见。
+        report = TranscriptAuditor().audit(
+            name, body, transcript, model=model, on_progress=lambda msg: console.print(msg),
+        )
     except SkillEvalError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=exc.exit_code)

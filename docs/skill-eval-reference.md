@@ -279,6 +279,8 @@ skill-eval gate output/iteration-1/benchmark.json --no-programmatic-guard --min-
 
 把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。**不 re-run**，直接对账历史执行（与 fixture compliance 互补）。支持多 transcript 指令级聚合。
 
+> 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行（`[k/总] 判定{条件性/禁令/步骤}(n 条)…` → `完成 ⏱ Xs`）。别误以为没输出就是卡死——看到 `[k/总] …` 滚动就是在跑。
+
 ```bash
 skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out/
 skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl --format json

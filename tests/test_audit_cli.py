@@ -85,7 +85,7 @@ class _FakeAuditor:
     def __init__(self):
         self.calls: list[dict] = []
 
-    def audit(self, skill_name, skill_body, transcripts, model=None, timeout=120):
+    def audit(self, skill_name, skill_body, transcripts, model=None, timeout=120, on_progress=None):
         self.calls.append(
             {
                 "skill_name": skill_name,

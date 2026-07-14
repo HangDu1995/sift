@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Callable
 
 from skill_eval.audit.declare import derive_declarations
 from skill_eval.audit.rebuild import rebuild
@@ -76,6 +77,16 @@ _SCENE_TRUNCATE = 8000
 # 重试只针对 RuntimeError(语义错误重试无益,且 call_claude 也只抛这一种)。
 _LLM_RETRY_MAX = 2
 _LLM_RETRY_DELAY = 3.0
+
+# 进度回调类型:audit 每批 LLM 判定 40-257s,全程静默对用户极不友好。核心只 emit 字符串,
+# 由 CLI 层(传 console.print)/测试层(传 list.append)决定如何呈现,producer/consumer 分离。
+ProgressFn = Callable[[str], None]
+
+
+def _emit(on_progress: ProgressFn | None, msg: str) -> None:
+    """None 安全的进度回调:on_progress 为 None 时 no-op(核心默认不耦合 I/O)。"""
+    if on_progress is not None:
+        on_progress(msg)
 
 
 def _call_claude_with_retry(prompt: str, model: str | None, timeout: int) -> str:
@@ -135,6 +146,7 @@ class TranscriptAuditor:
         transcripts: list[Path],
         model: str | None = None,
         timeout: int = 600,
+        on_progress: ProgressFn | None = None,
     ) -> AuditReport:
         """聚合主入口:把 skill 声明的指令 + transcript 反推声明逐条对账若干 transcript。
 
@@ -167,7 +179,8 @@ class TranscriptAuditor:
         all_findings: list[AuditFinding] = []
         transcript_names: list[str] = []
 
-        for tp in transcripts:
+        for ti, tp in enumerate(transcripts, 1):
+            _emit(on_progress, f"对账 transcript {ti}/{len(transcripts)}: {tp.name}")
             try:
                 tool_trace, transcript_text, digest = rebuild(tp)
             except SkillEvalError as e:
@@ -192,14 +205,16 @@ class TranscriptAuditor:
 
             findings: list[AuditFinding] = []
             findings += self._judge_conditional(
-                buckets[AuditCategory.CONDITIONAL], tool_trace, scene, tp.name, model, timeout
+                buckets[AuditCategory.CONDITIONAL], tool_trace, scene, tp.name, model, timeout,
+                on_progress=on_progress,
             )
             findings += self._judge_prohibition(
-                buckets[AuditCategory.PROHIBITION], transcript_text, tp.name, model, timeout
+                buckets[AuditCategory.PROHIBITION], transcript_text, tp.name, model, timeout,
+                on_progress=on_progress,
             )
             findings += self._judge_step(
                 buckets[AuditCategory.STEP], transcript_text, tp.name, model, timeout,
-                tool_trace=tool_trace,
+                tool_trace=tool_trace, on_progress=on_progress,
             )
             findings += self._judge_output(
                 buckets[AuditCategory.OUTPUT], transcript_text, tp.name
@@ -250,6 +265,7 @@ class TranscriptAuditor:
         transcript_name: str,
         model: str | None = None,
         timeout: int = 600,
+        on_progress: ProgressFn | None = None,
     ) -> list[AuditFinding]:
         """判定条件性指令(TOOL_REQUIREMENT / REFERENCE_USAGE)的三态结论。
 
@@ -292,7 +308,7 @@ class TranscriptAuditor:
         # 未命中全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_applicable 内部分批循环,
         # 不再单次截断 + 超限保守 FAIL)。
         applicable_mask = self._llm_judge_applicable(
-            [inst for _, inst in unmatched], transcript_scene, model, timeout
+            [inst for _, inst in unmatched], transcript_scene, model, timeout, on_progress,
         )
 
         for local_pos, (orig_i, inst) in enumerate(unmatched):
@@ -338,6 +354,7 @@ class TranscriptAuditor:
         transcript_name: str,
         model: str | None = None,
         timeout: int = 600,
+        on_progress: ProgressFn | None = None,
     ) -> list[AuditFinding]:
         """判定禁令类指令(CONSTRAINT / ANTI_FABRICATION)——**主动检测违规是否发生**。
 
@@ -367,7 +384,7 @@ class TranscriptAuditor:
 
         # 全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_prohibition 内部分批循环)。
         violated_mask = self._llm_judge_prohibition(
-            instructions, transcript_text, model, timeout
+            instructions, transcript_text, model, timeout, on_progress,
         )
 
         for i, inst in enumerate(instructions):
@@ -413,6 +430,7 @@ class TranscriptAuditor:
         model: str | None = None,
         timeout: int = 600,
         tool_trace: list | None = None,
+        on_progress: ProgressFn | None = None,
     ) -> list[AuditFinding]:
         """判定步骤类指令(HEADING_STEP)的三态结论。
 
@@ -443,7 +461,9 @@ class TranscriptAuditor:
         findings: list[AuditFinding | None] = [None] * len(instructions)
 
         # 全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_step 内部分批循环)。
-        verdict_mask = self._llm_judge_step(instructions, transcript_text, model, timeout, tool_trace)
+        verdict_mask = self._llm_judge_step(
+            instructions, transcript_text, model, timeout, tool_trace, on_progress,
+        )
 
         for i, inst in enumerate(instructions):
             v, ev = verdict_mask[i]
@@ -597,8 +617,9 @@ class TranscriptAuditor:
         transcript_scene: str,
         model: str | None,
         timeout: int,
+        on_progress: ProgressFn | None = None,
     ) -> list[bool | None]:
-        """分批 call_claude 判每条未命中指令在该场景是否"该触发"(每批 30 条,处理全部)。
+        """分批 call_claude 判每条未命中指令在该场景是否"该触发"(每批 _MAX_LLM_IN_BATCH(10) 条,处理全部)。
 
         返回与 candidates 等长的列表:
         - True  = 该触发(→ FAIL,该做没做)
@@ -616,9 +637,11 @@ class TranscriptAuditor:
         """
         n = len(candidates)
         mask: list[bool | None] = [None] * n
+        total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
         for start in range(0, n, _MAX_LLM_IN_BATCH):
             batch = candidates[start:start + _MAX_LLM_IN_BATCH]
             bn = len(batch)
+            k = start // _MAX_LLM_IN_BATCH + 1
             instruction_list = "".join(
                 f"[{i}] {inst.instruction_text}\n" for i, inst in enumerate(batch)
             )
@@ -634,10 +657,14 @@ class TranscriptAuditor:
                 "## 输出格式\n"
                 '只返回 JSON 数组,每元素:{"index": 0, "applicable": true/false}\n'
             )
+            _emit(on_progress, f"  [{k}/{total}] 判定条件性({bn} 条)…")
+            t0 = time.monotonic()
             try:
                 result_text = _call_claude_with_retry(prompt, model, timeout)
             except RuntimeError:
+                _emit(on_progress, f"  [{k}/{total}] 判定条件性 失败(整批兜底 N/A)")
                 continue  # 重试仍失败 → 保持 None(调用方标 N/A + audit 汇总未判定警告)
+            _emit(on_progress, f"  [{k}/{total}] 判定条件性 完成 ⏱ {time.monotonic() - t0:.0f}s")
             batch_mask = self._parse_applicable(result_text, bn)
             for j, val in enumerate(batch_mask):
                 mask[start + j] = val  # 本地 j → 全量 start+j(批间 index 映射)
@@ -685,8 +712,9 @@ class TranscriptAuditor:
         transcript_text: str,
         model: str | None,
         timeout: int,
+        on_progress: ProgressFn | None = None,
     ) -> list[tuple[bool | None, str]]:
-        """分批 call_claude 判每条禁令在本次执行里是否被违反(每批 30 条,处理全部)。
+        """分批 call_claude 判每条禁令在本次执行里是否被违反(每批 _MAX_LLM_IN_BATCH(10) 条,处理全部)。
 
         返回与 candidates 等长的列表,每元素 ``(violated, evidence)``:
         - (True, ev)  = 已违反(→ FAIL)
@@ -701,9 +729,11 @@ class TranscriptAuditor:
         """
         n = len(candidates)
         results: list[tuple[bool | None, str]] = [(None, "")] * n
+        total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
         for start in range(0, n, _MAX_LLM_IN_BATCH):
             batch = candidates[start:start + _MAX_LLM_IN_BATCH]
             bn = len(batch)
+            k = start // _MAX_LLM_IN_BATCH + 1
             instruction_list = "".join(
                 f"[{i}] {inst.instruction_text}\n" for i, inst in enumerate(batch)
             )
@@ -719,10 +749,14 @@ class TranscriptAuditor:
                 '只返回 JSON 数组,每元素:'
                 '{"index": 0, "violated": true/false, "evidence": "中文简述为何违反/未违反"}\n'
             )
+            _emit(on_progress, f"  [{k}/{total}] 判定禁令({bn} 条)…")
+            t0 = time.monotonic()
             try:
                 result_text = _call_claude_with_retry(prompt, model, timeout)
             except RuntimeError:
+                _emit(on_progress, f"  [{k}/{total}] 判定禁令 失败(整批兜底 N/A)")
                 continue  # 重试仍失败 → 保持 (None, "")(调用方标 N/A + 未判定警告)
+            _emit(on_progress, f"  [{k}/{total}] 判定禁令 完成 ⏱ {time.monotonic() - t0:.0f}s")
             batch_results = self._parse_prohibition(result_text, bn)
             for j, val in enumerate(batch_results):
                 results[start + j] = val  # 本地 j → 全量 start+j
@@ -772,8 +806,9 @@ class TranscriptAuditor:
         model: str | None,
         timeout: int,
         tool_trace: list | None = None,
+        on_progress: ProgressFn | None = None,
     ) -> list[tuple[str | None, str]]:
-        """分批 call_claude 判每个步骤在本次执行里是否被走过(每批 30 条,处理全部)。
+        """分批 call_claude 判每个步骤在本次执行里是否被走过(每批 _MAX_LLM_IN_BATCH(10) 条,处理全部)。
 
         返回与 candidates 等长的列表,每元素 ``(verdict, evidence)``:
         - ("pass", ev) = 走过(→ PASS)
@@ -789,9 +824,11 @@ class TranscriptAuditor:
         """
         n = len(candidates)
         results: list[tuple[str | None, str]] = [(None, "")] * n
+        total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
         for start in range(0, n, _MAX_LLM_IN_BATCH):
             batch = candidates[start:start + _MAX_LLM_IN_BATCH]
             bn = len(batch)
+            k = start // _MAX_LLM_IN_BATCH + 1
             instruction_list = "".join(
                 f"[{i}] {inst.instruction_text}\n" for i, inst in enumerate(batch)
             )
@@ -818,10 +855,14 @@ class TranscriptAuditor:
                 '只返回 JSON 数组,每元素:'
                 '{"index": 0, "verdict": "pass"|"fail"|"na", "evidence": "中文简述"}\n'
             )
+            _emit(on_progress, f"  [{k}/{total}] 判定步骤({bn} 条)…")
+            t0 = time.monotonic()
             try:
                 result_text = _call_claude_with_retry(prompt, model, timeout)
             except RuntimeError:
+                _emit(on_progress, f"  [{k}/{total}] 判定步骤 失败(整批兜底 N/A)")
                 continue  # 重试仍失败 → 保持 (None, "")(调用方标 N/A + 未判定警告)
+            _emit(on_progress, f"  [{k}/{total}] 判定步骤 完成 ⏱ {time.monotonic() - t0:.0f}s")
             batch_results = self._parse_step(result_text, bn)
             for j, val in enumerate(batch_results):
                 results[start + j] = val  # 本地 j → 全量 start+j

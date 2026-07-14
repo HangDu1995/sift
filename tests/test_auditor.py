@@ -1043,3 +1043,120 @@ class TestAuditAggregate:
             AuditCategory.OUTPUT,
         }
         assert len(report.findings) == 5  # 2 CONDITIONAL + 1 + 1 + 1
+
+
+class TestProgressCallback:
+    """on_progress 回调:audit 长跑(每批 LLM 40-257s)时让用户看到进度,而非全程静默。
+
+    契约:audit() / _judge_conditional / _judge_prohibition / _judge_step 接可选
+    on_progress(str)->None,默认 None(核心不耦合 I/O)。进 transcript 打头;每个 LLM
+    批调用前后各打一行([k/总] + 类别标签 + 完成耗时)。on_progress=None 时行为与旧版一致。
+    """
+
+    def test_conditional_judge_emits_per_batch_progress(self, monkeypatch) -> None:
+        """未命中走 LLM → on_progress 收到 [1/1] 条件性批 + 完成耗时行。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: '[{"index": 0, "applicable": false}]',
+        )
+        msgs: list[str] = []
+        auditor = TranscriptAuditor()
+        auditor._judge_conditional(
+            [_tool_inst()], [], "某场景", "t.jsonl", on_progress=msgs.append,
+        )
+        flat = " ".join(msgs)
+        assert "条件性" in flat
+        assert "[1/1]" in flat
+        assert "⏱" in flat  # 完成耗时行
+
+    def test_conditional_multi_batch_progress_indexed(self, monkeypatch) -> None:
+        """>_MAX_LLM_IN_BATCH(12 条)→ 分 2 批,on_progress 标 [1/2] 与 [2/2]。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: json.dumps(
+                [{"index": i, "applicable": False} for i in range(_MAX_LLM_IN_BATCH)]
+            ),
+        )
+        msgs: list[str] = []
+        auditor = TranscriptAuditor()
+        auditor._judge_conditional(
+            [_tool_inst()] * 12, [], "场景", "t.jsonl", on_progress=msgs.append,
+        )
+        flat = " ".join(msgs)
+        assert "[1/2]" in flat
+        assert "[2/2]" in flat
+
+    def test_prohibition_judge_emits_progress(self, monkeypatch) -> None:
+        """禁令批 → on_progress 含 '禁令' 标签 + [1/1] + ⏱。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: '[{"index": 0, "violated": false, "evidence": "未违反"}]',
+        )
+        msgs: list[str] = []
+        auditor = TranscriptAuditor()
+        auditor._judge_prohibition(
+            [_prohibition_inst()], "执行记录", "t.jsonl", on_progress=msgs.append,
+        )
+        flat = " ".join(msgs)
+        assert "禁令" in flat
+        assert "[1/1]" in flat
+        assert "⏱" in flat
+
+    def test_step_judge_emits_progress(self, monkeypatch) -> None:
+        """步骤批 → on_progress 含 '步骤' 标签 + [1/1] + ⏱。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: '[{"index": 0, "verdict": "pass", "evidence": "走过"}]',
+        )
+        msgs: list[str] = []
+        auditor = TranscriptAuditor()
+        auditor._judge_step(
+            [_step_inst()], "执行记录", "t.jsonl", on_progress=msgs.append,
+        )
+        flat = " ".join(msgs)
+        assert "步骤" in flat
+        assert "[1/1]" in flat
+        assert "⏱" in flat
+
+    def test_empty_bucket_does_not_call_progress(self, monkeypatch) -> None:
+        """空禁令桶短路 → 不 spawn LLM → on_progress 不被调(不报假进度)。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: pytest.fail("空桶不应调 LLM"),
+        )
+        msgs: list[str] = []
+        auditor = TranscriptAuditor()
+        auditor._judge_prohibition([], "执行记录", "t.jsonl", on_progress=msgs.append)
+        assert msgs == []
+
+    def test_audit_emits_transcript_header(self, tmp_path, monkeypatch) -> None:
+        """audit() 进每个 transcript 打头:'对账 transcript i/N: <name>'。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: '[{"index": 0, "applicable": false}]',
+        )
+        body = (
+            "use Bash\n\n"
+            "NEVER delete production data\n\n"
+            "1. Analyze the input format carefully\n\n"
+            "```\nEXPECTED_TOKEN\n```\n"
+        )
+        tp = _write_jsonl(
+            tmp_path / "only_user.jsonl",
+            [{"message": {"role": "user", "content": "hello"}}],
+        )
+        msgs: list[str] = []
+        TranscriptAuditor().audit("s", body, [tp], on_progress=msgs.append)
+        flat = " ".join(msgs)
+        assert "对账 transcript 1/1" in flat
+        assert "only_user.jsonl" in flat
+
+    def test_progress_none_default_is_noop(self, monkeypatch) -> None:
+        """on_progress=None(默认)→ 与旧版完全一致,无 AttributeError。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: '[{"index": 0, "violated": false, "evidence": ""}]',
+        )
+        auditor = TranscriptAuditor()
+        findings = auditor._judge_prohibition([_prohibition_inst()], "记录", "t.jsonl")
+        assert len(findings) == 1  # 不传 on_progress 也能正常判定
