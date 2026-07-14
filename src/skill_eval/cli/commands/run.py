@@ -52,6 +52,51 @@ def _format_run_summary(run_debug: dict) -> str:
     return line
 
 
+def _emit_static_and_vet(
+    skill_path: Path,
+    iteration_dir: Path,
+    *,
+    skip_static: bool = False,
+    skip_vet: bool = False,
+) -> None:
+    """run 末尾:把静态评分卡 + 安全审查写进 iteration_dir(供 report 面板自动带上)。
+
+    生产者(run)产齐所有维度的评测产物、消费者(report/gate)只读 —— 让 report 的
+    "评分卡/安全"面板默认有数,不再依赖用户手动 analyze/vet -o。analyze/vet 秒级零 API
+    成本、纯本地,末尾追加开销可忽略;vet 用原生扫描器(skip_external)保零依赖秒级。
+
+    失败不阻断 run:两者是补充维度,挂了只让 report 缺那块,不影响动态评测(各自独立)。
+    """
+    if not skip_static:
+        try:
+            from skill_eval.static_analysis.analyzer import StaticAnalyzer
+            report = StaticAnalyzer().analyze(skill_path)
+            (iteration_dir / "scorecard.json").write_text(
+                json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            console.print(
+                f"  [dim]静态评分卡 → {iteration_dir / 'scorecard.json'} "
+                f"({report.score}/{report.max_score})[/dim]"
+            )
+        except Exception as exc:  # 补充维度,不阻断
+            console.print(f"[yellow]Warning:[/yellow] 静态分析失败(已跳过,不阻断): {exc}")
+
+    if not skip_vet:
+        try:
+            from skill_eval.security.vetter import SecurityVetter
+            vet = SecurityVetter(skip_external=True).vet(skill_path)
+            (iteration_dir / "vet-report.json").write_text(
+                json.dumps(vet.model_dump(mode="json"), indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            console.print(
+                f"  [dim]安全审查 → {iteration_dir / 'vet-report.json'} (verdict: {vet.verdict})[/dim]"
+            )
+        except Exception as exc:  # 补充维度,不阻断
+            console.print(f"[yellow]Warning:[/yellow] 安全审查失败(已跳过,不阻断): {exc}")
+
+
 def _render_security_report(report, console: Console) -> None:
     table = Table(title=f"Security Scan: {report.skill_name}")
     table.add_column("Scanner", style="bold")
@@ -95,6 +140,8 @@ def run(
     no_compliance: Optional[bool] = typer.Option(None, "--no-compliance/--compliance", help="Skip compliance checking (auto: on for --runs<3)"),
     no_calibration: bool = typer.Option(False, "--no-calibration", help="Skip scoring calibration"),
     security_gate: bool = typer.Option(False, "--security-gate", help="Fail if security vetting returns BLOCKED or REVIEW_NEEDED"),
+    no_static: bool = typer.Option(False, "--no-static", help="跳过末尾自动产静态评分卡(默认产,供 report 评分卡面板)"),
+    no_vet: bool = typer.Option(False, "--no-vet", help="跳过末尾自动产安全审查(默认产,供 report 安全面板)"),
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
     format: str = typer.Option("table", "--format", help="Output format"),
     eval_samples: Optional[str] = typer.Option(None, "--eval-samples", help="Number or pct of evals to run (e.g. 10 or 0.25)"),
@@ -194,7 +241,7 @@ def run(
     else:
         skip_compliance = no_compliance
 
-    _run_ab_eval(
+    _benchmark, iteration_dir = _run_ab_eval(
         skill_path=skill_path,
         eval_set=eval_set,
         runs=runs,
@@ -213,3 +260,6 @@ def run(
         label_a=label_a,
         label_b=label_b,
     )
+
+    # 末尾自动产静态评分卡 + 安全审查(写进 iteration_dir,供 report 面板自动带上)
+    _emit_static_and_vet(skill_path, iteration_dir, skip_static=no_static, skip_vet=no_vet)

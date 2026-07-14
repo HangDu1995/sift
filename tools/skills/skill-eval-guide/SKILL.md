@@ -240,10 +240,12 @@ skill-eval run /path/to/skill --task "重构 X 模块" --cwd ./repo   # 路径1 
 | `--task` / `--cwd` | — | **路径1 真任务模式**：直接跑真实任务（不读 evals.json），`--cwd` 拷贝隔离 |
 | `--no-compliance` / `--compliance` | 自动 | 跳过/强制遵循性（`--runs<3` 默认跳） |
 | `--security-gate` | 关 | 安全审查返回 BLOCKED/REVIEW_NEEDED 时判失败 |
+| `--no-static` / `--no-vet` | 都产 | 跳过末尾自动产的静态评分卡 / 安全审查（默认都产，写进 iteration-1/，供 `report` 面板自动带上） |
 | `--model` | — | claude -p 模型（也控制盲比较/赛后分析是否执行） |
 | `--timeout` / `--max-turns` / `--workers` / `--max-retries` | 300/10/4/2 | 执行控制 |
 
 - **默认 A/B**：位置参数 skill = 候选（side A）。不给 `--skill-b` → with/without 对照；给 `--skill-b <dir>` → v1/v2 双 skill。
+- **末尾自动产评分卡 + 安全审查**：A/B 模式跑完后，自动把 `scorecard.json`（静态 11 项）+ `vet-report.json`（原生安全扫描）写进 `iteration-1/`，让后续 `report` 的"评分卡/安全"面板默认有数（不用再手动 `analyze -o` / `vet -o`）。两者秒级零 API 成本、各自失败不阻断 run；`--no-static` / `--no-vet` 跳过。**仅 A/B 模式**——真任务模式（`--task`）无 iteration-1/，不产。
 - **路径1 真任务**（给 `--task`）：忽略 evals.json，spawn cc 在 `--cwd`（拷贝隔离）跑真任务，产 `run-*/transcript.jsonl` 喂 `audit`，每 run 打印 operational 摘要。
 - **退出码**：`run` 是纯数据生产者——0 = 产数据成功（**不代表通过**），2 = 输入错误，3 = 执行错误。**通过/失败由 `gate` 判**。`--security-gate` 触发时退 1。
 
@@ -440,8 +442,8 @@ output/iteration-1/
 ├── benchmark.json          # 聚合：双率 delta + comparisons + comparison_summary + analysis
 ├── report.html             # 自包含 HTML 报告（读 gate.json 显门禁徽章）
 ├── gate.json               # gate 命令产出（判决 + 两轴明细；非 run 产出）
-├── scorecard.json          # analyze -o 显式产出（run 不自动产）
-├── vet-report.json         # vet -o 显式产出（run 不自动产）
+├── scorecard.json          # run 末尾自动产（静态评分卡；也可 analyze -o 单独产）
+├── vet-report.json         # run 末尾自动产（原生安全扫描；也可 vet -o 单独产）
 └── with_skill/             # v1/v2 模式换成各自标签名
     └── eval-<id>/run-<n>/
         ├── outputs/        # Claude 产生的文件（skill references 已自动拷入）
@@ -491,7 +493,7 @@ PYEOF
 | calibration `agreement_rate` 为 null | 无双判数据（assertions 和 expectations 各评各的）；对关键产出补双判 |
 | calibration UNRELIABLE | 分歧较多，需人工复核 eval 设计 |
 | benchmark.json 缺失 | aggregation 失败，单独 `skill-eval report iteration-1/` |
-| report 面板空白 | 缺对应 JSON 文件，把 vet-report/scorecard 文件 cp 到 iteration-1/ |
+| report 评分卡/安全面板空 | run 默认已自动产；若空说明跑了 `--no-static`/`--no-vet` 或 analyze/vet 失败（run 会打 Warning，不阻断）|
 | batch 显示 0 skills | 输入不是 skills 目录或 manifest.json 格式不对 |
 | LLM 断言返回 "Not evaluated" | 自动重试（默认最多 2 次）；仍 UNEVAL 则标记 INDETERMINATE（报告里区分显示，不混成 FAIL） |
 | 单次运行方差大 | `--runs 1` 仅快速验证；推荐 `--runs 3` 启用异常检测和统计有效性 |

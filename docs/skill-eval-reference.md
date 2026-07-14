@@ -207,6 +207,8 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 | `--no-compliance` / `--compliance` | 自动 | 跳过/强制遵循性检查（默认自动：`--runs<3` 时开） |
 | `--no-calibration` | 关闭 | 跳过评分校准 |
 | `--security-gate` | 关闭 | 安全审查返回 BLOCKED / REVIEW_NEEDED 时判失败 |
+| `--no-static` | 关闭 | 跳过末尾自动产静态评分卡（默认产，写进 iteration-1/，供 report 评分卡面板） |
+| `--no-vet` | 关闭 | 跳过末尾自动产安全审查（默认产，写进 iteration-1/，供 report 安全面板） |
 | `--output` / `-o` | output/ | 输出目录 |
 | `--eval-samples` | 无 | 运行 eval 的数量或比例（如 `10` 或 `0.25`） |
 | `--format` | table | 输出格式：table / json |
@@ -237,8 +239,8 @@ output/iteration-1/
   without_skill/
     eval-<id>/run-1/ ...
   benchmark.json             ← 聚合结果(含 comparison_summary 盲评聚合)
-  scorecard.json
-  vet-report.json
+  scorecard.json             ← run 末尾自动产(静态评分卡;也可 analyze -o 单独产)
+  vet-report.json            ← run 末尾自动产(原生安全扫描;也可 vet -o 单独产)
   report.html
   gate.json                  ← 运行 gate 命令后产生(非 run 产出)
 ```
@@ -602,6 +604,8 @@ skill-eval batch-report batch-workspace/ --open
 | `benchmark.json` | 聚合结果（双率 delta + 盲比较 comparison_summary） |
 | `report.html` | 自包含 HTML 报告（读 gate.json 显门禁徽章） |
 | `gate.json` | `gate` 命令产出（非 run 产出）；判决 + 两轴明细 |
+| `scorecard.json` | run 末尾自动产（静态评分卡；也可 `analyze -o` 单独产） |
+| `vet-report.json` | run 末尾自动产（原生安全扫描；也可 `vet -o` 单独产） |
 | `with_skill/eval-<id>/run-1/grading.json` | expectations + assertions 的 pass/fail（双率） |
 | `with_skill/eval-<id>/run-1/compliance.json` | SKILL.md 指令遵循性（双率） |
 | `with_skill/eval-<id>/run-1/calibration.json` | 评分可信度校准 |
