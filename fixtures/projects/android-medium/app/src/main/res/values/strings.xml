@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">MediumApp</string>
-    <string name="welcome_message">Welcome back!</string>
-    <string name="login_title">Sign In</string>
-    <string name="hint_username">Username</string>
-    <string name="hint_password">Password</string>
-    <string name="btn_login">Login</string>
-</resources>

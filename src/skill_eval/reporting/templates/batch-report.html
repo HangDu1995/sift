@@ -91,12 +91,6 @@
     <div id="cascade-content"></div>
   </div>
 
-  <div class="card" id="integration-card" style="display:none;">
-    <h2>集成测试</h2>
-    <div id="integration-summary"></div>
-    <div id="integration-details"></div>
-  </div>
-
   <div class="card">
     <h2>各 Skill 详情</h2>
     <div id="drilldowns"></div>
@@ -107,7 +101,6 @@
 
     let allSkills = EMBEDDED_DATA.skills || [];
     let cascade = EMBEDDED_DATA.cascade || null;
-    let integration = EMBEDDED_DATA.integration || null;
 
     function init() {
       const batchName = EMBEDDED_DATA.manifest ? EMBEDDED_DATA.manifest.name : "batch";
@@ -125,7 +118,6 @@
       renderSummary();
       renderChart();
       renderCascade();
-      renderIntegration();
       renderDrilldowns();
     }
 
@@ -317,88 +309,6 @@
       }
       html += '</tbody></table>';
       document.getElementById("cascade-content").innerHTML = html;
-    }
-
-    function renderIntegration() {
-      const card = document.getElementById("integration-card");
-      if (!integration || !integration.scenarios || integration.scenarios.length === 0) return;
-
-      card.style.display = "block";
-
-      const summaryEl = document.getElementById("integration-summary");
-      summaryEl.innerHTML = '<div style="font-size:0.8rem;">' +
-        '<strong>' + integration.passed + '/' + integration.total + '</strong> 个场景通过' +
-        (integration.failed > 0 ? ' <span style="color:var(--red);">（' + integration.failed + ' 个失败）</span>' : ' <span style="color:var(--green);">✓</span>') +
-        '</div>';
-
-      const detailsEl = document.getElementById("integration-details");
-      let html = '<table style="margin-top:0.75rem;"><thead><tr><th>场景</th><th>类型</th><th>结果</th><th>详情</th></tr></thead><tbody>';
-
-      for (const sc of integration.scenarios) {
-        const icon = sc.passed ? "✓" : "✗";
-        const color = sc.passed ? "var(--green)" : "var(--red)";
-        const badge = sc.passed ? "badge-passed" : "badge-failed";
-        let detail = "";
-
-        if (sc.type === "routing" && sc.results) {
-          const total = sc.results.length;
-          const ok = sc.results.filter(r => r.correct).length;
-          detail = ok + '/' + total + ' 个提示词正确';
-        } else if (sc.type === "chain" && sc.steps) {
-          const ok = sc.steps.filter(s => s.status === "PASSED").length;
-          detail = ok + '/' + sc.steps.length + ' 个步骤通过';
-        } else if (sc.type === "contract" && sc.checks) {
-          const ok = sc.checks.filter(c => c.passed).length;
-          detail = ok + '/' + sc.checks.length + ' 个检查通过';
-          if (!sc.passed) {
-            const failed = sc.checks.filter(c => !c.passed);
-            detail += ' — ' + failed.map(c => c.evidence || c.type).join('; ');
-          }
-        }
-
-        html += '<tr>' +
-          '<td><strong>' + escapeHtml(sc.name || "?") + '</strong></td>' +
-          '<td>' + escapeHtml(sc.type || "?") + '</td>' +
-          '<td><span class="badge ' + badge + '">' + icon + '</span></td>' +
-          '<td style="font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(detail) + '</td>' +
-          '</tr>';
-      }
-
-      html += '</tbody></table>';
-
-      // Expanded routing details
-      for (const sc of integration.scenarios) {
-        if (sc.type === "routing" && sc.results) {
-          html += '<div style="margin-top:0.5rem;padding:0.5rem;background:var(--bg);border-radius:var(--radius);">';
-          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">路由：' + escapeHtml(sc.name) + '</div>';
-          html += '<table><thead><tr><th>提示词</th><th>实际触发</th><th>期望触发</th><th>正确</th></tr></thead><tbody>';
-          for (const r of sc.results) {
-            const ok = r.correct;
-            html += '<tr>' +
-              '<td style="font-size:0.75rem;">' + escapeHtml(r.prompt) + '</td>' +
-              '<td style="font-size:0.75rem;">' + (r.triggered || []).join(", ") || "—" + '</td>' +
-              '<td style="font-size:0.75rem;">' + (r.should_trigger || []).join(", ") || "—" + '</td>' +
-              '<td style="color:' + (ok ? "var(--green)" : "var(--red)") + ';">' + (ok ? "✓" : "✗") + '</td>' +
-              '</tr>';
-          }
-          html += '</tbody></table></div>';
-        }
-        if (sc.type === "contract" && sc.checks) {
-          html += '<div style="margin-top:0.5rem;padding:0.5rem;background:var(--bg);border-radius:var(--radius);">';
-          html += '<div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem;">契约：' + escapeHtml(sc.name) + '</div>';
-          html += '<div style="font-size:0.75rem;color:var(--text-muted);">生产者：' + escapeHtml(sc.producer || "?") + ' → 消费者：' + escapeHtml(sc.consumer || "?") + ' | 产物：' + escapeHtml(sc.artifact || "?") + '</div>';
-          for (const c of sc.checks) {
-            const ok = c.passed;
-            html += '<div style="font-size:0.75rem;margin-top:0.15rem;">' +
-              '<span style="color:' + (ok ? "var(--green)" : "var(--red)") + ';">' + (ok ? "✓" : "✗") + '</span> ' +
-              escapeHtml(c.type) + (c.evidence ? ' — ' + escapeHtml(c.evidence) : '') +
-              '</div>';
-          }
-          html += '</div>';
-        }
-      }
-
-      detailsEl.innerHTML = html;
     }
 
     function renderDrilldowns() {

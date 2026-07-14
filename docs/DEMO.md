@@ -229,7 +229,7 @@ FAIL: description_length, description_has_trigger,
 三个正常 Skill 的 DAG：
 
 ```bash
-skill-eval batch fixtures/test-skills/manifest.json --runs 1 --layers unit
+skill-eval batch fixtures/test-skills/manifest.json --runs 1
 ```
 
 按 DAG 顺序依次评测 data-validator → data-transform → report-generator。
