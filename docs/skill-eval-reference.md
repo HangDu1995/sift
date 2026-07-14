@@ -281,6 +281,8 @@ skill-eval gate output/iteration-1/benchmark.json --no-programmatic-guard --min-
 
 > 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行（`[k/总] 判定{条件性/禁令/步骤}(n 条)…` → `完成 ⏱ Xs`）。**两种失败都有信号**：① 调用失败打 `失败: <原因>(整批兜底 N/A)`（超时 / 退出码 / 限流）；② 调用成功但整批 0 条解析成功（LLM 输出畸形/截断）打 `⚠ … 0 条解析成功 … 全兜底 N/A`——后者原是静默盲点（看着"完成"却全 N/A），现在可见了，据此判断是不是后端抖、该重跑。看到 `[k/总] …` 滚动就是在跑，别误以为卡死。
 
+> 三个 LLM 类别判定器（条件性/禁令/步骤）**并发跑**（`max_workers=3` = 类别数 = 实测安全并发），墙钟约 **2× 提速**（串行 13+51+37=101s → 并发 ≈51s）。副作用：三类的 `[k/总]` 进度行会**交错**出现（各自带类别标签，不影响可读）；输出格式判定器是确定性子串匹配（无 LLM），不走并发。
+
 ```bash
 skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out/
 skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl --format json

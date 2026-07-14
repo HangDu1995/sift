@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
 
@@ -77,6 +78,9 @@ _SCENE_TRUNCATE = 8000
 # 重试只针对 RuntimeError(语义错误重试无益,且 call_claude 也只抛这一种)。
 _LLM_RETRY_MAX = 2
 _LLM_RETRY_DELAY = 3.0
+# 三个 LLM 判定器(条件性/禁令/步骤)并发上限。= 类别数 = 实测安全并发(1/2/3 档全 0 失败),
+# 既是全类别并发的最优值、又天然有界(再高也无更多类别可并发)。非魔法数、无需调参。
+_MAX_CONCURRENT = 3
 
 # 进度回调类型:audit 每批 LLM 判定 40-257s,全程静默对用户极不友好。核心只 emit 字符串,
 # 由 CLI 层(传 console.print)/测试层(传 list.append)决定如何呈现,producer/consumer 分离。
@@ -203,19 +207,28 @@ class TranscriptAuditor:
 
             scene = "\n".join(digest.user_turns)
 
-            findings: list[AuditFinding] = []
-            findings += self._judge_conditional(
-                buckets[AuditCategory.CONDITIONAL], tool_trace, scene, tp.name, model, timeout,
-                on_progress=on_progress,
-            )
-            findings += self._judge_prohibition(
-                buckets[AuditCategory.PROHIBITION], transcript_text, tp.name, model, timeout,
-                on_progress=on_progress,
-            )
-            findings += self._judge_step(
-                buckets[AuditCategory.STEP], transcript_text, tp.name, model, timeout,
-                tool_trace=tool_trace, on_progress=on_progress,
-            )
+            # 三个 LLM 判定器(条件性/禁令/步骤)互相独立、无共享可变状态,并发跑省墙钟
+            # (实测 zh:串行 13+51+37=101s → 并发 ≈ max=51s,约 2×)。max_workers=3 =
+            # 类别数 = 实测安全并发(3 档全 0 失败),天然有界、非魔法数。输出格式判定器
+            # 是确定性子串匹配(无 LLM),留主线程不占池位。on_progress(console.print)
+            # 线程安全,三类 [k/总] 交错可读。
+            with ThreadPoolExecutor(max_workers=_MAX_CONCURRENT) as pool:
+                fut_cond = pool.submit(
+                    self._judge_conditional, buckets[AuditCategory.CONDITIONAL],
+                    tool_trace, scene, tp.name, model, timeout, on_progress=on_progress,
+                )
+                fut_proh = pool.submit(
+                    self._judge_prohibition, buckets[AuditCategory.PROHIBITION],
+                    transcript_text, tp.name, model, timeout, on_progress=on_progress,
+                )
+                fut_step = pool.submit(
+                    self._judge_step, buckets[AuditCategory.STEP], transcript_text,
+                    tp.name, model, timeout, tool_trace=tool_trace, on_progress=on_progress,
+                )
+                findings: list[AuditFinding] = []
+                findings += fut_cond.result()
+                findings += fut_proh.result()
+                findings += fut_step.result()
             findings += self._judge_output(
                 buckets[AuditCategory.OUTPUT], transcript_text, tp.name
             )
