@@ -122,24 +122,28 @@ def _judge_batch_with_retry(
     重试上限 _LLM_RETRY_MAX,线性退避(_LLM_RETRY_DELAY × 尝试序号)。成功返回 parse_fn
     结果;重试耗尽返回 _RETRY_EXHAUSTED(调用方保留预置全 N/A 兜底,audit 汇总"未判定"警告)。
     """
+    # 进度前缀:类别名前置、括号化(三类并发交错时一眼分清哪条是哪类);单批不显 [k/总]
+    # (恒 [1/1] 是噪声、看着像坏掉的计数器),多批才带 "批 k/total"。
+    batch_tag = f" 批 {k}/{total}" if total > 1 else ""
+    prefix = f"[{label}]{batch_tag}"
     for attempt in range(_LLM_RETRY_MAX + 1):
         if attempt > 0:
             time.sleep(_LLM_RETRY_DELAY * attempt)
-            _emit(on_progress, f"  [{k}/{total}] {label} 重试 {attempt}/{_LLM_RETRY_MAX}…")
-        _emit(on_progress, f"  [{k}/{total}] {label}({bn} 条)…")
+            _emit(on_progress, f"  {prefix} 重试 {attempt}/{_LLM_RETRY_MAX}…")
+        _emit(on_progress, f"  {prefix} 判定 {bn} 条…")
         t0 = time.monotonic()
         try:
             result_text = call_claude(prompt, model=model, timeout=timeout, max_turns=1)
         except RuntimeError as exc:
-            _emit(on_progress, f"  [{k}/{total}] {label} 调用失败: {str(exc)[:120]}")
+            _emit(on_progress, f"  {prefix} 调用失败: {str(exc)[:120]}")
             continue
-        _emit(on_progress, f"  [{k}/{total}] {label} 完成 ⏱ {time.monotonic() - t0:.0f}s")
+        _emit(on_progress, f"  {prefix} 完成 ⏱ {time.monotonic() - t0:.0f}s")
         parsed = parse_fn(result_text, bn)
         if bn and all(is_unparsed(v) for v in parsed):
-            _emit(on_progress, f"  [{k}/{total}] ⚠ {label} 0 条解析成功(LLM 输出畸形/截断?),重试…")
+            _emit(on_progress, f"  {prefix} ⚠ 0 条解析成功(LLM 输出畸形/截断?),重试…")
             continue
         return parsed
-    _emit(on_progress, f"  [{k}/{total}] {label} 重试耗尽 → 本批 {bn} 条全兜底 N/A")
+    _emit(on_progress, f"  {prefix} 重试耗尽 → 本批 {bn} 条全兜底 N/A")
     return _RETRY_EXHAUSTED
 
 

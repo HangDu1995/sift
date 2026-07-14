@@ -1050,11 +1050,12 @@ class TestProgressCallback:
 
     契约:audit() / _judge_conditional / _judge_prohibition / _judge_step 接可选
     on_progress(str)->None,默认 None(核心不耦合 I/O)。进 transcript 打头;每个 LLM
-    批调用前后各打一行([k/总] + 类别标签 + 完成耗时)。on_progress=None 时行为与旧版一致。
+    批前后各打一行——类别名前置括号化([类别],三类并发交错可分清)、单批不显序号、
+    多批显 "批 k/总"、+ 完成耗时。on_progress=None 时行为与旧版一致。
     """
 
     def test_conditional_judge_emits_per_batch_progress(self, monkeypatch) -> None:
-        """未命中走 LLM → on_progress 收到 [1/1] 条件性批 + 完成耗时行。"""
+        """未命中走 LLM → on_progress 收到 [条件性] 批 + 完成耗时行(单批不显 [1/1])。"""
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "applicable": false}]',
@@ -1065,12 +1066,12 @@ class TestProgressCallback:
             [_tool_inst()], [], "某场景", "t.jsonl", on_progress=msgs.append,
         )
         flat = " ".join(msgs)
-        assert "条件性" in flat
-        assert "[1/1]" in flat
+        assert "[条件性]" in flat  # 类别名前置括号化(三类并发交错可分清)
+        assert "[1/1]" not in flat  # 单批不显 [k/总](原 [1/1] 是噪声)
         assert "⏱" in flat  # 完成耗时行
 
     def test_conditional_multi_batch_progress_indexed(self, monkeypatch) -> None:
-        """>_MAX_LLM_IN_BATCH(12 条)→ 分 2 批,on_progress 标 [1/2] 与 [2/2]。"""
+        """>_MAX_LLM_IN_BATCH(12 条)→ 分 2 批,on_progress 标 "批 1/2" 与 "批 2/2"。"""
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude",
             lambda *a, **k: json.dumps(
@@ -1083,11 +1084,11 @@ class TestProgressCallback:
             [_tool_inst()] * 12, [], "场景", "t.jsonl", on_progress=msgs.append,
         )
         flat = " ".join(msgs)
-        assert "[1/2]" in flat
-        assert "[2/2]" in flat
+        assert "批 1/2" in flat
+        assert "批 2/2" in flat
 
     def test_prohibition_judge_emits_progress(self, monkeypatch) -> None:
-        """禁令批 → on_progress 含 '禁令' 标签 + [1/1] + ⏱。"""
+        """禁令批 → on_progress 含 [禁令] 标签 + ⏱(单批不显 [1/1])。"""
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "violated": false, "evidence": "未违反"}]',
@@ -1098,12 +1099,12 @@ class TestProgressCallback:
             [_prohibition_inst()], "执行记录", "t.jsonl", on_progress=msgs.append,
         )
         flat = " ".join(msgs)
-        assert "禁令" in flat
-        assert "[1/1]" in flat
+        assert "[禁令]" in flat
+        assert "[1/1]" not in flat
         assert "⏱" in flat
 
     def test_step_judge_emits_progress(self, monkeypatch) -> None:
-        """步骤批 → on_progress 含 '步骤' 标签 + [1/1] + ⏱。"""
+        """步骤批 → on_progress 含 [步骤] 标签 + ⏱(单批不显 [1/1])。"""
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "verdict": "pass", "evidence": "走过"}]',
@@ -1114,8 +1115,8 @@ class TestProgressCallback:
             [_step_inst()], "执行记录", "t.jsonl", on_progress=msgs.append,
         )
         flat = " ".join(msgs)
-        assert "步骤" in flat
-        assert "[1/1]" in flat
+        assert "[步骤]" in flat
+        assert "[1/1]" not in flat
         assert "⏱" in flat
 
     def test_empty_bucket_does_not_call_progress(self, monkeypatch) -> None:

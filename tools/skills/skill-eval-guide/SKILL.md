@@ -273,7 +273,7 @@ skill-eval gate out/iteration-1/benchmark.json --no-programmatic-guard --min-win
 
 把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。**不 re-run**，直接对账历史执行。
 
-> 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行（`[k/总] 判定{条件性/禁令/步骤}(n 条)…` → `完成 ⏱ Xs`）。两种失败（调用失败 / 0 条解析成功）都先自动重试最多 2 次再兜底 N/A，重试打 `重试 n/2…`、耗尽打 `重试耗尽`。三个 LLM 类别判定器并发跑（max_workers=3），约 2× 提速，三类的 `[k/总]` 进度行会交错。看到 `[k/总] …` 滚动就是在跑。
+> 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行——`[条件性/禁令/步骤] 判定 N 条…` → `[条件性/禁令/步骤] 完成 ⏱ Xs`（类别名打头；>10 条分批才显 `批 k/总`）。两种失败（调用失败 / 0 条解析成功）都先自动重试最多 2 次再兜底 N/A，重试打 `重试 n/2…`、耗尽打 `重试耗尽`。三个 LLM 类别判定器并发跑（max_workers=3），约 2× 提速，进度行交错但每行 `[类别]` 打头、一眼分清。看到 `[条件性/禁令/步骤] …` 滚动就是在跑。
 
 ```bash
 skill-eval audit /path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out/
