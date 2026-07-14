@@ -145,7 +145,7 @@ skill-eval analyze /path/to/skill                       # 表格（默认不落�
 skill-eval analyze /path/to/skill --format json -o scorecard.json
 ```
 
-11 项检查（描述质量 / 命名规范 / 行数 / 示例 / 反捏造等），**零 API 成本，<1s**。输出 scorecard（`pass_count / max_score`）。`score < max_score` → exit 1。
+11 项检查（描述质量 / 命名规范 / 行数 / 示例 / 反捏造等），**零 API 成本，<1s**。输出 scorecard（`score / max_score`）。`score < max_score` → exit 1。
 
 ### `init` — 生成 evals.json
 
@@ -466,7 +466,7 @@ for f in ['benchmark.json','report.html']:
 if (it/'gate.json').exists():
     g=json.load(open(it/'gate.json')); print(f'gate: {g["decision"]}')
 if (it/'scorecard.json').exists():
-    s=json.load(open(it/'scorecard.json')); print(f'scorecard: {s.get("pass_count")}/{s.get("max_score")}')
+    s=json.load(open(it/'scorecard.json')); print(f'scorecard: {s.get("score")}/{s.get("max_score")}')
 if (it/'vet-report.json').exists():
     v=json.load(open(it/'vet-report.json')); print(f'vet: {v["verdict"]}')
 if (it/'benchmark.json').exists():

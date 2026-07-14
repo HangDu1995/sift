@@ -118,7 +118,7 @@ skill-eval add pdf/ --idea "..." --dry-run
 
 ### `analyze` — 静态分析
 
-11 项自动化体检，**零 API 成本，<1s 完成**。输出 scorecard（`pass_count / max_score`）。
+11 项自动化体检，**零 API 成本，<1s 完成**。输出 scorecard（`score / max_score`）。
 
 ```bash
 skill-eval analyze path/to/skill/                  # 表格（默认不落盘，-o 写文件）
