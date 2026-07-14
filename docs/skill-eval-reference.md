@@ -311,13 +311,13 @@ skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl --form
 
 > **禁令判的角度反着来**：其它三类问“该不该做 / 做没做”（正面遵循），禁令问“这次执行里有没有发生**违反**这条禁令的行为”——主动找违规。例：`NEVER delete production data`、`不得编造不存在的错误码`（模型 hallucinate 一个码 → `violated=true` → FAIL）。
 
-> **判不准不乱报**：三类 LLM 判定（条件性 / 禁令 / 步骤）在 LLM 失败 / 解析失败 / 未提及时一律报 **N/A**（低置信度），**不保守 FAIL**——FAIL 只留给 LLM 明确判“违反 / 该做没做”。N/A 多了 audit 会汇总成警告提示重跑，别误读“0 FAIL = 全过”。
+> **判不准不乱报**：三类 LLM 判定（条件性 / 禁令 / 步骤）在 LLM 失败 / 解析失败 / 未提及时一律报 **N/A**（标 `⚠ 判不准`），**不保守 FAIL**——FAIL 只留给 LLM 明确判“违反 / 该做没做”。**何时提示“建议重跑”**：`⚠ 判不准` 条数 > 0 时，audit 在报告顶部出警告（`X 条指令因 LLM 判定失败标为 N/A，本次结果可能不完整，建议重跑`）。**重跑 = 重跑同一条 `audit` 命令**（纯对账、无副作用，不 re-run）；这些失败多为瞬态（LLM 后端失败 / 限流 / 输出截断，retry 没救回才落到这），重跑常能救回。不重跑则那些条没判成、可能漏掉真违规，故 **“0 FAIL ≠ 全过”**——看警告里 N/A 是不是 0、findings 里有没有 `⚠ 判不准` 标签。
 
 产出 `<out>/audit-report.json`（机器读）+ `<out>/audit-report.html`（人读，**always 写**，与 JSON 并列，对齐 scoring report 视觉）。HTML 自上而下：① 头部（skill / summary 计数徽章 / 反推指令数）② 警告框（可信度，低置信 N/A 等）③ 系统性聚合表（**仅多 transcript**，跨会话 fail% + fail in transcripts）④ findings 全集（**含 PASS**，每条带 evidence / confidence / verdict 徽章 / category / source；多 transcript 按指令分组可折叠，FAIL/N/A 默认展开）。
 
 > **「X 条由 transcript 反推」是什么**：findings 里 `derived_from_transcript: true` 的不是 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（只增不减）。v1 只补一类：transcript 里 agent 真实 Read 过的输入/参考文件（`digest.input_files`）→ 各补一条「读取 \<path\>」（REFERENCE_USAGE）。例：SKILL.md 只写"读用户指定的日志文件"不点名，transcript 实际读了 `app.log` → 反推一条「读取 app.log」并确认命中。这类由 Read 行为反推的 read 检查构造上即 PASS（不膨胀 fail），作用是把 agent 真碰过的输入文件记进报告。`required_tools`（Bash 命令分不清业务/通用）、`required_outputs`（历史 trace 产物未必还在盘）不反推。
 
-> **怎么看结果（别只数 fail）**：每条 finding 带 **#N 序号**。① **同文重复已去重**——同句被抽成 `CONSTRAINT` + `ANTI_FABRICATION` 的合并成一条、来源徽章显 `CONSTRAINT + ANTI_FABRICATION`（不再虚增 fail）。② **同行为跨类已关联**——同一行为（如没读某 reference）同时违反 条件性 + 步骤 两条**不同**规则的，仍是两条（确是两条规则），但互标 `↔ 同源违规 #N`（可点跳）；故 fail 条数仍可能 > 真实问题数，**逐条看 evidence 对照"哪个行为"**，别数条数。③ **N/A 多 ≠ 全过**——三类 LLM 判定低置信一律 N/A（见上），汇总成警告提示重跑。④ **对照预期**：自带 3 个 audit 示例的预期违规已逐条列明（见 [example-skills/README.md](../fixtures/example-skills/README.md)），跑完比对该抓的违规是否都出现在 FAIL、evidence 是否点中。
+> **怎么看结果（别只数 fail）**：每条 finding 带 **#N 序号**。① **同文重复已去重**——同句被抽成 `CONSTRAINT` + `ANTI_FABRICATION` 的合并成一条、来源徽章显 `CONSTRAINT + ANTI_FABRICATION`（不再虚增 fail）。② **同行为跨类已关联**——同一行为（如没读某 reference）同时违反 条件性 + 步骤 两条**不同**规则的，仍是两条（确是两条规则），但互标 `↔ 同源违规 #N`（可点跳）；故 fail 条数仍可能 > 真实问题数，**逐条看 evidence 对照"哪个行为"**，别数条数。③ **N/A 多 ≠ 全过**——三类 LLM 判定低置信一律 N/A（见上），汇总成警告提示重跑。④ **对照预期**：自带 3 个 audit 示例的预期违规已逐条列明（见 [example-skills/README.md](../fixtures/example-skills/README.md)），跑完比对该抓的违规是否都出现在 FAIL、evidence 是否点中。⑤ **置信度标签**（每条右侧，悬停看原值+由来）：`✓ 确定`=程序对账（tool_trace 命中 / 子串匹配，不调 LLM，最硬）、`LLM 判定`=LLM 明确结论、`⚠ 判不准`=没判成（N/A、结果不完整，汇总进警告）。
 
 ### `report` — HTML 报告
 

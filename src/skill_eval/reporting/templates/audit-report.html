@@ -84,7 +84,9 @@
     .instruction { font-weight: 600; margin: 0.25rem 0; }
     .evidence { color: var(--text-muted); font-size: 0.9rem; margin: 0.25rem 0; }
     .transcript { color: var(--text-muted); font-size: 0.8rem; }
-    .low-conf { color: var(--red); font-size: 0.8em; }
+    .finding-head .conf-ok { color: var(--green); }
+    .finding-head .conf-llm { color: var(--text-muted); }
+    .finding-head .conf-bad { color: var(--red); font-weight: 600; }
     .warnings { background: var(--red-bg); border: 1px solid var(--red); border-radius: var(--radius); padding: 0.75rem 1rem; }
     .warnings ul { margin-top: 0.25rem; padding-left: 1.25rem; }
     .warnings li { color: var(--text); margin: 0.15rem 0; }
@@ -117,11 +119,19 @@
         });
       }
 
+      // confidence 三档 → 人话标签(替代裸数字 1.0/0.8/0.3):程序对账=✓ 确定、LLM 明确=LLM 判定、
+      // 判不准=⚠ 判不准(对应 verdict N/A,audit 汇总成"未判定"警告)。原值 + 由来进 title 悬停说明。
+      function confTag(c) {
+        if (typeof c !== 'number') return '<span class="conf" title="无置信度">—</span>';
+        if (c >= 1.0) return '<span class="conf conf-ok" title="confidence 1.0 · 程序对账(tool_trace 命中 / 子串匹配),不调 LLM">✓ 确定</span>';
+        if (c >= 0.8) return '<span class="conf conf-llm" title="confidence 0.8 · LLM 给出明确结论">LLM 判定</span>';
+        return '<span class="conf conf-bad" title="confidence 0.3 · 判定失败 / 未提及,本条结果不完整、建议重跑">⚠ 判不准</span>';
+      }
+
       // 单个 finding 的内层 HTML(finding-head + instruction + evidence + transcript)。多/单分支共用,DRY。
       function renderFinding(f) {
         var cls = f.verdict === 'PASS' ? 'badge-pass' : (f.verdict === 'FAIL' ? 'badge-fail' : 'badge-na');
         var icon = f.verdict === 'PASS' ? '✓' : (f.verdict === 'FAIL' ? '✗' : '❓');
-        var lowConf = (typeof f.confidence === 'number' && f.confidence <= 0.3) ? ' <span class="low-conf">低置信</span>' : '';
         var derived = f.derived_from_transcript ? ' <span class="derived">↺ 反推</span>' : '';
         var seqTag = f.seq ? '<span class="seq">#' + escapeHtml(f.seq) + '</span>' : '';
         // 来源徽章:同文去重后多来源用 " + " 连(已排序);单来源原样。sources 空则退回 source。
@@ -136,8 +146,8 @@
         return '<div class="finding-head"><span class="' + cls + '">' + icon + ' ' + escapeHtml(f.verdict) + '</span>' +
           seqTag +
           '<span class="cat">' + escapeHtml(f.category || '') + '</span>' +
-          srcTag + derived + lowConf + related +
-          '<span class="conf">置信 ' + (f.confidence != null ? f.confidence : '—') + '</span></div>' +
+          srcTag + derived + related +
+          confTag(f.confidence) + '</div>' +
           '<div class="instruction">' + escapeHtml(f.instruction_text || '') + '</div>' +
           '<div class="evidence">' + escapeHtml(f.evidence || '') + '</div>' +
           '<div class="transcript">@ ' + escapeHtml(f.transcript || '') + '</div>';
