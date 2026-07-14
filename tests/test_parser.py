@@ -5,8 +5,34 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 
-from skill_eval.parser import parse_skill_md
+from skill_eval.parser import parse_skill_md, resolve_skill_dir
 from skill_eval.errors import SkillParseError
+
+
+def test_resolve_skill_dir_directory(tmp_path: Path):
+    """传目录 → 原样返回。"""
+    assert resolve_skill_dir(tmp_path) == tmp_path
+
+
+def test_resolve_skill_dir_skill_md_file(tmp_path: Path):
+    """传 SKILL.md 文件 → 返回其父目录(规范化)。"""
+    (tmp_path / "SKILL.md").write_text("---\nname: x\ndescription: y\n---\nbody", encoding="utf-8")
+    assert resolve_skill_dir(tmp_path / "SKILL.md") == tmp_path
+
+
+def test_resolve_skill_dir_nonexistent_passthrough(tmp_path: Path):
+    """不存在的路径(非文件)→ 原样,交给下游报 not found。"""
+    ghost = tmp_path / "nope"
+    assert resolve_skill_dir(ghost) == ghost
+
+
+def test_parse_skill_md_accepts_skill_md_file(tmp_path: Path):
+    """parse_skill_md 接受 SKILL.md 文件路径(内部规范化取父目录),不只目录。"""
+    (tmp_path / "SKILL.md").write_text(
+        "---\nname: filearg\ndescription: does thing\n---\nbody", encoding="utf-8"
+    )
+    name, *_ = parse_skill_md(tmp_path / "SKILL.md")
+    assert name == "filearg"
 
 
 def test_parse_skill_md_success(sample_skill_path: Path):

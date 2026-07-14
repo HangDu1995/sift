@@ -10,6 +10,7 @@ from rich.table import Table
 from skill_eval.cli.main import app, console
 from skill_eval.errors import SkillEvalError
 from skill_eval.models import AnalysisReport
+from skill_eval.parser import resolve_skill_dir
 from skill_eval.static_analysis.analyzer import StaticAnalyzer
 
 
@@ -20,6 +21,7 @@ def analyze(
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path"),
 ):
     """Run static analysis on a Skill and output a scorecard."""
+    skill_path = resolve_skill_dir(skill_path)
     try:
         analyzer = StaticAnalyzer()
         report: AnalysisReport = analyzer.analyze(skill_path)

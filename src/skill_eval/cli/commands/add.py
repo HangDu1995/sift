@@ -12,7 +12,7 @@ from skill_eval.cli.helpers import _check_claude_or_exit, _discover_evals
 from skill_eval.cli.main import app, console
 from skill_eval.errors import SkillEvalError
 from skill_eval.models import EvalCase, EvalSet
-from skill_eval.parser import parse_skill_md
+from skill_eval.parser import parse_skill_md, resolve_skill_dir
 from skill_eval.utils import call_claude
 
 
@@ -36,6 +36,7 @@ def add(
       skill-eval add pdf/ --idea "test encrypted PDF decryption"
       skill-eval add pdf/ --prompt "Decrypt secret.pdf" --expectation "produces output.pdf" --level L2
     """
+    skill_path = resolve_skill_dir(skill_path)
     evals_path = _discover_evals(skill_path)
     if not evals_path:
         console.print("[red]Error:[/red] no evals.json found. Run `skill-eval init` first.")

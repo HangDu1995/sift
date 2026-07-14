@@ -14,7 +14,7 @@ from skill_eval.cli.pipeline import _run_ab_eval
 from skill_eval.env_check import check_skill_env, check_eval_env
 from skill_eval.errors import SkillEvalError
 from skill_eval.evals.baseline import skill_name_mismatch
-from skill_eval.parser import parse_skill_md
+from skill_eval.parser import parse_skill_md, resolve_skill_dir
 
 
 def _format_run_summary(run_debug: dict) -> str:
@@ -106,6 +106,7 @@ def run(
     label_b: Optional[str] = typer.Option(None, "--label-b", help="v1/v2 模式 side B 显示标签(默认 skill 目录 basename)"),
 ):
     """Run A/B evaluation of a Skill, or path-1 live task (--task)."""
+    skill_path = resolve_skill_dir(skill_path)
     from skill_eval.evals.loader import EvalLoader
     _check_claude_or_exit()
 

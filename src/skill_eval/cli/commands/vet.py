@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from skill_eval.cli.main import app, console
+from skill_eval.parser import resolve_skill_dir
 
 
 def _render_security_report(report, console: Console) -> None:
@@ -51,6 +52,7 @@ def vet(
     skip_external: bool = typer.Option(False, "--skip-external", help="Skip external scanners (aguara, skill-scanner)"),
 ):
     """Run security vetting on a Skill."""
+    skill_path = resolve_skill_dir(skill_path)
     from skill_eval.security.vetter import SecurityVetter
 
     try:

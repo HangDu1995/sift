@@ -6,13 +6,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from skill_eval.models import AnalysisReport, CheckResult, SkillCategory
-from skill_eval.parser import parse_skill_md
+from skill_eval.parser import parse_skill_md, resolve_skill_dir
 from skill_eval.static_analysis.checks import ALL_CHECKS
 from skill_eval.static_analysis.classifier import classify_skill
 
 
 class StaticAnalyzer:
     def analyze(self, skill_path: Path) -> AnalysisReport:
+        skill_path = resolve_skill_dir(skill_path)
         name, description, content, frontmatter, body = parse_skill_md(skill_path)
 
         checks: list[CheckResult] = []

@@ -23,7 +23,7 @@ from skill_eval.audit.auditor import TranscriptAuditor
 from skill_eval.cli.main import app, console
 from skill_eval.errors import SkillEvalError
 from skill_eval.models.audit_models import AuditVerdict
-from skill_eval.parser import parse_skill_md
+from skill_eval.parser import parse_skill_md, resolve_skill_dir
 
 _TRUNCATE_WIDTH = 60
 
@@ -52,6 +52,7 @@ def audit(
     ),
 ):
     """Audit real session transcript(s) against SKILL.md(不 re-run,直接对账真实历史执行)。"""
+    skill_path = resolve_skill_dir(skill_path)
     try:
         name, _desc, _content, _frontmatter, body = parse_skill_md(skill_path)
         report = TranscriptAuditor().audit(name, body, transcript, model=model)

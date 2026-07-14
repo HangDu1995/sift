@@ -8,6 +8,7 @@ import typer
 
 from skill_eval.cli.main import app, console
 from skill_eval.errors import SkillEvalError
+from skill_eval.parser import resolve_skill_dir
 
 
 @app.command()
@@ -26,6 +27,7 @@ def init(
     
     Generates L1 unit test cases from SKILL.md content.
     """
+    skill_path = resolve_skill_dir(skill_path)
     from skill_eval.evals.generator import EvalInitGenerator
 
     try:

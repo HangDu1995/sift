@@ -188,6 +188,40 @@ class TestStaticAnalyzer:
         assert report.skill_name == "minimal"
         assert report.score < report.max_score
 
+    def test_analyze_skill_md_file_sees_reference_depth(self, tmp_path: Path):
+        """传 SKILL.md 文件路径跑 analyze:reference_depth 必须真看到同级 references/(防假阳性)。
+
+        陷阱:若 skill_path 没规范化,reference_depth 会拿到文件路径 → 找
+        `SKILL.md/references`(不存在)→ 假阳性 "No references/ directory (OK)"。
+        此测试守这个边界:扁平 references/ 应报 "flat",而非 "No references"。
+        """
+        (tmp_path / "SKILL.md").write_text(
+            "---\nname: refskill\ndescription: Does useful thing\n---\n\nBody with example.\n",
+            encoding="utf-8",
+        )
+        ref = tmp_path / "references"
+        ref.mkdir()
+        (ref / "guide.md").write_text("guide", encoding="utf-8")  # 扁平
+
+        report = StaticAnalyzer().analyze(tmp_path / "SKILL.md")  # 传文件,不是目录
+        ref_check = next(c for c in report.checks if c.name == "reference_depth")
+        assert ref_check.passed
+        assert "flat" in ref_check.message               # 真看到了 references/
+        assert "No references" not in ref_check.message  # 不是假阳性
+
+    def test_analyze_skill_md_file_detects_nested_references(self, tmp_path: Path):
+        """传 SKILL.md 文件:references/ 嵌套时 reference_depth 应 FAIL(证明用对路径)。"""
+        (tmp_path / "SKILL.md").write_text(
+            "---\nname: refskill\ndescription: Does useful thing\n---\n\nBody with example.\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "references" / "sub").mkdir(parents=True)  # 嵌套
+
+        report = StaticAnalyzer().analyze(tmp_path / "SKILL.md")
+        ref_check = next(c for c in report.checks if c.name == "reference_depth")
+        assert not ref_check.passed                       # 检测到嵌套
+        assert "subdirectory" in ref_check.message
+
 
 class TestIndividualChecksChinese:
     """中文 SKILL.md 的静态检查(P1-3:补中文关键词后不误报)."""
