@@ -32,11 +32,14 @@ def inspect_evals(eval_set: EvalSet) -> dict[str, Any]:
         lv = e.level or "?"
         levels[lv] = levels.get(lv, 0) + 1
 
-    degraded = [e.get_name() for e in evals
+    def _label(e):
+        return f"{e.get_name()} (id={e.id})"  # name + id,problem 定位用
+
+    degraded = [_label(e) for e in evals
                 if any(str(f).startswith("degraded:") for f in (e.flags or []))]
-    zero_validation = [e.get_name() for e in evals if not e.assertions and not e.expectations]
+    zero_validation = [_label(e) for e in evals if not e.assertions and not e.expectations]
     # 零程序化:有校验(assertion 或 expectation)但无任何程序化断言 → 纯主观
-    zero_programmatic = [e.get_name() for e in evals
+    zero_programmatic = [_label(e) for e in evals
                          if (e.assertions or e.expectations)
                          and not any(a.type in PROGRAMMATIC_TYPES for a in e.assertions)]
 

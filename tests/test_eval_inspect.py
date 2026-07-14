@@ -39,9 +39,16 @@ def test_flags_degraded_zero_validation_zero_programmatic():
     only_llm = EvalCase(id=3, prompt="p", expectations=["e"], assertions=[Assertion(name="a", type=AssertionType.LLM_FACT)])  # 纯主观
     only_exp = EvalCase(id=4, prompt="p", expectations=["e"])  # 仅 expectation → 零程序化
     r = inspect_evals(_set([degraded, zero_val, only_llm, only_exp]))
-    assert r["problems"]["degraded"] == ["eval-1"]
-    assert r["problems"]["zero_validation"] == ["eval-2"]
-    assert set(r["problems"]["zero_programmatic"]) == {"eval-3", "eval-4"}  # 纯 LLM 断言 + 仅 expectation 都算零程序化
+    assert r["problems"]["degraded"] == ["eval-1 (id=1)"]
+    assert r["problems"]["zero_validation"] == ["eval-2 (id=2)"]
+    assert set(r["problems"]["zero_programmatic"]) == {"eval-3 (id=3)", "eval-4 (id=4)"}  # label 带 id 便于定位
+
+
+def test_problem_label_includes_name_and_id():
+    # 有 name 的 eval:problem label = "name (id=N)",兼顾可读 + 精确定位
+    e = EvalCase(id=5, name="L1-概念题", prompt="p", expectations=["e"])  # 仅 expectation → 零程序化
+    r = inspect_evals(_set([e]))
+    assert r["problems"]["zero_programmatic"] == ["L1-概念题 (id=5)"]
 
 
 def test_empty_set():
