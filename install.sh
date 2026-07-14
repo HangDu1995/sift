@@ -14,9 +14,39 @@ if [ ! -f pyproject.toml ]; then
     cd /tmp/skill-eval
 fi
 
-pip install -e . -q
+ROOT="$(pwd)"
 
-echo "  skill-eval $(skill-eval --version) installed"
+# 选解释器:优先复用 repo 内已有的 .venv;否则用系统 python。
+# 系统 python 若 externally-managed(Debian/Ubuntu/WSL2 的 PEP 668,禁止裸 pip)→
+# 自动建隔离 .venv,避免污染系统 Python。mac / python.org / conda 等无此标记则直接系统装。
+if [ -x "$ROOT/.venv/bin/python" ]; then
+    PY="$ROOT/.venv/bin/python"
+    echo "  Reusing existing venv: $PY"
+else
+    SYS_PY="${PYTHON:-$(command -v python3 || command -v python)}"
+    # PEP 668 检测:标记文件在 stdlib 目录里(Debian/Ubuntu/WSL2: /usr/lib/python3.x/EXTERNALLY-MANAGED)
+    if "$SYS_PY" -c 'import sysconfig,os,sys;s=sysconfig.get_paths();p=os.path.join(s["stdlib"],"EXTERNALLY-MANAGED");sys.exit(0 if os.path.exists(p) else 1)' 2>/dev/null; then
+        echo "  System Python is externally-managed (PEP 668); creating isolated venv..."
+        "$SYS_PY" -m venv "$ROOT/.venv"
+        PY="$ROOT/.venv/bin/python"
+        "$PY" -m pip install -q --upgrade pip
+    else
+        PY="$SYS_PY"
+    fi
+fi
+
+"$PY" -m pip install -e . -q
+
+# 让 `skill-eval` 裸名可调:软链 entry point 到 ~/.local/bin(终端 + agent 都能直接敲)
+LOCAL_BIN="${HOME}/.local/bin"
+mkdir -p "$LOCAL_BIN"
+ln -sf "$(dirname "$PY")/skill-eval" "$LOCAL_BIN/skill-eval"
+case ":$PATH:" in
+    *":$LOCAL_BIN:"*) ;;
+    *) echo "  NOTE: $LOCAL_BIN 不在 PATH,请加:export PATH=\"$LOCAL_BIN:\$PATH\"" ;;
+esac
+SE_VER="$("$LOCAL_BIN/skill-eval" --version)"
+echo "  skill-eval $SE_VER installed (→ $LOCAL_BIN/skill-eval)"
 
 # --- 2. Install skill-eval-guide for Claude Code ---
 echo ""
@@ -39,7 +69,7 @@ echo "  opencode:     $OC_DIR/skill-eval-guide/"
 # --- 3. Verify ---
 echo ""
 echo "[3/3] Verifying..."
-echo "  CLI:     $(skill-eval --version)"
+echo "  CLI:     $("$LOCAL_BIN/skill-eval" --version)"
 echo "  Python:  $(python3 --version 2>/dev/null || python --version 2>/dev/null || echo 'not found')"
 
 if command -v claude &> /dev/null; then

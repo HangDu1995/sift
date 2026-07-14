@@ -28,7 +28,7 @@ bash install.sh     # macOS / Linux
 ```
 
 这会完成三件事：
-1. `pip install -e .` — 安装 skill-eval CLI
+1. 安装 skill-eval CLI(系统 Python 受 PEP 668 限制时——Debian/Ubuntu/WSL2——自动建隔离 `.venv`,并把 `skill-eval` 软链到 `~/.local/bin`)
 2. 将 skill-eval-guide skill 安装到 Claude Code (`~/.claude/skills/`) 和 opencode (`~/.config/opencode/skills/`)
 3. 验证环境
 
@@ -39,6 +39,8 @@ bash install.sh     # macOS / Linux
 git clone https://github.com/fuxi-ailabs/skill-eval.git
 cd skill-eval
 pip install -e .
+# Debian/Ubuntu/WSL2(PEP 668)报 externally-managed 时,改用 venv:
+#   python3 -m venv .venv && .venv/bin/pip install -e . && ln -sf "$PWD/.venv/bin/skill-eval" ~/.local/bin/skill-eval
 
 # 安装 skill-eval-guide（可选，让 Claude 自动选择评测命令）
 # macOS / Linux:
