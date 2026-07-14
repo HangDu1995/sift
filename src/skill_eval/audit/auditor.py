@@ -46,6 +46,7 @@ from skill_eval.audit.declare import derive_declarations
 from skill_eval.audit.rebuild import rebuild
 from skill_eval.compliance.checker import extract_first_balanced, match_tool_call
 from skill_eval.audit.aggregate import aggregate_by_instruction
+from skill_eval.audit.dedup import post_process_findings
 from skill_eval.compliance.extractor import InstructionExtractor
 from skill_eval.errors import SkillEvalError
 from skill_eval.models import InstructionCheck, InstructionSource
@@ -269,6 +270,11 @@ class TranscriptAuditor:
 
             all_findings.extend(findings)
             transcript_names.append(tp.name)
+
+        # findings 后处理:Case A 同文去重(合并 sources)+ 编 #1..#N + Case B 跨类关联
+        # (related 引 #N)。在汇总前做,使 unverified/summary/by_instruction 都基于去重后
+        # findings(同文重复不再虚增 fail、by_instruction 不再同 transcript 双计)。
+        all_findings = post_process_findings(all_findings)
 
         # 宁少报不乱报:LLM 判不准的指令标 N/A(低置信度),不报假 FAIL。这里汇总
         # 未判定数 → 警告,让人知道本次结果可能不完整(而非误读"0 FAIL = 全过")。

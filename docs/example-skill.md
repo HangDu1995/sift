@@ -51,7 +51,7 @@ fixtures/example-skills/log-error-analyzer/
 
 做对的也正确 **PASS**(Read 工具命中、Read 日志步骤、反推 app.log);`security-policy.md` 正确 **N/A**(日志无安全事件,场景不触发)。
 
-> **fail=6 怎么来的**(标准答案要数全,不是只数植入的):3 个植入违规之外,规则"必须引用日志原文行"也被违反(助手只报"第 1 行"行号、没引原文)→ 第 4 个 FAIL;再加上同句"禁止编造"被 extractor 抽成 `CONSTRAINT` + `ANTI_FABRICATION` 两条**同文重复**(+1),共 **6 条 FAIL = 4 个行为**。即 fail 条数 > 真实违规数——读 evidence 对照**行为**,别数条数。(跨类扇出另一处:没读 error-codes.md 同时违反 REFERENCE_USAGE + HEADING_STEP 两条不同规则。)
+> **fail 怎么数 / 去重后**(标准答案按"SKILL 几条规则 × 这会话违反几条"数全):4 个行为 = 3 植入 + 规则"必须引用日志原文行"被违反(助手只报行号、没引原文)。同句"禁止编造"被 extractor 抽成 `CONSTRAINT` + `ANTI_FABRICATION` 两条同文——**已去重合并成一条**(来源徽章显两者),故 **fail=5**(不是 6)。另:没读 error-codes.md 同时违反 REFERENCE_USAGE + HEADING_STEP 两条**不同**规则——不合并(确是两条规则),但报告里 **related 互标 #N** 可一眼看到是同一违规。读 evidence 对照**行为**,别数条数。
 
 **这是首次正面证明:真 LLM 在干净输入下能抓违规。** 此前 dispatching(伪指令污染)和 mock 测试(mock LLM)都没覆盖。
 
@@ -65,7 +65,7 @@ fixtures/example-skills/log-error-analyzer/
 
 `log-error-analyzer-zh` 是英文版的**中文对照**(同 3 步骤/同 reference/同 3 违规,全中文),覆盖中文 extractor 分支(`禁止/必须` 约束 + `调用` 工具词 + `编造` 反捏造)——这些分支在英文 example 上从未触发。
 
-中英 audit 结果**完全一致**(都 pass=3/fail=6/na=1),3 个植入违规都抓到,中文证据同样具体可核对(E-FAKE-999 暗示 FAKE、"第1行"不算引用原文)。**LLM 对中文判定没有退化**。
+中英 audit 结果**完全一致**(都 pass=3/fail=5/na=1,同文去重后),3 个植入违规都抓到,中文证据同样具体可核对(E-FAKE-999 暗示 FAKE、"第1行"不算引用原文)。**LLM 对中文判定没有退化**。
 
 ## 复杂 skill:extractor 容忍度
 

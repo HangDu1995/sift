@@ -74,6 +74,9 @@
     .finding { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem; margin-bottom: 0.5rem; }
     .finding-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; font-size: 0.85rem; margin-bottom: 0.25rem; }
     .finding-head .cat, .finding-head .src { color: var(--text-muted); background: var(--bg); padding: 0.05rem 0.4rem; border-radius: 3px; }
+    .finding-head .seq { color: var(--text-muted); font-weight: 600; }
+    .finding-head .related { font-size: 0.8rem; color: var(--text-muted); }
+    .finding-head .ref-link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); margin-left: 0.25rem; }
     .finding-head .conf { color: var(--text-muted); margin-left: auto; }
     .finding.FAIL { border-left: 3px solid var(--red); }
     .finding.PASS { border-left: 3px solid var(--green); }
@@ -120,19 +123,31 @@
         var icon = f.verdict === 'PASS' ? '✓' : (f.verdict === 'FAIL' ? '✗' : '❓');
         var lowConf = (typeof f.confidence === 'number' && f.confidence <= 0.3) ? ' <span class="low-conf">低置信</span>' : '';
         var derived = f.derived_from_transcript ? ' <span class="derived">↺ 反推</span>' : '';
+        var seqTag = f.seq ? '<span class="seq">#' + escapeHtml(f.seq) + '</span>' : '';
+        // 来源徽章:同文去重后多来源用 " + " 连(已排序);单来源原样。sources 空则退回 source。
+        var srcs = (f.sources && f.sources.length) ? f.sources : [f.source];
+        var srcTag = '<span class="src">' + escapeHtml(srcs.join(' + ')) + '</span>';
+        // Case B 同行为跨类关联:↔ 同源违规 #X #Y(可点跳到对应 finding)
+        var relLinks = (f.related || []).map(function (r) {
+          var n = escapeHtml(String(r).replace('#', ''));
+          return '<a class="ref-link" href="#finding-' + n + '">' + escapeHtml(r) + '</a>';
+        }).join('');
+        var related = relLinks ? '<span class="related">↔ 同源违规</span>' + relLinks : '';
         return '<div class="finding-head"><span class="' + cls + '">' + icon + ' ' + escapeHtml(f.verdict) + '</span>' +
+          seqTag +
           '<span class="cat">' + escapeHtml(f.category || '') + '</span>' +
-          '<span class="src">' + escapeHtml(f.source || '') + '</span>' + derived + lowConf +
+          srcTag + derived + lowConf + related +
           '<span class="conf">置信 ' + (f.confidence != null ? f.confidence : '—') + '</span></div>' +
           '<div class="instruction">' + escapeHtml(f.instruction_text || '') + '</div>' +
           '<div class="evidence">' + escapeHtml(f.evidence || '') + '</div>' +
           '<div class="transcript">@ ' + escapeHtml(f.transcript || '') + '</div>';
       }
 
-      // 包一层带 verdict 边框色的 div
+      // 包一层带 verdict 边框色的 div;id=finding-<seq> 供 related 锚点跳转
       function findingRow(f) {
         var row = document.createElement('div');
         row.className = 'finding ' + String(f.verdict).replace('/', '');  // "N/A"→"NA" 匹配 CSS .finding.NA(replace 去斜杠,非替下划线)
+        if (f.seq) row.id = 'finding-' + f.seq;
         row.innerHTML = renderFinding(f);
         return row;
       }

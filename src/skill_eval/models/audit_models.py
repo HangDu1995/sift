@@ -49,6 +49,10 @@ class AuditFinding(BaseModel):
     confidence: float
     transcript: str  # 该 finding 对应的 transcript 文件名
     derived_from_transcript: bool = False  # 反推声明来的指令标 True
+    # findings 后处理(audit.dedup.post_process_findings)填:
+    seq: int = 0  # #1..#N:去重后编排的序号(供 related 引用 + 报告里 #N 可读定位)
+    sources: list[str] = Field(default_factory=list)  # 同文去重后合并的所有来源;单条=[source]
+    related: list[str] = Field(default_factory=list)  # 同行为跨类(Case B)关联的其它 finding 序号,如 ["#9"]
 
 
 class InstructionAggregate(BaseModel):

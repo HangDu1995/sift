@@ -34,7 +34,7 @@ skill-eval audit fixtures/example-skills/log-error-analyzer/ \
 >
 > 另:规则"必须引用日志原文行",助手只报"第 1 行/第 2 行"行号、没引原文 → **通常也 FAIL**(LLM 判,偶有方差)。做对的 **PASS**(读日志步骤,tool_trace 命中 Read app.log);`security-policy.md` **N/A**(日志没提安全事件,条件不触发)。
 >
-> 计数 **pass≈3 / fail≈6 / na≈1**——但 fail=6 只代表 **4 个行为**,不是 6 个问题,膨胀有二:① 编造那句被 extractor 抽成 `CONSTRAINT` + `ANTI_FABRICATION` 两条**同文重复**(+1,纯重复);② 没读码表同时违反"该读参考(条件性)"+"步骤2 读码表(步骤)"两条**不同**规则(+1,跨类扇出)。LLM 有 run-to-run 方差,**对照"3 个植入违规是否都出现在 FAIL、evidence 是否点中"即可,别钉精确条数**。
+> 计数 **pass≈3 / fail≈5 / na≈1**(同文去重后,4 个行为):① 同文重复——编造那句被抽成 `CONSTRAINT` + `ANTI_FABRICATION` 两条,已**合并成一条**(来源徽章显两者,不再虚增 fail);② 同行为跨类——没读码表同时违反 条件性 + 步骤 两条**不同**规则,不合并(确是两条规则),但报告里 `related` **互标 #N** 一眼看到是同一违规。LLM 有 run-to-run 方差,**对照"3 个植入违规是否都出现在 FAIL、evidence 是否点中"即可,别钉精确条数**。
 
 ### log-error-analyzer-zh(中文 audit 示例)
 
@@ -50,7 +50,7 @@ skill-eval init fixtures/example-skills/log-error-analyzer-zh/ \
   --from-transcript fixtures/example-skills/log-error-analyzer-zh/transcripts/synthetic-violation.jsonl   # 方式2:从 transcript 挖
 ```
 
-> **预期 audit 结果**:与上面英文版**完全一致**(同 3 步骤 / 同 reference / 全中文)——3 个植入违规都 **FAIL**(没读 error-codes.md、编造 E-FAKE-999、没写 error-report.json),外加"没引日志原文行"通常也 FAIL;读日志步骤 **PASS**,安全策略 **N/A**。计数与膨胀拆解同英文版(pass≈3 / fail≈6 / na≈1,4 个行为);LLM 对中文判定不退化(中英对照已验),同样别钉精确条数。
+> **预期 audit 结果**:与上面英文版**完全一致**(同 3 步骤 / 同 reference / 全中文)——3 个植入违规都 **FAIL**(没读 error-codes.md、编造 E-FAKE-999、没写 error-report.json),外加"没引日志原文行"通常也 FAIL;读日志步骤 **PASS**,安全策略 **N/A**。计数与去重/关联拆解同英文版(pass≈3 / fail≈5 / na≈1,4 个行为);LLM 对中文判定不退化(中英对照已验),同样别钉精确条数。
 
 ### code-review-auditor(路径1 真任务)
 

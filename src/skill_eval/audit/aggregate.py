@@ -5,9 +5,11 @@ audit 的 findings 默认平铺(每 transcript × 每指令 一条),多 transcri
 算每条指令的 pass/fail/na 分布 + fail_rate,按 fail_rate 降序——让系统性违规一眼可见。
 
 设计决策:
-- **不去重**:按 instruction_text 如实分组。extractor 把同一指令抽成多条不同 text
-  (如 error-codes 抽成 REFERENCE_USAGE + HEADING_STEP)是 extractor 的毛病;聚合如实
-  反映(重复抽取显形为多行),倒逼 extractor 治本,而非在聚合层硬塞归一化引入新 bug。
+- **本层不归一化**:按 instruction_text 如实分组。**同文 exact 重复**(同一句被抽成
+  CONSTRAINT + ANTI_FABRICATION、同 verdict)已在上游 ``audit.dedup`` 合并,本层看不到;
+  **不同 text 的扇出**(如 error-codes 抽成 REFERENCE_USAGE + HEADING_STEP 两条不同文本)
+  仍是两条不同指令、在此显形为两行——这是 extractor 的毛病,聚合如实反映(倒逼治本),
+  不在聚合层硬塞归一化引入新 bug。两者在**平铺 findings** 里靠 ``related`` 互标关联。
 - **纯函数**:不调 LLM、不读 transcript,只对已有 findings 后处理 → 单元可测、确定。
 - 判定层一行不动,只重组输出。
 """

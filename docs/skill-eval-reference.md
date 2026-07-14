@@ -317,7 +317,7 @@ skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl --form
 
 > **「X 条由 transcript 反推」是什么**：findings 里 `derived_from_transcript: true` 的不是 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（只增不减）。v1 只补一类：transcript 里 agent 真实 Read 过的输入/参考文件（`digest.input_files`）→ 各补一条「读取 \<path\>」（REFERENCE_USAGE）。例：SKILL.md 只写"读用户指定的日志文件"不点名，transcript 实际读了 `app.log` → 反推一条「读取 app.log」并确认命中。这类由 Read 行为反推的 read 检查构造上即 PASS（不膨胀 fail），作用是把 agent 真碰过的输入文件记进报告。`required_tools`（Bash 命令分不清业务/通用）、`required_outputs`（历史 trace 产物未必还在盘）不反推。
 
-> **怎么看结果（别只数 fail）**：① **fail 条数 ≠ 违规数**——同一违规可命中多类（如"没读参考文件"同时违反 条件性 + 步骤 两条），或同句被 extractor 抽成 `CONSTRAINT` + `ANTI_FABRICATION` 两条同文重复，故 fail 常大于真实问题数；**逐条看 FAIL 的 evidence 对照"哪个行为"**，别数条数。② **N/A 多 ≠ 全过**——三类 LLM 判定低置信一律 N/A（见上），汇总成警告提示重跑。③ **对照预期**：自带 3 个 audit 示例的预期违规已逐条列明（见 [example-skills/README.md](../fixtures/example-skills/README.md)），跑完比对该抓的违规是否都出现在 FAIL、evidence 是否点中。
+> **怎么看结果（别只数 fail）**：每条 finding 带 **#N 序号**。① **同文重复已去重**——同句被抽成 `CONSTRAINT` + `ANTI_FABRICATION` 的合并成一条、来源徽章显 `CONSTRAINT + ANTI_FABRICATION`（不再虚增 fail）。② **同行为跨类已关联**——同一行为（如没读某 reference）同时违反 条件性 + 步骤 两条**不同**规则的，仍是两条（确是两条规则），但互标 `↔ 同源违规 #N`（可点跳）；故 fail 条数仍可能 > 真实问题数，**逐条看 evidence 对照"哪个行为"**，别数条数。③ **N/A 多 ≠ 全过**——三类 LLM 判定低置信一律 N/A（见上），汇总成警告提示重跑。④ **对照预期**：自带 3 个 audit 示例的预期违规已逐条列明（见 [example-skills/README.md](../fixtures/example-skills/README.md)），跑完比对该抓的违规是否都出现在 FAIL、evidence 是否点中。
 
 ### `report` — HTML 报告
 
