@@ -288,7 +288,7 @@ skill-eval audit /path/to/skill/ --transcript a.jsonl --transcript b.jsonl --for
 | `--format` | table | table / json |
 | `--open` | 关 | 生成后浏览器打开 audit-report.html |
 
-判定四类（必令 / 步骤 / 输出格式 / 条件性），条件性走三态（遵循/违反/N/A）。判不准报 N/A + 警告，不保守 FAIL。产出 `audit-report.json` + `audit-report.html`（HTML always 写）。
+判定四类（条件性 / 禁令 / 步骤 / 输出格式）：前三类各走三态（遵循·违反·N/A），输出格式确定性二值（不调 LLM）。**禁令判的角度反着来**——主动找违规、不判“遵守没”（如 `NEVER ...` / `不得编造`）。判不准报 N/A + 警告，不保守 FAIL（各类判法详表见 reference 的 audit 段）。产出 `audit-report.json` + `audit-report.html`（HTML always 写）。
 
 ### `report` — HTML 报告
 

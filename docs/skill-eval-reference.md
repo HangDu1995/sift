@@ -296,7 +296,18 @@ skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl --form
 | `--format` | table | table / json |
 | `--open` | 关闭 | 生成后浏览器打开 `audit-report.html` |
 
-判定分四类（必令 / 步骤 / 输出格式 / 条件性指令），条件性指令走三态（遵循/违反/N/A）。判不准报 N/A + 警告，不保守 FAIL。
+判定分四类——每条指令按 SKILL.md 声明来源路由到一类，各按不同判法出 verdict：
+
+| 类别 | 来自哪些指令 | 怎么判 | 结论 |
+|------|------------|--------|------|
+| 条件性 CONDITIONAL | TOOL_REQUIREMENT / REFERENCE_USAGE（该用 X 工具、读 X 参考） | 命中 tool_trace → PASS（**不调 LLM**）；未命中 → LLM 判该场景该不该触发 | 遵循 / 违反 / N/A |
+| 禁令 PROHIBITION | CONSTRAINT / ANTI_FABRICATION（不许做 X） | LLM **主动检测这次有没有违规**（不是判“遵守没”） | 未违反→PASS / 违反→FAIL / 判不准→N/A |
+| 步骤 STEP | HEADING_STEP（应走第 N 步） | LLM 判走过 / 该走没走 / 不涉及 | pass / fail / na |
+| 输出格式 OUTPUT | OUTPUT_FORMAT（产物应含某格式） | **确定性子串匹配，不调 LLM** | 命中→PASS / 未命中→FAIL（无 N/A） |
+
+> **禁令判的角度反着来**：其它三类问“该不该做 / 做没做”（正面遵循），禁令问“这次执行里有没有发生**违反**这条禁令的行为”——主动找违规。例：`NEVER delete production data`、`不得编造不存在的错误码`（模型 hallucinate 一个码 → `violated=true` → FAIL）。
+
+> **判不准不乱报**：三类 LLM 判定（条件性 / 禁令 / 步骤）在 LLM 失败 / 解析失败 / 未提及时一律报 **N/A**（低置信度），**不保守 FAIL**——FAIL 只留给 LLM 明确判“违反 / 该做没做”。N/A 多了 audit 会汇总成警告提示重跑，别误读“0 FAIL = 全过”。
 
 产出 `<out>/audit-report.json`（机器读）+ `<out>/audit-report.html`（人读，**always 写**，与 JSON 并列，对齐 scoring report 视觉）。HTML 自上而下：① 头部（skill / summary 计数徽章 / 反推指令数）② 警告框（可信度，低置信 N/A 等）③ 系统性聚合表（**仅多 transcript**，跨会话 fail% + fail in transcripts）④ findings 全集（**含 PASS**，每条带 evidence / confidence / verdict 徽章 / category / source；多 transcript 按指令分组可折叠，FAIL/N/A 默认展开）。
 
