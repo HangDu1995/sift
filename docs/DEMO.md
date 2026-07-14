@@ -14,7 +14,7 @@ pytest tests/ -q           # 测试验证
 
 | 类型 | 目录 | 用途 |
 |------|------|------|
-| ✅ 正面 | `fixtures/test-skills/data-validator/` | 展示 Skill 如何**提升** Claude 表现 |
+| ✅ 正面 | `fixtures/test-skills/data-pipeline/skills/data-validator/` | 展示 Skill 如何**提升** Claude 表现 |
 | ❌ 反面×4 | `fixtures/negative-skills/` | 展示框架如何**检测**各种 Skill 缺陷 |
 
 ---
@@ -26,7 +26,7 @@ data-validator 是一个 JSON 数据校验 Skill。它告诉 Claude：校验 id�
 ### 1.1 安全审查（< 1 秒，无需 Claude）
 
 ```bash
-skill-eval vet fixtures/test-skills/data-validator/
+skill-eval vet fixtures/test-skills/data-pipeline/skills/data-validator/
 ```
 
 **产出解读**：
@@ -47,7 +47,7 @@ VERDICT 三种结果：**SAFE**（exit 0）、**REVIEW_NEEDED**（需人工审�
 ### 1.2 静态分析（< 1 秒，无需 Claude）
 
 ```bash
-skill-eval analyze fixtures/test-skills/data-validator/
+skill-eval analyze fixtures/test-skills/data-pipeline/skills/data-validator/
 ```
 
 **产出解读**（11/11 满分）：
@@ -61,7 +61,7 @@ Score: 11/11  Category: CAPABILITY_UPLIFT
 ### 1.3 完整 A/B 评测（需要 Claude，2-3 分钟）
 
 ```bash
-skill-eval run fixtures/test-skills/data-validator/ --runs 1 --output output/
+skill-eval run fixtures/test-skills/data-pipeline/skills/data-validator/ --runs 1 --output output/
 ```
 
 对 with_skill 和 without_skill 分别运行相同的评测，量化 Skill 的**因果贡献**。每个 eval 独立并发执行。
@@ -229,7 +229,7 @@ FAIL: description_length, description_has_trigger,
 三个正常 Skill 的 DAG：
 
 ```bash
-skill-eval batch fixtures/test-skills/manifest.json --runs 1
+skill-eval batch fixtures/test-skills/data-pipeline/manifest.json --runs 1
 ```
 
 按 DAG 顺序依次评测 data-validator → data-transform → report-generator。

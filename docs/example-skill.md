@@ -1,6 +1,6 @@
 # Example Skill: log-error-analyzer
 
-`fixtures/example-skills/log-error-analyzer/` 是 skill-eval 的**金丝雀示例 skill**——结构规整、可被三条评测路径共用,兼作 audit(路径2 transcript 对账)有效性的验证夹具。
+`fixtures/example-skills/log-error-analyzer/` 是 skill-eval 的**主力示例 skill**(canary:工具改评测逻辑后最先用它复验判定没退化)——结构规整、可被三条评测路径共用,兼作 audit(路径2 transcript 对账)有效性的验证夹具。
 
 ## 为什么有它
 
