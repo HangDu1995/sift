@@ -70,6 +70,8 @@ skill-eval vet path/to/skill/ --skip-external # 跳过外部扫描器
 
 根据 SKILL.md 内容自动生成 `evals.json`。三种生成路径，优先级 `--from-transcript` > `--generate-prompts`（LLM）> 模板。
 
+> 生成的 `evals.json` 格式（字段 / AssertionType 全表 / expectations vs assertions / tier 坑）详见 [evals-format.md](evals-format.md)。
+
 ```bash
 skill-eval init path/to/skill/                                  # LLM 生成(默认)
 skill-eval init path/to/skill/ --num-evals 8                    # 限制数量
