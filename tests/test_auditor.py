@@ -1217,3 +1217,29 @@ class TestProgressCallback:
         flat = " ".join(msgs)
         assert "0 条解析成功" in flat
         assert all(f.verdict == AuditVerdict.NA for f in findings)
+
+    def test_zero_parsed_triggers_retry_and_recovers(self, monkeypatch) -> None:
+        """0 解析成功 → 自动重试,重试拿到能解析的输出 → 真 verdict(非兜底 N/A)。
+
+        实锤价值:同 prompt 重试常能解出(0-解析多为 LLM 输出方差的瞬态),故重试而非直接
+        放弃。第一次返回空数组(0 解析)→ 重试 → 第二次返回正常 JSON → 解出 resolved PASS。
+        """
+        calls = {"n": 0}
+
+        def flaky(prompt, *a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return "[]"  # 第一次:0 解析
+            return '[{"index": 0, "violated": false, "evidence": "重试后解出"}]'  # 重试成功
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", flaky)
+        msgs: list[str] = []
+        auditor = TranscriptAuditor()
+        findings = auditor._judge_prohibition(
+            [_prohibition_inst()], "记录", "t.jsonl", on_progress=msgs.append,
+        )
+        flat = " ".join(msgs)
+        assert "重试" in flat  # 触发了重试
+        assert calls["n"] == 2  # 第一次 0 解析 + 重试一次成功
+        assert findings[0].verdict == AuditVerdict.PASS  # violated=false → PASS(resolved)
+        assert findings[0].confidence >= 0.7  # resolved(0.8),非 0.3 兜底

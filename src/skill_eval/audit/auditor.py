@@ -93,23 +93,53 @@ def _emit(on_progress: ProgressFn | None, msg: str) -> None:
         on_progress(msg)
 
 
-def _call_claude_with_retry(prompt: str, model: str | None, timeout: int) -> str:
-    """call_claude + transient 重试。
+# 重试耗尽标记:_judge_batch_with_retry 返回它时,调用方跳过写入、保留预置的全 N/A 兜底。
+_RETRY_EXHAUSTED = object()
 
-    RuntimeError(超时 / CLI 非零退出 / 限流)重试 ``_LLM_RETRY_MAX`` 次,线性退避
-    (``_LLM_RETRY_DELAY`` × 尝试序号);仍失败才抛出,由调用方 ``except RuntimeError``
-    兜底为 N/A。call_claude 只会抛 RuntimeError,故无需区分其他异常。
+
+def _judge_batch_with_retry(
+    prompt: str,
+    model: str | None,
+    timeout: int,
+    parse_fn: Callable[[str, int], list],
+    bn: int,
+    *,
+    on_progress: ProgressFn | None,
+    label: str,
+    k: int,
+    total: int,
+    is_unparsed: Callable[[object], bool],
+) -> object:
+    """call+parse 一个 LLM 批,RuntimeError 或整批 0 解析成功则重试(共用 _LLM_RETRY_MAX 预算)。
+
+    合并两种"这批没拿到可用判定"的失败,共用同一份重试预算(不再为 0-解析另设次数):
+
+    - **调用失败**:call_claude 抛 RuntimeError(超时 / CLI 非零退出 / 限流)。
+    - **解析为空**:调用成功但 parse_fn 全 None(LLM 输出畸形 / 截断 / 空数组)——原是静默
+      盲点(打"完成"却全 N/A),现重试。实锤 0-解析多为瞬态:同 prompt 重试常能解出。
+
+    重试上限 _LLM_RETRY_MAX,线性退避(_LLM_RETRY_DELAY × 尝试序号)。成功返回 parse_fn
+    结果;重试耗尽返回 _RETRY_EXHAUSTED(调用方保留预置全 N/A 兜底,audit 汇总"未判定"警告)。
     """
-    last_exc: RuntimeError | None = None
     for attempt in range(_LLM_RETRY_MAX + 1):
+        if attempt > 0:
+            time.sleep(_LLM_RETRY_DELAY * attempt)
+            _emit(on_progress, f"  [{k}/{total}] {label} 重试 {attempt}/{_LLM_RETRY_MAX}…")
+        _emit(on_progress, f"  [{k}/{total}] {label}({bn} 条)…")
+        t0 = time.monotonic()
         try:
-            return call_claude(prompt, model=model, timeout=timeout, max_turns=1)
+            result_text = call_claude(prompt, model=model, timeout=timeout, max_turns=1)
         except RuntimeError as exc:
-            last_exc = exc
-            if attempt < _LLM_RETRY_MAX:
-                time.sleep(_LLM_RETRY_DELAY * (attempt + 1))
-    assert last_exc is not None  # range 至少迭代 1 次 → 必捕获过异常
-    raise last_exc
+            _emit(on_progress, f"  [{k}/{total}] {label} 调用失败: {str(exc)[:120]}")
+            continue
+        _emit(on_progress, f"  [{k}/{total}] {label} 完成 ⏱ {time.monotonic() - t0:.0f}s")
+        parsed = parse_fn(result_text, bn)
+        if bn and all(is_unparsed(v) for v in parsed):
+            _emit(on_progress, f"  [{k}/{total}] ⚠ {label} 0 条解析成功(LLM 输出畸形/截断?),重试…")
+            continue
+        return parsed
+    _emit(on_progress, f"  [{k}/{total}] {label} 重试耗尽 → 本批 {bn} 条全兜底 N/A")
+    return _RETRY_EXHAUSTED
 
 
 class TranscriptAuditor:
@@ -670,20 +700,14 @@ class TranscriptAuditor:
                 "## 输出格式\n"
                 '只返回 JSON 数组,每元素:{"index": 0, "applicable": true/false}\n'
             )
-            _emit(on_progress, f"  [{k}/{total}] 判定条件性({bn} 条)…")
-            t0 = time.monotonic()
-            try:
-                result_text = _call_claude_with_retry(prompt, model, timeout)
-            except RuntimeError as exc:
-                _emit(on_progress, f"  [{k}/{total}] 判定条件性 失败: {str(exc)[:120]}(整批兜底 N/A)")
-                continue  # 重试仍失败 → 保持 None(调用方标 N/A + audit 汇总未判定警告)
-            _emit(on_progress, f"  [{k}/{total}] 判定条件性 完成 ⏱ {time.monotonic() - t0:.0f}s")
-            batch_mask = self._parse_applicable(result_text, bn)
-            if bn and all(v is None for v in batch_mask):
-                # 调用成功但整批 0 条解析成功(LLM 输出畸形/截断/空)→ 静默兜底 N/A 毫无信号,
-                # 补 ⚠ 让用户知道这批 N/A 是解析失败而非真判定(可重跑救回)。
-                _emit(on_progress, f"  [{k}/{total}] ⚠ 判定条件性 完成,但 0 条解析成功(LLM 输出畸形/截断?)→ 本批 {bn} 条全兜底 N/A")
-            for j, val in enumerate(batch_mask):
+            parsed = _judge_batch_with_retry(
+                prompt, model, timeout, self._parse_applicable, bn,
+                on_progress=on_progress, label="条件性", k=k, total=total,
+                is_unparsed=lambda v: v is None,
+            )
+            if parsed is _RETRY_EXHAUSTED:
+                continue  # 重试耗尽 → 保留 mask 预置的全 None(audit 汇总"未判定"警告)
+            for j, val in enumerate(parsed):
                 mask[start + j] = val  # 本地 j → 全量 start+j(批间 index 映射)
         return mask
 
@@ -766,18 +790,14 @@ class TranscriptAuditor:
                 '只返回 JSON 数组,每元素:'
                 '{"index": 0, "violated": true/false, "evidence": "中文简述为何违反/未违反"}\n'
             )
-            _emit(on_progress, f"  [{k}/{total}] 判定禁令({bn} 条)…")
-            t0 = time.monotonic()
-            try:
-                result_text = _call_claude_with_retry(prompt, model, timeout)
-            except RuntimeError as exc:
-                _emit(on_progress, f"  [{k}/{total}] 判定禁令 失败: {str(exc)[:120]}(整批兜底 N/A)")
-                continue  # 重试仍失败 → 保持 (None, "")(调用方标 N/A + 未判定警告)
-            _emit(on_progress, f"  [{k}/{total}] 判定禁令 完成 ⏱ {time.monotonic() - t0:.0f}s")
-            batch_results = self._parse_prohibition(result_text, bn)
-            if bn and all(v[0] is None for v in batch_results):
-                _emit(on_progress, f"  [{k}/{total}] ⚠ 判定禁令 完成,但 0 条解析成功(LLM 输出畸形/截断?)→ 本批 {bn} 条全兜底 N/A")
-            for j, val in enumerate(batch_results):
+            parsed = _judge_batch_with_retry(
+                prompt, model, timeout, self._parse_prohibition, bn,
+                on_progress=on_progress, label="禁令", k=k, total=total,
+                is_unparsed=lambda v: v[0] is None,
+            )
+            if parsed is _RETRY_EXHAUSTED:
+                continue  # 重试耗尽 → 保留 results 预置的全 (None,"")(audit 汇总"未判定"警告)
+            for j, val in enumerate(parsed):
                 results[start + j] = val  # 本地 j → 全量 start+j
         return results
 
@@ -874,18 +894,14 @@ class TranscriptAuditor:
                 '只返回 JSON 数组,每元素:'
                 '{"index": 0, "verdict": "pass"|"fail"|"na", "evidence": "中文简述"}\n'
             )
-            _emit(on_progress, f"  [{k}/{total}] 判定步骤({bn} 条)…")
-            t0 = time.monotonic()
-            try:
-                result_text = _call_claude_with_retry(prompt, model, timeout)
-            except RuntimeError as exc:
-                _emit(on_progress, f"  [{k}/{total}] 判定步骤 失败: {str(exc)[:120]}(整批兜底 N/A)")
-                continue  # 重试仍失败 → 保持 (None, "")(调用方标 N/A + 未判定警告)
-            _emit(on_progress, f"  [{k}/{total}] 判定步骤 完成 ⏱ {time.monotonic() - t0:.0f}s")
-            batch_results = self._parse_step(result_text, bn)
-            if bn and all(v[0] is None for v in batch_results):
-                _emit(on_progress, f"  [{k}/{total}] ⚠ 判定步骤 完成,但 0 条解析成功(LLM 输出畸形/截断?)→ 本批 {bn} 条全兜底 N/A")
-            for j, val in enumerate(batch_results):
+            parsed = _judge_batch_with_retry(
+                prompt, model, timeout, self._parse_step, bn,
+                on_progress=on_progress, label="步骤", k=k, total=total,
+                is_unparsed=lambda v: v[0] is None,
+            )
+            if parsed is _RETRY_EXHAUSTED:
+                continue  # 重试耗尽 → 保留 results 预置的全 (None,"")(audit 汇总"未判定"警告)
+            for j, val in enumerate(parsed):
                 results[start + j] = val  # 本地 j → 全量 start+j
         return results
 
