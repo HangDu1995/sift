@@ -66,6 +66,7 @@ def vet(
         data = report.model_dump(mode="json")
         text = json.dumps(data, indent=2, ensure_ascii=False)
         if output:
+            output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(text, encoding="utf-8")
             console.print(f"Written to {output}")
         else:
@@ -73,15 +74,13 @@ def vet(
     else:
         _render_security_report(report, console)
 
-    vet_output = output or skill_path / "vet-report.json"
-    if not vet_output.suffix == ".json":
-        vet_output = vet_output / "vet-report.json"
-    vet_output.parent.mkdir(parents=True, exist_ok=True)
-    vet_output.write_text(
-        json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    if format != "json":
-        console.print(f"  Report: {vet_output}")
+    # 落盘:仅当显式 -o(默认不写文件,避免污染 skill 目录)
+    if output and format != "json":
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        console.print(f"Written to {output}")
 
     if report.verdict in ("BLOCKED", "REVIEW_NEEDED"):
         raise typer.Exit(code=1)

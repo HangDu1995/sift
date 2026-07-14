@@ -35,7 +35,7 @@
 ### `vet` — 安全审查
 
 ```bash
-skill-eval vet path/to/skill/                # 表格输出 + 自动写 vet-report.json
+skill-eval vet path/to/skill/                # 表格输出(默认不落盘,-o 写文件)
 skill-eval vet path/to/skill/ --format json  # JSON 输出
 skill-eval vet path/to/skill/ --output report.json
 skill-eval vet path/to/skill/ --skip-external # 跳过外部扫描器
@@ -46,7 +46,7 @@ skill-eval vet path/to/skill/ --skip-external # 跳过外部扫描器
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--format` | table | 输出格式：table / json |
-| `--output` / `-o` | 无 | 输出文件路径 |
+| `--output` / `-o` | 无 | 输出文件路径（不给则仅终端输出，不落盘） |
 | `--skip-external` | 关闭 | 跳过外部扫描器（aguara、skill-scanner） |
 
 **四个扫描器**：
@@ -121,7 +121,7 @@ skill-eval add pdf/ --idea "..." --dry-run
 11 项自动化体检，**零 API 成本，<1s 完成**。输出 scorecard（`pass_count / max_score`）。
 
 ```bash
-skill-eval analyze path/to/skill/                  # 表格
+skill-eval analyze path/to/skill/                  # 表格（默认不落盘，-o 写文件）
 skill-eval analyze path/to/skill/ --format json -o scorecard.json
 ```
 
@@ -130,7 +130,7 @@ skill-eval analyze path/to/skill/ --format json -o scorecard.json
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--format` | table | 输出格式：table / json |
-| `--output` / `-o` | 无 | 输出文件路径 |
+| `--output` / `-o` | 无 | 输出文件路径（不给则仅终端输出，不落盘） |
 
 **11 项检查**：
 

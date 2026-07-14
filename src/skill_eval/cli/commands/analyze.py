@@ -34,6 +34,7 @@ def analyze(
     if format == "json":
         text = json.dumps(data, indent=2, ensure_ascii=False)
         if output:
+            output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(text, encoding="utf-8")
             console.print(f"Written to {output}")
         else:
@@ -54,11 +55,11 @@ def analyze(
         )
         console.print(table)
 
-    if not output:
-        output = skill_path / "scorecard.json"
-
-    output.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    console.print(f"  Report: {output}")
+    # 落盘:仅当显式 -o(默认不写文件,避免污染 skill 目录)
+    if output and format != "json":
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        console.print(f"Written to {output}")
 
     if report.score < report.max_score:
         raise typer.Exit(code=1)

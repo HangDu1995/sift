@@ -124,7 +124,7 @@ fixture-eval 下的**双主位**分工：**客观侧信 `delta.pass_rate_program
 ### `vet` — 安全审查
 
 ```bash
-skill-eval vet /path/to/skill                   # 表格 + 自动写 vet-report.json
+skill-eval vet /path/to/skill                   # 表格（默认不落盘，-o 写文件）
 skill-eval vet /path/to/skill --format json     # JSON 输出
 skill-eval vet /path/to/skill --skip-external   # 跳过外部扫描器
 skill-eval vet /path/to/skill -o report.json    # 指定输出路径
@@ -133,7 +133,7 @@ skill-eval vet /path/to/skill -o report.json    # 指定输出路径
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--format` | table | table / json |
-| `--output` / `-o` | skill 目录下 `vet-report.json` | 输出文件 |
+| `--output` / `-o` | 无（仅终端） | 输出文件（不给则不落盘） |
 | `--skip-external` | 关 | 跳过外部扫描器（aguara、skill-scanner） |
 
 4 扫描器：`aguara`（可选，Prompt 注入）、`skill-scanner`（可选，恶意模式/CVE）、`secrets-scan`（内置，密钥/Token/Base64）、`structure-check`（内置，SKILL.md 结构 + 危险命令）。判定 **SAFE / REVIEW_NEEDED / BLOCKED**，BLOCKED 退 1。
@@ -141,7 +141,7 @@ skill-eval vet /path/to/skill -o report.json    # 指定输出路径
 ### `analyze` — 静态分析
 
 ```bash
-skill-eval analyze /path/to/skill                       # 表格
+skill-eval analyze /path/to/skill                       # 表格（默认不落盘，-o 写文件）
 skill-eval analyze /path/to/skill --format json -o scorecard.json
 ```
 
@@ -440,8 +440,8 @@ output/iteration-1/
 ├── benchmark.json          # 聚合：双率 delta + comparisons + comparison_summary + analysis
 ├── report.html             # 自包含 HTML 报告（读 gate.json 显门禁徽章）
 ├── gate.json               # gate 命令产出（判决 + 两轴明细；非 run 产出）
-├── scorecard.json          # analyze 产出
-├── vet-report.json         # vet 产出
+├── scorecard.json          # analyze -o 显式产出（run 不自动产）
+├── vet-report.json         # vet -o 显式产出（run 不自动产）
 └── with_skill/             # v1/v2 模式换成各自标签名
     └── eval-<id>/run-<n>/
         ├── outputs/        # Claude 产生的文件（skill references 已自动拷入）
