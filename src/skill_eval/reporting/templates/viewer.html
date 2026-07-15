@@ -675,7 +675,7 @@
       document.getElementById("skill-name").textContent = EMBEDDED_DATA.skill_name;
       const gate = EMBEDDED_DATA.gate;
       if (gate && gate.decision) {
-          const styles = {PASS: {c:"green", bg:"#163a1f"}, FAIL: {c:"red", bg:"#3a1616"}, "N/A": {c:"yellow", bg:"#3a3a16"}};
+          const styles = {PASS: {c:"green", bg:"#163a1f"}, FAIL: {c:"red", bg:"#3a1616"}, "N/A": {c:"yellow", bg:"#3a3a16"}, UNCLEAR: {c:"yellow", bg:"#3a3a16"}};
           const s = styles[gate.decision] || {c:"var(--text)", bg:"transparent"};
           const el = document.getElementById("gate-badge");
           el.textContent = "门禁 " + gate.decision;

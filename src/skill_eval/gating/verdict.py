@@ -80,11 +80,14 @@ def evaluate_gate(
 
     engaged = [v for v in axes.values() if v.applicable]
     if not engaged:
+        # 无适用轴(轴都 applicable=False:守卫关 / 未请求 / 无信号)→ 不适用。与"判不准"
+        # 区分:不适用=已解决(本次没该轴可判),判不准=有轴但信号不足。都 exit 2(消费方定)。
         decision, exit_code = "N/A", 2
     elif any(v.verdict == "FAIL" for v in engaged):
         decision, exit_code = "FAIL", 1
     elif any(v.verdict == "N/A" for v in engaged):
-        decision, exit_code = "N/A", 2
+        # 有适用轴但信号不足(样本不足 / 全 tie)→ 判不准(UNCLEAR),独立于"不适用"的 N/A。
+        decision, exit_code = "UNCLEAR", 2
     else:
         decision, exit_code = "PASS", 0
     reason = "; ".join(v.reason for v in engaged) if engaged else "无适用轴可判"

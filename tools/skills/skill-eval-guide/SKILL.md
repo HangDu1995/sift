@@ -82,7 +82,7 @@ python3 --version || python --version  # 必须：>= 3.10
 | "冻结基线" / "freeze" / "固定题集" | `freeze` | evals.json → 命名 baseline 快照 |
 | "跑测试" / "A/B 测试" / "run" / "评测" | `run` | with/without 或 v1/v2 对照 |
 | "真任务" / "跑真实任务" / "live" | `run --task --cwd` | 路径1 真任务模式（不读 evals.json） |
-| "门禁" / "判决" / "通过没" / "gate" | `gate` | 对 benchmark.json 出 PASS/FAIL/N/A |
+| "门禁" / "判决" / "通过没" / "gate" | `gate` | 对 benchmark.json 出 PASS/FAIL/N/A/UNCLEAR |
 | "遵循性对账" / "audit" / "按指令做了没" | `audit` | transcript × SKILL.md 对账 |
 | "生成报告" / "report" / "报告" | `report` | 单 skill HTML 报告 |
 | "批量评测" / "batch" / "多 skill" | `batch` + `batch-report` | 多 skill（unit 层）并行 |
@@ -267,13 +267,13 @@ skill-eval gate out/iteration-1/benchmark.json --no-programmatic-guard --min-win
 | `--candidate` | 自动 | 候选侧名 |
 | `--out` / `-o` | benchmark 同目录 | gate.json 输出路径 |
 
-**两轴**（双主位）：客观侧 `delta.pass_rate_programmatic < 0` → FAIL；主观侧 tie-排除胜率 `< 阈值` 且样本足 → FAIL。AND——任一适用轴 FAIL → FAIL；判不准/样本不足 → N/A；否则 PASS。写 `gate.json`，退 `0=PASS / 1=FAIL / 2=N/A`。
+**两轴**（双主位）：客观侧 `delta.pass_rate_programmatic < 0` → FAIL；主观侧 tie-排除胜率 `< 阈值` 且样本足 → FAIL。AND——任一适用轴 FAIL → FAIL；有适用轴但信号不足（判不准/样本不足）→ UNCLEAR；无适用轴 → N/A（不适用）；否则 PASS。写 `gate.json`，退 `0=PASS / 1=FAIL / 2=N/A 或 UNCLEAR`（N/A 与 UNCLEAR 都 exit 2，消费方定）。
 
 ### `audit` — 真实 transcript 对账
 
 把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。**不 re-run**，直接对账历史执行。
 
-> 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行——`[条件性/禁令/步骤] 判定 N 条…` → `[条件性/禁令/步骤] 完成 ⏱ Xs`（类别名打头；>10 条分批才显 `批 k/总`）。两种失败（调用失败 / 0 条解析成功）都先自动重试最多 2 次再兜底 N/A，重试打 `重试 n/2…`、耗尽打 `重试耗尽`。三个 LLM 类别判定器并发跑（max_workers=3），约 2× 提速，进度行交错但每行 `[类别]` 打头、一眼分清。看到 `[条件性/禁令/步骤] …` 滚动就是在跑。
+> 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行——`[条件性/禁令/步骤] 判定 N 条…` → `[条件性/禁令/步骤] 完成 ⏱ Xs`（类别名打头；>10 条分批才显 `批 k/总`）。两种失败（调用失败 / 0 条解析成功）都先自动重试最多 2 次再兜底 UNCLEAR（判不准），重试打 `重试 n/2…`、耗尽打 `重试耗尽`。三个 LLM 类别判定器并发跑（max_workers=3），约 2× 提速，进度行交错但每行 `[类别]` 打头、一眼分清。看到 `[条件性/禁令/步骤] …` 滚动就是在跑。
 
 ```bash
 skill-eval audit /path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out/
@@ -288,7 +288,7 @@ skill-eval audit /path/to/skill/ --transcript a.jsonl --transcript b.jsonl --for
 | `--format` | table | table / json |
 | `--open` | 关 | 生成后浏览器打开 audit-report.html |
 
-判定四类（条件性 / 禁令 / 步骤 / 输出格式）：前三类各走三态（遵循·违反·N/A），输出格式确定性二值（不调 LLM）。**禁令判的角度反着来**——主动找违规、不判“遵守没”（如 `NEVER ...` / `不得编造`）。判不准报 N/A + 警告，不保守 FAIL（各类判法详表见 reference 的 audit 段）。产出 `audit-report.json` + `audit-report.html`（HTML always 写）。
+判定四类（条件性 / 禁令 / 步骤 / 输出格式）：前三类各走 PASS/FAIL/N/A（不适用），LLM 没判成的另报 UNCLEAR（判不准）；输出格式确定性二值（不调 LLM）。**禁令判的角度反着来**——主动找违规、不判“遵守没”（如 `NEVER ...` / `不得编造`）。判不准报 UNCLEAR + 警告，不保守 FAIL（各类判法详表见 reference 的 audit 段）。产出 `audit-report.json` + `audit-report.html`（HTML always 写）。
 
 ### `report` — HTML 报告
 
@@ -393,7 +393,7 @@ skill-eval run "$SKILL" --runs 3 -o "$OUT"
 
 # Step 3: 出门禁判决（exit code 驱动 CI）
 skill-eval gate "$OUT/iteration-1/benchmark.json" --min-win-rate 0.5
-echo $?    # 0=PASS / 1=FAIL / 2=N/A
+echo $?    # 0=PASS / 1=FAIL / 2=N/A(不适用) 或 UNCLEAR(判不准)
 
 # Step 4: 看报告
 skill-eval report "$OUT/iteration-1/" --open

@@ -280,18 +280,14 @@ class TranscriptAuditor:
         # findings(同文重复不再虚增 fail、by_instruction 不再同 transcript 双计)。
         all_findings = post_process_findings(all_findings)
 
-        # 宁少报不乱报:LLM 判不准的指令标 N/A(低置信度),不报假 FAIL。这里汇总
-        # 未判定数 → 警告,让人知道本次结果可能不完整(而非误读"0 FAIL = 全过")。
-        # 唯一置信度 <= _UNVERIFIABLE_CONFIDENCE 的就是"判不准兜底 N/A"(LLM 明确判
-        # N/A 是 _RESOLVED_CONFIDENCE=0.8;命中/确定性是 1.0)→ 阈值不会误伤。
-        unverified = sum(
-            1 for f in all_findings
-            if f.verdict == AuditVerdict.NA
-            and f.confidence <= _UNVERIFIABLE_CONFIDENCE
-        )
+        # 宁少报不乱报:LLM 判不准的指令标 UNCLEAR(不报假 FAIL)。这里汇总判不准数
+        # → 警告,让人知道本次结果可能不完整(而非误读"0 FAIL = 全过")。判不准即
+        # verdict==UNCLEAR(走 _make_unverifiable_na_finding,0.3);N/A(不适用,0.8)
+        # 是 LLM 明确判"场景不涉及",属已解决结论,不进警告。
+        unverified = sum(1 for f in all_findings if f.verdict == AuditVerdict.UNCLEAR)
         if unverified:
             warnings.append(
-                f"{unverified} 条指令因 LLM 判定失败标为 N/A"
+                f"{unverified} 条指令因 LLM 判定失败标为判不准(UNCLEAR)"
                 "(本次结果可能不完整,建议重跑)"
             )
 
@@ -300,6 +296,7 @@ class TranscriptAuditor:
             "pass": sum(1 for f in all_findings if f.verdict == AuditVerdict.PASS),
             "fail": sum(1 for f in all_findings if f.verdict == AuditVerdict.FAIL),
             "na": sum(1 for f in all_findings if f.verdict == AuditVerdict.NA),
+            "unclear": unverified,
         }
         return AuditReport(
             skill_name=skill_name,
@@ -645,17 +642,18 @@ class TranscriptAuditor:
         evidence: str,
         category: AuditCategory = AuditCategory.CONDITIONAL,
     ) -> AuditFinding:
-        """无法确证(LLM 失败 / 解析失败 / 畸形值 / 未提及)→ 标 N/A(宁少报不乱报)。
+        """无法确证(LLM 失败 / 解析失败 / 畸形值 / 未提及)→ 标 UNCLEAR(判不准,宁少报不乱报)。
 
         与 §48 当初的"保守 FAIL"相反:判不准时**不报 FAIL**(FAIL 必须站得住——LLM
-        明确判违规 / 该做没做)。判不准 → N/A,低置信度(= ``_UNVERIFIABLE_CONFIDENCE``),
+        明确判违规 / 该做没做)。判不准 → UNCLEAR(独立于 N/A:N/A 是"不适用"已解决,
+        UNCLEAR 是"没判成"未解决),低置信度(= ``_UNVERIFIABLE_CONFIDENCE``),
         ``audit()`` 据此汇总"未判定"警告让人知道本次结果可能不完整。``category`` 默认
         CONDITIONAL,prohibition / step 各自传入对应类别,以反映真实指令类别。
         """
         return AuditFinding(
             instruction_text=inst.instruction_text,
             source=inst.source.value,
-            verdict=AuditVerdict.NA,
+            verdict=AuditVerdict.UNCLEAR,
             category=category,
             evidence=evidence,
             confidence=_UNVERIFIABLE_CONFIDENCE,

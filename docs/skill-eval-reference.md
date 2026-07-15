@@ -269,11 +269,13 @@ skill-eval gate output/iteration-1/benchmark.json --no-programmatic-guard --min-
 
 **两轴**（§45 双主位）：
 - **客观侧 programmatic 回归守卫**（默认常开）：`delta.pass_rate_programmatic < 0` → FAIL；`>= 0` → PASS；纯主观题（无 programmatic expectation，值为 null）→ 此轴不适用。
-- **主观侧 comparison**（`--min-win-rate` opt-in）：tie-排除胜率 `a_wins/(a_wins+b_wins)` ≥ 阈值 → PASS；< 阈值且决定性比较数 ≥ `--min-valid` → FAIL；样本不足 → N/A。
+- **主观侧 comparison**（`--min-win-rate` opt-in）：tie-排除胜率 `a_wins/(a_wins+b_wins)` ≥ 阈值 → PASS；< 阈值且决定性比较数 ≥ `--min-valid` → FAIL；样本不足 → UNCLEAR（判不准）。
 
-**判决**：AND——任一适用轴 FAIL → FAIL；无 FAIL 但判不准/样本不足 → N/A；否则 PASS。写 `gate.json`，按 `PASS/FAIL/N/A` 退 `0/1/2`。
+**判决**：AND——任一适用轴 FAIL → FAIL；无 FAIL 但有适用轴信号不足（判不准/样本不足）→ **UNCLEAR**；无适用轴（守卫关 / 未请求 / 无信号）→ **N/A（不适用）**；否则 PASS。写 `gate.json`，按 `PASS/FAIL/N/A/UNCLEAR` 退 `0/1/2/2`（N/A 与 UNCLEAR 都 exit 2，消费方定）。
 
-> exit 2 双语义：**使用错误**（文件/解析错误，不写 gate.json）与 **N/A 判决**（信号不足，写 gate.json）都退 2——靠 gate.json 是否存在区分。
+> exit 2 多语义：**使用错误**（文件/解析错误，不写 gate.json）、**N/A 判决**（不适用，无适用轴）、**UNCLEAR 判决**（判不准，有轴但信号不足）都退 2——靠 gate.json 是否存在 + 其 `decision` 字段（N/A vs UNCLEAR）区分。
+>
+> **不适用（N/A）为何也 exit 2、不放行**：不适用=无适用轴，常意味着门禁根本没评上（如配置漏：纯主观题 + 没给 `--min-win-rate` + 关了 programmatic 守卫）。放行（exit 0）会让"没评"伪装成"通过"，有风险；故与判不准（UNCLEAR）一样退 exit 2 交消费方定（备选"不适用→exit 0 放行"暂缓，因放行风险）。两者都 exit 2，靠 gate.json 的 `decision` 字段区分 N/A vs UNCLEAR。
 
 ### `audit` — 真实 transcript 对账
 
@@ -304,20 +306,24 @@ skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl --form
 
 | 类别 | 来自哪些指令 | 怎么判 | 结论 |
 |------|------------|--------|------|
-| 条件性 CONDITIONAL | TOOL_REQUIREMENT / REFERENCE_USAGE（该用 X 工具、读 X 参考） | 命中 tool_trace → PASS（**不调 LLM**）；未命中 → LLM 判该场景该不该触发 | 遵循 / 违反 / N/A |
-| 禁令 PROHIBITION | CONSTRAINT / ANTI_FABRICATION（不许做 X） | LLM **主动检测这次有没有违规**（不是判“遵守没”） | 未违反→PASS / 违反→FAIL / 判不准→N/A |
-| 步骤 STEP | HEADING_STEP（应走第 N 步） | LLM 判走过 / 该走没走 / 不涉及 | pass / fail / na |
+| 条件性 CONDITIONAL | TOOL_REQUIREMENT / REFERENCE_USAGE（该用 X 工具、读 X 参考） | 命中 tool_trace → PASS（**不调 LLM**）；未命中 → LLM 判该场景该不该触发 | 遵循 / 违反 / N/A（不适用） |
+| 禁令 PROHIBITION | CONSTRAINT / ANTI_FABRICATION（不许做 X） | LLM **主动检测这次有没有违规**（不是判“遵守没”） | 未违反→PASS / 违反→FAIL / 判不准→UNCLEAR |
+| 步骤 STEP | HEADING_STEP（应走第 N 步） | LLM 判走过 / 该走没走 / 不涉及 | pass / fail / na（不适用） |
 | 输出格式 OUTPUT | OUTPUT_FORMAT（产物应含某格式） | **确定性子串匹配，不调 LLM** | 命中→PASS / 未命中→FAIL（无 N/A） |
 
 > **禁令判的角度反着来**：其它三类问“该不该做 / 做没做”（正面遵循），禁令问“这次执行里有没有发生**违反**这条禁令的行为”——主动找违规。例：`NEVER delete production data`、`不得编造不存在的错误码`（模型 hallucinate 一个码 → `violated=true` → FAIL）。
 
-> **判不准不乱报**：三类 LLM 判定（条件性 / 禁令 / 步骤）在 LLM 失败 / 解析失败 / 未提及时一律报 **N/A**（标 `⚠ 判不准`），**不保守 FAIL**——FAIL 只留给 LLM 明确判“违反 / 该做没做”。**何时提示“建议重跑”**：`⚠ 判不准` 条数 > 0 时，audit 在报告顶部出警告（`X 条指令因 LLM 判定失败标为 N/A，本次结果可能不完整，建议重跑`）。**重跑 = 重跑同一条 `audit` 命令**（纯对账、无副作用，不 re-run）；这些失败多为瞬态（LLM 后端失败 / 限流 / 输出截断，retry 没救回才落到这），重跑常能救回。不重跑则那些条没判成、可能漏掉真违规，故 **“0 FAIL ≠ 全过”**——看警告里 N/A 是不是 0、findings 里有没有 `⚠ 判不准` 标签。
+> **判不准不乱报**：三类 LLM 判定（条件性 / 禁令 / 步骤）在 LLM 失败 / 解析失败 / 未提及时一律报 **UNCLEAR（判不准）**，**不保守 FAIL**——FAIL 只留给 LLM 明确判“违反 / 该做没做”。
+>
+> **N/A 与判不准（UNCLEAR）是两码事，别混**：① **UNCLEAR（判不准）** = LLM 没给明确结论（失败 / 解析失败 / 未提及）→ 低置信（0.3）、结果不完整、汇总进警告提示重跑；② **N/A（不适用）** = 规则存在但本次 transcript 场景不触发——条件性类 LLM 明确判“不涉及”（`applicable=false`）、步骤类 LLM 返回“na”（场景不涉及该步）→ 置信 0.8、是**已解决的有效结论**、不进警告、不用重跑。后者为什么会有：提取是**对 SKILL 静态全抽**（skill 写了“读 references/foo.md”就抽一条），但“该读 foo.md”有触发条件——audit 一个根本不涉及该条件的 transcript 时，agent 没读是对的，不能 FAIL 也不能 PASS（规则没被触发），故 N/A（不适用）。
+>
+> **何时提示“建议重跑”**：`⚠ 判不准`（UNCLEAR）条数 > 0 时，audit 在报告顶部出警告（`X 条指令因 LLM 判定失败标为判不准(UNCLEAR)，本次结果可能不完整，建议重跑`）。**重跑 = 重跑同一条 `audit` 命令**（纯对账、无副作用，不 re-run）；这些失败多为瞬态（LLM 后端失败 / 限流 / 输出截断，retry 没救回才落到这），重跑常能救回。不重跑则那些条没判成、可能漏掉真违规，故 **“0 FAIL ≠ 全过”**——看警告里判不准（UNCLEAR）是不是 0、findings 里有没有 `⚠ 判不准` 标签。
 
-产出 `<out>/audit-report.json`（机器读）+ `<out>/audit-report.html`（人读，**always 写**，与 JSON 并列，对齐 scoring report 视觉）。HTML 自上而下：① 头部（skill / summary 计数徽章 / 反推指令数）② 警告框（可信度，低置信 N/A 等）③ 系统性聚合表（**仅多 transcript**，跨会话 fail% + fail in transcripts）④ findings 全集（**含 PASS**，每条带 evidence / confidence / verdict 徽章 / category / source；多 transcript 按指令分组可折叠，FAIL/N/A 默认展开）。
+产出 `<out>/audit-report.json`（机器读）+ `<out>/audit-report.html`（人读，**always 写**，与 JSON 并列，对齐 scoring report 视觉）。HTML 自上而下：① 头部（skill / summary 计数徽章 / 反推指令数）② 警告框（可信度，判不准 UNCLEAR 等）③ 系统性聚合表（**仅多 transcript**，跨会话 fail% + fail in transcripts）④ findings 全集（**含 PASS**，每条带 evidence / confidence / verdict 徽章 / category / source；多 transcript 按指令分组可折叠，FAIL/UNCLEAR/N/A 默认展开）。
 
 > **「X 条由 transcript 反推」是什么**：findings 里 `derived_from_transcript: true` 的不是 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（只增不减）。v1 只补一类：transcript 里 agent 真实 Read 过的输入/参考文件（`digest.input_files`）→ 各补一条「读取 \<path\>」（REFERENCE_USAGE）。例：SKILL.md 只写"读用户指定的日志文件"不点名，transcript 实际读了 `app.log` → 反推一条「读取 app.log」并确认命中。这类由 Read 行为反推的 read 检查构造上即 PASS（不膨胀 fail），作用是把 agent 真碰过的输入文件记进报告。`required_tools`（Bash 命令分不清业务/通用）、`required_outputs`（历史 trace 产物未必还在盘）不反推。
 
-> **怎么看结果（别只数 fail）**：每条 finding 带 **#N 序号**。① **同文重复已去重**——同句被抽成 `CONSTRAINT` + `ANTI_FABRICATION` 的合并成一条、来源徽章显 `CONSTRAINT + ANTI_FABRICATION`（不再虚增 fail）。② **同行为跨类已关联**——同一行为（如没读某 reference）同时违反 条件性 + 步骤 两条**不同**规则的，仍是两条（确是两条规则），但互标 `↔ 同源违规 #N`（可点跳）；故 fail 条数仍可能 > 真实问题数，**逐条看 evidence 对照"哪个行为"**，别数条数。③ **N/A 多 ≠ 全过**——三类 LLM 判定低置信一律 N/A（见上），汇总成警告提示重跑。④ **对照预期**：自带 3 个 audit 示例的预期违规已逐条列明（见 [example-skills/README.md](../fixtures/example-skills/README.md)），跑完比对该抓的违规是否都出现在 FAIL、evidence 是否点中。⑤ **置信度标签**（每条右侧，悬停看原值+由来）：`✓ 确定`=程序对账（tool_trace 命中 / 子串匹配，不调 LLM，最硬）、`LLM 判定`=LLM 明确结论、`⚠ 判不准`=没判成（N/A、结果不完整，汇总进警告）。
+> **怎么看结果（别只数 fail）**：每条 finding 带 **#N 序号**。① **同文重复已去重**——同句被抽成 `CONSTRAINT` + `ANTI_FABRICATION` 的合并成一条、来源徽章显 `CONSTRAINT + ANTI_FABRICATION`（不再虚增 fail）。② **同行为跨类已关联**——同一行为（如没读某 reference）同时违反 条件性 + 步骤 两条**不同**规则的，仍是两条（确是两条规则），但互标 `↔ 同源违规 #N`（可点跳）；故 fail 条数仍可能 > 真实问题数，**逐条看 evidence 对照"哪个行为"**，别数条数。③ **判不准（UNCLEAR）多 ≠ 全过**——LLM 没判成的一律 UNCLEAR（见上），汇总成警告提示重跑；N/A（不适用）是已解决结论、不进警告。④ **对照预期**：自带 3 个 audit 示例的预期违规已逐条列明（见 [example-skills/README.md](../fixtures/example-skills/README.md)），跑完比对该抓的违规是否都出现在 FAIL、evidence 是否点中。⑤ **置信度标签**（每条右侧，悬停看原值+由来）：`✓ 确定`=程序对账（tool_trace 命中 / 子串匹配，不调 LLM，最硬）、`LLM 判定`=LLM 明确结论、`⚠ 判不准`=没判成（UNCLEAR、结果不完整，汇总进警告）。
 
 ### `report` — HTML 报告
 
@@ -713,7 +719,7 @@ Skill-Eval 从 skill-creator 移植并改造了以下核心代码：
 |------|------|
 | 0 | PASS |
 | 1 | FAIL（客观回归 或 主观不过阈值） |
-| 2 | N/A（信号不足）或 使用错误（文件/解析错误）——靠 gate.json 是否存在区分 |
+| 2 | N/A（不适用，无适用轴）或 UNCLEAR（判不准，信号不足）或 使用错误（文件/解析错误）——靠 gate.json 是否存在 + decision 字段区分 |
 
 ### 其他
 
@@ -739,7 +745,7 @@ Skill-Eval 从 skill-creator 移植并改造了以下核心代码：
 ```bash
 skill-eval run v2/ --skill-b v1/ --evals baseline.json --runs 3 -o out/
 skill-eval gate out/iteration-1/benchmark.json --min-win-rate 0.5
-echo $?   # 0=PASS / 1=FAIL / 2=N/A
+echo $?   # 0=PASS / 1=FAIL / 2=N/A(不适用) 或 UNCLEAR(判不准)
 ```
 
 ### 静态分析 / inspect 需要 Claude CLI 吗？
@@ -765,7 +771,7 @@ skill-eval run v2/ --skill-b v1/ --evals baseline.json --runs 3 -o out/
 
 # 4. 出判决 → exit code 驱动 CI check
 skill-eval gate out/iteration-1/benchmark.json --min-win-rate 0.5
-# exit: 0=PASS(放行) / 1=FAIL(卡合并) / 2=N/A(信号不足,消费方定)
+# exit: 0=PASS(放行) / 1=FAIL(卡合并) / 2=N/A(不适用) 或 UNCLEAR(判不准),消费方定
 ```
 
-门禁阈值与 CI 落点（分支保护、check 名、N/A 是否阻塞）归消费方配置——skill-eval 只提供机制（三态 exit + gate.json）。
+门禁阈值与 CI 落点（分支保护、check 名、N/A / UNCLEAR 是否阻塞）归消费方配置——skill-eval 只提供机制（PASS/FAIL/exit-2 兼盖 N/A 与 UNCLEAR + gate.json）。

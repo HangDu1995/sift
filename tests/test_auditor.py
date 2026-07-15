@@ -199,7 +199,7 @@ class TestUnmatchedLlm:
         findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.NA  # 不报 FAIL,标 N/A(判不准)
+        assert f.verdict == AuditVerdict.UNCLEAR  # 不报 FAIL,标 UNCLEAR(判不准)
         assert f.category == AuditCategory.CONDITIONAL
         assert f.confidence <= 0.5  # 低置信度(判不准兜底,非 LLM 明确判 N/A)
         assert "无法确证" in f.evidence
@@ -216,7 +216,7 @@ class TestUnmatchedLlm:
         findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.NA
+        assert f.verdict == AuditVerdict.UNCLEAR
         assert "无法确证" in f.evidence
         assert f.confidence <= 0.5
 
@@ -236,7 +236,7 @@ class TestUnmatchedLlm:
         findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A,不报 FAIL
+        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR,不报 FAIL
         assert f.confidence <= 0.5  # 低置信度(判不准兜底)
         assert "无法确证" in f.evidence
 
@@ -255,7 +255,7 @@ class TestUnmatchedLlm:
         findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A,不报 FAIL
+        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR,不报 FAIL
         assert f.confidence <= 0.5
         assert "无法确证" in f.evidence
 
@@ -441,7 +441,7 @@ class TestJudgeProhibition:
         )
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A,不报假 FAIL
+        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR,不报假 FAIL
         assert f.category == AuditCategory.PROHIBITION
         assert f.confidence <= 0.5
         assert "无法确证" in f.evidence
@@ -458,7 +458,7 @@ class TestJudgeProhibition:
         )
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.NA
+        assert f.verdict == AuditVerdict.UNCLEAR
         assert f.confidence <= 0.5
         assert "无法确证" in f.evidence
 
@@ -475,7 +475,7 @@ class TestJudgeProhibition:
         )
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A,既不当 PASS 也不报 FAIL
+        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR,既不当 PASS 也不报 FAIL
         assert f.confidence <= 0.5
         assert "无法确证" in f.evidence
 
@@ -497,7 +497,7 @@ class TestJudgeProhibition:
         )
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A
+        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR
         assert f.confidence <= 0.5
         assert "无法确证" in f.evidence
 
@@ -672,7 +672,7 @@ class TestJudgeStep:
         auditor = TranscriptAuditor()
 
         f = auditor._judge_step([_step_inst()], "某执行记录", "s.jsonl")[0]
-        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A,不报 FAIL
+        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR,不报 FAIL
         assert f.category == AuditCategory.STEP
         assert f.confidence <= 0.5
         assert "无法确证" in f.evidence
@@ -685,7 +685,7 @@ class TestJudgeStep:
         auditor = TranscriptAuditor()
 
         f = auditor._judge_step([_step_inst()], "某执行记录", "s.jsonl")[0]
-        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A
+        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR
         assert f.confidence <= 0.5
         assert "无法确证" in f.evidence
 
@@ -697,7 +697,7 @@ class TestJudgeStep:
         auditor = TranscriptAuditor()
 
         f = auditor._judge_step([_step_inst()], "某执行记录", "s.jsonl")[0]
-        assert f.verdict == AuditVerdict.NA  # 判不准 → N/A
+        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR
         assert f.confidence <= 0.5
         assert "无法确证" in f.evidence
 
@@ -961,7 +961,7 @@ class TestAuditAggregate:
         assert sorted(f.transcript for f in report.findings) == ["t1.jsonl", "t1.jsonl", "t2.jsonl", "t2.jsonl"]
 
         # summary 精确:每 transcript (1 N/A [Bash 未调] + 1 PASS [读取 foo.md 命中])
-        assert report.summary == {"total": 4, "pass": 2, "fail": 0, "na": 2}
+        assert report.summary == {"total": 4, "pass": 2, "fail": 0, "na": 2, "unclear": 0}
 
         # derived 标记:2 个 PASS finding(读取 foo.md)标 derived_from_transcript=True,
         # 2 个 N/A finding(use Bash,来自 skill_body 静态指令)保持 False
@@ -1008,7 +1008,7 @@ class TestAuditAggregate:
         assert report.findings == []
         assert report.transcripts == []
         assert report.warnings == []
-        assert report.summary == {"total": 0, "pass": 0, "fail": 0, "na": 0}
+        assert report.summary == {"total": 0, "pass": 0, "fail": 0, "na": 0, "unclear": 0}
 
     def test_routes_each_category(self, tmp_path, monkeypatch) -> None:
         """skill_body 含四类指令 + REFERENCES → 各自路由到正确 category 判定(覆盖四桶)。
@@ -1182,8 +1182,8 @@ class TestProgressCallback:
         flat = " ".join(msgs)
         assert "失败" in flat
         assert "Reached max turns" in flat  # 原因带出来了,不只'兜底 N/A'
-        # 判定本身仍兜底为 N/A(失败不报假 FAIL)
-        assert findings[0].verdict == AuditVerdict.NA
+        # 判定本身仍兜底为 UNCLEAR(判不准,失败不报假 FAIL)
+        assert findings[0].verdict == AuditVerdict.UNCLEAR
 
     def test_zero_parsed_batch_emits_warning_prohibition(self, monkeypatch) -> None:
         """调用成功但整批 0 条解析成功(LLM 输出畸形/空)→ 打可见警告,不只静默 N/A。
@@ -1203,7 +1203,7 @@ class TestProgressCallback:
         flat = " ".join(msgs)
         assert "完成" in flat  # 调用确实成功了(不是 RuntimeError)
         assert "0 条解析成功" in flat  # ⚠ 但解析为空,可见警告
-        assert all(f.verdict == AuditVerdict.NA for f in findings)  # 仍兜底 N/A
+        assert all(f.verdict == AuditVerdict.UNCLEAR for f in findings)  # 仍兜底 UNCLEAR(判不准)
 
     def test_zero_parsed_batch_emits_warning_conditional(self, monkeypatch) -> None:
         """条件性批(标量 mask 形状)同样:0 条解析成功 → ⚠ 警告。"""
@@ -1217,7 +1217,7 @@ class TestProgressCallback:
         )
         flat = " ".join(msgs)
         assert "0 条解析成功" in flat
-        assert all(f.verdict == AuditVerdict.NA for f in findings)
+        assert all(f.verdict == AuditVerdict.UNCLEAR for f in findings)
 
     def test_zero_parsed_triggers_retry_and_recovers(self, monkeypatch) -> None:
         """0 解析成功 → 自动重试,重试拿到能解析的输出 → 真 verdict(非兜底 N/A)。

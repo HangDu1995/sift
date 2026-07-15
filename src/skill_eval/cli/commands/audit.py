@@ -121,17 +121,17 @@ def audit(
             )
         console.print(agg)
 
-    # 只列 FAIL/N/A 明细(PASS 是默认正常态,太多;FAIL/N/A 才是关注点)。
+    # 只列 FAIL/UNCLEAR/N/A 明细(PASS 是默认正常态,太多;FAIL/UNCLEAR 才是关注点,N/A 不适用也列)。
     non_pass = [f for f in report.findings if f.verdict != AuditVerdict.PASS]
     if non_pass:
-        table = Table(title="Findings (FAIL / N/A)")
+        table = Table(title="Findings (FAIL / UNCLEAR / N/A)")
         table.add_column("verdict", style="bold")
         table.add_column("category")
         table.add_column("instruction_text")
         table.add_column("transcript")
         table.add_column("evidence")
         for f in non_pass:
-            color = "red" if f.verdict == AuditVerdict.FAIL else "yellow"
+            color = "red" if f.verdict == AuditVerdict.FAIL else ("yellow" if f.verdict == AuditVerdict.UNCLEAR else "dim")
             table.add_row(
                 f"[{color}]{f.verdict.value}[/{color}]",
                 f.category.value,

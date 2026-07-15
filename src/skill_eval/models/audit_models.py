@@ -16,7 +16,8 @@ class AuditVerdict(str, Enum):
 
     PASS = "PASS"
     FAIL = "FAIL"
-    NA = "N/A"
+    NA = "N/A"  # 不适用:规则存在但本次 transcript 场景不触发(applicable=false / STEP-LLM-"na"),已解决的结论(0.8)
+    UNCLEAR = "UNCLEAR"  # 判不准:LLM 失败/解析失败/未提及,没判成(_make_unverifiable_na_finding,0.3),结果不完整→汇总警告提示重跑
 
 
 class AuditCategory(str, Enum):
@@ -63,7 +64,8 @@ class InstructionAggregate(BaseModel):
     category: AuditCategory
     pass_count: int
     fail_count: int
-    na_count: int
+    na_count: int  # 不适用(applicable=false / STEP-"na")
+    unclear_count: int = 0  # 判不准(LLM 没判成)
     total: int
     fail_rate: float  # fail_count / total(total=0 时 0.0)
     fail_in_transcripts: list[str]  # 哪些 transcript 里判 FAIL(定位用)
@@ -74,7 +76,7 @@ class AuditReport(BaseModel):
 
     skill_name: str
     transcripts: list[str]
-    summary: dict  # {"total": N, "pass": X, "fail": Y, "na": Z}
+    summary: dict  # {"total": N, "pass": X, "fail": Y, "na": Z(不适用), "unclear": W(判不准)}
     findings: list[AuditFinding]
     # 多 transcript 对账的指令级聚合(按 fail_rate 降序);单 transcript 也有(每指令 1 verdict)。
     by_instruction: list[InstructionAggregate] = Field(default_factory=list)

@@ -66,6 +66,7 @@
     .badge-pass { color: var(--green); font-weight: 600; }
     .badge-fail { color: var(--red); font-weight: 600; }
     .badge-na { color: var(--accent); font-weight: 600; }
+    .badge-unclear { color: var(--red); font-weight: 600; }
 
     .derived { color: var(--text-muted); font-size: 0.9em; font-weight: normal; }
 
@@ -81,6 +82,7 @@
     .finding.FAIL { border-left: 3px solid var(--red); }
     .finding.PASS { border-left: 3px solid var(--green); }
     .finding.NA { border-left: 3px solid var(--accent); }
+    .finding.UNCLEAR { border-left: 3px dashed var(--red); }
     .instruction { font-weight: 600; margin: 0.25rem 0; }
     .evidence { color: var(--text-muted); font-size: 0.9rem; margin: 0.25rem 0; }
     .transcript { color: var(--text-muted); font-size: 0.8rem; }
@@ -120,7 +122,7 @@
       }
 
       // confidence 三档 → 人话标签(替代裸数字 1.0/0.8/0.3):程序对账=✓ 确定、LLM 明确=LLM 判定、
-      // 判不准=⚠ 判不准(对应 verdict N/A,audit 汇总成"未判定"警告)。原值 + 由来进 title 悬停说明。
+      // 判不准=⚠ 判不准(对应 verdict UNCLEAR,audit 汇总成"未判定"警告)。原值 + 由来进 title 悬停说明。
       function confTag(c) {
         if (typeof c !== 'number') return '<span class="conf" title="无置信度">—</span>';
         if (c >= 1.0) return '<span class="conf conf-ok" title="confidence 1.0 · 程序对账(tool_trace 命中 / 子串匹配),不调 LLM">✓ 确定</span>';
@@ -130,8 +132,8 @@
 
       // 单个 finding 的内层 HTML(finding-head + instruction + evidence + transcript)。多/单分支共用,DRY。
       function renderFinding(f) {
-        var cls = f.verdict === 'PASS' ? 'badge-pass' : (f.verdict === 'FAIL' ? 'badge-fail' : 'badge-na');
-        var icon = f.verdict === 'PASS' ? '✓' : (f.verdict === 'FAIL' ? '✗' : '❓');
+        var cls = f.verdict === 'PASS' ? 'badge-pass' : (f.verdict === 'FAIL' ? 'badge-fail' : (f.verdict === 'UNCLEAR' ? 'badge-unclear' : 'badge-na'));
+        var icon = f.verdict === 'PASS' ? '✓' : (f.verdict === 'FAIL' ? '✗' : (f.verdict === 'UNCLEAR' ? '⚠' : '❓'));
         var derived = f.derived_from_transcript ? ' <span class="derived">↺ 反推</span>' : '';
         var seqTag = f.seq ? '<span class="seq">#' + escapeHtml(f.seq) + '</span>' : '';
         // 来源徽章:同文去重后多来源用 " + " 连(已排序);单来源原样。sources 空则退回 source。
@@ -177,6 +179,7 @@
             '<span class="badge-pass">✅ 通过 ' + (s.pass || 0) + '</span>' +
             '<span class="badge-fail">❌ 失败 ' + (s.fail || 0) + '</span>' +
             '<span class="badge-na">❓ N/A ' + (s.na || 0) + '</span>' +
+            '<span class="badge-unclear">⚠ 判不准 ' + (s.unclear || 0) + '</span>' +
             '<span>共 ' + (s.total || 0) + '</span>' +
             (derivedCount ? ' · <span class="derived">↺ ' + derivedCount + ' 条由 transcript 反推</span>' : '') +
           '</div>' +
@@ -215,7 +218,7 @@
       }
 
       // ④ findings:多 transcript → 按指令分组(可折叠);单 transcript → 扁平
-      var ORDER = { 'FAIL': 0, 'N/A': 1, 'PASS': 2 };
+      var ORDER = { 'FAIL': 0, 'UNCLEAR': 1, 'N/A': 2, 'PASS': 3 };
       if (multi) {
         root.insertAdjacentHTML('beforeend',
           '<div id="audit-findings-grouped" class="findings-grouped"><h2>明细(按指令分组)</h2></div>');

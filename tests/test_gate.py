@@ -81,10 +81,10 @@ def test_comparison_fail_below_threshold():
     assert r.axes["comparison"].verdict == "FAIL"
 
 
-def test_comparison_NA_insufficient_sample():
+def test_comparison_unclear_insufficient_sample():
     r = evaluate_gate(_bench("+0.27", _cs(2, 0)), min_win_rate=0.5, min_valid=3)
-    assert r.axes["comparison"].verdict == "N/A"  # decisive 2 < min_valid 3
-    assert r.decision == "N/A"  # 客观 PASS 但主观样本不足 → N/A
+    assert r.axes["comparison"].verdict == "N/A"  # decisive 2 < min_valid 3(轴级仍 N/A,applicable=True 信号不足)
+    assert r.decision == "UNCLEAR"  # 客观 PASS 但主观样本不足 → 判不准(UNCLEAR,非不适用 N/A)
 
 
 def test_comparison_NA_all_ties():

@@ -209,11 +209,12 @@ class TestAuditEndToEnd:
             "pass": sum(1 for f in report.findings if f.verdict == AuditVerdict.PASS),
             "fail": sum(1 for f in report.findings if f.verdict == AuditVerdict.FAIL),
             "na": sum(1 for f in report.findings if f.verdict == AuditVerdict.NA),
+            "unclear": sum(1 for f in report.findings if f.verdict == AuditVerdict.UNCLEAR),
         }
         assert report.summary == expected
         # 明确数值:5 = 2 CONDITIONAL(Bash 命中 + 反推 notes.md 命中)
         #              + 1 PROHIBITION(violated) + 1 STEP(pass) + 1 OUTPUT(子串命中)
-        assert report.summary == {"total": 5, "pass": 4, "fail": 1, "na": 0}
+        assert report.summary == {"total": 5, "pass": 4, "fail": 1, "na": 0, "unclear": 0}
 
         # ---- LLM 边界:条件性两条全命中(不调 LLM),只有禁令 + 步骤各调一次 = 2 次
         assert calls["n"] == 2
@@ -248,7 +249,7 @@ class TestConditionalNaPath:
         assert f.source == "TOOL_REQUIREMENT"
         assert "场景不涉及" in f.evidence
         # summary 的 na 计数与 findings 一致
-        assert report.summary == {"total": 1, "pass": 0, "fail": 0, "na": 1}
+        assert report.summary == {"total": 1, "pass": 0, "fail": 0, "na": 1, "unclear": 0}
         # 未命中 → N/A 来自 LLM 判定(非命中短路),即 applicable 路径确实被走过。
         # (auditor 对空桶也调一次 call_claude、不在空 batch 短路,故实际调用 ≥1;
         #  这里只断言"走过 LLM"这一事实,不绑定空桶调用次数以免耦合实现细节。)
@@ -288,8 +289,9 @@ class TestUnverifiableNoFalseFail:
         # 关键:LLM 全挂 → 0 假 FAIL(旧保守 FAIL 会产出 N 条 FAIL = 乱报)
         assert report.summary["fail"] == 0
         assert report.summary["pass"] == 0
-        # 三条指令(条件性未命中 + 禁令 + 步骤)全标 N/A
-        assert report.summary["na"] == 3
+        # 三条指令(条件性未命中 + 禁令 + 步骤)全标 UNCLEAR(判不准)
+        assert report.summary["unclear"] == 3
+        assert report.summary["na"] == 0
         # 全是低置信度兜底 N/A(非 LLM 明确判的 resolved N/A=0.8)
         assert all(f.confidence <= 0.3 for f in report.findings)
         # 低置信度 N/A 汇总成警告:提示结果不完整、建议重跑

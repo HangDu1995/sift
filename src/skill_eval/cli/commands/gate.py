@@ -55,7 +55,7 @@ def gate(
         encoding="utf-8",
     )
 
-    color = {"PASS": "green", "FAIL": "red", "N/A": "yellow"}[result.decision]
+    color = {"PASS": "green", "FAIL": "red", "N/A": "yellow", "UNCLEAR": "yellow"}[result.decision]
     console.print(f"[{color}][{result.decision}][/{color}] {result.reason}")
     for w in result.warnings:
         console.print(f"[yellow]⚠ {w}[/yellow]")
