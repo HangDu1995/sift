@@ -37,5 +37,9 @@ def call_claude(
         proc.wait()
         raise RuntimeError(f"claude CLI timed out after {timeout}s")
     if proc.returncode != 0:
-        raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {err[:500]}")
+        # claude CLI 实测把输出/错误打 stdout、stderr 常空(后端不可用时 exit 1 +
+        # stderr 空),只报 stderr 会得到冒号后空白的报错、根因被吞。两条都查才看得到;
+        # 优先 stderr(常规错误通道),空则 fallback stdout。
+        detail = err.strip() or out.strip()
+        raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {detail[:500]}")
     return out

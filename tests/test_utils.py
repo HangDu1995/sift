@@ -60,3 +60,14 @@ def test_call_claude_nonzero_exit_raises(monkeypatch, tmp_path):
     _prepend_path(monkeypatch, tmp_path)
     with pytest.raises(RuntimeError, match="failed"):
         call_claude("x", timeout=10)
+
+
+def test_call_claude_nonzero_exit_shows_stdout_when_stderr_empty(monkeypatch, tmp_path):
+    # claude CLI 实测把输出/错误打 stdout、stderr 常空。报错信息必须能看到根因,
+    # 不能是空的 "failed (exit 1): "(曾发生:后端不可用时 exit 1 + stderr 空,
+    # 报错行冒号后空白,根因被吞)。优先 stderr、stderr 空则 fallback stdout。
+    _make_fake_claude(tmp_path, "echo 'rate limit exceeded, retry later'\nexit 1")  # 错误打 stdout
+    _prepend_path(monkeypatch, tmp_path)
+    with pytest.raises(RuntimeError, match="rate limit exceeded") as exc:
+        call_claude("x", timeout=10)
+    assert "failed" in str(exc.value)
