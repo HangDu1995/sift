@@ -90,13 +90,31 @@ def test_audit_html_renders_by_instruction_and_groups_findings_multi_transcript(
                 category=AuditCategory.PROHIBITION, pass_count=1, fail_count=2,
                 na_count=0, total=3, fail_rate=2 / 3,
                 fail_in_transcripts=["t1.jsonl", "t2.jsonl"],
+                fail_seqs=[2, 5],
+            ),
+            InstructionAggregate(
+                instruction_text="Use ref: security-policy.md", source="REFERENCE_USAGE",
+                category=AuditCategory.CONDITIONAL, pass_count=0, fail_count=0,
+                na_count=2, total=2, fail_rate=0.0,
+                fail_in_transcripts=[],
+                na_in_transcripts=["t1.jsonl", "t2.jsonl"],
+                na_seqs=[8, 9],
             ),
         ],
         warnings=[],
     )
     html = AuditReportGenerator().generate_html(report)
-    # 结构标记(RED 锚点;多 transcript 才产出)
-    assert 'id="audit-by-instruction"' in html
+    # 拆两张表:违规 FAIL(fail>0)+ 场景不适用 N/A(na>0),模板里各有独立 id/标题/表头
+    # (静态 render-smoke 只验模板结构 + 数据流;行内容如 2/2、明细 #N 是 JS 运行时算的,
+    #  源码里没有,运行时正确性靠 node --check + 读 JS + 终端并行实现已运行时测过)
+    assert 'id="audit-by-instruction-fail"' in html   # 违规表(fail_count>0 → 渲染)
+    assert 'id="audit-by-instruction-na"' in html     # 场景不适用表(na_count>0 → 渲染)
+    assert '违规 FAIL' in html
+    assert '场景不适用 N/A' in html
+    assert html.count('<th>明细 #</th>') >= 2         # 两张表各有明细 # 列(交叉引用到明细)
+    assert 'na/total' in html                         # N/A 表头列(模板字面量)
+    assert 'na_in_transcripts' in html                # 字段随 model_dump 注入页面,供 JS 消费
+    assert 'fail_seqs' in html and 'na_seqs' in html  # 明细 #N 数据流入页面
     assert 'id="audit-findings-grouped"' in html
     # 单 transcript 的扁平容器在多 transcript 下不应出现(分组了)
     assert 'id="audit-findings"' not in html or 'id="audit-findings-grouped"' in html

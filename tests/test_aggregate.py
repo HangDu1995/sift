@@ -22,6 +22,7 @@ def _f(
     transcript: str,
     source: str = "TOOL_REQUIREMENT",
     category: AuditCategory = AuditCategory.CONDITIONAL,
+    seq: int = 0,
 ) -> AuditFinding:
     return AuditFinding(
         instruction_text=text,
@@ -31,6 +32,7 @@ def _f(
         evidence="e",
         confidence=1.0,
         transcript=transcript,
+        seq=seq,
     )
 
 
@@ -100,3 +102,25 @@ class TestAggregateByInstruction:
         ]
         rows = aggregate_by_instruction(findings)
         assert rows[0].instruction_text == "alpha"  # fail_rate 0.67 > 0.5
+
+    def test_na_in_transcripts_and_seqs_track_where_instruction_was_na(self):
+        """na_in_transcripts 记录哪几段判 N/A,na_seqs 记录对应明细 #N(供 N/A 聚合表
+        交叉引用到明细)。同指令两段都 N/A → 2 条 transcript + 2 个 #N。
+
+        例:security-policy 两段日志都没安全事件 → 两段都 N/A(na/total 2/2);
+        error-codes 只 span2 没触发 → 1 条。"""
+        findings = [
+            _f("Use ref: security-policy.md", AuditVerdict.NA, "span1", seq=3),
+            _f("Use ref: security-policy.md", AuditVerdict.NA, "span2", seq=7),
+            _f("Use ref: error-codes.md", AuditVerdict.PASS, "span1", seq=1),
+            _f("Use ref: error-codes.md", AuditVerdict.NA, "span2", seq=5),
+        ]
+        rows = {r.instruction_text: r for r in aggregate_by_instruction(findings)}
+        sec = rows["Use ref: security-policy.md"]
+        assert sec.na_count == 2 and sec.total == 2
+        assert set(sec.na_in_transcripts) == {"span1", "span2"}
+        assert set(sec.na_seqs) == {3, 7}
+        ec = rows["Use ref: error-codes.md"]
+        assert ec.na_count == 1
+        assert set(ec.na_in_transcripts) == {"span2"}
+        assert set(ec.na_seqs) == {5}

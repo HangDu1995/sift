@@ -267,3 +267,74 @@ def test_by_skill_multi_transcript_same_stem_no_collision(monkeypatch, tmp_path)
     joined = "\n".join(contents.values())
     assert "/tmp/A-run1.md" in joined
     assert "/tmp/A-run2.md" in joined
+
+
+def test_by_instruction_split_into_fail_and_na_tables(monkeypatch, tmp_path):
+    """聚合表拆两张:fail>0 进「违规」表(fail%/fail/total),na>0 进「场景不适用」表
+    (na/total + 哪几段不适用);全 PASS 隐藏。na-only 行不再套 fail 列(那曾误导:
+    N/A 行显示 0% fail / fail/total 0/2,看着像有 fail)。
+
+    造 2-transcript 报告:I-FAIL(t1 FAIL/t2 PASS)、I-NA(两段都 N/A)、I-PASS(全 PASS)。
+    断言:I-FAIL 在违规表带 1/2;I-NA 在 N/A 表带 2/2 + 两段;I-PASS 不出现。
+    """
+    from skill_eval.audit.aggregate import aggregate_by_instruction
+
+    findings = [
+        AuditFinding(instruction_text="I-FAIL", source="HEADING_STEP",
+                     verdict=AuditVerdict.FAIL, category=AuditCategory.STEP,
+                     evidence="e", confidence=0.8, transcript="t1.jsonl", seq=2),
+        AuditFinding(instruction_text="I-FAIL", source="HEADING_STEP",
+                     verdict=AuditVerdict.PASS, category=AuditCategory.STEP,
+                     evidence="e", confidence=0.8, transcript="t2.jsonl", seq=1),
+        AuditFinding(instruction_text="I-NA", source="REFERENCE_USAGE",
+                     verdict=AuditVerdict.NA, category=AuditCategory.CONDITIONAL,
+                     evidence="e", confidence=0.8, transcript="t1.jsonl", seq=3),
+        AuditFinding(instruction_text="I-NA", source="REFERENCE_USAGE",
+                     verdict=AuditVerdict.NA, category=AuditCategory.CONDITIONAL,
+                     evidence="e", confidence=0.8, transcript="t2.jsonl", seq=4),
+        AuditFinding(instruction_text="I-PASS", source="HEADING_STEP",
+                     verdict=AuditVerdict.PASS, category=AuditCategory.STEP,
+                     evidence="e", confidence=0.8, transcript="t1.jsonl", seq=5),
+        AuditFinding(instruction_text="I-PASS", source="HEADING_STEP",
+                     verdict=AuditVerdict.PASS, category=AuditCategory.STEP,
+                     evidence="e", confidence=0.8, transcript="t2.jsonl", seq=6),
+    ]
+    report = AuditReport(
+        skill_name="skillA",
+        transcripts=["t1.jsonl", "t2.jsonl"],
+        summary={"total": 6, "pass": 3, "fail": 1, "na": 2},
+        findings=findings,
+        warnings=[],
+        by_instruction=aggregate_by_instruction(findings),
+    )
+
+    class _Fake:
+        def audit(self, *a, **k):
+            return report
+
+    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _Fake())
+
+    sp = _skill_dir(tmp_path, "skillA")
+    tp1 = _write_jsonl(tmp_path / "t1.jsonl", [_skill("s1", "skillA")])
+    tp2 = _write_jsonl(tmp_path / "t2.jsonl", [_skill("s2", "skillA")])
+    out = tmp_path / "out"
+
+    r = runner.invoke(
+        app,
+        ["audit", str(sp), "--transcript", str(tp1), "--transcript", str(tp2),
+         "-o", str(out)],
+    )
+    assert r.exit_code == 0, r.output
+    text = r.output
+
+    # 违规表:I-FAIL + fail/total 1/2 + 明细 #2(只有 t1 那条 FAIL 的 seq;t2 是 PASS 不进 fail_seqs)
+    assert "I-FAIL" in text
+    assert "1/2" in text
+    assert "#2" in text
+    # 场景不适用表:I-NA + na/total 2/2 + 明细 #3,#4(两条 N/A 的 seq),且两段都列出
+    assert "I-NA" in text
+    assert "2/2" in text
+    assert "#3" in text and "#4" in text
+    assert "t1.jsonl" in text and "t2.jsonl" in text
+    # 全 PASS 的 I-PASS 隐藏
+    assert "I-PASS" not in text

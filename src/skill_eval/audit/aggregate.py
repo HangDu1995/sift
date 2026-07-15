@@ -58,6 +58,9 @@ def aggregate_by_instruction(
                 "na": 0,
                 "unclear": 0,
                 "fail_in_transcripts": [],
+                "na_in_transcripts": [],
+                "fail_seqs": [],
+                "na_seqs": [],
             },
         )
         if f.verdict == AuditVerdict.PASS:
@@ -65,10 +68,13 @@ def aggregate_by_instruction(
         elif f.verdict == AuditVerdict.FAIL:
             g["fail"] += 1
             g["fail_in_transcripts"].append(f.transcript)
+            g["fail_seqs"].append(f.seq)
         elif f.verdict == AuditVerdict.UNCLEAR:
             g["unclear"] += 1
         else:  # AuditVerdict.NA(不适用)
             g["na"] += 1
+            g["na_in_transcripts"].append(f.transcript)
+            g["na_seqs"].append(f.seq)
 
     rows: list[InstructionAggregate] = []
     for g in groups.values():
@@ -85,6 +91,9 @@ def aggregate_by_instruction(
                 total=total,
                 fail_rate=g["fail"] / total if total else 0.0,
                 fail_in_transcripts=g["fail_in_transcripts"],
+                na_in_transcripts=g["na_in_transcripts"],
+                fail_seqs=g["fail_seqs"],
+                na_seqs=g["na_seqs"],
             )
         )
 

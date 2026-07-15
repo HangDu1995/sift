@@ -194,26 +194,49 @@
           '</ul></div>');
       }
 
-      // ③ by_instruction 系统性表(仅多 transcript 且有聚合)
+      // ③ by_instruction 系统性表(仅多 transcript 且有聚合)。fail 与 N/A 语义不同 → 两张表
+      // (同终端):违规表看 fail%/fail/total;场景不适用表看 na/total + 哪几段不适用。
+      // 不再混一张让 N/A 行套 fail 列(那看着像有 fail、误导)。全 PASS 仍不列。
       if (multi && (EMBEDDED_DATA.by_instruction || []).length) {
-        var rows = EMBEDDED_DATA.by_instruction.filter(function (a) {
-          return a.fail_count > 0 || a.na_count > 0;  // 全 PASS 不列(同终端)
-        }).map(function (a) {
-          var pct = Math.round((a.fail_rate || 0) * 100);
-          var colorCls = (a.fail_rate || 0) >= 0.5 ? 'badge-fail' : 'badge-na';
-          return '<tr><td class="' + colorCls + '">' + pct + '%</td>' +
-            '<td>' + escapeHtml(a.instruction_text || '') + '</td>' +
-            '<td>' + escapeHtml(a.category || '') + '</td>' +
-            '<td>' + (a.fail_count || 0) + '/' + (a.total || 0) + '</td>' +
-            '<td>' + escapeHtml((a.fail_in_transcripts || []).join(', ')) + '</td></tr>';
-        }).join('');
-        if (rows) {
-        root.insertAdjacentHTML('beforeend',
-          '<div id="audit-by-instruction" class="by-instruction">' +
-            '<h2>系统性聚合(跨 ' + EMBEDDED_DATA.transcripts.length + ' transcript)</h2>' +
-            '<table><thead><tr><th>fail%</th><th>指令</th><th>类别</th><th>fail/total</th><th>fail in transcripts</th></tr></thead>' +
-            '<tbody>' + rows + '</tbody></table>' +
-          '</div>');
+        var byInstr = EMBEDDED_DATA.by_instruction;
+        var nTrans = EMBEDDED_DATA.transcripts.length;
+
+        var failRows = byInstr.filter(function (a) { return a.fail_count > 0; });
+        if (failRows.length) {
+          var failHtml = failRows.map(function (a) {
+            var pct = Math.round((a.fail_rate || 0) * 100);
+            var colorCls = (a.fail_rate || 0) >= 0.5 ? 'badge-fail' : 'badge-na';
+            var seqs = (a.fail_seqs || []).map(function (s) { return '#' + s; }).join(', ');
+            return '<tr><td class="seq">' + escapeHtml(seqs) + '</td><td class="' + colorCls + '">' + pct + '%</td>' +
+              '<td>' + escapeHtml(a.instruction_text || '') + '</td>' +
+              '<td>' + escapeHtml(a.category || '') + '</td>' +
+              '<td>' + (a.fail_count || 0) + '/' + (a.total || 0) + '</td>' +
+              '<td>' + escapeHtml((a.fail_in_transcripts || []).join(', ')) + '</td></tr>';
+          }).join('');
+          root.insertAdjacentHTML('beforeend',
+            '<div id="audit-by-instruction-fail" class="by-instruction">' +
+              '<h2>违规 FAIL(跨 ' + nTrans + ' transcript)</h2>' +
+              '<table><thead><tr><th>明细 #</th><th>fail%</th><th>指令</th><th>类别</th><th>fail/total</th><th>fail in transcripts</th></tr></thead>' +
+              '<tbody>' + failHtml + '</tbody></table>' +
+            '</div>');
+        }
+
+        var naRows = byInstr.filter(function (a) { return a.na_count > 0; })
+          .sort(function (x, y) { return (y.na_count || 0) - (x.na_count || 0); });
+        if (naRows.length) {
+          var naHtml = naRows.map(function (a) {
+            var seqs = (a.na_seqs || []).map(function (s) { return '#' + s; }).join(', ');
+            return '<tr><td class="seq">' + escapeHtml(seqs) + '</td><td class="badge-na">' + (a.na_count || 0) + '/' + (a.total || 0) + '</td>' +
+              '<td>' + escapeHtml(a.instruction_text || '') + '</td>' +
+              '<td>' + escapeHtml(a.category || '') + '</td>' +
+              '<td>' + escapeHtml((a.na_in_transcripts || []).join(', ')) + '</td></tr>';
+          }).join('');
+          root.insertAdjacentHTML('beforeend',
+            '<div id="audit-by-instruction-na" class="by-instruction">' +
+              '<h2>场景不适用 N/A(跨 ' + nTrans + ' transcript)</h2>' +
+              '<table><thead><tr><th>明细 #</th><th>na/total</th><th>指令</th><th>类别</th><th>na in transcripts</th></tr></thead>' +
+              '<tbody>' + naHtml + '</tbody></table>' +
+            '</div>');
         }
       }
 

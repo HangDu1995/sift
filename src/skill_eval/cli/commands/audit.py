@@ -136,28 +136,54 @@ def audit(
         for w in report.warnings:
             console.print(f"  [yellow]- {w}[/yellow]")
 
-    # 多 transcript:展示指令级聚合(系统性违规一眼可见,如"NEVER fabricate 在 75% 会话被违反")。
-    # 单 transcript 不显示(聚合无额外洞察,每指令 1 verdict,平铺明细已够)。
+    # 多 transcript:展示指令级聚合。fail 与 N/A(场景不适用)语义不同 → 分两张表:
+    #   违规表看 fail%/fail/total(系统性违规,如"NEVER fabricate 在 75% 会话被违反");
+    #   场景不适用表看 na/total + 哪几段不适用。
+    # 不再混在一张用 fail 列 —— 那会让 N/A 行显示 0% fail / fail/total 0/2,看着像有
+    # fail、误导(N/A 不是 fail)。一条指令既有 fail 又有 na(某段违反、某段不适用)→ 两表都出现,
+    # 各反映一面。全 PASS 仍隐藏(默认正常态,太多)。单 transcript 不显示(聚合无额外洞察)。
     if len(report.transcripts) > 1 and report.by_instruction:
-        agg = Table(title=f"By instruction (across {len(report.transcripts)} transcripts)")
-        agg.add_column("fail%", style="bold")
-        agg.add_column("instruction")
-        agg.add_column("category")
-        agg.add_column("fail/total")
-        agg.add_column("fail in transcripts")
-        for row in report.by_instruction:
-            # 全 PASS 的不列(默认正常态,太多);只列有 fail 或 na 的(关注点)。
-            if row.fail_count == 0 and row.na_count == 0:
-                continue
-            color = "red" if row.fail_rate >= 0.5 else "yellow"
-            agg.add_row(
-                f"[{color}]{row.fail_rate * 100:.0f}%[/{color}]",
-                _truncate(row.instruction_text),
-                row.category.value,
-                f"{row.fail_count}/{row.total}",
-                ", ".join(row.fail_in_transcripts) if row.fail_in_transcripts else "—",
-            )
-        console.print(agg)
+        n = len(report.transcripts)
+
+        fail_rows = [r for r in report.by_instruction if r.fail_count > 0]
+        if fail_rows:  # 已按 fail_rate 降序
+            t = Table(title=f"By instruction — 违规 FAIL (across {n} transcripts)")
+            t.add_column("明细 #", style="dim")
+            t.add_column("fail%", style="bold")
+            t.add_column("instruction")
+            t.add_column("category")
+            t.add_column("fail/total")
+            t.add_column("fail in transcripts")
+            for row in fail_rows:
+                color = "red" if row.fail_rate >= 0.5 else "yellow"
+                t.add_row(
+                    ", ".join(f"#{s}" for s in row.fail_seqs),
+                    f"[{color}]{row.fail_rate * 100:.0f}%[/{color}]",
+                    _truncate(row.instruction_text),
+                    row.category.value,
+                    f"{row.fail_count}/{row.total}",
+                    ", ".join(row.fail_in_transcripts) if row.fail_in_transcripts else "—",
+                )
+            console.print(t)
+
+        na_rows = [r for r in report.by_instruction if r.na_count > 0]
+        if na_rows:
+            na_rows.sort(key=lambda r: (-r.na_count, r.instruction_text))  # 不适用的段多的在前
+            t = Table(title=f"By instruction — 场景不适用 N/A (across {n} transcripts)")
+            t.add_column("明细 #", style="dim")
+            t.add_column("na/total", style="bold")
+            t.add_column("instruction")
+            t.add_column("category")
+            t.add_column("na in transcripts")
+            for row in na_rows:
+                t.add_row(
+                    ", ".join(f"#{s}" for s in row.na_seqs),
+                    f"{row.na_count}/{row.total}",
+                    _truncate(row.instruction_text),
+                    row.category.value,
+                    ", ".join(row.na_in_transcripts),
+                )
+            console.print(t)
 
     # 只列 FAIL/UNCLEAR/N/A 明细(PASS 是默认正常态,太多;FAIL/UNCLEAR 才是关注点,N/A 不适用也列)。
     non_pass = [f for f in report.findings if f.verdict != AuditVerdict.PASS]

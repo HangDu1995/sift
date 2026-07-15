@@ -69,6 +69,9 @@ class InstructionAggregate(BaseModel):
     total: int
     fail_rate: float  # fail_count / total(total=0 时 0.0)
     fail_in_transcripts: list[str]  # 哪些 transcript 里判 FAIL(定位用)
+    na_in_transcripts: list[str] = Field(default_factory=list)  # 哪些 transcript 判 N/A(场景不适用,定位用);默认空兼容旧 report
+    fail_seqs: list[int] = Field(default_factory=list)  # FAIL findings 的明细 #N(汇总表交叉引用到明细用)
+    na_seqs: list[int] = Field(default_factory=list)  # N/A findings 的明细 #N
 
 
 class AuditReport(BaseModel):
