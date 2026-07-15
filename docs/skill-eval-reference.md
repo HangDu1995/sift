@@ -281,7 +281,7 @@ skill-eval gate output/iteration-1/benchmark.json --no-programmatic-guard --min-
 
 把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。**不 re-run**，直接对账历史执行（与 fixture compliance 互补）。支持多 transcript 指令级聚合。
 
-> 想拿现成材料试手 + 对照预期结果：自带 3 个 audit 示例（合成违规 transcript，预期该抓的违规已逐条列明），见 [example-skills/README.md](../fixtures/example-skills/README.md)。
+> 想拿现成材料试手 + 对照预期结果：自带 3 个 audit 示例（合成违规 transcript，预期该抓的违规已逐条列明）+ 1 个 multi-skill-demo（演示 `--by-skill` 在一条多 skill transcript 里只对账一个 skill），见 [example-skills/README.md](../fixtures/example-skills/README.md)。
 
 > 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行——`[条件性/禁令/步骤] 判定 N 条…` → `[条件性/禁令/步骤] 完成 ⏱ Xs`（类别名打头括号化；指令 >10 条分批时才显 `批 k/总`，单批不显）。**两种失败都会先自动重试（最多 2 次）再兜底**：① 调用失败（超时 / 退出码 / 限流）；② 调用成功但整批 0 条解析成功（LLM 输出畸形/截断，原是看着"完成"却全 N/A 的静默盲点）——都大概率瞬态、重试常能救回。重试打 `重试 n/2…`，耗尽才 `重试耗尽 → 全兜底 N/A`（audit 汇总"未判定"警告提示重跑）。看到 `[条件性/禁令/步骤] …` 滚动就是在跑，别误以为卡死。
 

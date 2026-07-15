@@ -1,6 +1,6 @@
 # example-skills — 主力示例 skill
 
-4 个结构规整的示例 skill,演示 skill-eval 的评测路径。**每个示例擅长的路径不同**(取决于自带 `evals.json` / `transcript` 与否),照下表选,照命令跑。
+4 个结构规整的示例 skill + 1 条多 skill `--by-skill` 切分 demo transcript,演示 skill-eval 的评测路径。**每个示例擅长的路径不同**(取决于自带 `evals.json` / `transcript` 与否),照下表选,照命令跑。
 
 ## 能力速查
 
@@ -87,5 +87,25 @@ skill-eval init fixtures/example-skills/release-checklist-zh/ \
 > - **没生成 changelog、没更新 version.py** → **FAIL**
 >
 > 典型计数 **pass≈11 / fail≈12 / na≈5**(total≈28)。这个 skill 故意复杂(7 步骤 + 代码块 + 示例列表),extractor 会把"示例当步骤、代码块当输出格式"抽成噪音,所以信噪比低于简单 skill、会出现少量假 FAIL;但真违规仍穿透噪音被抓。同样别钉精确条数,对照"上面这些违规是否都出现在 FAIL"即可。
+
+### multi-skill-demo(`--by-skill` 多 skill 切分对账)
+
+上面 4 个是**单 skill** 示例;这一个是一条**复用 3 个 skill 的多 skill transcript**,演示 `audit --by-skill`:transcript 里交错调了 log-error-analyzer / code-review-auditor / release-checklist-zh(log-error-analyzer 调两次 + 一个子 agent 调 code-review-auditor),只对账指定那一个 skill 被调用期间的段。
+
+```bash
+# 只对账 log-error-analyzer 被调用的段(切出 2 段:主作用域两次调用,不含 src/CHANGELOG):
+skill-eval audit fixtures/example-skills/log-error-analyzer/ \
+  --transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --by-skill
+# 换审 code-review-auditor(切出 2 段:主作用域 1 + 子 agent 里 1):
+skill-eval audit fixtures/example-skills/code-review-auditor/ \
+  --transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --by-skill
+# release-checklist-zh(1 段):
+skill-eval audit fixtures/example-skills/release-checklist-zh/ \
+  --transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --by-skill
+```
+
+> **跑时的进度行 `对账 transcript i/N`**:N = 切片数 = 该 skill 在 transcript 里被调用的次数(log-error-analyzer / code-review-auditor = 2,release-checklist-zh = 1),i 是第几段;每段切片落盘在 `<输出目录>/slices/`(文件名形如 `multi-skill-log-error-analyzer-1-1.jsonl`),想看每段具体切了啥可直接打开。
+
+> **预期(这个 demo 验的是"切分不串味",不是确定性违规)**:每个 skill 的报告**只反映自己被调用那几段**——log-error-analyzer 的报告不提 `src/*.py` / CHANGELOG;code-review-auditor 的不提 `logs/*.log`;**子 agent 里那次 code-review-auditor 调用切到子 agent 返回,不污染主 agent 的 log-error-analyzer 归属**(scope-aware 切分的关键)。transcript 里各 skill 产物刻意不完美,但能否被抓取决于 auditor 判定层(这几个 skill 的输出要求是散文 / OUTPUT 检查对措辞不对文件,故多为 LLM 辅助判定、非确定性)——本 demo 的核心是**切片纯度**,不是"违规必抓"。归段细节(scope-aware / 子 agent 作用域 / 两限制)见 [reference 的 audit 段](../../docs/skill-eval-reference.md)。重生成:`.venv/bin/python fixtures/example-skills/multi-skill-demo/build_multi_skill.py`(确定性,无随机)。
 
 > analyze / vet 默认只终端输出(显式 `-o` 才落盘);run 默认产齐 benchmark + scorecard + vet-report 到 `output/iteration-1/`,随后 `skill-eval report output/iteration-1/` 出自包含 HTML 报告。完整命令参考 [skill-eval-guide](../../tools/skills/skill-eval-guide/SKILL.md)。

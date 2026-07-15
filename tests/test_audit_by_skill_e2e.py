@@ -4,7 +4,7 @@
 与 ``test_audit_by_skill.py`` 的层次区别:那里 mock **整个 TranscriptAuditor**(只验 CLI
 接线 / 切片派发);这里只 mock ``call_claude``,**真跑 ``TranscriptAuditor.audit`` 全流程**
 (切片 → rebuild → extract → derive → 四判定 → 聚合 → 落盘),on the committed
-``fixtures/example-transcripts/multi-skill.jsonl`` fixture。
+``fixtures/example-skills/multi-skill-demo/multi-skill.jsonl`` fixture。
 
 只断言**管线 plumbing**,不断言 verdict:
   - fixture 植入的"违规"非确定性——lea/cra 的输出要求是散文(extractor 只对代码块抽
@@ -33,7 +33,8 @@ runner = CliRunner()
 FIXTURE_TRANSCRIPT = (
     Path(__file__).resolve().parent.parent
     / "fixtures"
-    / "example-transcripts"
+    / "example-skills"
+    / "multi-skill-demo"
     / "multi-skill.jsonl"
 )
 FIXTURE_SKILLS = Path(__file__).resolve().parent.parent / "fixtures" / "example-skills"

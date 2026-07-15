@@ -1,7 +1,7 @@
 # tests/test_multi_skill_fixture.py
 """合成多 skill transcript fixture 的结构 + 切片纯度回归。
 
-fixture(``fixtures/example-transcripts/multi-skill.jsonl``)由确定性 builder 产出,
+fixture(``fixtures/example-skills/multi-skill-demo/multi-skill.jsonl``)由确定性 builder 产出,
 覆盖:三个 skill 交错调用 + log-error-analyzer 二次调用 + 子 agent 调 code-review-auditor
 + 子 agent 返回后主 agent 继续 log 工作。本测试固化其切片纯度,防止 builder / fixture 漂移。
 
@@ -19,7 +19,7 @@ import pytest
 from skill_eval.audit.slice import slice_transcript_by_skill
 from skill_eval.evals.transcript import build_digest
 
-FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "example-transcripts" / "multi-skill.jsonl"
+FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "example-skills" / "multi-skill-demo" / "multi-skill.jsonl"
 BUILDER = FIXTURE.parent / "build_multi_skill.py"
 
 LEA, CRA, RCZ = "log-error-analyzer", "code-review-auditor", "release-checklist-zh"

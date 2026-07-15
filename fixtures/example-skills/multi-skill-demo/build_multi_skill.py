@@ -21,7 +21,7 @@
   文件,故这些"违规"多为 LLM 辅助判定、非确定性。slice 纯度才是 --by-skill 本身保证的东西。
 
 重新生成:
-    .venv/bin/python fixtures/example-transcripts/build_multi_skill.py
+    .venv/bin/python fixtures/example-skills/multi-skill-demo/build_multi_skill.py
 """
 from __future__ import annotations
 
