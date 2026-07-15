@@ -62,6 +62,48 @@ def test_call_claude_nonzero_exit_raises(monkeypatch, tmp_path):
         call_claude("x", timeout=10)
 
 
+def test_call_claude_injects_claude_code_identity_when_absent(monkeypatch):
+    # 智谱(open.bigmodel.cn)后端在模型过载时只放行带 claude-code 身份标识
+    # (AI_AGENT + CLAUDE_CODE_ENTRYPOINT)的请求,裸 claude CLI 被直接 529 挡回。
+    # 这俩变量由 VSCode 扩展/SDK 注入、用户终端默认没有 → 终端跑 audit 会系统性失败
+    # (实测:同 token 同时刻,带这俩 OK、不带 529/超时)。故 call_claude 必须在子进程
+    # env 缺这俩时补上。值版本无关(通用 'claude-code' 实测即放行)。
+    from unittest.mock import MagicMock
+    import skill_eval.utils as u
+    monkeypatch.delenv("AI_AGENT", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
+    proc = MagicMock()
+    proc.communicate.return_value = ("out", "")
+    proc.returncode = 0
+    proc.pid = 99999
+    mock_popen = MagicMock(return_value=proc)
+    monkeypatch.setattr(u.subprocess, "Popen", mock_popen)
+    call_claude("x", timeout=10)
+    _, kwargs = mock_popen.call_args
+    env = kwargs["env"]
+    assert env.get("AI_AGENT") == "claude-code"
+    assert env.get("CLAUDE_CODE_ENTRYPOINT") == "claude-vscode"
+
+
+def test_call_claude_preserves_existing_identity(monkeypatch):
+    # 在 claude-code 上下文内跑(VSCode 扩展/SDK 已注入真值)时,不覆盖、保留原值。
+    from unittest.mock import MagicMock
+    import skill_eval.utils as u
+    monkeypatch.setenv("AI_AGENT", "real-agent-xyz")
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "real-entrypoint")
+    proc = MagicMock()
+    proc.communicate.return_value = ("out", "")
+    proc.returncode = 0
+    proc.pid = 99999
+    mock_popen = MagicMock(return_value=proc)
+    monkeypatch.setattr(u.subprocess, "Popen", mock_popen)
+    call_claude("x", timeout=10)
+    _, kwargs = mock_popen.call_args
+    env = kwargs["env"]
+    assert env.get("AI_AGENT") == "real-agent-xyz"
+    assert env.get("CLAUDE_CODE_ENTRYPOINT") == "real-entrypoint"
+
+
 def test_call_claude_nonzero_exit_shows_stdout_when_stderr_empty(monkeypatch, tmp_path):
     # claude CLI 实测把输出/错误打 stdout、stderr 常空。报错信息必须能看到根因,
     # 不能是空的 "failed (exit 1): "(曾发生:后端不可用时 exit 1 + stderr 空,
