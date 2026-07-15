@@ -278,15 +278,20 @@ skill-eval gate out/iteration-1/benchmark.json --no-programmatic-guard --min-win
 ```bash
 skill-eval audit /path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out/
 skill-eval audit /path/to/skill/ --transcript a.jsonl --transcript b.jsonl --format json --open
+# transcript 里调了多个 skill,只对账本 skill 被调用的段:
+skill-eval audit /path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
 ```
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--transcript` | **必填** | 真实会话 transcript jsonl（**可重复**，多 transcript 聚合） |
+| `--by-skill` | 关 | transcript 里调了多个 skill 时，只对账本 skill 被调用的段（按 `Skill` 工具调用切分） |
 | `--output` / `-o` | ./output | 输出目录 |
 | `--model` | 默认 | 语义判定 LLM |
 | `--format` | table | table / json |
 | `--open` | 关 | 生成后浏览器打开 audit-report.html |
+
+> **`--by-skill` 归段 scope-aware**：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent（Agent 工具）是独立作用域（记录带 `parent_tool_use_id`），子 agent 里用的 skill 切到 Agent 返回、不污染主 agent。target 调多次 → 多段 → 多 transcript 聚合。**两限制**：① skill 无"返回"信号，"调 A→B→不重调 A 接着干 A"那段归 B（不可测）；② 委派子 skill 折进主 skill（inclusive）需声明、暂不支持。该 skill 没在 transcript 里被调过 → exit 2。
 
 判定四类（条件性 / 禁令 / 步骤 / 输出格式）：前三类各走 PASS/FAIL/N/A（不适用），LLM 没判成的另报 UNCLEAR（判不准）；输出格式确定性二值（不调 LLM）。**禁令判的角度反着来**——主动找违规、不判“遵守没”（如 `NEVER ...` / `不得编造`）。判不准报 UNCLEAR + 警告，不保守 FAIL（各类判法详表见 reference 的 audit 段）。产出 `audit-report.json` + `audit-report.html`（HTML always 写）。
 

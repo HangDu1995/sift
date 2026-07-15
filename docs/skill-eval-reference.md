@@ -290,6 +290,8 @@ skill-eval gate output/iteration-1/benchmark.json --no-programmatic-guard --min-
 ```bash
 skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out/
 skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl --format json
+# transcript 里用了多个 skill,只对账本 skill 被调用的段(按 Skill 工具调用切分):
+skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
 ```
 
 **参数**：
@@ -297,10 +299,13 @@ skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl --form
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--transcript` | **必填** | 真实会话 transcript jsonl（**可重复**，多 transcript 聚合） |
+| `--by-skill` | 关闭 | transcript 里调了多个 skill 时，只对账本 skill 被调用的段（按 `Skill` 工具调用切分，见下） |
 | `--output` / `-o` | ./output | 输出目录 |
 | `--model` | 默认 | 语义判定 LLM |
 | `--format` | table | table / json |
 | `--open` | 关闭 | 生成后浏览器打开 `audit-report.html` |
+
+> **`--by-skill`：多 skill transcript 只对账一个 skill**。transcript 里调了多个 skill 时，默认会把整段当一个袋子判（其他 skill 的行为会混进报告）。加 `--by-skill` 后，按 transcript 里的 `Skill` 工具调用切成若干单 skill 子 transcript，只对账 `<skill_path>` 这个 skill 被调用期间的段。归段 **scope-aware**：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent（Agent 工具）是独立作用域，其记录带 `parent_tool_use_id`，子 agent 里用的 skill 切到 Agent 返回、**不污染主 agent 归属**；target 调多次 → 多段 → 多 transcript 聚合。**两条限制**：① skill 没有"返回"信号，所以"调 A → 调 B → 不重调 A 接着干 A"那段会归给 B（不可检测，解法是 agent 显式重调 A）；② 把委派子 skill 的段折进主 skill 审计（inclusive）需用户声明，暂不支持。该 skill 没在 transcript 里被调过 → 报错退出（exit 2），不静默跑空。
 
 判定分四类——每条指令按 SKILL.md 声明来源路由到一类，各按不同判法出 verdict：
 
