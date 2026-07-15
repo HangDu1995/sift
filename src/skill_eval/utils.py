@@ -7,6 +7,27 @@ import signal
 import subprocess
 
 
+def claude_cli_env() -> dict:
+    """claude CLI 子进程环境:剥 CLAUDECODE + 补 claude-code 身份变量。
+
+    智谱(open.bigmodel.cn)等后端在模型过载时,只放行带 claude-code 身份标识
+    (AI_AGENT + CLAUDE_CODE_ENTRYPOINT)的请求,裸 claude CLI 请求被 529「访问量过大」
+    直接挡回。这两个变量由 VSCode 扩展 / SDK 运行时注入,用户终端默认没有 → 终端跑
+    skill-eval(任何 spawn claude 的路径)系统性撞 529(实测:同 token 同时刻,带这俩 OK、
+    不带 529/超时)。缺则补(值版本无关,通用 'claude-code' 实测即放行),已有不覆盖
+    (在 claude-code 内跑保留真值)。
+
+    call_claude(audit/init/score 判分调用)与 ClaudeRunner(run --task 真任务 spawn)
+    共用此 helper,确保两条 spawn 路径都自报身份。
+    """
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    if "AI_AGENT" not in env:
+        env["AI_AGENT"] = "claude-code"
+    if "CLAUDE_CODE_ENTRYPOINT" not in env:
+        env["CLAUDE_CODE_ENTRYPOINT"] = "claude-vscode"
+    return env
+
+
 def call_claude(
     prompt: str,
     model: str | None = None,
@@ -18,17 +39,7 @@ def call_claude(
         cmd.extend(["--max-turns", str(max_turns)])
     if model:
         cmd.extend(["--model", model])
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-    # 智谱(open.bigmodel.cn)等后端在模型过载时,只放行带 claude-code 身份标识
-    # (AI_AGENT + CLAUDE_CODE_ENTRYPOINT)的请求,裸 claude CLI 请求被 529「访问量过大」
-    # 直接挡回。这两个变量由 VSCode 扩展 / SDK 运行时注入,用户终端默认没有 → 终端跑
-    # skill-eval(audit/init/score)会系统性撞 529(实测:同 token 同时刻,带这俩 OK、
-    # 不带 529/超时)。缺则补上,让 skill-eval 驱动的 claude 也自报 claude-code 身份;
-    # 值版本无关(通用 'claude-code' 实测即放行);已有则不覆盖(在 claude-code 内跑保留真值)。
-    if "AI_AGENT" not in env:
-        env["AI_AGENT"] = "claude-code"
-    if "CLAUDE_CODE_ENTRYPOINT" not in env:
-        env["CLAUDE_CODE_ENTRYPOINT"] = "claude-vscode"
+    env = claude_cli_env()
     # start_new_session 让外部 CLI(claude/opencode 等通用 backend)在独立进程组,
     # 超时方可 os.killpg 杀整组含其子进程树——这类 CLI 常是 wrapper + node worker,
     # 单 kill 主进程会让 worker 成孤儿、持有 stdout pipe 使 communicate 卡死

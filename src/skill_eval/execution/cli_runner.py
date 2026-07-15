@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -11,6 +10,7 @@ from pathlib import Path
 from skill_eval.errors import ClaudeRunnerError
 from skill_eval.models import RunOutput
 from skill_eval.parser import parse_skill_md
+from skill_eval.utils import claude_cli_env
 
 
 def find_project_root() -> Path:
@@ -76,7 +76,7 @@ class ClaudeRunner:
             if model:
                 cmd.extend(["--model", model])
 
-            env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+            env = claude_cli_env()
 
             start = time.time()
             try:

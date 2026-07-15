@@ -73,3 +73,27 @@ class TestParseStreamJsonTokenExtraction:
         runner = ClaudeRunner()
         _, total_tokens, _, _, _, _, _ = runner._parse_stream_json(stdout)
         assert total_tokens == 0
+
+
+class TestSpawnIdentity:
+    """终端跑 run --task:ClaudeRunner spawn 的 claude 子进程必须带 claude-code 身份
+    (AI_AGENT + CLAUDE_CODE_ENTRYPOINT),否则后端过载时撞 529(同 call_claude,见
+    utils.claude_cli_env)。用户终端默认没这俩变量,故缺则补 —— 与 call_claude 共用
+    claude_cli_env helper,防漂移。"""
+
+    def test_run_injects_identity_when_absent(self, monkeypatch, tmp_path):
+        from unittest.mock import MagicMock
+        import skill_eval.execution.cli_runner as mod
+        monkeypatch.delenv("AI_AGENT", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
+        proc = MagicMock()
+        proc.communicate.return_value = (b"", b"")
+        proc.returncode = 0
+        mock_popen = MagicMock(return_value=proc)
+        monkeypatch.setattr(mod.subprocess, "Popen", mock_popen)
+        # 不传 skill_path:避开 parse_skill_md;cwd=tmp_path 钉 project_root
+        ClaudeRunner().run(prompt="do task", cwd=tmp_path)
+        _, kwargs = mock_popen.call_args
+        env = kwargs["env"]
+        assert env.get("AI_AGENT") == "claude-code"
+        assert env.get("CLAUDE_CODE_ENTRYPOINT") == "claude-vscode"
