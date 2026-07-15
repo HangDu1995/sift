@@ -33,6 +33,21 @@ def _in_sub(parent, rec):
     rec["parent_tool_use_id"] = parent
     return rec
 
+def test_namespaced_skill_name_stripped_to_match(tmp_path):
+    """真 transcript 的 input.skill 是命名空间名(如 plugin:skill),slicer 剥前缀后匹配 target。
+
+    防护:所有别的测试都用裸名,若 rsplit 剥前缀逻辑坏了,全测试照绿但真 transcript
+    (命名空间名)会静默得 0 span → 假 exit 2。这条钉死剥前缀路径。
+    """
+    recs = [
+        _skill("s1", "ops-team:log-error-analyzer"),   # 命名空间名(非裸名)
+        _tool_use("r1", "Read", {"file_path": "app.log"}),
+        _tool_result("r1", "ERR"),
+    ]
+    spans = slice_transcript_by_skill(_write(tmp_path, recs), "log-error-analyzer")
+    assert len(spans) == 1                              # 剥掉 ops-team: 前缀后命中
+    assert any("app.log" in json.dumps(r, ensure_ascii=False) for r in spans[0])
+
 def test_single_main_skill_span_to_end(tmp_path):
     recs = [
         _asst_text("pre-skill 主 agent 干的活,不该进段"),
