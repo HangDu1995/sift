@@ -42,6 +42,7 @@ def run_live_task(
     max_turns: int = 10,
     output_dir: Path = Path("output"),
     on_progress: ProgressCallback | None = None,
+    on_run_progress: ProgressCallback | None = None,
 ) -> Path:
     """跑路径1 真任务模式,返回 output_dir。
 
@@ -66,6 +67,11 @@ def run_live_task(
         run_dir = output_dir / f"run-{run_num}"
         run_dir.mkdir(parents=True, exist_ok=True)
 
+        if on_run_progress:
+            on_run_progress(f"▶ run {run_num}/{runs}")
+        # 每次 spawn 流式吐进度(cc 逐行 stream-json → on_progress),不再全程静默到结束
+        during = (lambda msg: on_run_progress(f"  {msg}")) if on_run_progress else None
+
         run_output: RunOutput = runner.run(
             prompt=task,
             skill_path=skill_path,
@@ -73,6 +79,7 @@ def run_live_task(
             timeout=timeout,
             cwd=workspace,
             max_turns=max_turns,
+            on_progress=during,
         )
 
         # 4. dump raw stream-json 成 transcript.jsonl(打通 audit 闭环)

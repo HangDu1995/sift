@@ -178,6 +178,7 @@ def run(
             timeout=timeout,
             max_turns=max_turns,
             output_dir=output_dir,
+            on_run_progress=lambda line: console.print(line),
         )
         transcripts = sorted(output_dir.glob("run-*/transcript.jsonl"))
         console.print(f"\n[bold]Live task:[/bold] {runs} run(s) → {len(transcripts)} transcript(s)")

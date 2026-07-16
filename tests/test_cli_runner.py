@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 
+import pytest
+
+from skill_eval.errors import ClaudeRunnerError
 from skill_eval.execution.cli_runner import ClaudeRunner, _build_non_interactive_prompt
 
 
@@ -37,7 +42,47 @@ class TestNonInteractivePrompt:
         assert "proceed with what is available" in p
 
 
-class TestParseStreamJsonTokenExtraction:
+class TestProgressFromEvent:
+    """stream-json 一行 → 进度字符串(供 run 流式 on_progress 实时吐)。
+    tool_use 是动作信号(Read/Bash/Write…),result 是完成信号;assistant 散文太吵不报。"""
+
+    def test_tool_use_file_path(self):
+        from skill_eval.execution.cli_runner import _progress_from_event
+        line = json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read", "input": {"file_path": "audit/aggregate.py"}}]}})
+        assert _progress_from_event(line) == "🔧 Read: audit/aggregate.py"
+
+    def test_tool_use_command(self):
+        from skill_eval.execution.cli_runner import _progress_from_event
+        line = json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "grep -n x audit/aggregate.py"}}]}})
+        assert _progress_from_event(line) == "🔧 Bash: grep -n x audit/aggregate.py"
+
+    def test_result_event_completion(self):
+        from skill_eval.execution.cli_runner import _progress_from_event
+        line = json.dumps({"type": "result", "subtype": "success", "num_turns": 5,
+                           "stop_reason": "end_turn", "usage": {"input_tokens": 12000, "output_tokens": 345}})
+        assert _progress_from_event(line) == "✓ 完成: end_turn, 5 轮, 12345 tok"
+
+    def test_assistant_text_not_reported(self):
+        from skill_eval.execution.cli_runner import _progress_from_event
+        line = json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "let me analyze the file"}]}})
+        assert _progress_from_event(line) is None
+
+    def test_garbage_and_empty_return_none(self):
+        from skill_eval.execution.cli_runner import _progress_from_event
+        assert _progress_from_event("") is None
+        assert _progress_from_event("not json") is None
+
+    def test_long_input_truncated(self):
+        from skill_eval.execution.cli_runner import _progress_from_event
+        long_cmd = "x" * 200
+        line = json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": long_cmd}}]}})
+        out = _progress_from_event(line)
+        assert out.startswith("🔧 Bash: ")
+        assert len(out) < 100 and out.endswith("…")
     """result event token 解析:claude CLI 2.x 顶层无 total_tokens,token 在 usage 子对象
     (input_tokens + output_tokens,标准 Anthropic 字段)。GLM/Claude 原生 2.x 实测同结构。"""
 
@@ -87,7 +132,10 @@ class TestSpawnIdentity:
         monkeypatch.delenv("AI_AGENT", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
         proc = MagicMock()
-        proc.communicate.return_value = (b"", b"")
+        # 流式 run 读 proc.stdout.readline:mock 成立即 EOF,reader 线程马上收尾
+        proc.stdout.readline.return_value = b""
+        proc.stderr.read.return_value = b""
+        proc.wait.return_value = 0
         proc.returncode = 0
         mock_popen = MagicMock(return_value=proc)
         monkeypatch.setattr(mod.subprocess, "Popen", mock_popen)
@@ -97,3 +145,38 @@ class TestSpawnIdentity:
         env = kwargs["env"]
         assert env.get("AI_AGENT") == "claude-code"
         assert env.get("CLAUDE_CODE_ENTRYPOINT") == "claude-vscode"
+
+
+class TestRunStreaming:
+    """run() 流式读 + on_progress:cc 逐行出 stream-json,边读边吐进度,不再全程静默到结束。
+    用 fake claude(PATH 注入)覆盖真流式路径 + 超时。"""
+
+    def _fake_claude(self, tmp_path, body):
+        p = tmp_path / "claude"
+        p.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        p.chmod(p.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+    def _prepend(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    def test_emits_progress_and_parses_result(self, monkeypatch, tmp_path):
+        body = (
+            """printf '%s\\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"audit/aggregate.py"}}]}}'\n"""
+            """printf '%s\\n' '{"type":"result","subtype":"success","num_turns":1,"stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":5},"result":"done"}'\n"""
+        )
+        self._fake_claude(tmp_path, body)
+        self._prepend(monkeypatch, tmp_path)
+        collected = []
+        out = ClaudeRunner().run(prompt="x", cwd=tmp_path, on_progress=collected.append)
+        # 流式吐了 tool_use + 完成
+        assert "🔧 Read: audit/aggregate.py" in collected
+        assert any(m.startswith("✓ 完成") for m in collected)
+        # 最终解析照常
+        assert out.result_text == "done"
+        assert out.tool_calls.get("Read") == 1
+
+    def test_timeout_no_output_raises(self, monkeypatch, tmp_path):
+        self._fake_claude(tmp_path, "exec sleep 30\n")
+        self._prepend(monkeypatch, tmp_path)
+        with pytest.raises(ClaudeRunnerError, match="timed out"):
+            ClaudeRunner().run(prompt="x", cwd=tmp_path, timeout=2)

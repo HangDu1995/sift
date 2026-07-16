@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import queue
 import subprocess
+import threading
 import time
 from pathlib import Path
+from typing import Callable
 
 from skill_eval.errors import ClaudeRunnerError
 from skill_eval.models import RunOutput
@@ -50,6 +53,42 @@ def _build_non_interactive_prompt(prompt: str, skill_name: str, skill_body: str)
     )
 
 
+def _progress_from_event(line: str) -> str | None:
+    """stream-json 一行 → 进度字符串(供 run 流式 on_progress 实时吐),无足轻重返 None。
+
+    cc ``--output-format stream-json`` 逐行出事件;run 流式读时每行调此,非 None 即经
+    on_progress 吐出,让长 spawn 有可见进度(同 audit 的 on_progress 套路)。
+    tool_use 是动作信号(Read/Bash/Write…),result 是完成信号;assistant 散文太吵不报。
+    """
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        ev = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    typ = ev.get("type")
+    if typ == "assistant":
+        for item in (ev.get("message") or {}).get("content") or []:
+            if item.get("type") == "tool_use":
+                name = item.get("name", "?")
+                inp = item.get("input") or {}
+                brief = (inp.get("file_path") or inp.get("command") or inp.get("description")
+                         or inp.get("prompt") or (next(iter(inp.values())) if inp else ""))
+                brief = str(brief).replace("\n", " ").strip()
+                if len(brief) > 80:
+                    brief = brief[:77] + "…"
+                return f"🔧 {name}: {brief}" if brief else f"🔧 {name}"
+        return None
+    if typ == "result":
+        usage = ev.get("usage") or {}
+        toks = ev.get("total_tokens") or ((usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0))
+        stop = ev.get("stop_reason") or ev.get("subtype") or ""
+        turns = ev.get("num_turns", 0)
+        return f"✓ 完成: {stop}, {turns} 轮, {toks} tok"
+    return None
+
+
 class ClaudeRunner:
     def run(
         self,
@@ -59,6 +98,7 @@ class ClaudeRunner:
         timeout: int = 120,
         cwd: Path | None = None,
         max_turns: int = 10,
+        on_progress: Callable[[str], None] | None = None,
     ) -> RunOutput:
         project_root = cwd or find_project_root()
 
@@ -87,12 +127,55 @@ class ClaudeRunner:
                     cwd=str(project_root),
                     env=env,
                 )
-                try:
-                    stdout_bytes, stderr_bytes = proc.communicate(timeout=timeout)
-                except subprocess.TimeoutExpired:
+                # 流式读 stdout:cc --output-format stream-json 逐行出事件,边读边解析吐进度
+                # (同 audit on_progress),不再 communicate 全缓冲到结束才返回(那让长 spawn
+                # 全程无反馈)。独立线程阻塞 readline + 主线程 queue.get(timeout) 实现超时 +
+                # 流式(避开 select 对带缓冲 file 对象的对齐坑)。stderr 不流式(cc stderr
+                # 通常很小、常空),proc 退出后一次 read。
+                line_queue: queue.Queue = queue.Queue()
+
+                def _stdout_reader() -> None:
+                    for raw in iter(proc.stdout.readline, b""):
+                        line_queue.put(raw)
+                    line_queue.put(None)  # EOF 哨兵
+
+                reader = threading.Thread(target=_stdout_reader, daemon=True)
+                reader.start()
+
+                stdout_chunks: list[str] = []
+                timed_out = False
+                while True:
+                    remaining = timeout - (time.time() - start)
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                    try:
+                        raw = line_queue.get(timeout=remaining)
+                    except queue.Empty:
+                        timed_out = True
+                        break
+                    if raw is None:
+                        break  # stdout EOF → cc 结束/退出
+                    line = raw.decode("utf-8", errors="replace")
+                    stdout_chunks.append(line)
+                    if on_progress:
+                        msg = _progress_from_event(line)
+                        if msg:
+                            on_progress(msg)
+
+                if timed_out:
                     proc.kill()
-                    stdout_bytes, stderr_bytes = proc.communicate(timeout=5)
-                    stdout = stdout_bytes.decode("utf-8", errors="replace")
+                proc.wait()
+                try:
+                    stderr_bytes = proc.stderr.read() if proc.stderr else b""
+                except Exception:
+                    stderr_bytes = b""
+
+                stdout = "".join(stdout_chunks)
+                stderr = stderr_bytes.decode("utf-8", errors="replace")
+                returncode = proc.returncode
+
+                if timed_out:
                     if stdout.strip():
                         transcript, total_tokens, tool_calls, result_text, num_turns, stop_reason, tool_trace = self._parse_stream_json(stdout)
                         if transcript or result_text or total_tokens > 0:
@@ -110,9 +193,6 @@ class ClaudeRunner:
                                 stop_reason=f"timed_out_after_{timeout}s",
                             )
                     raise ClaudeRunnerError(f"claude -p timed out after {timeout}s (killed process tree)")
-                stdout = stdout_bytes.decode("utf-8", errors="replace")
-                stderr = stderr_bytes.decode("utf-8", errors="replace")
-                returncode = proc.returncode
             except ClaudeRunnerError:
                 raise
             except FileNotFoundError:
