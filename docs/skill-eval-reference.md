@@ -87,9 +87,10 @@ skill-eval init path/to/skill/ --from-transcript session.jsonl  # 从真实会�
 | `--model` | 默认 | LLM 模型 |
 | `--num-evals` | 无 | 最多生成的 eval case 数量 |
 | `--from-transcript` | 无 | 从真实 session transcript 挖 evals（加料 SKILL.md，非替代） |
+| `--by-skill` | off | transcript 含多个 skill 时只挖本 skill 被调用期间段（按 Skill 调用切分，同 audit）；不传 + 检测到多 skill → 警告 |
 | `--timeout` | 600 | LLM 调用超时秒数（mining 是单次大 prompt；撞超时 → degraded fallback） |
 
-`--from-transcript` 解析 session transcript（模型、user turns、用到的 skill），重建 input_files / commands / produced_files，生成带结构化 assertions 的 eval。若 LLM 失败降级为 fallback eval，会带 `degraded:*` flag 并在终端告警（不再静默）。
+`--from-transcript` 解析 session transcript（模型、user turns、用到的 skill），重建 input_files / commands / produced_files，生成带结构化 assertions 的 eval。若 LLM 失败降级为 fallback eval，会带 `degraded:*` flag 并在终端告警（不再静默）。多 skill transcript 不传 `--by-skill` 时会把全部当本 skill 挖（可能串味）→ 终端告警，建议加 `--by-skill` 只挖本 skill 段。
 
 ### `add` — 追加评测用例
 

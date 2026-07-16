@@ -64,6 +64,20 @@ def _scope_of(rec: dict) -> str | None:
     return ptid if ptid else None
 
 
+def invoked_skills(transcript_path: Path) -> list[str]:
+    """transcript 里被调用的所有 skill 名(剥命名空间前缀、去重、按首次出现顺序)。
+
+    供多 skill 检测:init --from-transcript 不切分时,若 transcript 涉及多 skill 会串味
+    (把别 skill 的活动当本 skill 挖)→ CLI 层据此警告、建议 --by-skill。
+    """
+    seen: list[str] = []
+    for rec in _records(transcript_path):
+        name = _skill_name_of(rec)
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
 def slice_transcript_by_skill(transcript_path: Path, target_skill: str) -> list[list[dict]]:
     """scope-aware 切 target_skill 的段。target 从未被调用→返回 []。
 

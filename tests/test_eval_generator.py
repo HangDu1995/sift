@@ -317,3 +317,68 @@ def test_from_transcript_keeps_skill_output_assertion_on_violation_transcript(mo
     fns = [a.params.get("filename") for a in es.evals[0].assertions
            if a.type == AssertionType.FILE_EXISTS]
     assert "error-report.json" in fns            # 保住了(改前被 drop)
+
+
+# ---------------------------------------------------------------------------
+# mining --by-skill:多 skill transcript 切分(平行 audit --by-skill)
+# ---------------------------------------------------------------------------
+
+def _multi_skill_transcript(tmp_path: Path, target: str = "skillA", other: str = "skillB") -> Path:
+    """两 skill 交替的 transcript:target 写 target.json、other 写 other.json。"""
+    import json
+    tp = tmp_path / "multi.jsonl"
+    tp.write_text("\n".join(json.dumps(r) for r in [
+        {"message": {"role": "user", "content": "do A then B"}},
+        {"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "s1", "name": "Skill", "input": {"skill": target}}]}},
+        {"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "w1", "name": "Write",
+             "input": {"file_path": f"/p/{target}.json", "content": "a"}}]}},
+        {"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "s2", "name": "Skill", "input": {"skill": other}}]}},
+        {"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "w2", "name": "Write",
+             "input": {"file_path": f"/p/{other}.json", "content": "b"}}]}},
+    ]), encoding="utf-8")
+    return tp
+
+
+def test_invoked_skills_lists_all_in_order(tmp_path: Path):
+    from skill_eval.audit.slice import invoked_skills
+    tp = _multi_skill_transcript(tmp_path)
+    assert invoked_skills(tp) == ["skillA", "skillB"]
+
+
+def test_from_transcript_by_skill_isolates_target_segment(monkeypatch, tmp_path: Path):
+    """--by-skill:只挖本 skill 段 → manifest 只含本 skill 文件,别 skill 的断言被 drop。
+    对照:不切分(默认)会把别 skill 文件也当本 skill → 串味(两者都留)。"""
+    import json
+    gen = EvalInitGenerator()
+    sp = tmp_path / "skill"; sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: skillA\ndescription: d\n---\n# b\n", encoding="utf-8")
+    tp = _multi_skill_transcript(tmp_path)
+    fake = json.dumps({"skill_name": "skillA", "evals": [{"id": 1, "name": "L2", "level": "L2",
+        "prompt": "p", "expected_output": "", "expectations": [],
+        "assertions": [{"name": "A", "type": "FILE_EXISTS", "params": {"filename": "skillA.json"}},
+                       {"name": "B", "type": "FILE_EXISTS", "params": {"filename": "skillB.json"}}],
+        "fixtures": []}]})
+    monkeypatch.setattr("skill_eval.evals.generator.call_claude", lambda *a, **k: fake)
+    # by_skill=True:只切 skillA 段 → skillA.json 留、skillB.json drop
+    es = gen.generate_from_transcript(sp, tp, by_skill=True)
+    fns = [a.params.get("filename") for a in es.evals[0].assertions if a.type == AssertionType.FILE_EXISTS]
+    assert "skillA.json" in fns and "skillB.json" not in fns
+    # 对照 by_skill=False:整份 transcript,skillB.json 也在 manifest → 留(串味)
+    es2 = gen.generate_from_transcript(sp, tp, by_skill=False)
+    fns2 = [a.params.get("filename") for a in es2.evals[0].assertions if a.type == AssertionType.FILE_EXISTS]
+    assert "skillA.json" in fns2 and "skillB.json" in fns2
+
+
+def test_from_transcript_by_skill_target_never_invoked_raises(tmp_path: Path):
+    """--by-skill 但本 skill 从未在 transcript 被调用 → 明确报错(别静默挖空)。"""
+    from skill_eval.errors import SkillEvalError
+    gen = EvalInitGenerator()
+    sp = tmp_path / "skill"; sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: skillC\ndescription: d\n---\n# b\n", encoding="utf-8")
+    tp = _multi_skill_transcript(tmp_path)  # 含 skillA + skillB,无 skillC
+    with pytest.raises(SkillEvalError):
+        gen.generate_from_transcript(sp, tp, by_skill=True)

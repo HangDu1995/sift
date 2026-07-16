@@ -162,6 +162,7 @@ skill-eval init /path/to/skill --no-generate-prompts            # 不调 LLM，�
 | `--generate-prompts` / `--no-generate-prompts` | 开 | 是否用 LLM 生成 L1 eval |
 | `--num-evals` | 无 | 最多生成的 eval 数 |
 | `--from-transcript` | 无 | 从真实 session 挖 eval（加料 SKILL.md，非替代） |
+| `--by-skill` | off | transcript 含多个 skill 时只挖本 skill 被调用期间段（按 Skill 调用切分，同 audit）；不传 + 检测到多 skill → 警告 |
 | `--model` | 默认 | LLM 模型 |
 | `--timeout` | 600 | LLM 调用超时秒数（mining 是单次大 prompt；撞超时 → degraded fallback） |
 

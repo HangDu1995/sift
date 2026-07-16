@@ -737,12 +737,29 @@ class EvalInitGenerator:
         return outputs
 
     def generate_from_transcript(self, skill_path: Path, transcript_path: Path,
-                                 on_heartbeat: Callable[[str], None] | None = None) -> EvalSet:
+                                 on_heartbeat: Callable[[str], None] | None = None,
+                                 by_skill: bool = False) -> EvalSet:
         from skill_eval.evals.transcript import build_digest
         if not Path(transcript_path).exists():
             raise SkillEvalError(f"transcript 文件不存在: {transcript_path}")
         name, description, _content, _frontmatter, body = parse_skill_md(skill_path)
-        digest = build_digest(transcript_path)
+        digest_path = transcript_path
+        if by_skill:
+            # 多 skill transcript:只取本 skill 被调用期间的段(scope-aware 切分,复用 audit),
+            # 拼成虚拟 transcript 再 build_digest → manifest 只含本 skill 文件,不串别 skill 的味。
+            from skill_eval.audit.slice import slice_transcript_by_skill
+            segments = slice_transcript_by_skill(transcript_path, name)
+            if not segments:
+                raise SkillEvalError(
+                    f"skill「{name}」未在此 transcript 被调用,--by-skill 无可挖段")
+            import tempfile
+            flat = [r for seg in segments for r in seg]
+            tf = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".jsonl", delete=False, encoding="utf-8")
+            tf.write("\n".join(json.dumps(r, ensure_ascii=False) for r in flat) + "\n")
+            tf.close()
+            digest_path = Path(tf.name)
+        digest = build_digest(digest_path)
         if not digest.user_turns and not digest.manifest:
             raise SkillEvalError("transcript 未产出可用内容(无 user turn 也无文件)")
         skill_outputs = self._extract_skill_outputs(body)
