@@ -109,7 +109,14 @@ skill-eval init fixtures/example-skills/release-checklist-zh/ \
 
 ### multi-skill-demo(`--by-skill` 多 skill 切分对账)
 
-上面 4 个是**单 skill** 示例;这一个是一条**复用 3 个 skill 的多 skill transcript**,演示 `audit --by-skill`:transcript 里交错调了 log-error-analyzer / code-review-auditor / release-checklist-zh(log-error-analyzer 调两次 + 一个子 agent 调 code-review-auditor),只对账指定那一个 skill 被调用期间的段。
+上面 4 个是**单 skill** 示例;这一个演示**多 skill 会话的 `--by-skill` 切分**(audit 对账 / mining 出卷都支持)。transcript 里交错调了 log-error-analyzer / code-review-auditor / release-checklist-zh(log-error-analyzer 调两次 + 一个子 agent 调 code-review-auditor),`--by-skill` 只取指定 skill 被调用期间的段。两份 transcript **结构相同、产物不同**:
+
+- `multi-skill.jsonl` —— **违规版**(各 skill 产物刻意缺字段/缺段),给 `audit --by-skill` 验切片纯度 + 各段独立抓违规。
+- `multi-skill-clean.jsonl` —— **好版本**(各 skill 产物正确),给 `init --from-transcript --by-skill` 演示多 skill 切分出卷(各 skill 挖各的干净考卷)。
+
+两份都由 `build_multi_skill.py` 确定性生成(重生成:`.venv/bin/python fixtures/example-skills/multi-skill-demo/build_multi_skill.py`)。
+
+**audit(违规版 `multi-skill.jsonl`)—— 抓各 skill 段的违规:**
 
 ```bash
 # 只对账 log-error-analyzer 被调用的段(切出 2 段:主作用域两次调用,不含 src/CHANGELOG):
@@ -123,14 +130,18 @@ skill-eval audit fixtures/example-skills/release-checklist-zh/ \
   --transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --by-skill
 ```
 
-> **mining 也支持 `--by-skill`**:`init --from-transcript` 挖同一条多 skill transcript 时加 `--by-skill` 只挖本 skill 段(manifest 只含本 skill 文件,不串别 skill 的 CHANGELOG/src.py);不加 + 检测到多 skill 会警告。复用同一套 scope-aware 切分:
-> ```bash
-> skill-eval init fixtures/example-skills/log-error-analyzer/ \
->   --from-transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --by-skill
-> ```
+**mining 出卷(好版本 `multi-skill-clean.jsonl`)—— 各 skill 挖各的干净考卷:**
+
+```bash
+skill-eval init fixtures/example-skills/log-error-analyzer/ \
+  --from-transcript fixtures/example-skills/multi-skill-demo/multi-skill-clean.jsonl --by-skill
+# 换挖 code-review-auditor / release-checklist-zh,同样加 --by-skill
+```
+
+> **切分出卷零串味(实测)**:一份 `multi-skill-clean.jsonl`(3 skill 交错 + 子 agent 调 code-review),加 `--by-skill` 各挖各的、断言路径全是本 skill 自己的产物——log-error-analyzer → `error-report.json`(5 eval)、code-review-auditor → `review-report.json` / `src/orders.py`(5 eval)、release-checklist-zh → `CHANGELOG.md`(7 eval);**互不污染**(log 的考卷不提 review-report/CHANGELOG,反之亦然)。不传 `--by-skill` + 检测到多 skill 会警告(防把别 skill 活动当本 skill 挖)。
 
 > **跑时的进度行 `对账 transcript i/N`**:N = 切片数 = 该 skill 在 transcript 里被调用的次数(log-error-analyzer / code-review-auditor = 2,release-checklist-zh = 1),i 是第几段;每段切片落盘在 `<输出目录>/slices/`(文件名形如 `multi-skill-log-error-analyzer-1-1.jsonl`),想看每段具体切了啥可直接打开。
 
-> **预期(这个 demo 验的是"切分不串味",不是确定性违规)**:每个 skill 的报告**只反映自己被调用那几段**——log-error-analyzer 的报告不提 `src/*.py` / CHANGELOG;code-review-auditor 的不提 `logs/*.log`;**子 agent 里那次 code-review-auditor 调用切到子 agent 返回,不污染主 agent 的 log-error-analyzer 归属**(scope-aware 切分的关键)。transcript 里各 skill 产物刻意不完美,但能否被抓取决于 auditor 判定层(这几个 skill 的输出要求是散文 / OUTPUT 检查对措辞不对文件,故多为 LLM 辅助判定、非确定性)——本 demo 的核心是**切片纯度**,不是"违规必抓"。归段细节(scope-aware / 子 agent 作用域 / 两限制)见 [reference 的 audit 段](../../docs/skill-eval-reference.md)。重生成:`.venv/bin/python fixtures/example-skills/multi-skill-demo/build_multi_skill.py`(确定性,无随机)。
+> **预期(这个 demo 验的是"切分不串味",不是确定性违规)**:每个 skill 的报告**只反映自己被调用那几段**——log-error-analyzer 的报告不提 `src/*.py` / CHANGELOG;code-review-auditor 的不提 `logs/*.log`;**子 agent 里那次 code-review-auditor 调用切到子 agent 返回,不污染主 agent 的 log-error-analyzer 归属**(scope-aware 切分的关键)。transcript 里各 skill 产物刻意不完美,但能否被抓取决于 auditor 判定层(这几个 skill 的输出要求是散文 / OUTPUT 检查对措辞不对文件,故多为 LLM 辅助判定、非确定性)——本 demo 的核心是**切片纯度**,不是"违规必抓"。归段细节(scope-aware / 子 agent 作用域 / 两限制)见 [reference 的 audit 段](../../docs/skill-eval-reference.md)。
 
 > analyze / vet 默认只终端输出(显式 `-o` 才落盘);run 默认产齐 benchmark + scorecard + vet-report 到 `output/iteration-1/`,随后 `skill-eval report output/iteration-1/` 出自包含 HTML 报告。完整命令参考 [skill-eval-guide](../../tools/skills/skill-eval-guide/SKILL.md)。
