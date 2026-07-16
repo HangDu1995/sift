@@ -13,11 +13,15 @@
 
 > **三条路径**:路径3 `run` 跑 evals.json 评测题 · 路径2 `audit` 对账历史 transcript(不 run)· 路径1 `--task --cwd` 跑真任务(不读 evals.json)。详见 [docs/example-skill.md](../../docs/example-skill.md)。
 
+> **关于 `transcripts/synthetic-violation.jsonl`(为什么是"违规"的)**:三个 audit 示例(log-en / log-zh / release-checklist-zh)自带的是**人为构造、故意违规**的合成会话,**不是真实跑出来的 session**。audit 的职责是判"transcript 有没有遵循 skill",而一份全做对的干净 transcript 只会让 audit 全 PASS、演示不出价值——所以示例故意把 skill 要求的关键步骤(读 references / 写产物 / 不编造)**条条漏掉或做错**,当反面教材给 audit 抓。下面每个示例的「预期 audit 结果」列了具体植入的违规。另两个不带这种违规 transcript:`code-review-auditor` 走路径1 真任务(自己 run 出来再审),`multi-skill-demo` 靠 `build_multi_skill.py` 脚本生成(验的是切分纯度,不是确定性违规)。
+
 ## 每个怎么跑
 
 ### log-error-analyzer(主力示例,canary)
 
 自带 evals.json(2 题)+ transcript,三条路径都能走:
+
+> **这份 `evals.json` 是手写考卷,不是 `init` 自动生成的**:2 题人工金标准——L1 测规则理解(读日志 / 查 `error-codes.md` / 不编造 / 报告三字段),L2 用**和违规 transcript 同一条 `app.log`** 但编码**正确答案**(E-AUTH-001 / E-DB-002 分类、无码第三行归 `unclassified` 而非编造),可作正确基线对照。别的示例(zh / code-review / release)都没自带考卷,得 `init` 自动生成(LLM 出题、需复核);注意跑 `init` 会**覆盖**这份手写版,默认 ship 的是手写。
 
 ```bash
 skill-eval analyze fixtures/example-skills/log-error-analyzer/          # 静态体检(<1s)
