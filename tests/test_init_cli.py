@@ -84,3 +84,25 @@ def test_init_threads_model_flag_to_generator(monkeypatch, tmp_path):
     r = runner.invoke(app, ["init", str(sp), "--model", "sonnet", "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
     assert captured.get("model") == "sonnet", f"--model 没透到 generator: {captured}"
+
+
+def test_init_threads_timeout_flag_to_generator(monkeypatch, tmp_path):
+    """init --timeout 接线:flag 须透到 EvalInitGenerator(timeout=...);默认 600。"""
+    captured = {}
+
+    def fake_init(self, model=None, timeout=600, **_kw):
+        captured["timeout"] = timeout
+
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.__init__", fake_init)
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp: _fake_evalset())
+    sp = _skill_dir(tmp_path)
+    # 显式传 --timeout
+    r = runner.invoke(app, ["init", str(sp), "--timeout", "300", "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert captured.get("timeout") == 300, f"--timeout 没透到 generator: {captured}"
+    # 默认(不传)→ 600
+    captured.clear()
+    r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out2")])
+    assert r.exit_code == 0, r.output
+    assert captured.get("timeout") == 600, f"默认 timeout 应为 600: {captured}"

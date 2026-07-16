@@ -163,6 +163,7 @@ skill-eval init /path/to/skill --no-generate-prompts            # 不调 LLM，�
 | `--num-evals` | 无 | 最多生成的 eval 数 |
 | `--from-transcript` | 无 | 从真实 session 挖 eval（加料 SKILL.md，非替代） |
 | `--model` | 默认 | LLM 模型 |
+| `--timeout` | 600 | LLM 调用超时秒数（mining 是单次大 prompt；撞超时 → degraded fallback） |
 
 `--from-transcript` 解析 session 重建 input_files/commands/produced_files，生成带结构化 assertions 的 eval。LLM 失败降级为 fallback eval 会带 `degraded:*` flag 并在终端告警（不再静默）——拿到 degraded eval 要重跑。
 
