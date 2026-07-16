@@ -13,7 +13,12 @@
 
 > **三条路径**:路径3 `run` 跑 evals.json 评测题 · 路径2 `audit` 对账历史 transcript(不 run)· 路径1 `--task --cwd` 跑真任务(不读 evals.json)。详见 [docs/example-skill.md](../../docs/example-skill.md)。
 
-> **关于 `transcripts/synthetic-violation.jsonl`(为什么是"违规"的)**:三个 audit 示例(log-en / log-zh / release-checklist-zh)自带的是**人为构造、故意违规**的合成会话,**不是真实跑出来的 session**。audit 的职责是判"transcript 有没有遵循 skill",而一份全做对的干净 transcript 只会让 audit 全 PASS、演示不出价值——所以示例故意把 skill 要求的关键步骤(读 references / 写产物 / 不编造)**条条漏掉或做错**,当反面教材给 audit 抓。下面每个示例的「预期 audit 结果」列了具体植入的违规。另两个不带这种违规 transcript:`code-review-auditor` 走路径1 真任务(自己 run 出来再审),`multi-skill-demo` 靠 `build_multi_skill.py` 脚本生成(验的是切分纯度,不是确定性违规)。
+> **关于示例 transcript(分三类、各做什么)**:每个 audit 示例的 `transcripts/` 里通常有两三类:
+> - **`synthetic-violation.jsonl`** — 人为构造、**故意违规**的合成会话(不是真 session)。audit 的职责是判"transcript 遵不遵循 skill",全做对的干净 transcript 只会全 PASS、演示不出价值,所以这份当**反面教材**给 audit 抓。下面每个示例的「预期 audit 结果」列了具体植入的违规。
+> - **`synthetic-clean.jsonl`** — 人为构造的**正确执行**合成会话(读该读的 references、写对产物、不编造)。是 `init --from-transcript` **出卷验证的正源**——违规 transcript 是边缘案例(没产出 skill 声明的产物),挖不到客观题;clean 才能验证 mining 真能挖出客观断言。
+> - **`real-clean.jsonl`**(仅 log-en / log-zh)— **真跑** path-1(`run --task --cwd` spawn cc)产出的真实正确会话,和 `synthetic-clean` **同任务同输入**,用来**对照手构 vs 真跑**的出卷效果(真跑 transcript 大/杂、25+ 条 vs 手构 8 条)。release-zh 7 步太复杂、真跑难一次跑对,故只手构。
+>
+> 另两个不带这种 transcript:`code-review-auditor` 走路径1 真任务(自己 run 出来再审),`multi-skill-demo` 靠 `build_multi_skill.py` 脚本生成(验的是切分纯度,不是确定性违规)。
 
 ## 每个怎么跑
 
@@ -40,6 +45,15 @@ skill-eval audit fixtures/example-skills/log-error-analyzer/ \
 >
 > 计数 **pass≈3 / fail≈5 / na≈1**(同文去重后,4 个行为):① 同文重复——编造那句被抽成 `CONSTRAINT` + `ANTI_FABRICATION` 两条,已**合并成一条**(来源徽章显两者,不再虚增 fail);② 同行为跨类——没读码表同时违反 条件性 + 步骤 两条**不同**规则,不合并(确是两条规则),但报告里 `related` **互标 #N** 一眼看到是同一违规。LLM 有 run-to-run 方差,**对照"3 个植入违规是否都出现在 FAIL、evidence 是否点中"即可,别钉精确条数**。
 
+> **出卷验证:用 clean transcript 挖(`init --from-transcript` 正源)**:挖客观题该用 `synthetic-clean.jsonl`(正确执行、产出了 error-report.json),不是 `synthetic-violation.jsonl`(边缘案例、没产出 → 挖不到客观题)。实测从 synthetic-clean 挖出 `FILE_EXISTS error-report.json` + `JSON_HAS_FIELD(total_errors/errors/unclassified)` + 真实错误码 `CONTAINS_PATTERN` 等客观断言(同任务多条细则合并成 1 题、零降级):
+> ```bash
+> skill-eval init fixtures/example-skills/log-error-analyzer/ \
+>   --from-transcript fixtures/example-skills/log-error-analyzer/transcripts/synthetic-clean.jsonl   # 手构 clean(8 条)
+> #   换 real-clean.jsonl(真跑,25+ 条)同任务同输入,可对照手构 vs 真跑的出题差异
+> ```
+>
+> 实测对照(en/zh 一致):两者都挖出核心客观断言(`FILE_EXISTS error-report.json` + schema 字段 + 真实码);**手构**干净聚焦(同任务多条合并成 1 题),**真跑**更丰富(6-7 题,还多捕获 `security` 字段——真 cc 主动多读了 `security-policy.md`)。手构=确定可控,真跑=反映真实 cc 行为(含小怪癖),正是两者并存对照的意义。
+
 ### log-error-analyzer-zh(中文 audit 示例)
 
 自带 transcript(中文对账),无 evals.json——走 audit;要 run 得先 `init` 生成中文 evals.json:
@@ -51,7 +65,8 @@ skill-eval audit fixtures/example-skills/log-error-analyzer-zh/ \
 # 想跑路径3 run,先 init 生成考卷 evals.json(两种方式):
 skill-eval init fixtures/example-skills/log-error-analyzer-zh/          # 方式1:从 SKILL.md 直接生成(L1 测例)
 skill-eval init fixtures/example-skills/log-error-analyzer-zh/ \
-  --from-transcript fixtures/example-skills/log-error-analyzer-zh/transcripts/synthetic-violation.jsonl   # 方式2:从 transcript 挖
+  --from-transcript fixtures/example-skills/log-error-analyzer-zh/transcripts/synthetic-clean.jsonl      # 方式2:从 clean transcript 挖(正源;violation 是边缘案例)
+#   也可换 real-clean.jsonl(真跑版)对照手构 vs 真跑
 ```
 
 > **预期 audit 结果**:与上面英文版**完全一致**(同 3 步骤 / 同 reference / 全中文)——3 个植入违规都 **FAIL**(没读 error-codes.md、编造 E-FAKE-999、没写 error-report.json),外加"没引日志原文行"通常也 FAIL;读日志步骤 **PASS**,安全策略 **N/A**。计数与去重/关联拆解同英文版(pass≈3 / fail≈5 / na≈1,4 个行为);LLM 对中文判定不退化(中英对照已验),同样别钉精确条数。
@@ -81,7 +96,7 @@ skill-eval audit fixtures/example-skills/release-checklist-zh/ \
 # 想跑路径3 run,先 init 生成考卷(两种方式):
 skill-eval init fixtures/example-skills/release-checklist-zh/           # 方式1:从 SKILL.md 直接生成
 skill-eval init fixtures/example-skills/release-checklist-zh/ \
-  --from-transcript fixtures/example-skills/release-checklist-zh/transcripts/synthetic-violation.jsonl   # 方式2:从 transcript 挖
+  --from-transcript fixtures/example-skills/release-checklist-zh/transcripts/synthetic-clean.jsonl       # 方式2:从 clean transcript 挖(正源;violation 是边缘案例)
 ```
 
 > **预期 audit 结果(跑完对照)**:这份 transcript 跑了测试 + 打了 tag(这两步该 **PASS**),但应抓到这些违规——
