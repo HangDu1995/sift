@@ -143,6 +143,34 @@ def test_generate_from_transcript_pipeline(monkeypatch, tmp_path):
     assert es.evals[0].assertions[0].params["filename"] == "cli.py"
 
 
+def test_generate_from_transcript_heartbeat_during_slow_call(monkeypatch, tmp_path):
+    """mining 单次慢 LLM 调用:心跳每 N 秒报'仍在挖',避免 Mining… 后长时间静默
+    (同 audit/path-1 进度诉求)。monkeypatch 间隔到极小 + call_claude sleep,验心跳触发。"""
+    import json as _json
+    import time
+    gen = EvalInitGenerator()
+    tp = tmp_path / "t.jsonl"
+    tp.write_text("\n".join(_json.dumps(r) for r in [
+        {"message": {"role": "user", "content": "造 cli"}},
+        {"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "w1", "name": "Write",
+             "input": {"file_path": "/proj/cli.py", "content": "x"}}]}},
+    ]), encoding="utf-8")
+    fake = _json.dumps({"skill_name": "calc", "evals": [{"id": 1, "name": "L2", "level": "L2",
+        "prompt": "p", "expected_output": "", "expectations": [],
+        "assertions": [{"name": "cli", "type": "FILE_EXISTS", "params": {"filename": "cli.py"}}],
+        "fixtures": []}]})
+    monkeypatch.setattr("skill_eval.evals.generator._HEARTBEAT_INTERVAL", 0.05)
+    monkeypatch.setattr("skill_eval.evals.generator.call_claude",
+                        lambda *a, **k: (time.sleep(0.2), fake)[1])
+    sp = tmp_path / "skill"; sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: calc\ndescription: d\n---\n# body\n", encoding="utf-8")
+    beats = []
+    gen.generate_from_transcript(sp, tp, on_heartbeat=beats.append)
+    assert len(beats) >= 1            # 慢调用期间心跳至少触发一次
+    assert "仍在调用 LLM" in beats[0]
+
+
 def test_enforce_keeps_pathless_contains_pattern():
     ev = EvalCase(id=1, prompt="x", level="L1", assertions=[
         Assertion(name="k", type=AssertionType.CONTAINS_PATTERN, params={"pattern": "keyword"})])  # no path

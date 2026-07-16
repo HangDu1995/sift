@@ -35,7 +35,9 @@ def init(
 
         if from_transcript:
             console.print(f"Mining evals from transcript [bold]{from_transcript}[/bold]...")
-            eval_set = gen.generate_from_transcript(skill_path, from_transcript)
+            eval_set = gen.generate_from_transcript(
+                skill_path, from_transcript, on_heartbeat=lambda m: console.print(m)
+            )
         elif generate_prompts:
             console.print("Generating L1 unit-level evals with LLM...")
             eval_set = gen.generate_with_llm(skill_path)

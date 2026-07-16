@@ -5,13 +5,18 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING
 
 from skill_eval.errors import SkillEvalError
 from skill_eval.models import Assertion, AssertionTier, AssertionType, EvalCase, EvalSet
 from skill_eval.parser import parse_skill_md
 from skill_eval.utils import call_claude
+
+# mining 心跳间隔(秒):generate_from_transcript 单次慢 LLM 调用期间每 N 秒报一次仍在跑。
+# 模块常量便于测试 monkeypatch 成极小值验心跳触发。
+_HEARTBEAT_INTERVAL = 20
 
 if TYPE_CHECKING:
     from skill_eval.config.loader import EvalConfig
@@ -621,7 +626,8 @@ class EvalInitGenerator:
     # Transcript-driven generation
     # ------------------------------------------------------------------
 
-    def generate_from_transcript(self, skill_path: Path, transcript_path: Path) -> EvalSet:
+    def generate_from_transcript(self, skill_path: Path, transcript_path: Path,
+                                 on_heartbeat: Callable[[str], None] | None = None) -> EvalSet:
         from skill_eval.evals.transcript import build_digest
         if not Path(transcript_path).exists():
             raise SkillEvalError(f"transcript 文件不存在: {transcript_path}")
@@ -630,10 +636,22 @@ class EvalInitGenerator:
         if not digest.user_turns and not digest.manifest:
             raise SkillEvalError("transcript 未产出可用内容(无 user turn 也无文件)")
         prompt = self._build_transcript_prompt(name, description, body, digest)
+        # mining 是单次大-prompt LLM 调用,常 1-5 分钟;"Mining…"后长时间静默像卡死。
+        # 加心跳(独立线程,call_claude 阻塞期间每 20s 报一次仍在跑),同 audit/path-1 进度诉求。
+        stop = threading.Event()
+        if on_heartbeat:
+            def _beat() -> None:
+                secs = 0
+                while not stop.wait(_HEARTBEAT_INTERVAL):
+                    secs += _HEARTBEAT_INTERVAL
+                    on_heartbeat(f"  …仍在调用 LLM 挖考卷({int(secs)}s)")
+            threading.Thread(target=_beat, daemon=True).start()
         try:
             response = call_claude(prompt, model=self.model, timeout=self.timeout)
         except RuntimeError:
+            stop.set()
             return self._transcript_fallback(name, description, digest)
+        stop.set()
         eval_set = self._parse_llm_response(response, name)
         if eval_set is None:
             return self._transcript_fallback(name, description, digest)
