@@ -31,7 +31,9 @@ def init(
     from skill_eval.evals.generator import EvalInitGenerator
 
     try:
-        gen = EvalInitGenerator(model=model, timeout=300)
+        # mining 是单次大-prompt LLM 调用(SKILL.md + 全 transcript + manifest schema),
+        # 实测 300s 临界(时成时超→degraded);对齐 audit 的 600s 给慢响应余量。
+        gen = EvalInitGenerator(model=model, timeout=600)
 
         if from_transcript:
             console.print(f"Mining evals from transcript [bold]{from_transcript}[/bold]...")

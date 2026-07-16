@@ -171,6 +171,47 @@ def test_generate_from_transcript_heartbeat_during_slow_call(monkeypatch, tmp_pa
     assert "仍在调用 LLM" in beats[0]
 
 
+def test_merge_same_task_evals_collapses_identical_prompt():
+    """单 transcript 挖出多个同 prompt eval(同任务多细则)→ 合并成一题多断言,
+    省 spawn、去冗余(避免同一任务 spawn 6 次)。不同 prompt 不合并。"""
+    from skill_eval.models import EvalSet, EvalCase, Assertion, AssertionType, FixtureFile
+    evals = [
+        EvalCase(id=1, prompt="分析 app.log 写 report", level="L1",
+                 expected_output="含 total_errors", expectations=["要 total_errors"],
+                 assertions=[], fixtures=[FixtureFile(path="app.log", content="E1")]),
+        EvalCase(id=2, prompt="分析 app.log 写 report", level="L1",
+                 expected_output="认 E-AUTH-001", expectations=["E-AUTH-001"],
+                 assertions=[], fixtures=[FixtureFile(path="app.log", content="E1")]),
+        EvalCase(id=3, prompt="分析 app.log 写 report", level="L2",
+                 expected_output="不编造码", expectations=["码白名单"],
+                 assertions=[Assertion(name="check", type=AssertionType.CUSTOM_SCRIPT, params={"script": "c.py"})],
+                 fixtures=[FixtureFile(path="app.log", content="E1"), FixtureFile(path="c.py", content="#")]),
+        EvalCase(id=4, prompt="另一个不同任务", level="L1", expectations=["别的"]),
+    ]
+    out = EvalInitGenerator._merge_same_task_evals(EvalSet(skill_name="s", evals=evals))
+    # 同 prompt 的 1/2/3 合并成 1;不同 prompt 的 4 保留 → 共 2 个 eval
+    assert len(out.evals) == 2
+    merged = out.evals[0]
+    assert merged.prompt == "分析 app.log 写 report"
+    assert merged.level == "L2"                 # 有 fixture → 执行型
+    assert len(merged.expectations) == 3        # 三条细则并集
+    assert len(merged.assertions) == 1          # CUSTOM_SCRIPT 并集
+    assert len(merged.fixtures) == 2            # app.log 去重 + c.py
+    assert any(f.startswith("merged:") for f in (merged.flags or []))
+    assert out.evals[1].prompt == "另一个不同任务"   # 不同 prompt 不合并
+    assert not any(f.startswith("merged:") for f in (out.evals[1].flags or []))
+
+
+def test_merge_no_op_when_all_prompts_distinct():
+    """所有 eval prompt 各不同 → 无合并,原样返回(仅重排 id)。"""
+    from skill_eval.models import EvalSet, EvalCase
+    es = EvalSet(skill_name="s", evals=[
+        EvalCase(id=1, prompt="任务A"), EvalCase(id=2, prompt="任务B")])
+    out = EvalInitGenerator._merge_same_task_evals(es)
+    assert len(out.evals) == 2
+    assert not any(f.startswith("merged:") for e in out.evals for f in (e.flags or []))
+
+
 def test_enforce_keeps_pathless_contains_pattern():
     ev = EvalCase(id=1, prompt="x", level="L1", assertions=[
         Assertion(name="k", type=AssertionType.CONTAINS_PATTERN, params={"pattern": "keyword"})])  # no path

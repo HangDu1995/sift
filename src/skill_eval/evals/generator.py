@@ -626,6 +626,77 @@ class EvalInitGenerator:
     # Transcript-driven generation
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _merge_same_task_evals(eval_set: EvalSet) -> EvalSet:
+        """合并 prompt 相同的 eval → 一题多断言(去冗余、省 spawn)。
+
+        单 transcript 挖掘常产出多个同 prompt 的 eval(同一任务的多条评分细则:认某错误码、
+        schema 完整、反编造…),各自 spawn 一次 cc 冗余、A/B 时是高度相关 trial。按 prompt
+        分组合并:assertions / expectations / fixtures 取并集去重、expected_output 拼成 rubric、
+        level 取有 fixture→L2。无同 prompt 则原样返回(仅重排 id)。flag 标 ``merged:N-evals``
+        (不触发改降级警告,只认 ``degraded:`` 前缀)。
+        """
+        evals = eval_set.evals
+        if len(evals) <= 1:
+            return eval_set
+        groups: dict[str, list[EvalCase]] = {}
+        order: list[str] = []
+        for e in evals:
+            key = (e.prompt or "").strip()
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(e)
+        if len(groups) == len(evals):
+            # 无同 prompt:不合并,仅按原序重排 id
+            return EvalSet(skill_name=eval_set.skill_name,
+                           evals=[e.model_copy(update={"id": i}) for i, e in enumerate(evals, 1)])
+
+        merged: list[EvalCase] = []
+        for new_id, key in enumerate(order, 1):
+            group = groups[key]
+            first = group[0]
+            if len(group) == 1:
+                merged.append(first.model_copy(update={"id": new_id}))
+                continue
+            seen_a, assertions = set(), []
+            seen_x, expectations = set(), []
+            seen_f, fixtures = {}, []
+            seen_o, eouts = set(), []
+            for e in group:
+                for a in (e.assertions or []):
+                    sig = (a.type, a.name, json.dumps(a.params or {}, sort_keys=True, ensure_ascii=False))
+                    if sig not in seen_a:
+                        seen_a.add(sig); assertions.append(a)
+                for x in (e.expectations or []):
+                    if x not in seen_x:
+                        seen_x.add(x); expectations.append(x)
+                for fx in (e.fixtures or []):
+                    fsig = (fx.path or "", fx.content or "")
+                    if fsig not in seen_f:
+                        seen_f[fsig] = fx; fixtures.append(fx)
+                eo = (e.expected_output or "").strip()
+                if eo and eo not in seen_o:
+                    seen_o.add(eo); eouts.append(eo)
+            flags = list(dict.fromkeys([*(first.flags or []), f"merged:{len(group)}-evals"]))
+            merged.append(EvalCase(
+                id=new_id,
+                name=first.name,
+                prompt=first.prompt,
+                expected_output="\n".join(f"- {x}" for x in eouts) if eouts else "",
+                files=first.files,
+                expectations=expectations,
+                assertions=assertions,
+                fixtures=fixtures,
+                level="L2" if fixtures else first.level,
+                mode=first.mode,
+                source_dir=first.source_dir,
+                source_dir_as=first.source_dir_as,
+                timeout=first.timeout,
+                flags=flags,
+            ))
+        return EvalSet(skill_name=eval_set.skill_name, evals=merged)
+
     def generate_from_transcript(self, skill_path: Path, transcript_path: Path,
                                  on_heartbeat: Callable[[str], None] | None = None) -> EvalSet:
         from skill_eval.evals.transcript import build_digest
@@ -655,7 +726,8 @@ class EvalInitGenerator:
         eval_set = self._parse_llm_response(response, name)
         if eval_set is None:
             return self._transcript_fallback(name, description, digest)
-        return self._enforce_manifest(eval_set, digest.manifest)
+        eval_set = self._enforce_manifest(eval_set, digest.manifest)
+        return self._merge_same_task_evals(eval_set)
 
     def _transcript_fallback(self, name: str, description: str, digest) -> EvalSet:
         turns = digest.user_turns[:8] or [self._build_fallback_prompt(name, description)]
