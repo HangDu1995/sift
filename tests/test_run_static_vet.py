@@ -95,3 +95,53 @@ def test_emit_vet_failure_nonblocking(tmp_path: Path, monkeypatch):
     _emit_static_and_vet(sp, it)  # 不该抛
     assert (it / "scorecard.json").exists(), "scorecard 该照常产(独立失败)"
     assert not (it / "vet-report.json").exists(), "vet 失败时不该写残缺 vet-report"
+
+
+# ---- _emit_report:run 末尾聚合产 report.html(best-effort,不阻断)----
+# monkeypatch generate_report_html 隔离 HTML 渲染(渲染本身由 generate_report_html +
+# viewer 测试覆盖),这里只验 _emit_report 的 skip / best-effort / 调用接线。
+
+
+def test_emit_report_default(tmp_path, monkeypatch):
+    """默认(不跳过):调 generate_report_html 产 report.html。"""
+    import skill_eval.cli.commands.report as rep
+    it = tmp_path / "iteration-1"
+    it.mkdir()
+
+    def fake_gen(workspace):
+        p = workspace / "report.html"
+        p.write_text("<html></html>", encoding="utf-8")
+        return p
+
+    monkeypatch.setattr(rep, "generate_report_html", fake_gen)
+    from skill_eval.cli.commands.run import _emit_report
+    _emit_report(it)
+    assert (it / "report.html").exists(), "默认该产 report.html"
+
+
+def test_emit_report_skips_when_flag(tmp_path, monkeypatch):
+    """skip_report=True:不调 generate_report_html,不产 report.html。"""
+    import skill_eval.cli.commands.report as rep
+    it = tmp_path / "iteration-1"
+    it.mkdir()
+    called = []
+    monkeypatch.setattr(rep, "generate_report_html", lambda ws: called.append(ws))
+    from skill_eval.cli.commands.run import _emit_report
+    _emit_report(it, skip_report=True)
+    assert called == [], "--no-report 不该调 generate_report_html"
+    assert not (it / "report.html").exists()
+
+
+def test_emit_report_best_effort(tmp_path, monkeypatch):
+    """generate_report_html 抛异常:不阻断 run,不产 report.html。"""
+    import skill_eval.cli.commands.report as rep
+    it = tmp_path / "iteration-1"
+    it.mkdir()
+
+    def boom(workspace):  # noqa: ARG001
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(rep, "generate_report_html", boom)
+    from skill_eval.cli.commands.run import _emit_report
+    _emit_report(it)  # 不该抛
+    assert not (it / "report.html").exists(), "失败时不该写残缺 report.html"

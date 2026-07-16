@@ -9,6 +9,33 @@ import typer
 from skill_eval.cli.main import app, console
 
 
+def generate_report_html(workspace: Path) -> Path | None:
+    """从 workspace 的 benchmark.json(+ scorecard.json)生成自包含 report.html。best-effort。
+
+    生产者(run 末尾自动产)与 `report` 命令共用此「workspace → report.html」核心;report 命令
+    额外支持 --benchmark/--previous 覆盖与候选路径搜索(workspace vs iteration-1)。无
+    benchmark.json → 返回 None(没东西可报,如路径1 --task 模式无 benchmark)。ReportGenerator
+    .write_static 内部自读 vet-report.json / gate.json(存在则带对应面板/徽章)。
+    """
+    bench_path = workspace / "benchmark.json"
+    if not bench_path.exists():
+        return None
+    bench_data = json.loads(bench_path.read_text(encoding="utf-8"))
+
+    scorecard_data = None
+    sc_path = workspace / "scorecard.json"
+    if sc_path.exists():
+        try:
+            scorecard_data = json.loads(sc_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    from skill_eval.reporting.viewer import ReportGenerator
+    output_path = workspace / "report.html"
+    ReportGenerator().write_static(workspace, output_path, bench_data, previous=None, scorecard=scorecard_data)
+    return output_path
+
+
 @app.command()
 def report(
     workspace: Path = typer.Argument(..., help="Path to evaluation workspace"),

@@ -446,3 +446,54 @@ class TestLoadAuxData:
 
     def test_load_vet_report_missing(self, tmp_path: Path):
         assert _load_vet_report(tmp_path) is None
+
+
+class TestGenerateReportHtml:
+    """generate_report_html:workspace → report.html 核心(run 末尾 + report 命令共用)。
+    monkeypatch ReportGenerator.write_static 隔离渲染,只验 benchmark/scorecard 加载逻辑。"""
+
+    def test_loads_benchmark_and_scorecard(self, tmp_path: Path):
+        from skill_eval.cli.commands.report import generate_report_html
+
+        (tmp_path / "benchmark.json").write_text(
+            json.dumps({"skill_name": "s", "runs": []}), encoding="utf-8")
+        (tmp_path / "scorecard.json").write_text(
+            json.dumps({"score": 7, "max_score": 11}), encoding="utf-8")
+
+        captured = {}
+
+        def fake_write_static(self, workspace, output_path, benchmark=None, previous=None, scorecard=None):  # noqa: ARG002
+            captured.update(benchmark=benchmark, previous=previous,
+                             scorecard=scorecard, output_path=output_path)
+            output_path.write_text("<html></html>", encoding="utf-8")
+
+        with patch.object(ReportGenerator, "write_static", fake_write_static):
+            out = generate_report_html(tmp_path)
+
+        assert out == tmp_path / "report.html"
+        assert captured["benchmark"] == {"skill_name": "s", "runs": []}
+        assert captured["scorecard"] == {"score": 7, "max_score": 11}
+        assert captured["previous"] is None
+        assert captured["output_path"] == tmp_path / "report.html"
+
+    def test_no_benchmark_returns_none(self, tmp_path: Path):
+        from skill_eval.cli.commands.report import generate_report_html
+
+        with patch.object(ReportGenerator, "write_static") as m:
+            assert generate_report_html(tmp_path) is None
+        m.assert_not_called()
+
+    def test_missing_scorecard_ok(self, tmp_path: Path):
+        from skill_eval.cli.commands.report import generate_report_html
+
+        (tmp_path / "benchmark.json").write_text(
+            json.dumps({"skill_name": "s"}), encoding="utf-8")
+        captured = {}
+
+        def fake_write_static(self, workspace, output_path, benchmark=None, previous=None, scorecard=None):  # noqa: ARG002
+            captured["scorecard"] = scorecard
+            output_path.write_text("x", encoding="utf-8")
+
+        with patch.object(ReportGenerator, "write_static", fake_write_static):
+            generate_report_html(tmp_path)
+        assert captured["scorecard"] is None

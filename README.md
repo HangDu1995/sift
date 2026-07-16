@@ -263,7 +263,7 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 ```
 output/iteration-1/
 ├── benchmark.json          # 聚合:双率 delta + comparisons + comparison_summary + analysis
-├── report.html             # 自包含 HTML 报告(读 gate.json 显门禁徽章)
+├── report.html             # 自包含 HTML 报告(读 gate.json 显门禁徽章;run 末尾自动产)
 ├── gate.json               # gate 命令产出(判决 + 两轴明细;非 run 产出)
 ├── with_skill/             # v1/v2 模式下换成各自标签名
 │   └── eval-<id>/run-<n>/

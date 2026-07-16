@@ -97,6 +97,24 @@ def _emit_static_and_vet(
             console.print(f"[yellow]Warning:[/yellow] 安全审查失败(已跳过,不阻断): {exc}")
 
 
+def _emit_report(iteration_dir: Path, *, skip_report: bool = False) -> None:
+    """run 末尾:聚合 benchmark/scorecard/vet 产自包含 report.html(best-effort,不阻断 run)。
+
+    必须在 _emit_static_and_vet 之后调(scorecard/vet 是它的输入)。无 benchmark.json 则跳过
+    (路径1 --task 模式不走 A/B、无 benchmark,不产)。让用户跑完 run 即得 HTML,不必再单独
+    `skill-eval report`。
+    """
+    if skip_report:
+        return
+    try:
+        from skill_eval.cli.commands.report import generate_report_html
+        html_path = generate_report_html(iteration_dir)
+        if html_path:
+            console.print(f"  [dim]HTML 报告 → {html_path}[/dim]")
+    except Exception as exc:  # 补充维度,不阻断
+        console.print(f"[yellow]Warning:[/yellow] HTML 报告生成失败(已跳过,不阻断): {exc}")
+
+
 def _render_security_report(report, console: Console) -> None:
     table = Table(title=f"Security Scan: {report.skill_name}")
     table.add_column("Scanner", style="bold")
@@ -142,6 +160,7 @@ def run(
     security_gate: bool = typer.Option(False, "--security-gate", help="Fail if security vetting returns BLOCKED or REVIEW_NEEDED"),
     no_static: bool = typer.Option(False, "--no-static", help="跳过末尾自动产静态评分卡(默认产,供 report 评分卡面板)"),
     no_vet: bool = typer.Option(False, "--no-vet", help="跳过末尾自动产安全审查(默认产,供 report 安全面板)"),
+    no_report: bool = typer.Option(False, "--no-report", help="跳过末尾自动产 HTML 报告(默认产 report.html)"),
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
     format: str = typer.Option("table", "--format", help="Output format"),
     eval_samples: Optional[str] = typer.Option(None, "--eval-samples", help="Number or pct of evals to run (e.g. 10 or 0.25)"),
@@ -264,3 +283,5 @@ def run(
 
     # 末尾自动产静态评分卡 + 安全审查(写进 iteration_dir,供 report 面板自动带上)
     _emit_static_and_vet(skill_path, iteration_dir, skip_static=no_static, skip_vet=no_vet)
+    # 再聚合上面三者产 report.html(必须在 static/vet 之后:它们是输入)
+    _emit_report(iteration_dir, skip_report=no_report)
