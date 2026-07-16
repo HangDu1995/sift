@@ -121,7 +121,7 @@ class CalibrationChecker:
                 impact=-0.2,
             ))
 
-        if compliance:
+        if compliance and compliance.compliance_rate is not None:
             if compliance.compliance_rate >= 0.8:
                 signals.append(ConfidenceSignal(
                     signal_type=SignalType.COMPLIANCE_BACKS_SCORING,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from skill_eval.models import (
     Assertion,
@@ -20,6 +21,7 @@ from skill_eval.models import (
     RunResultMetrics,
     ComplianceReport,
     ComplianceResultItem,
+    ComplianceVerdict,
     InstructionCheck,
     InstructionSource,
     InstructionPriority,
@@ -149,11 +151,62 @@ class TestComplianceModels:
                     evidence="Step executed",
                     confidence=0.9,
                     source="llm",
+                    verdict=ComplianceVerdict.PASS,
                 )
             ],
         )
         data = cr.model_dump(mode="json")
         assert data["compliance_rate"] == 0.67
+
+    def test_compliance_item_verdict_required_and_serialized(self):
+        """verdict 必填、且参与序列化(区分 PASS/FAIL/UNCLEAR)。"""
+        item = ComplianceResultItem(
+            instruction=InstructionCheck(
+                source=InstructionSource.HEADING_STEP,
+                instruction_text="Do X",
+                section="Workflow",
+                priority=InstructionPriority.REQUIRED,
+                check_method=CheckMethod.LLM_JUDGE,
+            ),
+            followed=False,
+            evidence="LLM 未评估此指令",
+            confidence=0.0,
+            source="llm",
+            verdict=ComplianceVerdict.UNCLEAR,
+        )
+        assert item.verdict == ComplianceVerdict.UNCLEAR
+        assert item.model_dump(mode="json")["verdict"] == "UNCLEAR"
+
+    def test_compliance_item_verdict_is_required(self):
+        """构造 ComplianceResultItem 不带 verdict → ValidationError(逼全设对,不靠默认)。"""
+        with pytest.raises(ValidationError):
+            ComplianceResultItem(
+                instruction=InstructionCheck(
+                    source=InstructionSource.HEADING_STEP,
+                    instruction_text="Do X",
+                    section="Workflow",
+                    priority=InstructionPriority.REQUIRED,
+                    check_method=CheckMethod.LLM_JUDGE,
+                ),
+                followed=True,
+                evidence="done",
+                confidence=0.9,
+                source="llm",
+            )
+
+    def test_compliance_report_unclear_count_and_optional_rate(self):
+        """ComplianceReport 带 unclear_count;compliance_rate 可为 None(无可判定项)。"""
+        cr = ComplianceReport(
+            skill_name="test",
+            total_instructions=2,
+            followed_count=0,
+            compliance_rate=None,
+            checks=[],
+            unclear_count=2,
+        )
+        data = cr.model_dump(mode="json")
+        assert data["unclear_count"] == 2
+        assert data["compliance_rate"] is None
 
 
 class TestCalibrationModels:

@@ -10,6 +10,7 @@ from skill_eval.models import (
     CheckMethod,
     ComplianceReport,
     ComplianceResultItem,
+    ComplianceVerdict,
     InstructionCheck,
     InstructionPriority,
     InstructionSource,
@@ -164,12 +165,14 @@ class ComplianceChecker:
                     on_substep(idx + 1, total, batch_instructions[i].instruction_text[:60], item.followed, item.confidence)
 
             for idx in remaining_indices:
+                # U1:超出批量预算、没轮到判 → 判不准,非 FAIL。
                 results[idx] = ComplianceResultItem(
                     instruction=instructions[idx],
                     followed=False,
                     evidence=f"Skipped: LLM batch budget ({_MAX_LLM_IN_BATCH}) exhausted",
                     confidence=0.0,
                     source="llm",
+                    verdict=ComplianceVerdict.UNCLEAR,
                 )
                 self._log_step(log_path, idx + 1, total, instructions[idx].instruction_text[:80], results[idx])
 
@@ -178,24 +181,31 @@ class ComplianceChecker:
         required_items = [i for i in items if i.instruction.priority == InstructionPriority.REQUIRED]
         required_followed = sum(1 for i in required_items if i.followed)
 
-        # P0-1e: 按检查来源拆双率(programmatic 稳 / llm 漂)。None = 该类无指令。
-        prog_items = [i for i in items if i.source == "programmatic"]
-        llm_items = [i for i in items if i.source == "llm"]
+        # UNCLEAR(判不准)排除出分母——与被预过滤排除的不适用项(filtered)同口径:
+        # 判不准是零信息量,当 FAIL 计进分母会把率压低(实测 6/9 判不准把 33% 压成 11%)。
+        judged = [i for i in items if i.verdict != ComplianceVerdict.UNCLEAR]
+        unclear_count = len(items) - len(judged)
+        rate = (followed / len(judged)) if judged else None
+
+        # P0-1e: 按检查来源拆双率(分母同样排除 UNCLEAR)。None = 该类无可判定项。
+        prog_judged = [i for i in judged if i.source == "programmatic"]
+        llm_judged = [i for i in judged if i.source == "llm"]
         prog_rate = (
-            sum(1 for i in prog_items if i.followed) / len(prog_items) if prog_items else None
+            sum(1 for i in prog_judged if i.followed) / len(prog_judged) if prog_judged else None
         )
         llm_rate = (
-            sum(1 for i in llm_items if i.followed) / len(llm_items) if llm_items else None
+            sum(1 for i in llm_judged if i.followed) / len(llm_judged) if llm_judged else None
         )
 
         return ComplianceReport(
             skill_name="",
             total_instructions=total,
             followed_count=followed,
-            compliance_rate=followed / total if total > 0 else 0.0,
+            compliance_rate=rate,
             checks=items,
             warnings=[],
             filtered_count=filtered_count,
+            unclear_count=unclear_count,
             compliance_rate_programmatic=prog_rate,
             compliance_rate_llm=llm_rate,
         )
@@ -204,7 +214,7 @@ class ComplianceChecker:
     def _log_step(log_path: Path | None, step: int, total: int, text: str, item: ComplianceResultItem):
         if not log_path:
             return
-        tag = "PASS" if item.followed else "FAIL"
+        tag = item.verdict.value if item.verdict else ("PASS" if item.followed else "FAIL")
         line = f"[{tag}] {step}/{total} [{item.source}] conf={item.confidence:.1f} {text}\n"
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(line)
@@ -336,6 +346,7 @@ class ComplianceChecker:
                         evidence=f"Tool '{tc_name}' found in tool trace with input: {tc_input[:100]}",
                         confidence=1.0,
                         source="programmatic",
+                        verdict=ComplianceVerdict.PASS,
                     )
                 if script_path and script_path.lower() in tc_input.lower():
                     return ComplianceResultItem(
@@ -344,6 +355,7 @@ class ComplianceChecker:
                         evidence=f"Script path '{script_path}' found in tool call '{tc_name}': {tc_input[:100]}",
                         confidence=1.0,
                         source="programmatic",
+                        verdict=ComplianceVerdict.PASS,
                     )
                 if cmd_re and cmd_re.search(tc_input):
                     return ComplianceResultItem(
@@ -352,18 +364,21 @@ class ComplianceChecker:
                         evidence=f"Command '{tool_name}' run via '{tc_name}': {tc_input[:100]}",
                         confidence=1.0,
                         source="programmatic",
+                        verdict=ComplianceVerdict.PASS,
                     )
 
         tool_used = tool_name.lower() in lower if tool_name else False
         script_found = script_path.lower() in lower if script_path else False
+        followed = tool_used or script_found
 
         return ComplianceResultItem(
             instruction=instruction,
-            followed=tool_used or script_found,
+            followed=followed,
             evidence=f"Tool '{tool_name}' {'found' if tool_used else 'not found'} in transcript"
                       + (f", script '{script_path}' {'found' if script_found else 'not found'}" if script_path else ""),
             confidence=1.0 if tool_trace else 0.7,
             source="programmatic",
+            verdict=ComplianceVerdict.PASS if followed else ComplianceVerdict.FAIL,
         )
 
     def _check_programmatic(
@@ -379,6 +394,7 @@ class ComplianceChecker:
                 evidence=f"File {path} {'exists' if exists else 'not found'}",
                 confidence=1.0,
                 source="programmatic",
+                verdict=ComplianceVerdict.PASS if exists else ComplianceVerdict.FAIL,
             )
 
         sample = instruction.params.get("sample", "")
@@ -390,14 +406,17 @@ class ComplianceChecker:
                 evidence="Pattern match in transcript" if match else "Pattern not found",
                 confidence=0.7 if match else 0.3,
                 source="programmatic",
+                verdict=ComplianceVerdict.PASS if match else ComplianceVerdict.FAIL,
             )
 
+        # U2:该 check_method 无 programmatic handler(如 PATTERN_MATCH 缺 sample)→ 判不准,非 FAIL。
         return ComplianceResultItem(
             instruction=instruction,
             followed=False,
             evidence="No programmatic check available",
             confidence=0.0,
             source="programmatic",
+            verdict=ComplianceVerdict.UNCLEAR,
         )
 
     def _check_llm_batch(
@@ -430,6 +449,7 @@ class ComplianceChecker:
             result_text = call_claude(prompt, model=model, timeout=timeout, max_turns=1)
             return self._parse_batch_result(result_text, instructions)
         except RuntimeError:
+            # U3:LLM 不可用(CLI 失败/超时)→ 判不准,非 FAIL。
             return [
                 ComplianceResultItem(
                     instruction=inst,
@@ -437,6 +457,7 @@ class ComplianceChecker:
                     evidence="LLM 批量检查不可用",
                     confidence=0.0,
                     source="llm",
+                    verdict=ComplianceVerdict.UNCLEAR,
                 )
                 for inst in instructions
             ]
@@ -445,6 +466,7 @@ class ComplianceChecker:
     def _parse_batch_result(
         text: str, instructions: list[InstructionCheck]
     ) -> list[ComplianceResultItem]:
+        # U4:LLM 没返回可解析 JSON / 没覆盖该 index → 判不准,非 FAIL。
         defaults = [
             ComplianceResultItem(
                 instruction=inst,
@@ -452,6 +474,7 @@ class ComplianceChecker:
                 evidence="LLM 未评估此指令",
                 confidence=0.0,
                 source="llm",
+                verdict=ComplianceVerdict.UNCLEAR,
             )
             for inst in instructions
         ]
@@ -474,12 +497,14 @@ class ComplianceChecker:
             idx = item.get("index")
             if not isinstance(idx, int) or idx < 0 or idx >= len(defaults):
                 continue
+            followed = bool(item.get("followed", False))
             defaults[idx] = ComplianceResultItem(
                 instruction=instructions[idx],
-                followed=bool(item.get("followed", False)),
+                followed=followed,
                 evidence=str(item.get("evidence", "")),
                 confidence=float(item.get("confidence", 0.5)),
                 source="llm",
+                verdict=ComplianceVerdict.PASS if followed else ComplianceVerdict.FAIL,
             )
 
         return defaults
@@ -507,20 +532,24 @@ class ComplianceChecker:
             obj_str = _extract_first_balanced(result_text, "{", "}")
             if obj_str:
                 data = json.loads(obj_str)
+                followed = bool(data.get("followed", False))
                 return ComplianceResultItem(
                     instruction=instruction,
-                    followed=bool(data.get("followed", False)),
+                    followed=followed,
                     evidence=str(data.get("evidence", "")),
                     confidence=float(data.get("confidence", 0.5)),
                     source="llm",
+                    verdict=ComplianceVerdict.PASS if followed else ComplianceVerdict.FAIL,
                 )
         except Exception:
             pass
 
+        # U5:single 调用异常或解析失败 → 判不准,非 FAIL。
         return ComplianceResultItem(
             instruction=instruction,
             followed=False,
             evidence="LLM 检查不可用",
             confidence=0.0,
             source="llm",
+            verdict=ComplianceVerdict.UNCLEAR,
         )

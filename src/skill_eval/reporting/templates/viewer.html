@@ -317,6 +317,7 @@
     }
     .assertion-status.pass { color: var(--green); }
     .assertion-status.fail { color: var(--red); }
+    .assertion-status.unclear { color: var(--text-muted); }
     .assertion-evidence {
       color: var(--text-muted);
       font-size: 0.75rem;
@@ -884,8 +885,9 @@
       if (run.compliance) {
         const cr = run.compliance;
         const target = 0.8;
-        const met = cr.compliance_rate >= target;
-        const rateColor = met ? "var(--green)" : cr.compliance_rate >= 0.5 ? "var(--accent)" : "var(--red)";
+        const hasRate = cr.compliance_rate != null;
+        const met = hasRate && cr.compliance_rate >= target;
+        const rateColor = !hasRate ? "var(--text-muted)" : met ? "var(--green)" : cr.compliance_rate >= 0.5 ? "var(--accent)" : "var(--red)";
         const fmtPct = v => (v != null ? (v * 100).toFixed(0) + '%' : '—');
         html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
         html += '<strong>遵循度：</strong> <span style="color:' + rateColor + ';font-weight:600;">' + fmtPct(cr.compliance_rate) + '</span>';
@@ -898,14 +900,20 @@
         if (cr.filtered_count) {
           html += '<div style="font-size:0.75rem;color:var(--text-muted);">精筛剔除 ' + cr.filtered_count + ' 条非可遵循项（路由提示/描述语）</div>';
         }
-        // per-instruction 明细(照 grading 的 assertion-list 风格):哪条指令遵循、证据、来源、置信度
+        // 判不准(UNCLEAR)已排除出遵循度分母——零信息量,不当 FAIL 计。单独报出让人知道率基于几条实判。
+        if (cr.unclear_count) {
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);">' + cr.unclear_count + ' 条判不准（UNCLEAR）已排除出分母（LLM 没判成，非真违规）</div>';
+        }
+        // per-instruction 明细(照 grading 的 assertion-list 风格):verdict 三态 PASS/FAIL/UNCLEAR
         const checks = cr.checks || [];
         if (checks.length) {
           html += '<ul class="assertion-list" style="margin-top:0.5rem;">';
           for (const c of checks) {
-            const ok = c.followed;
-            const statusClass = ok ? "pass" : "fail";
-            const statusIcon = ok ? "✓" : "✗";
+            const verdict = c.verdict || (c.followed ? "PASS" : "FAIL");  // 旧数据无 verdict → 按 followed 回退
+            const isUnclear = verdict === "UNCLEAR";
+            const isPass = verdict === "PASS";
+            const statusClass = isUnclear ? "unclear" : (isPass ? "pass" : "fail");
+            const statusIcon = isUnclear ? "○" : (isPass ? "✓" : "✗");
             const instrText = (c.instruction && c.instruction.instruction_text) ? c.instruction.instruction_text : '(未命名)';
             const srcTag = c.source === "programmatic"
               ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">程序化</span>'

@@ -17,6 +17,7 @@ from skill_eval.models import (
     CheckMethod,
     ComplianceReport,
     ComplianceResultItem,
+    ComplianceVerdict,
     ExpectationResult,
     GradingResult,
     GradingSummary,
@@ -436,6 +437,76 @@ class TestComplianceChecker:
         assert report.compliance_rate_programmatic == 0.0  # Write 不过 → 0/1
         assert report.compliance_rate_llm == 1.0  # mock 判过 → 1/1
 
+    def test_unclear_excluded_from_rate(self, mocker, tmp_path: Path):
+        """判不准(UNCLEAR)排除出 compliance_rate 分母,不冒充 FAIL 拉低率。
+
+        场景:1 条程序化(Write 没用→真 FAIL)+ 1 条 LLM(call_claude 返回不可解析→UNCLEAR)。
+        改前:UNCLEAR 当 followed=false 进分母 → 率 0/2=0(被零信息项压低)。
+        改后:UNCLEAR 排除 → 率 0/1=0.0(只算实判的),unclear_count=1,llm 率 None。"""
+        mocker.patch(
+            "skill_eval.compliance.checker.call_claude",
+            return_value="this is not valid JSON",
+        )
+        checker = ComplianceChecker()
+        instructions = [
+            InstructionCheck(  # 程序化,transcript 没提 Write → 真 FAIL
+                source=InstructionSource.TOOL_REQUIREMENT,
+                instruction_text="Use Write", section="S",
+                priority=InstructionPriority.REQUIRED,
+                check_method=CheckMethod.TOOL_CALL_CHECK,
+                params={"tool_name": "Write"},
+            ),
+            InstructionCheck(  # LLM_JUDGE,mock 解析失败 → UNCLEAR
+                source=InstructionSource.HEADING_STEP,
+                instruction_text="Analyze the data", section="S",
+                priority=InstructionPriority.REQUIRED,
+                check_method=CheckMethod.LLM_JUDGE,
+            ),
+        ]
+        report = checker.check(
+            instructions=instructions,
+            transcript="nothing about tools here",
+            output_dir=tmp_path,
+        )
+        # UNCLEAR 项:verdict 标记 + 计 unclear_count
+        llm_item = next(c for c in report.checks if c.source == "llm")
+        assert llm_item.verdict == ComplianceVerdict.UNCLEAR
+        assert report.unclear_count == 1
+        # 率分母只含实判的 1 条(Write FAIL)→ 0/1=0.0,不被 UNCLEAR 压成 0/2
+        assert report.compliance_rate == 0.0
+        assert report.compliance_rate_programmatic == 0.0
+        assert report.compliance_rate_llm is None  # 唯一 llm 项判不准 → 该类无可判定 → None
+
+    def test_all_unclear_rate_is_none(self, mocker, tmp_path: Path):
+        """全部判不准 → compliance_rate=None(无可判定项),非 0%。"""
+        mocker.patch(
+            "skill_eval.compliance.checker.call_claude",
+            return_value="garbage no json",
+        )
+        checker = ComplianceChecker()
+        instructions = [
+            InstructionCheck(
+                source=InstructionSource.HEADING_STEP,
+                instruction_text="Step A", section="S",
+                priority=InstructionPriority.REQUIRED,
+                check_method=CheckMethod.LLM_JUDGE,
+            ),
+            InstructionCheck(
+                source=InstructionSource.CONSTRAINT,
+                instruction_text="必须做 B", section="S",
+                priority=InstructionPriority.REQUIRED,
+                check_method=CheckMethod.LLM_JUDGE,
+            ),
+        ]
+        report = checker.check(
+            instructions=instructions,
+            transcript="some transcript",
+            output_dir=tmp_path,
+        )
+        assert report.unclear_count == 2
+        assert report.compliance_rate is None
+        assert report.compliance_rate_llm is None
+
     def test_reference_usage_tool_call_check(self, tmp_path: Path):
         """P0-1d: REFERENCE_USAGE 走 TOOL_CALL_CHECK —— tool_trace 里有 Read(ref) → followed;
         没读该 ref → not followed。替代旧 FILE_PRESENCE(P0-2 拷文件后恒真、无意义)。"""
@@ -547,6 +618,27 @@ class TestComplianceChecker:
         )
         report = cal.calibrate(grading, compliance)
         assert any(s.signal_type == "COMPLIANCE_CONTRADICTS_SCORING" for s in report.confidence_signals) or report.overall_confidence < 0.7
+
+    def test_compliance_rate_none_skips_signal(self):
+        """compliance_rate=None(全判不准/无可判定)→ 不加 COMPLIANCE_BACKS/CONTRADICTS 信号,也不崩。"""
+        cal = CalibrationChecker()
+        grading = GradingResult(
+            expectations=[
+                ExpectationResult(text="e1", passed=True, evidence="OK", source="programmatic"),
+            ],
+            summary=GradingSummary(passed=1, failed=0, total=1, pass_rate=1.0),
+        )
+        compliance = ComplianceReport(
+            skill_name="test",
+            total_instructions=2,
+            followed_count=0,
+            compliance_rate=None,  # 全 UNCLEAR → 无可判定
+            checks=[],
+            unclear_count=2,
+        )
+        report = cal.calibrate(grading, compliance)  # 不应 TypeError
+        assert not any(s.signal_type == "COMPLIANCE_CONTRADICTS_SCORING" for s in report.confidence_signals)
+        assert not any(s.signal_type == "COMPLIANCE_BACKS_SCORING" for s in report.confidence_signals)
 
     def test_grade_thresholds(self):
         cal = CalibrationChecker()

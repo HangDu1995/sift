@@ -59,6 +59,19 @@ class CheckMethod(str, Enum):
     LLM_JUDGE = "LLM_JUDGE"
 
 
+class ComplianceVerdict(str, Enum):
+    """单条指令遵循性判定。
+
+    PASS/FAIL = 已评估(有结论);UNCLEAR = 判不准(批量预算超限 / LLM 不可用 /
+    解析失败 / 无 programmatic handler),零信息量,**排除出 compliance_rate 分母**
+    (与被预过滤排除的不适用项同口径),不冒充 FAIL 拉低率。
+    """
+
+    PASS = "PASS"
+    FAIL = "FAIL"
+    UNCLEAR = "UNCLEAR"
+
+
 class ConfidenceGrade(str, Enum):
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"

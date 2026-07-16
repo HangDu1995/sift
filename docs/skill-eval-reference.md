@@ -434,7 +434,7 @@ skill-eval batch-report batch-workspace/ --open
 |---|---|---|---|
 | `*_programmatic` | 确定性断言（程序判定） | 稳（A=0 噪声） | 强信 |
 | `*_llm` | LLM 语义判定 | 抖（阅卷噪声） | 看方向 |
-| 总率（`pass_rate` / `compliance_rate`） | 全部混算 | 历史兼容 | 粗略 |
+| 总率（`pass_rate` / `compliance_rate`） | `pass_rate` 全部混算；`compliance_rate` 排除 UNCLEAR（判不准，见下） | 历史兼容 | 粗略 |
 
 **双主位分工**（fixture-eval 下）：
 - **客观侧主位** = `delta.pass_rate_programmatic`（候选 - 基线）——A/B 噪声抵消到 0，最稳。
