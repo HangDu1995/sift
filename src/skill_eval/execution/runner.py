@@ -234,36 +234,37 @@ class ABTestRunner:
                     json.dumps(per_checkpoint, indent=2, ensure_ascii=False), encoding="utf-8"
                 )
 
-                compliance_report = None
-                # compliance 按"该 side 注入的 skill"判:凡 inject_skill 非空且未 skip 就跑
-                # (默认 with→跑、without→不跑;v1/v2 两边都跑)。extract body 取自 inject_skill。
-                if inject_skill and not self.config.skip_compliance:
-                    self._emit_progress(
-                        eval_case.get_name(), config_name,
-                        eval_case.id, len(evals),
-                        completed[0], total_jobs,
-                        None, 0.0, None, phase="compliance",
+                # dump raw stream-json 成 transcript.jsonl(无条件:两侧都产,既是 run 产物,
+                # 也供下面 audit 对账 + init --from-transcript 复用)。打通 live 真跑→audit 闭环:
+                # stream-json 的 assistant/user event 带 message 字段 → audit build_digest 可直接
+                # 解析重建 digest(result event 无 message,自动跳过)。
+                if run_output.stdout:
+                    (config_dir / "transcript.jsonl").write_text(
+                        run_output.stdout, encoding="utf-8"
                     )
-                    from skill_eval.compliance.extractor import InstructionExtractor
-                    from skill_eval.compliance.checker import ComplianceChecker
 
-                    extractor = InstructionExtractor()
-                    _, _, _, _, skill_body = parse_skill_md(inject_skill)
-                    instructions = extractor.extract(skill_body)
-                    if instructions:
-                        log_path = config_dir / "compliance.log"
-                        log_path.write_text("", encoding="utf-8")
-                        checker = ComplianceChecker()
-                        compliance_report = checker.check(
-                            instructions=instructions,
-                            transcript=run_output.transcript,
-                            output_dir=outputs_dir,
+                compliance_report = None
+                # 遵循性 = audit 引擎对账:凡 inject_skill 非空且未 skip 就跑
+                # (默认 with→跑、without→不跑;v1/v2 两边都跑)。audit 自做 extract/rebuild/derive/
+                # classify/judge(禁令主动查违规、条件性三态适用性),产 AuditReport 原样存 compliance.json。
+                if inject_skill and not self.config.skip_compliance:
+                    transcript_path = config_dir / "transcript.jsonl"
+                    if transcript_path.exists():
+                        self._emit_progress(
+                            eval_case.get_name(), config_name,
+                            eval_case.id, len(evals),
+                            completed[0], total_jobs,
+                            None, 0.0, None, phase="compliance",
+                        )
+                        from skill_eval.audit.auditor import TranscriptAuditor
+                        _, _, _, _, skill_body = parse_skill_md(inject_skill)
+                        compliance_report = TranscriptAuditor().audit(
+                            skill_name=eval_set.skill_name,
+                            skill_body=skill_body,
+                            transcripts=[transcript_path],
                             model=self.config.model,
                             timeout=self.scoring_config.llm_timeout,
-                            tool_trace=list(run_output.tool_trace),
-                            log_path=log_path,
                         )
-                        compliance_report.skill_name = eval_set.skill_name
                         (config_dir / "compliance.json").write_text(
                             compliance_report.model_dump_json(indent=2), encoding="utf-8"
                         )
@@ -295,16 +296,6 @@ class ABTestRunner:
                 (config_dir / "run_debug.json").write_text(
                     json.dumps(run_debug, indent=2, ensure_ascii=False), encoding="utf-8"
                 )
-                # dump raw stream-json 成 transcript.jsonl,打通 live 真跑→audit 闭环:
-                # _parse_stream_json 只留 assistant text + 截断的 tool_trace,丢了 tool_use
-                # 完整 input 与 tool_result 配对;而 audit 的 build_digest 需要完整配对重建
-                # digest。stream-json 的 assistant/user event 本身带 message 字段 → build_digest
-                # 可直接解析(result event 无 message,自动跳过)。使 run(路径1/3)产物能喂
-                # audit(路径2)/ init --from-transcript(路径3)。
-                if run_output.stdout:
-                    (config_dir / "transcript.jsonl").write_text(
-                        run_output.stdout, encoding="utf-8"
-                    )
 
                 run_duration = time.time() - run_start
 

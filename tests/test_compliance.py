@@ -2,27 +2,17 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 
 from skill_eval.compliance.extractor import InstructionExtractor
-from skill_eval.compliance.checker import (
-    ComplianceChecker,
-    _extract_first_balanced,
-    extract_first_balanced,
-    match_tool_call,
-)
+from skill_eval.audit.tool_match import extract_first_balanced, match_tool_call, _extract_first_balanced
 from skill_eval.calibration.calibrator import CalibrationChecker
 from skill_eval.models import (
+    AuditReport,
     CheckMethod,
-    ComplianceReport,
-    ComplianceResultItem,
-    ComplianceVerdict,
     ExpectationResult,
     GradingResult,
     GradingSummary,
-    InstructionCheck,
-    InstructionPriority,
     InstructionSource,
     ConfidenceGrade,
     ToolCallRecord,
@@ -284,281 +274,9 @@ class TestInstructionExtractorChinese:
         assert "ing" not in names
 
 
-class TestComplianceChecker:
-    def test_check_tool_call_present(self):
-        checker = ComplianceChecker()
-        instructions = [
-            InstructionCheck(
-                source=InstructionSource.TOOL_REQUIREMENT,
-                instruction_text="Use the Read tool",
-                section="Workflow",
-                priority=InstructionPriority.REQUIRED,
-                check_method=CheckMethod.TOOL_CALL_CHECK,
-                params={"tool_name": "Read"},
-            ),
-        ]
-        report = checker.check(
-            instructions=instructions,
-            transcript="I will use the Read tool to open the file",
-            output_dir=Path("/tmp"),
-        )
-        assert report.total_instructions == 1
-        assert report.followed_count == 1
-        assert report.compliance_rate == 1.0
+class TestCalibrationChecker:
 
-    def test_check_tool_call_missing(self):
-        checker = ComplianceChecker()
-        instructions = [
-            InstructionCheck(
-                source=InstructionSource.TOOL_REQUIREMENT,
-                instruction_text="Use the Bash tool",
-                section="Workflow",
-                priority=InstructionPriority.REQUIRED,
-                check_method=CheckMethod.TOOL_CALL_CHECK,
-                params={"tool_name": "Bash"},
-            ),
-        ]
-        report = checker.check(
-            instructions=instructions,
-            transcript="I just wrote the file directly",
-            output_dir=Path("/tmp"),
-        )
-        assert report.followed_count == 0
 
-    def test_check_tool_call_bash_subcommand_evidence(self):
-        """Bash 子命令:_check_tool_call 命中 input_summary 时 followed=True +
-        evidence 提到命令匹配(命中 tool_trace),而非走 transcript fallback。
-
-        防回归:match_tool_call 加 input_summary 分支后,_check_tool_call 的 evidence
-        遍历(L302-320)须同步加分支——否则 match 命中但取不到命中 tc → 落 fallback →
-        行为不一致(transcript 不含 tool_name 时甚至报假 FAIL)。transcript 故意不含
-        tool_name,逼出走 tool_trace 命中分支。"""
-        checker = ComplianceChecker()
-        instructions = [
-            InstructionCheck(
-                source=InstructionSource.TOOL_REQUIREMENT,
-                instruction_text="运行 pytest",
-                section="Workflow",
-                priority=InstructionPriority.REQUIRED,
-                check_method=CheckMethod.TOOL_CALL_CHECK,
-                params={"tool_name": "pytest"},
-            ),
-        ]
-        tool_trace = [ToolCallRecord(name="Bash", input_summary='{"command": "pytest"}')]
-        report = checker.check(
-            instructions=instructions,
-            transcript="开始自检,先跑测试。",  # 不含 pytest,逼走 tool_trace 命中分支
-            output_dir=Path("/tmp"),
-            tool_trace=tool_trace,
-        )
-        assert report.followed_count == 1
-        item = report.checks[0]
-        assert item.followed is True
-        assert item.confidence == 1.0
-        # evidence 提到命令匹配(命中 tool_trace),非 fallback 的 "not found in transcript"
-        assert "pytest" in item.evidence
-
-    def test_check_file_presence(self, tmp_path: Path):
-        (tmp_path / "output.json").write_text("{}", encoding="utf-8")
-        checker = ComplianceChecker()
-        instructions = [
-            InstructionCheck(
-                source=InstructionSource.REFERENCE_USAGE,
-                instruction_text="Output file exists",
-                section="Output",
-                priority=InstructionPriority.RECOMMENDED,
-                check_method=CheckMethod.FILE_PRESENCE,
-                params={"path": "output.json"},
-            ),
-        ]
-        report = checker.check(
-            instructions=instructions,
-            transcript="",
-            output_dir=tmp_path,
-        )
-        assert report.followed_count == 1
-
-    def test_compliance_rate(self):
-        checker = ComplianceChecker()
-        instructions = [
-            InstructionCheck(
-                source=InstructionSource.TOOL_REQUIREMENT,
-                instruction_text="Use Read",
-                section="S1",
-                priority=InstructionPriority.REQUIRED,
-                check_method=CheckMethod.TOOL_CALL_CHECK,
-                params={"tool_name": "Read"},
-            ),
-            InstructionCheck(
-                source=InstructionSource.TOOL_REQUIREMENT,
-                instruction_text="Use Write",
-                section="S2",
-                priority=InstructionPriority.REQUIRED,
-                check_method=CheckMethod.TOOL_CALL_CHECK,
-                params={"tool_name": "Write"},
-            ),
-        ]
-        report = checker.check(
-            instructions=instructions,
-            transcript="I used the Read tool but not the other one",
-            output_dir=Path("/tmp"),
-        )
-        assert report.compliance_rate == 0.5
-
-    def test_dual_rate_split(self, mocker, tmp_path: Path):
-        """P0-1e: compliance_rate 拆 _programmatic(稳)+ _llm(漂,只看方向)。
-        混合场景两率分别报;某类无指令则该率 None(不报假 0)。"""
-        mocker.patch(
-            "skill_eval.compliance.checker.call_claude",
-            return_value='[{"index": 0, "followed": true, "evidence": "ok", "confidence": 0.9}]',
-        )
-        checker = ComplianceChecker()
-        instructions = [
-            InstructionCheck(  # 程序化,transcript 没提 Write → 不过
-                source=InstructionSource.TOOL_REQUIREMENT,
-                instruction_text="Use Write", section="S",
-                priority=InstructionPriority.REQUIRED,
-                check_method=CheckMethod.TOOL_CALL_CHECK,
-                params={"tool_name": "Write"},
-            ),
-            InstructionCheck(  # LLM_JUDGE,mock 判过
-                source=InstructionSource.HEADING_STEP,
-                instruction_text="Analyze the data", section="S",
-                priority=InstructionPriority.REQUIRED,
-                check_method=CheckMethod.LLM_JUDGE,
-            ),
-        ]
-        report = checker.check(
-            instructions=instructions,
-            transcript="nothing about tools here",
-            output_dir=tmp_path,
-        )
-        assert report.compliance_rate == 0.5  # 总:程序化 0 + LLM 1 = 1/2
-        assert report.compliance_rate_programmatic == 0.0  # Write 不过 → 0/1
-        assert report.compliance_rate_llm == 1.0  # mock 判过 → 1/1
-
-    def test_unclear_excluded_from_rate(self, mocker, tmp_path: Path):
-        """判不准(UNCLEAR)排除出 compliance_rate 分母,不冒充 FAIL 拉低率。
-
-        场景:1 条程序化(Write 没用→真 FAIL)+ 1 条 LLM(call_claude 返回不可解析→UNCLEAR)。
-        改前:UNCLEAR 当 followed=false 进分母 → 率 0/2=0(被零信息项压低)。
-        改后:UNCLEAR 排除 → 率 0/1=0.0(只算实判的),unclear_count=1,llm 率 None。"""
-        mocker.patch(
-            "skill_eval.compliance.checker.call_claude",
-            return_value="this is not valid JSON",
-        )
-        checker = ComplianceChecker()
-        instructions = [
-            InstructionCheck(  # 程序化,transcript 没提 Write → 真 FAIL
-                source=InstructionSource.TOOL_REQUIREMENT,
-                instruction_text="Use Write", section="S",
-                priority=InstructionPriority.REQUIRED,
-                check_method=CheckMethod.TOOL_CALL_CHECK,
-                params={"tool_name": "Write"},
-            ),
-            InstructionCheck(  # LLM_JUDGE,mock 解析失败 → UNCLEAR
-                source=InstructionSource.HEADING_STEP,
-                instruction_text="Analyze the data", section="S",
-                priority=InstructionPriority.REQUIRED,
-                check_method=CheckMethod.LLM_JUDGE,
-            ),
-        ]
-        report = checker.check(
-            instructions=instructions,
-            transcript="nothing about tools here",
-            output_dir=tmp_path,
-        )
-        # UNCLEAR 项:verdict 标记 + 计 unclear_count
-        llm_item = next(c for c in report.checks if c.source == "llm")
-        assert llm_item.verdict == ComplianceVerdict.UNCLEAR
-        assert report.unclear_count == 1
-        # 率分母只含实判的 1 条(Write FAIL)→ 0/1=0.0,不被 UNCLEAR 压成 0/2
-        assert report.compliance_rate == 0.0
-        assert report.compliance_rate_programmatic == 0.0
-        assert report.compliance_rate_llm is None  # 唯一 llm 项判不准 → 该类无可判定 → None
-
-    def test_all_unclear_rate_is_none(self, mocker, tmp_path: Path):
-        """全部判不准 → compliance_rate=None(无可判定项),非 0%。"""
-        mocker.patch(
-            "skill_eval.compliance.checker.call_claude",
-            return_value="garbage no json",
-        )
-        checker = ComplianceChecker()
-        instructions = [
-            InstructionCheck(
-                source=InstructionSource.HEADING_STEP,
-                instruction_text="Step A", section="S",
-                priority=InstructionPriority.REQUIRED,
-                check_method=CheckMethod.LLM_JUDGE,
-            ),
-            InstructionCheck(
-                source=InstructionSource.CONSTRAINT,
-                instruction_text="必须做 B", section="S",
-                priority=InstructionPriority.REQUIRED,
-                check_method=CheckMethod.LLM_JUDGE,
-            ),
-        ]
-        report = checker.check(
-            instructions=instructions,
-            transcript="some transcript",
-            output_dir=tmp_path,
-        )
-        assert report.unclear_count == 2
-        assert report.compliance_rate is None
-        assert report.compliance_rate_llm is None
-
-    def test_reference_usage_tool_call_check(self, tmp_path: Path):
-        """P0-1d: REFERENCE_USAGE 走 TOOL_CALL_CHECK —— tool_trace 里有 Read(ref) → followed;
-        没读该 ref → not followed。替代旧 FILE_PRESENCE(P0-2 拷文件后恒真、无意义)。"""
-        checker = ComplianceChecker()
-        inst = InstructionCheck(
-            source=InstructionSource.REFERENCE_USAGE,
-            instruction_text="Use reference file: references/guide.md",
-            section="References",
-            priority=InstructionPriority.RECOMMENDED,
-            check_method=CheckMethod.TOOL_CALL_CHECK,
-            params={"script_path": "references/guide.md"},
-        )
-        # 读过该 ref → followed
-        trace_read = [{"name": "Read", "input_summary": "reading references/guide.md"}]
-        item = checker._check_instruction(
-            inst, transcript="", output_dir=tmp_path, model=None, timeout=5, tool_trace=trace_read
-        )
-        assert item.followed is True
-        assert item.source == "programmatic"
-        # 没读该 ref(读了别的)→ not followed
-        trace_other = [{"name": "Read", "input_summary": "reading some_other.md"}]
-        item2 = checker._check_instruction(
-            inst, transcript="", output_dir=tmp_path, model=None, timeout=5, tool_trace=trace_other
-        )
-        assert item2.followed is False
-
-    def test_reference_usage_category_grouped_check(self, tmp_path: Path):
-        """合并后的类别指令(script_path='references/'):读任一 references/ 文件 → followed;
-        啥都没读(捏造)→ not followed。修路由型 skill 假红灯:softmax 属 reduction,
-        只读 reduction 是对的,合并后是 1/1 而非误导的 1/7。"""
-        checker = ComplianceChecker()
-        inst = InstructionCheck(
-            source=InstructionSource.REFERENCE_USAGE,
-            instruction_text="Consult reference material (7 alternative category references)",
-            section="References",
-            priority=InstructionPriority.RECOMMENDED,
-            check_method=CheckMethod.TOOL_CALL_CHECK,
-            params={"script_path": "references/"},
-        )
-        # Claude 路由到 reduction,读了 reduction 文件 → 过(就算只读 1 类也算对)
-        trace_read = [{"name": "Read", "input_summary": '{"file_path": "/x/outputs/references/reduction/patterns.md"}'}]
-        item = checker._check_instruction(
-            inst, transcript="", output_dir=tmp_path, model=None, timeout=5, tool_trace=trace_read
-        )
-        assert item.followed is True
-        assert item.source == "programmatic"
-        # 啥参考都没读(只读了产出物)→ 不过(反捏造信号)
-        trace_none = [{"name": "Read", "input_summary": '{"file_path": "/x/outputs/operator_spec.md"}'}]
-        item2 = checker._check_instruction(
-            inst, transcript="", output_dir=tmp_path, model=None, timeout=5, tool_trace=trace_none
-        )
-        assert item2.followed is False
     def test_high_confidence(self):
         cal = CalibrationChecker()
         grading = GradingResult(
@@ -609,18 +327,18 @@ class TestComplianceChecker:
             ],
             summary=GradingSummary(passed=1, failed=0, total=1, pass_rate=1.0),
         )
-        compliance = ComplianceReport(
+        # 遵循性现在是 AuditReport;rate 从 summary 算 = pass/(pass+fail) = 1/4 = 0.25 → CONTRADICTS
+        compliance = AuditReport(
             skill_name="test",
-            total_instructions=2,
-            followed_count=1,
-            compliance_rate=0.5,
-            checks=[],
+            transcripts=[],
+            summary={"total": 4, "pass": 1, "fail": 3, "na": 0, "unclear": 0},
+            findings=[],
         )
         report = cal.calibrate(grading, compliance)
-        assert any(s.signal_type == "COMPLIANCE_CONTRADICTS_SCORING" for s in report.confidence_signals) or report.overall_confidence < 0.7
+        assert any(s.signal_type == "COMPLIANCE_CONTRADICTS_SCORING" for s in report.confidence_signals)
 
     def test_compliance_rate_none_skips_signal(self):
-        """compliance_rate=None(全判不准/无可判定)→ 不加 COMPLIANCE_BACKS/CONTRADICTS 信号,也不崩。"""
+        """无可判定项(pass+fail=0,全 na/unclear)→ rate None → 不加 COMPLIANCE 信号,也不崩。"""
         cal = CalibrationChecker()
         grading = GradingResult(
             expectations=[
@@ -628,17 +346,49 @@ class TestComplianceChecker:
             ],
             summary=GradingSummary(passed=1, failed=0, total=1, pass_rate=1.0),
         )
-        compliance = ComplianceReport(
+        compliance = AuditReport(
             skill_name="test",
-            total_instructions=2,
-            followed_count=0,
-            compliance_rate=None,  # 全 UNCLEAR → 无可判定
-            checks=[],
-            unclear_count=2,
+            transcripts=[],
+            summary={"total": 5, "pass": 0, "fail": 0, "na": 5, "unclear": 0},  # 无可判定 → rate None
+            findings=[],
         )
         report = cal.calibrate(grading, compliance)  # 不应 TypeError
         assert not any(s.signal_type == "COMPLIANCE_CONTRADICTS_SCORING" for s in report.confidence_signals)
         assert not any(s.signal_type == "COMPLIANCE_BACKS_SCORING" for s in report.confidence_signals)
+
+    def test_compliance_rate_from_audit_summary(self):
+        """calibrator 从 AuditReport.summary 算 rate(pass/(pass+fail),排 na+unclear)→ 信号阈值正确。"""
+        cal = CalibrationChecker()
+        grading = GradingResult(
+            expectations=[
+                ExpectationResult(text="e1", passed=True, evidence="OK", source="programmatic"),
+            ],
+            summary=GradingSummary(passed=1, failed=0, total=1, pass_rate=1.0),
+        )
+        # rate = 4/(4+1) = 0.8 → BACKS(na/unclear 排除出分母)
+        backs = AuditReport(
+            skill_name="t", transcripts=[],
+            summary={"total": 6, "pass": 4, "fail": 1, "na": 1, "unclear": 0}, findings=[],
+        )
+        r1 = cal.calibrate(grading, backs)
+        assert any(s.signal_type == "COMPLIANCE_BACKS_SCORING" for s in r1.confidence_signals)
+
+        # rate = 1/(1+3) = 0.25 → CONTRADICTS
+        contra = AuditReport(
+            skill_name="t", transcripts=[],
+            summary={"total": 4, "pass": 1, "fail": 3, "na": 0, "unclear": 0}, findings=[],
+        )
+        r2 = cal.calibrate(grading, contra)
+        assert any(s.signal_type == "COMPLIANCE_CONTRADICTS_SCORING" for s in r2.confidence_signals)
+
+        # rate = 3/(3+1) = 0.75 → 既不 BACKS(≥0.8)也不 CONTRADICTS(<0.5);na+unclear 不进分母
+        mid = AuditReport(
+            skill_name="t", transcripts=[],
+            summary={"total": 6, "pass": 3, "fail": 1, "na": 1, "unclear": 1}, findings=[],
+        )
+        r3 = cal.calibrate(grading, mid)
+        assert not any(s.signal_type == "COMPLIANCE_BACKS_SCORING" for s in r3.confidence_signals)
+        assert not any(s.signal_type == "COMPLIANCE_CONTRADICTS_SCORING" for s in r3.confidence_signals)
 
     def test_grade_thresholds(self):
         cal = CalibrationChecker()
@@ -657,90 +407,6 @@ class TestComplianceChecker:
         )
         report = cal.calibrate(grading)
         assert isinstance(report.recommendations, list)
-
-
-class TestConstraintFiltering:
-    """P0-1b: CONSTRAINT 候选 LLM 精筛 —— '必须'类过 LLM 去假阳性,禁止性词直接保留。"""
-
-    @staticmethod
-    def _constraint(text: str) -> InstructionCheck:
-        return InstructionCheck(
-            source=InstructionSource.CONSTRAINT,
-            instruction_text=text,
-            section="Constraint",
-            priority=InstructionPriority.REQUIRED,
-            check_method=CheckMethod.LLM_JUDGE,
-        )
-
-    def test_prohibitive_kept_without_llm(self, mocker):
-        """禁止性词(禁止/严禁/不得…)确定性高,不过 LLM 直接保留。"""
-        spy = mocker.patch("skill_eval.compliance.checker.call_claude")
-        checker = ComplianceChecker()
-        instructions = [
-            self._constraint("禁止跳过验证步骤"),
-            self._constraint("严禁捏造数据"),
-        ]
-        filtered, n = checker._filter_constraint_candidates(instructions, model=None)
-        assert len(filtered) == 2
-        assert n == 0
-        spy.assert_not_called()
-
-    def test_must_false_positive_filtered(self, mocker):
-        """'必须'路由提示/描述语经 LLM 判非可遵循 → 剔除。"""
-        mocker.patch(
-            "skill_eval.compliance.checker.call_claude",
-            return_value='[{"index": 0, "applicable": false}]',
-        )
-        checker = ComplianceChecker()
-        instructions = [self._constraint("（⚠️ 必须先读） / [算法](references/x.md)")]
-        filtered, n = checker._filter_constraint_candidates(instructions, model=None)
-        assert len(filtered) == 0
-        assert n == 1
-
-    def test_must_real_constraint_kept(self, mocker):
-        """'必须'真约束(必须使用 UTF-8)经 LLM 判可遵循 → 保留。"""
-        mocker.patch(
-            "skill_eval.compliance.checker.call_claude",
-            return_value='[{"index": 0, "applicable": true}]',
-        )
-        checker = ComplianceChecker()
-        instructions = [self._constraint("必须使用 UTF-8 编码")]
-        filtered, n = checker._filter_constraint_candidates(instructions, model=None)
-        assert len(filtered) == 1
-        assert n == 0
-
-    def test_llm_unavailable_keeps_all(self, mocker):
-        """LLM 不可用(RuntimeError)时保守保留全部,不误剔。"""
-        mocker.patch(
-            "skill_eval.compliance.checker.call_claude",
-            side_effect=RuntimeError("timeout"),
-        )
-        checker = ComplianceChecker()
-        instructions = [self._constraint("必须先读 references/x.md")]
-        filtered, n = checker._filter_constraint_candidates(instructions, model=None)
-        assert len(filtered) == 1
-        assert n == 0
-
-    def test_prohibitive_and_must_mixed(self, mocker):
-        """混合:禁止性保留不过 LLM,'必须'过 LLM;LLM 未提的 index 默认保留。"""
-        spy = mocker.patch(
-            "skill_eval.compliance.checker.call_claude",
-            return_value='[{"index": 0, "applicable": false}]',
-        )
-        checker = ComplianceChecker()
-        instructions = [
-            self._constraint("禁止跳过"),
-            self._constraint("必须先读 x.md"),
-            self._constraint("必须使用 UTF-8"),
-        ]
-        filtered, n = checker._filter_constraint_candidates(instructions, model=None)
-        assert n == 1  # 只剔"必须先读"
-        assert len(filtered) == 2
-        texts = [i.instruction_text for i in filtered]
-        assert "禁止跳过" in texts
-        assert "必须使用 UTF-8" in texts
-        # 单次 call_claude 判整批"必须"候选(parser 修后该结构化判定确定,无需自洽)
-        spy.assert_called_once()
 
 
 class TestParseRobustness:
@@ -769,52 +435,6 @@ class TestParseRobustness:
         assert _extract_first_balanced("") is None
         # 转义引号不破坏字符串边界
         assert _extract_first_balanced(r'["a\"b]"]') == r'["a\"b]"]'
-
-    def test_applicability_bracket_reasoning_not_default_keep(self):
-        """GLM 返回 JSON + reasoning 含 [0]-[1] 引用 → 须解析为实际值(全 false),
-        不是解析失败回退的全保留。这是 §39 [6,6,0] 漂移的真因。"""
-        text = (
-            '[{"index": 0, "applicable": false},'
-            ' {"index": 1, "applicable": false}]\n\n'
-            "判定依据:\n- [0]-[1] 均为表格注记「(⚠️ 必须先读)」,非可遵循。"
-        )
-        mask = ComplianceChecker._parse_applicability(text, 2)
-        assert mask == [False, False]  # 旧贪婪正则:FAIL → 默认 [True, True]
-
-    def test_batch_bracket_evidence_not_default_false(self):
-        """batch evidence 含 [0] 引用 → 须正确解析,不退到默认全 False。"""
-        insts = [
-            InstructionCheck(
-                source=InstructionSource.CONSTRAINT, instruction_text="t0", section="S",
-                priority=InstructionPriority.REQUIRED, check_method=CheckMethod.LLM_JUDGE,
-            ),
-            InstructionCheck(
-                source=InstructionSource.CONSTRAINT, instruction_text="t1", section="S",
-                priority=InstructionPriority.REQUIRED, check_method=CheckMethod.LLM_JUDGE,
-            ),
-        ]
-        text = (
-            '[{"index": 0, "followed": true, "evidence": "见 [0] 处确认", "confidence": 0.9},'
-            ' {"index": 1, "followed": false, "evidence": "未提及", "confidence": 0.8}]'
-        )
-        items = ComplianceChecker._parse_batch_result(text, insts)
-        assert items[0].followed is True
-        assert items[1].followed is False
-
-    def test_single_brace_in_evidence(self, mocker):
-        """单条判定 evidence 含 } → 须正确解析(旧 [^}]+ 在首个 } 截断 → 解析失败)。"""
-        mocker.patch(
-            "skill_eval.compliance.checker.call_claude",
-            return_value='{"followed": true, "evidence": "dict {k: v} ok", "confidence": 0.9}',
-        )
-        checker = ComplianceChecker()
-        inst = InstructionCheck(
-            source=InstructionSource.CONSTRAINT, instruction_text="t", section="S",
-            priority=InstructionPriority.REQUIRED, check_method=CheckMethod.LLM_JUDGE,
-        )
-        item = checker._check_llm_single(inst, "transcript", None, 5)
-        assert item.followed is True
-        assert "dict {k: v} ok" in item.evidence
 
 
 class TestMatchToolCall:
@@ -901,8 +521,8 @@ class TestMatchToolCall:
 
 
 class TestExtractFirstBalancedPublic:
-    """Task 3: extract_first_balanced 提为公共(供 audit 复用 JSON 抽取),
-    _extract_first_balanced 保留为别名 —— checker 内部调用点零改动。"""
+    """extract_first_balanced 是公共名(供 audit 复用 JSON 抽取),
+    _extract_first_balanced 是其别名(旧调用点兼容)——两者现都从 audit.tool_match 来。"""
 
     def test_public_and_alias_are_same_object(self):
         """_extract_first_balanced 是 extract_first_balanced 的别名(同一函数对象)。"""

@@ -706,6 +706,74 @@ class TestABTestRunnerReferencesAutoCopy:
         assert not without_ref.exists(), "without_skill 不注入 body,不该拷 references/"
 
 
+class TestABTestRunnerComplianceIsAudit:
+    """遵循性引擎 = audit:开 compliance 时 with_skill 产 AuditReport 形 compliance.json,
+    without_skill 不产;transcript.jsonl 落盘喂给 TranscriptAuditor。"""
+
+    @staticmethod
+    def _make_skill(tmp_path: Path) -> Path:
+        skill = tmp_path / "myskill"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: myskill\ndescription: test skill\n---\n"
+            "# 步骤\n\n1. 必须读日志。\n\n## 禁止\n\n禁止编造错误码。\n",
+            encoding="utf-8",
+        )
+        return skill
+
+    def test_with_skill_compliance_is_audit_report(self, tmp_path: Path):
+        from skill_eval.execution.runner import ABTestRunner
+        from skill_eval.models import (
+            AuditReport, RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase,
+        )
+
+        skill = self._make_skill(tmp_path)
+
+        # stdout 非空 → transcript.jsonl 落盘 → compliance 才会跑(实际 audit 被 mock,不真解析)
+        def fake_run(self, prompt, skill_path=None, **kwargs):
+            return RunOutput(exit_code=0, stdout='{"type":"result","result":"done"}',
+                             transcript="done", result_text="done")
+
+        canned = AuditReport(
+            skill_name="myskill",
+            transcripts=["transcript.jsonl"],
+            summary={"total": 2, "pass": 1, "fail": 1, "na": 0, "unclear": 0},
+            findings=[],
+        )
+
+        config = RunConfig(
+            runs_per_config=1,
+            output_dir=tmp_path / "out",
+            skip_compliance=False,
+            skip_calibration=True,
+            max_workers=1,
+        )
+        scoring = ScoringConfig(enable_programmatic=False, enable_llm=False)
+        runner = ABTestRunner(config=config, scoring_config=scoring)
+        eval_set = EvalSet(skill_name="myskill", evals=[EvalCase(id=1, prompt="do the task")])
+
+        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run), \
+             patch("skill_eval.audit.auditor.TranscriptAuditor") as MockAuditor:
+            MockAuditor.return_value.audit.return_value = canned
+            runner.run_ab_test(skill, eval_set)
+
+        base = tmp_path / "out" / "iteration-1"
+        with_comp = base / "with_skill" / "eval-1" / "run-1" / "compliance.json"
+        without_comp = base / "without_skill" / "eval-1" / "run-1" / "compliance.json"
+        assert with_comp.exists(), "with_skill 应产 compliance.json"
+        assert not without_comp.exists(), "without_skill 不注入 skill,不该产 compliance.json"
+
+        data = json.loads(with_comp.read_text(encoding="utf-8"))
+        assert "summary" in data and "findings" in data, "compliance.json 应是 AuditReport 形(summary/findings)"
+        assert "compliance_rate" not in data, "不再是旧 ComplianceReport 形(无 compliance_rate 顶层字段)"
+        assert data["summary"] == {"total": 2, "pass": 1, "fail": 1, "na": 0, "unclear": 0}
+
+        # audit 被喂的是落盘的 transcript.jsonl
+        called = MockAuditor.return_value.audit.call_args
+        assert called.kwargs["skill_name"] == "myskill"
+        assert [p.name for p in called.kwargs["transcripts"]] == ["transcript.jsonl"]
+
+
 class TestBuildSides:
     """build_sides:sides spec 单一事实源(块 B v1/v2)。"""
 

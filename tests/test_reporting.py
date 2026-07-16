@@ -214,6 +214,41 @@ class TestReportGeneratorStatic:
         # 数据流断言(文档性,改前改后都通过):confidence_signals 描述真嵌入了 EMBEDDED_DATA
         assert "测试信号" in html
 
+    def test_generate_html_compliance_is_audit_report(self, tmp_path):
+        """compliance 块读 AuditReport(summary+findings 四态),不再读旧 ComplianceReport 字段。
+
+        RED 驱动:renderGrades 的 compliance 块现引用 cr.summary / findings 循环 f.instruction_text
+        (旧 code 用 cr.compliance_rate / cr.checks / c.instruction),锚定新字段避开旧字面量。
+        """
+        workspace = tmp_path / "iteration-1"
+        ws_dir = workspace / "with_skill" / "run-1"
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "outputs").mkdir()
+        (ws_dir / "outputs" / "out.txt").write_text("hello")
+        (ws_dir / "compliance.json").write_text(json.dumps({
+            "skill_name": "myskill",
+            "transcripts": ["transcript.jsonl"],
+            "summary": {"total": 3, "pass": 2, "fail": 1, "na": 0, "unclear": 0},
+            "findings": [
+                {"instruction_text": "禁止编造错误码", "source": "CONSTRAINT",
+                 "verdict": "PASS", "category": "prohibition", "evidence": "未发现编造", "confidence": 0.9},
+                {"instruction_text": "必须读日志", "source": "TOOL_REQUIREMENT",
+                 "verdict": "FAIL", "category": "conditional", "evidence": "未调用 Read", "confidence": 0.7},
+            ],
+        }))
+
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, None)
+        # 新 JS 读 AuditReport 字段(RED 驱动)
+        assert "cr.summary" in html
+        assert "f.instruction_text" in html
+        # 旧 ComplianceReport 字段已从 JS 移除
+        assert "cr.compliance_rate" not in html
+        assert "cr.checks" not in html
+        # AuditReport 数据真嵌入 EMBEDDED_DATA(findings 文本可见)
+        assert "禁止编造错误码" in html
+        assert "必须读日志" in html
+
     def test_generate_html_renders_comparison_labels(self, tmp_path):
         """comparison_summary 的 label_a/b 驱动盲评头条显示(块 B v1/v2 真标签)。"""
         workspace = tmp_path / "iteration-1"

@@ -428,13 +428,15 @@ skill-eval batch-report batch-workspace/ --open
 
 ### 双率：客观侧 vs 主观侧
 
-每条 expectation/assertion 带 `source`（`programmatic` / `llm`）。评分与遵循性都按 source 拆**双率**，让干净信号不被 LLM 阅卷噪声污染：
+每条 expectation/assertion 带 `source`（`programmatic` / `llm`）。**评分**按 source 拆**双率**，让干净信号不被 LLM 阅卷噪声污染：
 
 | 率 | 来源 | 稳定性 | 信任度 |
 |---|---|---|---|
-| `*_programmatic` | 确定性断言（程序判定） | 稳（A=0 噪声） | 强信 |
-| `*_llm` | LLM 语义判定 | 抖（阅卷噪声） | 看方向 |
-| 总率（`pass_rate` / `compliance_rate`） | `pass_rate` 全部混算；`compliance_rate` 排除 UNCLEAR（判不准，见下） | 历史兼容 | 粗略 |
+| `pass_rate_programmatic` | 确定性断言（程序判定） | 稳（A=0 噪声） | 强信 |
+| `pass_rate_llm` | LLM 语义判定 | 抖（阅卷噪声） | 看方向 |
+| `pass_rate`（总率） | 全部混算 | 历史兼容 | 粗略 |
+
+> **遵循性不分 source 双率**：`compliance.json` 现是 **AuditReport**（遵循性引擎已统一到 audit），按语义 category 四类（condition/prohibition/step/output）判，产 `summary{total,pass,fail,na,unclear}`。遵循度 = `pass/(pass+fail)`，排除 **N/A**（不适用，场景不触发）+ **UNCLEAR**（判不准，LLM 没判成）——两者都不进分母，与 audit 命令的 `audit-report.json` 同 schema。
 
 **双主位分工**（fixture-eval 下）：
 - **客观侧主位** = `delta.pass_rate_programmatic`（候选 - 基线）——A/B 噪声抵消到 0，最稳。
@@ -644,7 +646,7 @@ skill-eval batch-report batch-workspace/ --open
 | `scorecard.json` | run 末尾自动产（静态评分卡；也可 `analyze -o` 单独产） |
 | `vet-report.json` | run 末尾自动产（原生安全扫描；也可 `vet -o` 单独产） |
 | `with_skill/eval-<id>/run-1/grading.json` | expectations + assertions 的 pass/fail（双率） |
-| `with_skill/eval-<id>/run-1/compliance.json` | SKILL.md 指令遵循性（双率） |
+| `with_skill/eval-<id>/run-1/compliance.json` | SKILL.md 指令遵循性（AuditReport：summary 计数 + findings 四态；遵循度 = pass/(pass+fail)，排除 N/A + UNCLEAR） |
 | `with_skill/eval-<id>/run-1/calibration.json` | 评分可信度校准 |
 | `with_skill/eval-<id>/run-1/run_debug.json` | 完整回复 + tool_calls + timing |
 | `with_skill/eval-<id>/run-1/timing.json` | 执行耗时和 token 统计 |
@@ -698,7 +700,7 @@ Skill-Eval 从 skill-creator 移植并改造了以下核心代码：
 新增模块（无对应源码）：
 
 - `security/` — 安全审查引擎
-- `compliance/` — 遵循性引擎
+- `compliance/` — `InstructionExtractor`(SKILL.md → 指令;audit/run 共用的出题地基)。判定引擎在 `audit/`(transcript 对账,run 的遵循性也走它)
 - `calibration/` — 评分校准
 - `audit/` — 真实 transcript 对账
 - `gating/` — post-hoc 通过/失败判决

@@ -23,7 +23,7 @@
   - 确定性子串判定(**不调 LLM**):sample 任一行(strip 后)在 transcript 命中 → PASS,否则 FAIL
 - ``classify`` 把 ``InstructionSource`` 路由到对应 ``AuditCategory``,供 Task 8 聚合主入口用。
 
-设计要点(对照 compliance.checker):
+设计要点(对照已删的 compliance.checker 旧实现,helper 现归 audit.tool_match):
 - 复用 ``match_tool_call`` / ``extract_first_balanced``(Task 3 抽出的公共件),不重写。
 - OUTPUT 的子串判定**照** ``_check_programmatic`` 的 PATTERN_MATCH 分支逻辑。
 - LLM 批量 prompt + JSON 解析**仿** ``_check_llm_batch`` / ``_parse_applicability``。
@@ -44,7 +44,7 @@ from typing import Callable
 
 from skill_eval.audit.declare import derive_declarations
 from skill_eval.audit.rebuild import rebuild
-from skill_eval.compliance.checker import extract_first_balanced, match_tool_call
+from skill_eval.audit.tool_match import extract_first_balanced, match_tool_call
 from skill_eval.audit.aggregate import aggregate_by_instruction
 from skill_eval.audit.dedup import post_process_findings
 from skill_eval.compliance.extractor import InstructionExtractor
@@ -58,7 +58,7 @@ from skill_eval.models.audit_models import (
 )
 from skill_eval.utils import call_claude
 
-# 每批交 LLM 判定的指令数上限。**小于** compliance.checker 的 30:audit 每条要 LLM 产出
+# 每批交 LLM 判定的指令数上限。**小于**已删 compliance.checker 的 30:audit 每条要 LLM 产出
 # "verdict + 中文 evidence"(输出量大),且 LLM 延迟方差极大(实测 ~10 条/批 40-257s)。
 # 30 条均值就 ~210s、慢尾更甚;10 条均值 ~117s、慢尾 ~257s,配 timeout=600 留足裕量
 # (慢尾 257s + ~340s 裕量,几乎不超时)。批数虽多但每批绝对时长低,远比 30 条稳。
@@ -567,7 +567,7 @@ class TranscriptAuditor:
         """判定 OUTPUT_FORMAT(PATTERN_MATCH)——确定性子串判定,**不调 LLM**。
 
         每条指令取 ``params.get("sample","")``,按行拆,任一行 strip 后作为子串在
-        ``transcript_text`` 命中 → PASS,否则 FAIL(照 ``compliance.checker._check_programmatic``
+        ``transcript_text`` 命中 → PASS,否则 FAIL(照已删的 ``compliance.checker._check_programmatic``
         的 PATTERN_MATCH 分支逻辑)。confidence=1.0(确定性程序判定)。
 
         Args:
@@ -723,7 +723,7 @@ class TranscriptAuditor:
     def _parse_applicable(text: str, n: int) -> list[bool | None]:
         """解析 LLM 场景触发判定;默认保守 FAIL(None)。
 
-        与 compliance.checker._parse_applicability 同构(同 JSON 格式 +
+        与已删的 compliance.checker._parse_applicability 同构(同 JSON 格式 +
         extract_first_balanced),但默认值相反:compliance 默认 True(不误剔可遵循项),
         audit 默认 None(保守 FAIL,不误判 N/A 放过疑似违规)。LLM 未提及的条目、以及
         带了 index 但 applicable 缺键/None/非布尔(如字符串 "false")的畸形条目,

@@ -10,7 +10,6 @@ from skill_eval.models.analysis_models import AnalysisResult
 from skill_eval.models.comparison_models import ComparisonResult
 from skill_eval.models.enums import (
     CheckMethod,
-    ComplianceVerdict,
     ConfidenceGrade,
     InstructionPriority,
     InstructionSource,
@@ -103,37 +102,6 @@ class InstructionCheck(BaseModel):
     priority: InstructionPriority
     check_method: CheckMethod
     params: dict[str, Any] = Field(default_factory=dict)
-
-
-class ComplianceResultItem(BaseModel):
-    instruction: InstructionCheck
-    followed: bool
-    evidence: str
-    confidence: float
-    source: str
-    # 判定态:PASS/FAIL=已评估;UNCLEAR=判不准(零信息量)。必填——checker 每个构造点
-    # 显式设值,不靠 confidence==0.0 反推(magic value 脆)。UNCLEAR 排除出率分母。
-    verdict: ComplianceVerdict
-
-
-class ComplianceReport(BaseModel):
-    skill_name: str
-    total_instructions: int
-    followed_count: int
-    # 分母已排除 UNCLEAR(判不准);None = 无可判定项(全 UNCLEAR),非 0%。
-    compliance_rate: float | None
-    checks: list[ComplianceResultItem] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-    filtered_count: int = 0  # P0-1b: CONSTRAINT 候选经 LLM 精筛剔除的非可遵循项(路由提示/描述语)
-    # 判不准(UNCLEAR)条数——已排除出 compliance_rate 分母,单独报出让人知道
-    # 率是基于几条实判算的(与 filtered_count 的「不适用」并列:都不进分母)。
-    unclear_count: int = 0
-    # P0-1e: 拆双率。compliance_rate 是总率(已排除 UNCLEAR);这两条按检查来源拆 ——
-    # programmatic(TOOL_CALL_CHECK/PATTERN_MATCH/FILE_PRESENCE)稳、可信;
-    # llm(LLM_JUDGE)漂(§41 探针:无 artifact 的模糊项 23% 真方差),只看方向。
-    # None = 该类无可判定项(不报假 0)。让可信信号不再被 LLM 噪声污染。
-    compliance_rate_programmatic: float | None = None
-    compliance_rate_llm: float | None = None
 
 
 class DisagreementRecord(BaseModel):

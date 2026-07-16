@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from skill_eval.models import (
+    AuditReport,
     CalibrationReport,
-    ComplianceReport,
     ConfidenceGrade,
     ConfidenceSignal,
     DisagreementRecord,
@@ -22,7 +22,7 @@ class CalibrationChecker:
     def calibrate(
         self,
         grading: GradingResult,
-        compliance: ComplianceReport | None = None,
+        compliance: AuditReport | None = None,
     ) -> CalibrationReport:
         expectations = grading.expectations
 
@@ -103,7 +103,7 @@ class CalibrationChecker:
         total: int,
         programmatic_only: int,
         llm_only: int,
-        compliance: ComplianceReport | None,
+        compliance: AuditReport | None,
         expectations: list[ExpectationResult],
     ) -> list[ConfidenceSignal]:
         signals: list[ConfidenceSignal] = []
@@ -121,19 +121,26 @@ class CalibrationChecker:
                 impact=-0.2,
             ))
 
-        if compliance and compliance.compliance_rate is not None:
-            if compliance.compliance_rate >= 0.8:
-                signals.append(ConfidenceSignal(
-                    signal_type=SignalType.COMPLIANCE_BACKS_SCORING,
-                    description=f"遵循性比率 {compliance.compliance_rate:.0%}",
-                    impact=0.1,
-                ))
-            elif compliance.compliance_rate < 0.5:
-                signals.append(ConfidenceSignal(
-                    signal_type=SignalType.COMPLIANCE_CONTRADICTS_SCORING,
-                    description=f"遵循性偏低 {compliance.compliance_rate:.0%}",
-                    impact=-0.3,
-                ))
+        if compliance:
+            # 遵循性是 AuditReport:rate 从 summary 算 = pass/(pass+fail),
+            # 排除 na(不适用)+ unclear(判不准),与 audit 自身 fail_rate 口径一致。
+            # pass+fail==0(无可判定)→ rate None,不发 COMPLIANCE 信号。
+            s = compliance.summary or {}
+            judged = (s.get("pass", 0) + s.get("fail", 0))
+            rate = (s.get("pass", 0) / judged) if judged > 0 else None
+            if rate is not None:
+                if rate >= 0.8:
+                    signals.append(ConfidenceSignal(
+                        signal_type=SignalType.COMPLIANCE_BACKS_SCORING,
+                        description=f"遵循性比率 {rate:.0%}",
+                        impact=0.1,
+                    ))
+                elif rate < 0.5:
+                    signals.append(ConfidenceSignal(
+                        signal_type=SignalType.COMPLIANCE_CONTRADICTS_SCORING,
+                        description=f"遵循性偏低 {rate:.0%}",
+                        impact=-0.3,
+                    ))
 
         weak = sum(1 for e in expectations if len(e.evidence) < 20)
         if weak > total * 0.5:
