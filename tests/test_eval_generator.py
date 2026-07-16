@@ -243,3 +243,77 @@ def test_generate_from_transcript_missing_file_raises(tmp_path):
     (sp / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n", encoding="utf-8")
     with pytest.raises(SkillEvalError):
         EvalInitGenerator().generate_from_transcript(sp, tmp_path / "nope.jsonl")
+
+
+# ---------------------------------------------------------------------------
+# 方向 B:把 skill 声明的产物纳入 mining manifest
+# (原则性客观断言源自 skill、transcript 无关;违规 transcript 不再倒扣)
+# ---------------------------------------------------------------------------
+
+class TestExtractSkillOutputs:
+    """_extract_skill_outputs:确定性抽 SKILL.md 声明的【产物】文件名,不含输入/参考资料。"""
+
+    def test_output_section_filenames_admitted(self):
+        body = "## 输出\n\nerror-report.json 含 total_errors 整数、errors 列表。\n"
+        assert EvalInitGenerator()._extract_skill_outputs(body) == {"error-report.json"}
+
+    def test_excludes_references_and_read_only_inputs(self):
+        body = (
+            "## 步骤\n\n"
+            "1. 读取 references/error-codes.md 做分类。\n"
+            "2. 写出 error-report.json。\n\n"
+            "## 参考资料\n\n"
+            "权威表在 references/error-codes.md;安全规则在 references/security-policy.md。\n\n"
+            "## 输出\n\nerror-report.json 含 total_errors。\n"
+        )
+        out = EvalInitGenerator()._extract_skill_outputs(body)
+        assert "error-report.json" in out
+        assert "error-codes.md" not in out
+        assert "security-policy.md" not in out
+        assert not any("error-codes" in p or "security-policy" in p for p in out)
+
+    def test_write_verb_in_steps_admits_without_output_section(self):
+        body = "## 步骤\n\n3. 生成 report.json 保存结果。\n"
+        assert "report.json" in EvalInitGenerator()._extract_skill_outputs(body)
+
+    def test_read_verb_in_steps_not_admitted(self):
+        body = "## 步骤\n\n1. 读取 input.csv 做处理。\n"
+        assert EvalInitGenerator()._extract_skill_outputs(body) == set()
+
+    def test_no_signal_returns_empty(self):
+        body = "## 规则\n\n禁止编造错误码。\n## 背景\n\n见 error-codes.md。\n"
+        assert EvalInitGenerator()._extract_skill_outputs(body) == set()
+
+
+def test_from_transcript_keeps_skill_output_assertion_on_violation_transcript(monkeypatch, tmp_path):
+    """B 端到端:违规 transcript(只读没写)没产 error-report.json,但 skill '## 输出' 声明它 →
+    mining 应保住 FILE_EXISTS error-report.json(改前因 closed-set manifest 把它 drop)。
+    原则性断言 transcript 无关、源自 skill。"""
+    import json
+    gen = EvalInitGenerator()
+    tp = tmp_path / "t.jsonl"
+    tp.write_text("\n".join(json.dumps(r) for r in [
+        {"message": {"role": "user", "content": "分析 logs/app.log 写 error-report.json"}},
+        {"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "r1", "name": "Read",
+             "input": {"file_path": "/ws/logs/app.log"}}]}},
+        {"message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "r1", "content": "E-AUTH-001 login failed"}]}},
+        {"message": {"role": "assistant", "content": [
+            {"type": "text", "text": "我不写 error-report.json 了,直接总结。"}]}},
+    ]), encoding="utf-8")
+    sp = tmp_path / "skill"; sp.mkdir()
+    (sp / "SKILL.md").write_text(
+        "---\nname: log\ndescription: d\n---\n# 日志分析\n\n"
+        "## 步骤\n\n1. 读取 app.log。\n2. 写出 error-report.json。\n\n"
+        "## 输出\n\nerror-report.json 含 total_errors。\n", encoding="utf-8")
+    fake = json.dumps({"skill_name": "log", "evals": [{"id": 1, "name": "L2", "level": "L2",
+        "prompt": "分析 app.log 写 error-report.json", "expected_output": "", "expectations": [],
+        "assertions": [{"name": "report exists", "type": "FILE_EXISTS",
+                        "params": {"filename": "error-report.json"}}],
+        "fixtures": []}]})
+    monkeypatch.setattr("skill_eval.evals.generator.call_claude", lambda *a, **k: fake)
+    es = gen.generate_from_transcript(sp, tp)
+    fns = [a.params.get("filename") for a in es.evals[0].assertions
+           if a.type == AssertionType.FILE_EXISTS]
+    assert "error-report.json" in fns            # 保住了(改前被 drop)

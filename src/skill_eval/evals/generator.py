@@ -18,6 +18,19 @@ from skill_eval.utils import call_claude
 # 模块常量便于测试 monkeypatch 成极小值验心跳触发。
 _HEARTBEAT_INTERVAL = 20
 
+# 方向 B:从 SKILL.md 确定性抽【产物】文件名,把 skill 声明的产物并入 mining manifest。
+# 原则性客观断言源自 skill、transcript 无关 —— 违规 transcript 没产出 skill 声明的产物时,
+# 也不该让它的 FILE_EXISTS 被 closed-set manifest drop。
+_SKILL_OUTPUT_SECTION_RE = re.compile(
+    r"(输出|output|产物|产出|生成物|交付物|deliverable|result|结果)", re.IGNORECASE)
+_SKILL_STEP_SECTION_RE = re.compile(
+    r"(步骤|step|流程|workflow|procedure|过程)", re.IGNORECASE)
+# 写/产出动词(锚定产物);读动词(读取/read)锚定的是输入,不在此列
+_SKILL_WRITE_VERB_RE = re.compile(
+    r"(写出|写入|写至|写到|生成|创建|输出|产出|保存|导出|emit|write\s+(?:out|to)|"
+    r"create|generate|produce|output|save|export)", re.IGNORECASE)
+_SKILL_FILENAME_RE = re.compile(r"[\w/\-]+\.[\w]+")
+
 if TYPE_CHECKING:
     from skill_eval.config.loader import EvalConfig
 
@@ -697,6 +710,32 @@ class EvalInitGenerator:
             ))
         return EvalSet(skill_name=eval_set.skill_name, evals=merged)
 
+    def _extract_skill_outputs(self, body: str) -> set[str]:
+        """确定性抽取 SKILL.md 声明的【产物】文件名 —— 不含输入/参考资料。
+
+        mining 的客观断言受 ``_enforce_manifest`` closed-set 约束,manifest 默认只含
+        transcript 真产出的文件;违规/不完整 transcript 没产出 skill 声明的产物时,连
+        skill 明明要求的 ``FILE_EXISTS`` 也会被 drop(原则性断言本该 transcript 无关、
+        源自 skill)。把 skill 声明的产物并入 manifest 即正本清源(方向 B)。
+
+        两条高精信号,故不抓输入/参考资料里的文件名:
+        (a) 输出语义小节(``## 输出`` / Output / 产物 / 交付物 …)内的所有文件名;
+        (b) 步骤小节内、由写/产出动词(写出/生成/创建/保存 …)锚定的行上的文件名。
+        """
+        outputs: set[str] = set()
+        for title, text in self._split_into_sections(body):
+            names = {m.group(0) for m in _SKILL_FILENAME_RE.finditer(text)}
+            if not names:
+                continue
+            low = title.lower()
+            if _SKILL_OUTPUT_SECTION_RE.search(low):
+                outputs |= names
+            elif _SKILL_STEP_SECTION_RE.search(low):
+                for line in text.split("\n"):
+                    if _SKILL_WRITE_VERB_RE.search(line):
+                        outputs |= {m.group(0) for m in _SKILL_FILENAME_RE.finditer(line)}
+        return outputs
+
     def generate_from_transcript(self, skill_path: Path, transcript_path: Path,
                                  on_heartbeat: Callable[[str], None] | None = None) -> EvalSet:
         from skill_eval.evals.transcript import build_digest
@@ -706,7 +745,8 @@ class EvalInitGenerator:
         digest = build_digest(transcript_path)
         if not digest.user_turns and not digest.manifest:
             raise SkillEvalError("transcript 未产出可用内容(无 user turn 也无文件)")
-        prompt = self._build_transcript_prompt(name, description, body, digest)
+        skill_outputs = self._extract_skill_outputs(body)
+        prompt = self._build_transcript_prompt(name, description, body, digest, skill_outputs)
         # mining 是单次大-prompt LLM 调用,常 1-5 分钟;"Mining…"后长时间静默像卡死。
         # 加心跳(独立线程,call_claude 阻塞期间每 20s 报一次仍在跑),同 audit/path-1 进度诉求。
         stop = threading.Event()
@@ -726,7 +766,7 @@ class EvalInitGenerator:
         eval_set = self._parse_llm_response(response, name)
         if eval_set is None:
             return self._transcript_fallback(name, description, digest)
-        eval_set = self._enforce_manifest(eval_set, digest.manifest)
+        eval_set = self._enforce_manifest(eval_set, digest.manifest | skill_outputs)
         return self._merge_same_task_evals(eval_set)
 
     def _transcript_fallback(self, name: str, description: str, digest) -> EvalSet:
@@ -738,8 +778,10 @@ class EvalInitGenerator:
         ) for i, t in enumerate(turns, 1)]
         return EvalSet(skill_name=name, evals=cases)
 
-    def _build_transcript_prompt(self, name: str, description: str, body: str, digest) -> str:
-        manifest = sorted(digest.manifest)
+    def _build_transcript_prompt(self, name: str, description: str, body: str, digest,
+                                 skill_outputs: set[str] | None = None) -> str:
+        skill_outputs = skill_outputs or set()
+        manifest = sorted(digest.manifest | skill_outputs)
         produced = sorted(f.path for f in digest.produced_files)
         inputs = sorted(f.path for f in digest.input_files)
         L: list[str] = []
@@ -764,6 +806,12 @@ class EvalInitGenerator:
             L.append(f"\n## UNRECONSTRUCTED (Bash-only,别断言): {digest.unreconstructed}\n")
         L.append(f"\n## PATH MANIFEST (断言/fixture 路径只能引用这些): {manifest}\n")
         L.append(f"produced(FILE_EXISTS/内容目标): {produced}\ninput(fixtures): {inputs}\n")
+        if skill_outputs:
+            L.append(
+                "\n## SKILL-DECLARED OUTPUTS (skill 要求的产物;此 transcript 未必产出,但遵循 "
+                "skill 就该产 —— 可放心对它们出 FILE_EXISTS / 内容断言): "
+                f"{sorted(skill_outputs)}\n"
+            )
         L.append("\n## ASSERTION SCHEMA(scorer 读这些精确 key):\n"
                  '- FILE_EXISTS: {"filename": "<manifest path>"}\n'
                  '- CONTAINS_PATTERN / NOT_CONTAINS: {"pattern": "<regex>", "path": "<manifest path>"}(path 必填)\n'
