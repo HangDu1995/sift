@@ -89,8 +89,9 @@ def init(
             console.print("[yellow]建议重跑,或检查 claude CLI 可用性。[/yellow]")
         for e in eval_set.evals:
             level = getattr(e, 'level', 'L1')
-            console.print(f"  [{level}] {e.name}: {len(e.expectations)} expectations" +
-                          (f", {len(e.fixtures)} fixtures" if e.fixtures else ""))
+            console.print(f"  [{level}] {e.name}: {len(e.assertions)} assertions, "
+                          f"{len(e.expectations)} expectations"
+                          + (f", {len(e.fixtures)} fixtures" if e.fixtures else ""))
         console.print(f"Written to {output}")
     except SkillEvalError as exc:
         console.print(f"[red]Error:[/red] {exc}")

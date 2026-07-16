@@ -167,3 +167,26 @@ def test_init_no_warning_on_single_skill(monkeypatch, tmp_path):
                             "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
     assert not any("涉及" in p and "skill" in p for p in printed), printed
+
+
+def test_init_lists_programmatic_count_per_eval(monkeypatch, tmp_path):
+    """init 逐条输出须显示客观题(assertions)数量,不只主观 expectations。
+    曾只印 expectations+fixtures、漏 assertions(客观题是确定性最强的部分)。
+    断言用「N assertions, M expectations」整串——避免测试名进 tmp_path 造成假绿
+    (假绿陷阱:断言词与 tmp_path 来源重合会恒真,见记忆 test_init_warns_on_degraded)。"""
+    from skill_eval.models import Assertion, AssertionType
+    printed = []
+    monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
+                        lambda *a, **k: printed.append(str(a)))
+    evalset = EvalSet(skill_name="s", evals=[EvalCase(
+        id=1, name="n", prompt="p", level="L1",
+        expectations=["e1", "e2", "e3"],
+        assertions=[Assertion(name="a", type=AssertionType.FILE_EXISTS),
+                    Assertion(name="b", type=AssertionType.CONTAINS_PATTERN)],
+    )])
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp: evalset)
+    sp = _skill_dir(tmp_path)
+    r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert any("2 assertions, 3 expectations" in p for p in printed), printed
