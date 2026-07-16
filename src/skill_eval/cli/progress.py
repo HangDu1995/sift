@@ -1,12 +1,37 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
 
 from rich.panel import Panel
 
 
+def _config_label(config_name: str) -> str:
+    """side 名 → 短标签(进度行用)。默认模式 with/without;v1/v2 用各自 side key。"""
+    if config_name == "with_skill":
+        return "with"
+    if config_name == "without_skill":
+        return "BASE"
+    return (config_name or "?")[:14]
+
+
 class _ProgressState:
+    """run 进度渲染:顶部 live bar(原地更新)+ 每次执行完成追加持久日志行。
+
+    设计:每次 spawn(cc 跑一条 eval 的一个 side)= 一次「执行」,共
+    ``2 * runs * num_evals`` 次。每次执行的 config(with/BASE/side)、题名、判卷结果
+    (通过率 + 失败项,失败项标客观/主观)单独占一行、**持久保留**(不再被覆写),
+    滚动累积成一条条执行记录;顶部一行原地更新的进度条给整体 % / ETA / 当前在跑的执行。
+
+    线程安全:workers 并发,on_progress 多线程交错调 update → 用锁串行化渲染,
+    避免持久行与 live 块擦写交错撕裂。
+
+    触发持久行的判据:**``completed`` 计数自增**(runner 在 skipped/failed/完成时自增,
+    retrying 不自增)。三类完成事件都带 grading(skipped 带既有、failed 带错误 grading、
+    完成带 overall),故按 completed 自增即可精确捕获「一次执行结束」、自动跳过 retry。
+    """
+
     def __init__(self, num_evals: int, runs_per_config: int):
         self.num_evals = num_evals
         self.runs_per_config = runs_per_config
@@ -15,82 +40,94 @@ class _ProgressState:
         self.skipped = 0
         self.failed = 0
         self.retried = 0
+        # live(在跑)状态
         self.current_eval = ""
         self.current_config = ""
         self.eval_idx = 0
-        self.last_grading = None
-        self.results: list[dict] = []
-        self.run_start_time: float | None = None
-        self.last_run_duration: float = 0.0
-        self.total_elapsed: float = 0.0
-        self.phase: str = ""
-        self.substep: str = ""
-        self._last_line_count: int = 0
+        self.phase = ""
+        self.substep = ""
+        self.run_start_time: float | None = None  # executing 起算,跨 scoring/compliance 保持,完成清
+        # 计时(avg/ETA)
+        self.total_elapsed = 0.0
+        self._timed_count = 0
+        # 渲染簿记
+        self._logged_completed = 0   # 已打印持久行的最高 completed 值
+        self._last_live_lines = 0    # 当前 live 块占几行(擦写用)
+        self._lock = threading.Lock()
 
-    def update(self, eval_name, config_name, eval_idx, completed, total, grading, run_duration=0.0,
-                run_output=None, phase="", substep=""):
+    def update(self, eval_name, config_name, eval_idx, total_evals, completed, total,
+               grading, run_duration=0.0, run_output=None, phase="", substep=""):
+        with self._lock:
+            persistent = self._apply(
+                eval_name, config_name, eval_idx, completed, total,
+                grading, run_duration, phase, substep,
+            )
+            self._render(persistent)
+
+    def _apply(self, eval_name, config_name, eval_idx, completed, total,
+               grading, run_duration, phase, substep):
+        """更新计数/状态,返回本次新增的持久行(完成时)或 []。须持锁调。"""
+        if phase == "skipped":
+            self.skipped += 1
+        elif phase == "failed":
+            self.failed += 1
+        elif phase == "retrying":
+            self.retried += 1
+
+        if completed > self._logged_completed:
+            # 一次执行完成(skipped/failed/done;retrying 不自增 completed 故不进这)
+            self._logged_completed = completed
+            self.completed = completed
+            persistent = []
+            if grading is not None:
+                persistent = self._completion_lines(
+                    eval_name, config_name, completed, total, grading, run_duration, phase, substep,
+                )
+            if run_duration:
+                self.total_elapsed += run_duration
+                self._timed_count += 1
+            self.run_start_time = None
+            self.phase = ""
+            return persistent
+
+        # in-flight(executing/scoring/compliance/retrying):只更新 live 状态
         self.current_eval = eval_name
         self.current_config = config_name
         self.eval_idx = eval_idx
         self.phase = phase
         self.substep = substep
-        if phase == "skipped":
-            self.skipped += 1
+        if phase == "executing":
+            self.run_start_time = time.time()  # 新执行起算;scoring/compliance 不重置(保留 executing 起算)
+        return []
+
+    def _completion_lines(self, eval_name, config_name, idx, total,
+                          grading, dur, phase, substep):
+        """一次执行完成的持久行:config/题名/通过率/耗时 + 失败项(标客观/主观)。"""
+        label = _config_label(config_name)
+        name = (eval_name or "")[:28]
         if phase == "failed":
-            self.failed += 1
-        if phase == "retrying":
-            self.retried += 1
-        prev_completed = self.completed
-        if completed > self.completed:
-            self.completed = completed
-        if grading is not None:
-            self.last_grading = grading
-            failed_expectations = []
-            for e in grading.expectations:
-                if not e.passed:
-                    failed_expectations.append(e.text[:60])
-            entry = {
-                "eval": eval_name,
-                "config": config_name,
-                "pass_rate": grading.summary.pass_rate,
-                "passed": grading.summary.passed,
-                "total": grading.summary.total,
-                "duration": run_duration,
-                "failed_expectations": failed_expectations,
-            }
-            if run_output is not None:
-                entry["tool_calls"] = run_output.tool_calls
-                entry["num_turns"] = run_output.num_turns
-                entry["stop_reason"] = run_output.stop_reason
-                entry["result_text"] = run_output.result_text[:200]
-            self.results.append(entry)
-            self.total_elapsed += run_duration
-            self.run_start_time = None
-        else:
-            self.run_start_time = time.time()
-            self.last_run_duration = 0.0
+            extra = f"({substep}) " if substep else ""
+            return [f"✗ {idx}/{total} {name} · {label} · 执行失败 {extra}· {dur:.0f}s"]
+        s = grading.summary
+        icon = "✓" if s.pass_rate >= 0.5 else "✗"
+        lines = [f"{icon} {idx}/{total} {name} · {label} · "
+                 f"{int(s.pass_rate * 100)}% ({s.passed}/{s.total}) · {dur:.0f}s"]
+        failed = [e for e in (grading.expectations or []) if not e.passed]
+        for fe in failed[:3]:
+            tag = "客观" if getattr(fe, "source", "") == "programmatic" else "主观"
+            lines.append(f"     ✗ [{tag}] {(fe.text or '')[:56]}")
+        if len(failed) > 3:
+            lines.append(f"     …还有 {len(failed) - 3} 条未通过")
+        return lines
 
-        import sys as _sys
-        progress_line = self._format_progress_line()
-        if progress_line:
-            if _sys.stderr.isatty():
-                lines = str(self._last_line_count or 1)
-                _sys.stderr.write(f"\033[{lines}A\033[J")
-            _sys.stderr.write(progress_line + "\n")
-            _sys.stderr.flush()
-            self._last_line_count = progress_line.count("\n") + 1
-
-    def _format_progress_bar(self, width: int, pct: float) -> str:
-        filled = int(width * pct / 100) if width else 0
-        return "█" * filled + "░" * (width - filled)
-
-    def _format_progress_line(self) -> str:
+    def _format_live(self):
+        """顶部 live 块:bar 行 + (有执行在跑时)当前执行行。返回不含尾换行的多行串。"""
         if self.total_runs == 0:
             return ""
         pct = self.completed / self.total_runs * 100
-        bar = self._format_progress_bar(20, pct)
+        filled = int(20 * pct / 100)
+        bar = "█" * filled + "░" * (20 - filled)
         parts = [f"[{bar}] {pct:.0f}% ({self.completed}/{self.total_runs})"]
-
         counters = []
         if self.skipped:
             counters.append(f"skip:{self.skipped}")
@@ -99,37 +136,40 @@ class _ProgressState:
         if self.retried:
             counters.append(f"retry:{self.retried}")
         if counters:
-            parts.append("|".join(counters))
+            parts.append("·".join(counters))
+        if self._timed_count > 0:
+            avg = self.total_elapsed / self._timed_count
+            eta = (self.total_runs - self.completed) * avg
+            parts.append(f"avg {avg:.0f}s ETA {eta / 60:.0f}m{eta % 60:02.0f}s")
+        lines = [" · ".join(parts)]
+        if self.run_start_time is not None and self.current_eval:
+            elapsed = time.time() - self.run_start_time
+            label = _config_label(self.current_config)
+            ph = f"({self.phase})" if self.phase and self.phase != "executing" else ""
+            sub = f" {self.substep}" if self.substep else ""
+            tail = f"{ph}{sub}".rstrip()
+            lines.append(f"  ⏳ {label} · {self.current_eval[:24]} · {elapsed:.0f}s{(' ' + tail) if tail else ''}")
+        return "\n".join(lines)
 
-        if self.current_eval:
-            tag = "SKILL" if self.current_config == "with_skill" else "BASE"
-            if self.run_start_time is not None:
-                elapsed = time.time() - self.run_start_time
-                phase_str = f"[{self.phase}]" if self.phase else ""
-                parts.append(f"  [{self.eval_idx}/{self.num_evals}] {self.current_eval[:25]} {tag} ⏳ {elapsed:.0f}s {phase_str} {self.substep}")
-            elif self.last_grading is not None:
-                r = self.results[-1]
-                icon = "✓" if r.get("pass_rate", 0) >= 0.5 else "✗"
-                dur = f"{r.get('duration', 0):.0f}s"
-                parts.append(f"  {icon} {self.current_eval[:25]} {tag} {int(r.get('pass_rate',0)*100)}% [{dur}]")
-            else:
-                parts.append(f"  [{self.eval_idx}/{self.num_evals}] {self.current_eval[:25]} {tag}")
-
-        if self.results and self.total_elapsed > 0:
-            avg = self.total_elapsed / len(self.results)
-            remaining = self.total_runs - self.completed
-            eta_s = remaining * avg
-            parts.append(f" | avg {avg:.0f}s ETA {eta_s/60:.0f}m{eta_s%60:02.0f}s")
-
-        result_lines = [" ".join(parts)]
-
-        if self.results:
-            r = self.results[-1]
-            if r.get("failed_expectations"):
-                for fe in r["failed_expectations"][:2]:
-                    result_lines.append(f"    ✗ {fe[:80]}")
-
-        return "\n".join(result_lines)
+    def _render(self, persistent):
+        """擦旧 live 块 → 打新持久行(留)→ 重画 live 块。非 tty 只流式打持久行。"""
+        is_tty = sys.stderr.isatty()
+        if is_tty:
+            if self._last_live_lines:
+                sys.stderr.write(f"\033[{self._last_live_lines}A\033[J")
+            for ln in persistent:
+                sys.stderr.write(ln + "\n")
+            live = self._format_live()
+            if live:
+                sys.stderr.write(live + "\n")
+            sys.stderr.flush()
+            self._last_live_lines = (live.count("\n") + 1) if live else 0
+        else:
+            # 非 tty(管道/日志):原地 bar 会把 ANSI 转义码灌进去,只流式打持久行。
+            for ln in persistent:
+                sys.stderr.write(ln + "\n")
+            sys.stderr.flush()
+            self._last_live_lines = 0
 
 
 class _BatchProgressState:
