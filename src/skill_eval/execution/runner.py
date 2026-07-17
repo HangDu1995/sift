@@ -70,6 +70,55 @@ def build_sides(
     return [(la, skill_path, la), (lb, skill_b, lb)]
 
 
+def _compute_cache_key(
+    eval_case: EvalCase,
+    inject_skill: Path | None,
+    config: RunConfig,
+    scoring_config: ScoringConfig,
+) -> str:
+    """内容感知缓存键:决定一个 run 槽的既有 grading.json 能否被续跑复用。
+
+    = sha256(SKILL 正文 + eval 全身 + model/配置)[:16]。改了 SKILL.md / eval / model /
+    scoring 开关 → key 变 → 续跑时与既有 grading.json.cache_key 不符 → 失效重跑。
+    BASE 侧(inject_skill=None)不含 skill_body → 改 SKILL.md 只重跑 with 侧(BASE 不被牵连)。
+    run_num 不进键(各 run 是同输入独立采样);skill 目录 source/reference 文件改动不检测(已知缺口)。
+    纯函数、无共享状态(并发安全)。
+    """
+    import hashlib
+    skill_body = ""
+    if inject_skill:
+        _, _, _, _, skill_body = parse_skill_md(inject_skill)
+    payload = {
+        "skill_body": skill_body,
+        "eval": {
+            "prompt": eval_case.prompt,
+            "expected_output": eval_case.expected_output,
+            "expectations": list(eval_case.expectations),
+            "assertions": [a.model_dump(mode="json") for a in eval_case.assertions],
+            "files": list(eval_case.files),
+            "fixtures": [f.model_dump(mode="json") for f in eval_case.fixtures],
+            "source_dir": eval_case.source_dir,
+            "source_dir_as": eval_case.source_dir_as,
+            "level": eval_case.level,
+            "mode": eval_case.mode,
+            "timeout": eval_case.timeout,
+        },
+        "run": {
+            "model": config.model,
+            "max_turns": config.max_turns,
+            "timeout_seconds": config.timeout_seconds,
+        },
+        "scoring": {
+            "enable_programmatic": scoring_config.enable_programmatic,
+            "enable_llm": scoring_config.enable_llm,
+            "llm_model": scoring_config.llm_model,
+        },
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()[:16]
+
+
 class ABTestRunner:
     def __init__(
         self,
@@ -119,18 +168,23 @@ class ABTestRunner:
                 config_dir = iteration_dir / config_name / f"eval-{eval_case.id}" / f"run-{run_num}-retry-{retry_num}"
             config_dir.mkdir(parents=True, exist_ok=True)
 
+            # 内容感知缓存键:同 eval+skill+model+配置 才复用(改任一项 → key 变 → 失效重跑)。
+            # retry 重入重算,同输入同 key,不破坏 retry 语义。
+            cache_key = _compute_cache_key(eval_case, inject_skill, self.config, self.scoring_config)
+
             grading_path = config_dir / "grading.json"
             if retry_num == 0 and grading_path.exists():
                 try:
-                    existing = json.loads(grading_path.read_text(encoding="utf-8"))
-                    if existing.get("summary", {}).get("total", 0) > 0:
+                    existing = GradingResult.model_validate(
+                        json.loads(grading_path.read_text(encoding="utf-8")))
+                    if existing.summary.total > 0 and existing.cache_key == cache_key:
                         with lock:
                             completed[0] += 1
                         self._emit_progress(
                             eval_case.get_name(), config_name,
                             eval_case.id, len(evals),
                             completed[0], total_jobs,
-                            GradingResult.model_validate(existing),
+                            existing,
                             0.0, None, phase="skipped",
                             substep="already completed",
                         )
@@ -180,6 +234,7 @@ class ABTestRunner:
                                   for e in eval_case.expectations],
                     error=str(exc),
                 )
+                grading.cache_key = cache_key
                 (config_dir / "grading.json").write_text(grading.model_dump_json(indent=2), encoding="utf-8")
                 if retry_num < max_retries:
                     shutil.rmtree(config_dir, ignore_errors=True)
@@ -229,6 +284,7 @@ class ABTestRunner:
                     expectations=all_expectations,
                     summary=GradingSummary.from_expectations(all_expectations),
                 )
+                overall_grading.cache_key = cache_key
                 (config_dir / "grading.json").write_text(overall_grading.model_dump_json(indent=2), encoding="utf-8")
                 (config_dir / "checkpoints.json").write_text(
                     json.dumps(per_checkpoint, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -335,6 +391,7 @@ class ABTestRunner:
                                   for e in eval_case.expectations],
                     error=f"{type(exc).__name__}: {exc}",
                 )
+                grading.cache_key = cache_key
                 (config_dir / "grading.json").write_text(grading.model_dump_json(indent=2), encoding="utf-8")
                 traceback.print_exc()
                 with lock:

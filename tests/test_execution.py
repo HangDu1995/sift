@@ -1081,3 +1081,229 @@ class TestRunDumpsTranscript:
         assert any(t.name == "Read" for t in d.tool_trace), \
             f"build_digest 应从 stream-json 解析出 Read,实际 tool_trace={d.tool_trace}"
         assert "read it" in d.transcript_text
+
+
+class TestCacheKey:
+    """内容感知缓存键(_compute_cache_key):改 SKILL 正文 / eval / model-config 自动失效;
+    BASE 侧(inject_skill=None)不认 skill_body,改 SKILL.md 只重跑 with 侧。"""
+
+    @staticmethod
+    def _skill(parent: Path, name: str, body: str) -> Path:
+        d = parent / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: x\n---\n{body}", encoding="utf-8")
+        return d
+
+    @staticmethod
+    def _base():
+        from skill_eval.models import EvalCase, RunConfig, ScoringConfig
+        ec = EvalCase(id=1, prompt="do it", expectations=["步骤正确"])
+        cfg = RunConfig(model="m1", max_turns=10, timeout_seconds=120)
+        sc = ScoringConfig(enable_programmatic=True, enable_llm=True, llm_model="m1")
+        return ec, cfg, sc
+
+    def test_grading_result_cache_key_default_empty(self):
+        from skill_eval.models import GradingResult, GradingSummary
+        g = GradingResult(summary=GradingSummary(pass_rate=0.0, passed=0, failed=0, total=0))
+        assert g.cache_key == "", "GradingResult 应有 cache_key 字段,默认空串(老 grading.json 兼容)"
+
+    def test_stable(self, tmp_path: Path):
+        from skill_eval.execution.runner import _compute_cache_key
+        ec, cfg, sc = self._base()
+        skill = self._skill(tmp_path, "s", "# 步骤\n1. 做 A")
+        k1 = _compute_cache_key(ec, skill, cfg, sc)
+        k2 = _compute_cache_key(ec, skill, cfg, sc)
+        assert k1 == k2 and len(k1) == 16, "同输入应得同 key(16 hex)"
+
+    def test_skill_body_change_invalidates_with_side(self, tmp_path: Path):
+        from skill_eval.execution.runner import _compute_cache_key
+        ec, cfg, sc = self._base()
+        sA = self._skill(tmp_path / "a", "s", "# 步骤\n1. 做 A")
+        sB = self._skill(tmp_path / "b", "s", "# 步骤\n1. 做 B(改了指令)")
+        assert _compute_cache_key(ec, sA, cfg, sc) != _compute_cache_key(ec, sB, cfg, sc), \
+            "with 侧改了 SKILL 正文,cache_key 必须变"
+
+    def test_base_ignores_skill_body(self, tmp_path: Path):
+        from skill_eval.execution.runner import _compute_cache_key
+        ec, cfg, sc = self._base()
+        sA = self._skill(tmp_path / "a", "s", "# 步骤\n1. 做 A")
+        sB = self._skill(tmp_path / "b", "s", "# 完全不同的步骤 ZZZ")
+        # BASE 侧 inject_skill=None → skill_body="" → 与 skill 内容无关
+        assert _compute_cache_key(ec, None, cfg, sc) == _compute_cache_key(ec, None, cfg, sc), \
+            "BASE 侧 key 不该随 skill 变"
+        # 对照:with 侧注入不同 body → key 必变
+        assert _compute_cache_key(ec, sA, cfg, sc) != _compute_cache_key(ec, sB, cfg, sc)
+
+    def test_eval_change_invalidates(self, tmp_path: Path):
+        from skill_eval.execution.runner import _compute_cache_key
+        ec, cfg, sc = self._base()
+        skill = self._skill(tmp_path, "s", "# 步骤\n1. A")
+        ec_prompt = ec.model_copy(update={"prompt": "do it differently"})
+        ec_expec = ec.model_copy(update={"expectations": ["步骤正确", "新增一条"]})
+        assert _compute_cache_key(ec, skill, cfg, sc) != _compute_cache_key(ec_prompt, skill, cfg, sc)
+        assert _compute_cache_key(ec, skill, cfg, sc) != _compute_cache_key(ec_expec, skill, cfg, sc)
+
+    def test_model_config_change_invalidates(self, tmp_path: Path):
+        from skill_eval.execution.runner import _compute_cache_key
+        ec, cfg, sc = self._base()
+        skill = self._skill(tmp_path, "s", "# 步骤\n1. A")
+        cfg2 = cfg.model_copy(update={"model": "m2"})
+        sc2 = sc.model_copy(update={"enable_llm": False})
+        assert _compute_cache_key(ec, skill, cfg, sc) != _compute_cache_key(ec, skill, cfg2, sc)
+        assert _compute_cache_key(ec, skill, cfg, sc) != _compute_cache_key(ec, skill, cfg, sc2)
+
+
+class TestResumeCacheKey:
+    """续跑缓存键接入 skip 路径:cache_key 匹配→跳过、不匹配→重跑、老格式(无 key)→重跑。"""
+
+    @staticmethod
+    def _skill(tmp_path: Path) -> Path:
+        d = tmp_path / "myskill"
+        d.mkdir()
+        (d / "SKILL.md").write_text(
+            "---\nname: myskill\ndescription: x\n---\n# 步骤\n1. 做 A\n", encoding="utf-8")
+        return d
+
+    @staticmethod
+    def _slot_grading_path(output_dir: Path) -> Path:
+        return output_dir / "iteration-1" / "with_skill" / "eval-1" / "run-1" / "grading.json"
+
+    def _setup(self, tmp_path: Path):
+        from skill_eval.models import RunConfig, ScoringConfig, EvalSet, EvalCase
+        skill = self._skill(tmp_path)
+        output_dir = tmp_path / "out"
+        ec = EvalCase(id=1, prompt="do it", expectations=["步骤正确"])
+        config = RunConfig(runs_per_config=1, output_dir=output_dir,
+                           skip_compliance=True, skip_calibration=True, max_workers=1,
+                           model="m1", max_turns=10, timeout_seconds=120)
+        scoring = ScoringConfig(enable_programmatic=False, enable_llm=False, llm_model="m1")
+        eval_set = EvalSet(skill_name="myskill", evals=[ec])
+        return skill, output_dir, ec, config, scoring, eval_set
+
+    @staticmethod
+    def _fake_run_factory(calls: list):
+        from skill_eval.models import RunOutput
+        def fake_run(self, prompt, skill_path=None, **kwargs):
+            calls.append((prompt, skill_path))   # 记 skill_path 区分 with(=skill)/without(=None)
+            return RunOutput(exit_code=0, stdout="ok", transcript="done", result_text="done")
+        return fake_run
+
+    def _with_skill_ran(self, calls, skill) -> bool:
+        return any(sp == skill for _, sp in calls)
+
+    def test_match_skips(self, tmp_path: Path):
+        from skill_eval.execution.runner import ABTestRunner, _compute_cache_key
+        from skill_eval.models import GradingResult, GradingSummary, ExpectationResult
+        skill, output_dir, ec, config, scoring, eval_set = self._setup(tmp_path)
+        key = _compute_cache_key(ec, skill, config, scoring)
+        gp = self._slot_grading_path(output_dir)
+        gp.parent.mkdir(parents=True, exist_ok=True)
+        gp.write_text(GradingResult(
+            expectations=[ExpectationResult(text="ok", passed=True, evidence="")],
+            summary=GradingSummary(pass_rate=1.0, passed=1, failed=0, total=1),
+            cache_key=key,
+        ).model_dump_json(indent=2), encoding="utf-8")
+
+        calls: list = []
+        runner = ABTestRunner(config=config, scoring_config=scoring)
+        with patch("skill_eval.execution.runner.ClaudeRunner.run", self._fake_run_factory(calls)):
+            runner.run_ab_test(skill, eval_set)
+
+        assert not self._with_skill_ran(calls, skill), "cache_key 匹配 + total>0 → with 槽应跳过"
+        g = GradingResult.model_validate(json.loads(gp.read_text(encoding="utf-8")))
+        assert g.summary.total == 1 and g.cache_key == key, "跳过时 grading.json 不被覆写"
+
+    def test_mismatch_reruns(self, tmp_path: Path):
+        from skill_eval.execution.runner import ABTestRunner, _compute_cache_key
+        from skill_eval.models import GradingResult, GradingSummary, ExpectationResult
+        skill, output_dir, ec, config, scoring, eval_set = self._setup(tmp_path)
+        gp = self._slot_grading_path(output_dir)
+        gp.parent.mkdir(parents=True, exist_ok=True)
+        gp.write_text(GradingResult(
+            expectations=[ExpectationResult(text="ok", passed=True, evidence="")],
+            summary=GradingSummary(pass_rate=1.0, passed=1, failed=0, total=1),
+            cache_key="WRONG_STALE_KEY",
+        ).model_dump_json(indent=2), encoding="utf-8")
+        expected_key = _compute_cache_key(ec, skill, config, scoring)
+
+        calls: list = []
+        runner = ABTestRunner(config=config, scoring_config=scoring)
+        with patch("skill_eval.execution.runner.ClaudeRunner.run", self._fake_run_factory(calls)):
+            runner.run_ab_test(skill, eval_set)
+
+        assert self._with_skill_ran(calls, skill), "cache_key 不匹配 → with 槽应重跑"
+        g = GradingResult.model_validate(json.loads(gp.read_text(encoding="utf-8")))
+        assert g.cache_key == expected_key, "重跑后 grading.json 应写上正确 cache_key"
+
+    def test_legacy_no_key_reruns(self, tmp_path: Path):
+        from skill_eval.execution.runner import ABTestRunner
+        skill, output_dir, ec, config, scoring, eval_set = self._setup(tmp_path)
+        gp = self._slot_grading_path(output_dir)
+        gp.parent.mkdir(parents=True, exist_ok=True)
+        # 老格式:无 cache_key 字段(模拟升级前的 grading.json)
+        gp.write_text(json.dumps({
+            "expectations": [{"text": "ok", "passed": True, "evidence": ""}],
+            "summary": {"pass_rate": 1.0, "passed": 1, "failed": 0, "total": 1},
+        }, ensure_ascii=False), encoding="utf-8")
+
+        calls: list = []
+        runner = ABTestRunner(config=config, scoring_config=scoring)
+        with patch("skill_eval.execution.runner.ClaudeRunner.run", self._fake_run_factory(calls)):
+            runner.run_ab_test(skill, eval_set)
+
+        assert self._with_skill_ran(calls, skill), "老 grading.json 无 cache_key → 向后兼容失效重跑"
+
+
+class TestCacheNotice:
+    """全跳过/部分跳过的缓存复用提示行(_cache_notice_lines)。"""
+
+    @staticmethod
+    def _state(skipped, total):
+        from types import SimpleNamespace
+        return SimpleNamespace(skipped=skipped, total_runs=total)
+
+    def test_no_skip_no_notice(self, tmp_path: Path):
+        from skill_eval.cli.pipeline import _cache_notice_lines
+        assert _cache_notice_lines(self._state(0, 18), tmp_path) == []
+
+    def test_all_skipped_two_yellow_lines(self, tmp_path: Path):
+        from skill_eval.cli.pipeline import _cache_notice_lines
+        lines = _cache_notice_lines(self._state(18, 18), tmp_path)
+        assert len(lines) == 2
+        assert "全部 18 个槽" in lines[0] and "[yellow]" in lines[0]
+        assert str(tmp_path) in lines[1], "提示应指明清哪个目录"
+
+    def test_partial_skipped_one_dim_line(self, tmp_path: Path):
+        from skill_eval.cli.pipeline import _cache_notice_lines
+        lines = _cache_notice_lines(self._state(6, 18), tmp_path)
+        assert len(lines) == 1
+        assert "6/18" in lines[0] and "[dim]" in lines[0]
+
+
+class TestProgressCallbackWiring:
+    """on_progress → progress_state.update 参数必须逐个对齐。
+    曾漏传 total_evals 致整体左移:update.grading 收到 run_duration(float)→ completion 渲染崩。"""
+
+    def test_forwards_total_evals_and_grading(self):
+        from skill_eval.cli.pipeline import _make_progress_callback
+        from skill_eval.cli.progress import _ProgressState
+        from skill_eval.models import GradingResult, GradingSummary
+
+        ps = _ProgressState(2, 1)
+        captured = {}
+
+        def spy(eval_name, config_name, eval_idx, total_evals, completed, total,
+                grading, run_duration=0.0, run_output=None, phase="", substep=""):
+            captured.update(total_evals=total_evals, completed=completed, total=total,
+                            grading=grading, run_duration=run_duration, phase=phase)
+        ps.update = spy  # 拦截,看 update 实际收到什么
+
+        cb = _make_progress_callback(ps)
+        g = GradingResult(summary=GradingSummary(pass_rate=1.0, passed=1, failed=0, total=1))
+        cb("eval-1", "with_skill", 1, 2, 1, 2, g, 5.0, None, phase="executing")
+
+        assert captured["total_evals"] == 2, "total_evals 必须透传(曾漏传→左移)"
+        assert captured["grading"] is g, "grading 必须原样转发,不能错位成 run_duration"
+        assert captured["completed"] == 1 and captured["total"] == 2
+        assert captured["run_duration"] == 5.0 and captured["phase"] == "executing"

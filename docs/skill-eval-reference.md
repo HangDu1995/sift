@@ -569,13 +569,16 @@ skill-eval batch-report batch-workspace/ --open
   },
   "execution_metrics": {"tool_calls": {"Read": 3, "Write": 2}, "total_tool_calls": 5},
   "timing": {"total_tokens": 84852, "duration_ms": 23332, "total_duration_seconds": 23.3},
-  "error": ""
+  "error": "",
+  "cache_key": "d5077d0f9e83586a"
 }
 ```
 
 每条 expectation 带 `verdict`（`PASS`/`FAIL`/`UNEVAL`/`TIMEOUT`/`ERROR`）与 `source`（`programmatic`/`llm`）。报告里 UNEVAL/TIMEOUT/ERROR 与 FAIL **区分显示**（?/⏱/!），不会被混成红 ✗——"没评出来/超时/出错"不是"失败"。
 
 `summary` 的双率字段（`*_programmatic` / `*_llm`）按 expectation 的 `source` 分桶；某类无 expectation 时为 `null`（不报假 0）。
+
+`cache_key` 是**内容感知续跑键**：`= sha256(SKILL 正文 + eval 全身 + 模型/配置)[:16]`。重跑同一 skill 时，`run` 只对 `cache_key` 与本次输入**完全一致**且 `summary.total > 0` 的槽跳过重跑（省 token）；改了 SKILL.md / evals / model / scoring 配置 → key 变 → 自动失效重跑，不再盲复用旧结果。BASE 侧（`without_skill`）不含 skill 正文，故改 SKILL.md 只重跑 with 侧。**已知缺口**：skill 目录里 eval 引用的 `source_dir` / `references/` 文件内容改动不检测——改这些请用新 `-o` 强制重跑。老 `grading.json`（无此字段）首次重跑时全部失效一次（向后兼容）。
 
 ### benchmark.json
 

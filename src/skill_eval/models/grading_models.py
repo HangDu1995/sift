@@ -108,3 +108,6 @@ class GradingResult(BaseModel):
     user_notes_summary: UserNotes | None = None
     eval_feedback: EvalFeedback | None = None
     error: str = ""
+    # 内容感知缓存键(runner 续跑用):= sha256(skill 正文 + eval 全身 + model/配置)[:16]。
+    # 空 = 老 grading.json 或尚未计算 → 续跑时与任何算出的 key 不匹配 → 自动失效重跑。
+    cache_key: str = ""

@@ -72,9 +72,7 @@ def _run_ab_eval(
     )
 
     progress_state = _ProgressState(actual_evals, runs)
-
-    def on_progress(eval_name, config_name, eval_idx, total_evals, completed, total, grading, run_duration=0.0, run_output=None, phase="", substep=""):
-        progress_state.update(eval_name, config_name, eval_idx, completed, total, grading, run_duration, run_output, phase=phase, substep=substep)
+    on_progress = _make_progress_callback(progress_state)
 
     try:
         ab = ABTestRunner(run_config, scoring_config, on_progress=on_progress)
@@ -147,4 +145,38 @@ def _run_ab_eval(
 
         console.print(f"\nBenchmark saved to: {benchmark_path}")
 
+    # 缓存复用提示:全跳过 = 输入未变、结果可信复用;部分跳过也明说。避免"进度条瞬间 100%"的困惑。
+    for line in _cache_notice_lines(progress_state, output_dir):
+        console.print(line)
+
     return benchmark, iteration_dir
+
+
+def _make_progress_callback(progress_state):
+    """on_progress 闭包:把 runner 的进度事件转给 progress_state.update。
+
+    参数必须逐个对齐 ``update(eval_name, config_name, eval_idx, total_evals, completed,
+    total, grading, run_duration, run_output, …)``——曾漏传 ``total_evals`` 致整体左移:
+    update.grading 收到 run_duration(float)→ completion 渲染 grading.summary 崩,被 future
+    兜底吞成 per-slot "Unhandled error",live bar 中途崩留残影(skip 场景进度条错乱的真凶)。
+    抽成工厂便于对参数对齐做单测。
+    """
+    def on_progress(eval_name, config_name, eval_idx, total_evals, completed, total, grading, run_duration=0.0, run_output=None, phase="", substep=""):
+        progress_state.update(eval_name, config_name, eval_idx, total_evals, completed, total, grading, run_duration, run_output, phase=phase, substep=substep)
+    return on_progress
+
+
+def _cache_notice_lines(progress_state, output_dir) -> list[str]:
+    """据 progress_state.skipped 产缓存复用提示行(空表 = 无需提示)。抽出为纯函数便于测。"""
+    if progress_state.skipped <= 0:
+        return []
+    if progress_state.skipped == progress_state.total_runs:
+        return [
+            f"[yellow]⚠️ 全部 {progress_state.total_runs} 个槽命中既有结果,未重跑"
+            f"(skill/eval/模型 较上次未变)。[/yellow]",
+            f"[yellow]   改了 skill/eval 想重跑:换 -o 或清空 {output_dir}。[/yellow]",
+        ]
+    return [
+        f"[dim]缓存:{progress_state.skipped}/{progress_state.total_runs} "
+        f"个槽复用既有结果未重跑(内容未变)。[/dim]",
+    ]
