@@ -245,9 +245,9 @@ class TestReportGeneratorStatic:
         # 数据流断言(文档性,改前改后都通过):confidence_signals 描述真嵌入了 EMBEDDED_DATA
         assert "测试信号" in html
 
-    def test_generate_html_compliance_aggregate_not_per_run(self, tmp_path):
-        """遵循性整体聚合显示(基准测试 tab),不再 per-run:report 含聚合渲染块、
-        不含 per-run 的 cr.summary;聚合 findings 文本可见。"""
+    def test_generate_html_compliance_per_run_and_aggregate(self, tmp_path):
+        """遵循性 per-run(评估详情里 cr.summary)+ 整个考试聚合(基准测试 tab)并存:
+        report 既含 per-run 渲染、也含聚合(compliance_aggregate);findings 文本两处都可见。"""
         workspace = tmp_path / "iteration-1"
         ws_dir = workspace / "with_skill" / "run-1"
         ws_dir.mkdir(parents=True)
@@ -266,12 +266,12 @@ class TestReportGeneratorStatic:
 
         gen = ReportGenerator()
         html = gen.generate_html(workspace, None)
-        # 聚合渲染块存在(RED 驱动)
+        # 聚合渲染块存在(基准测试 tab)
         assert "renderComplianceAggregate" in html
-        # per-run compliance 块已删(renderGrades 不再读 cr.summary)
-        assert "cr.summary" not in html
-        # 聚合数据嵌入 + findings 文本可见
         assert "compliance_aggregate" in html
+        # per-run 遵循性块也渲染(评估详情里 cr.summary)
+        assert "cr.summary" in html
+        # findings 文本 per-run 与聚合两处都可见
         assert "禁止编造错误码" in html
 
     def test_generate_html_renders_comparison_labels(self, tmp_path):

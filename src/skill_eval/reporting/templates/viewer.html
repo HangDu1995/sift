@@ -555,8 +555,8 @@
 
     <!-- View tabs (only shown when benchmark data exists) -->
     <div class="view-tabs" id="view-tabs" style="display:none;">
-      <button class="view-tab active" onclick="switchView('outputs')">输出</button>
-      <button class="view-tab" onclick="switchView('benchmark')">基准测试</button>
+      <button class="view-tab active" onclick="switchView('outputs')">单次执行</button>
+      <button class="view-tab" onclick="switchView('benchmark')">整体汇总</button>
     </div>
 
     <!-- Outputs panel (qualitative review) -->
@@ -594,7 +594,7 @@
         <div class="section-header">
           <div class="grades-toggle" onclick="toggleGrades()">
             <span class="arrow" id="grades-arrow">&#9654;</span>
-            评分详情
+            评估详情
           </div>
         </div>
         <div class="grades-content" id="grades-content"></div>
@@ -872,7 +872,7 @@
       const section = document.getElementById("grades-section");
       const content = document.getElementById("grades-content");
 
-      if (!run.grading && !run.calibration) {
+      if (!run.grading && !run.compliance && !run.calibration) {
         section.style.display = "none";
         return;
       }
@@ -883,53 +883,11 @@
 
       let html = '<div style="padding: 1rem;">';
 
-      // 遵循性已改为整个考试聚合显示(基准测试 tab 的 renderComplianceAggregate),
-      // 不再 per-run —— 避免 L1 理解题(无工具活动)刷出一片"无可对账内容"噪音。
-      // per-run compliance.json 仍留存(calibrator 用),仅不在此逐个渲染。
+      // 评估详情含三层,顺序:打分(grading)→ 遵循性(compliance)→ 校准(calibration)。
+      // substance 在前、阅卷可信度(meta)垫底,不冒充结论。遵循性 per-run 显本 run 的指令
+      // 判定;整个考试聚合另见整体汇总 tab(renderComplianceAggregate),两者并存非冲突。
 
-      // ── Calibration ──
-      if (run.calibration) {
-        const cal = run.calibration;
-        const gradeColor = cal.grade === "HIGH" ? "var(--green)" : cal.grade === "MEDIUM" ? "var(--accent)" : cal.grade === "LOW" ? "var(--text-muted)" : "var(--red)";
-        html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
-        html += '<strong>校准等级：</strong> <span style="color:' + gradeColor + ';font-weight:600;">' + (cal.grade || "—") + '</span>';
-        html += '（一致性：' + (cal.agreement_rate != null ? (cal.agreement_rate * 100).toFixed(0) + '%' : '—') + '，整体置信度：' + (cal.overall_confidence != null ? cal.overall_confidence.toFixed(2) : '—') + '）';
-        // 计数行(常显):双判/仅程序/仅LLM;agreement_rate 为 null 时正好解释为何一致性显 "—"
-        html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">双判 ' + (cal.both_evaluated != null ? cal.both_evaluated : 0) + ' · 仅程序 ' + (cal.programmatic_only_count != null ? cal.programmatic_only_count : 0) + ' · 仅LLM ' + (cal.llm_only_count != null ? cal.llm_only_count : 0) + '</div>';
-        // confidence_signals(非空时显):只 description + impact 色片,不显 signal_type 枚举码
-        if (cal.confidence_signals && cal.confidence_signals.length) {
-          html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
-          for (const s of cal.confidence_signals) {
-            let impactColor = "var(--text-muted)";
-            if (s.impact != null) {
-              if (s.impact < 0) impactColor = s.impact <= -0.15 ? "var(--red)" : "var(--accent)";
-              else if (s.impact > 0) impactColor = "var(--green)";
-            }
-            const impactTag = (s.impact != null) ? '<span style="color:' + impactColor + ';margin-left:0.25rem;">(' + (s.impact > 0 ? '+' : '') + s.impact.toFixed(2) + ')</span>' : '';
-            html += '<li>' + escapeHtml(s.description || '') + impactTag + '</li>';
-          }
-          html += '</ul>';
-        }
-        // disagreements(仅非空时显;空时完全不渲染,计数行已解释无双判)
-        if (cal.disagreements && cal.disagreements.length) {
-          const fmtVerdict = (v) => v === true ? '通过' : (v === false ? '失败' : '—');
-          html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
-          for (const d of cal.disagreements) {
-            html += '<li>' + escapeHtml(d.expectation_text || '') + '<span style="color:var(--text-muted);margin-left:0.25rem;">（程序判 ' + fmtVerdict(d.programmatic_verdict) + ' / LLM判 ' + fmtVerdict(d.llm_verdict) + (d.resolution ? ' · ' + escapeHtml(d.resolution) : '') + '）</span>';
-            if (d.evidence_analysis) html += '<div style="color:var(--text-muted);margin-top:0.15rem;">' + escapeHtml(d.evidence_analysis) + '</div>';
-            html += '</li>';
-          }
-          html += '</ul>';
-        }
-        if (cal.recommendations && cal.recommendations.length) {
-          html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
-          for (const r of cal.recommendations) html += '<li>' + escapeHtml(r) + '</li>';
-          html += '</ul>';
-        }
-        html += '</div>';
-      }
-
-      // ── Grading ──
+      // ── 打分(Grading)──
       if (run.grading) {
         const grading = run.grading;
         const summary = grading.summary || {};
@@ -975,6 +933,103 @@
           html += '</li>';
         }
         html += '</ul>';
+      }
+
+      // ── 遵循性(Compliance = audit 对账,AuditReport 形;per-run:本 run 的指令判定)──
+      if (run.compliance) {
+        const cr = run.compliance;
+        const s = cr.summary || {};
+        const totalInstr = s.total || 0;
+        html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
+        if (totalInstr === 0) {
+          // 空 digest(常见 L1 理解类题):cc 纯推理作答、无工具调用/文件产出 → 无流程可审。
+          // 明示 N/A、非失败,不显"遵循度:— + 目标≥80%"框架(那读着像遵循性挂了)。
+          html += '<strong>遵循性：</strong> <span style="color:var(--text-muted);font-weight:600;">无可对账内容</span>';
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">此 run 无工具调用 / 文件产出(cc 纯推理作答,常见于理解类题)。遵循性审的是流程执行 —— 无流程可审,非失败。</div>';
+        } else {
+          const passN = s.pass || 0, failN = s.fail || 0, naN = s.na || 0, unclearN = s.unclear || 0;
+          // 遵循度 = pass/(pass+fail),排除 na(不适用)+ unclear(判不准);全无可判定 → null
+          const judged = passN + failN;
+          const rate = judged > 0 ? passN / judged : null;
+          const target = 0.8;
+          const hasRate = rate != null;
+          const met = hasRate && rate >= target;
+          const rateColor = !hasRate ? "var(--text-muted)" : met ? "var(--green)" : rate >= 0.5 ? "var(--accent)" : "var(--red)";
+          const fmtPct = v => (v != null ? (v * 100).toFixed(0) + '%' : '—');
+          html += '<strong>遵循度：</strong> <span style="color:' + rateColor + ';font-weight:600;">' + fmtPct(rate) + '</span>';
+          html += ' <span style="font-size:0.75rem;color:var(--text-muted);">（目标 ≥ ' + (target * 100).toFixed(0) + '%' + (met ? ' ✓' : '') + '）</span>';
+          html += ' <span style="font-size:0.75rem;color:var(--text-muted);">PASS ' + passN + ' / FAIL ' + failN + (naN ? ' / 不适用 ' + naN : '') + (unclearN ? ' / 判不准 ' + unclearN : '') + '</span>';
+          // per-instruction 明细(audit findings,四态 PASS/FAIL/N/A/UNCLEAR)
+          const findings = cr.findings || [];
+          if (findings.length) {
+            html += '<ul class="assertion-list" style="margin-top:0.5rem;">';
+            for (const f of findings) {
+              const verdict = f.verdict || "UNCLEAR";
+              const statusClass = verdict === "PASS" ? "pass" : verdict === "FAIL" ? "fail" : verdict === "N/A" ? "na" : "unclear";
+              const statusIcon = verdict === "PASS" ? "✓" : verdict === "FAIL" ? "✗" : verdict === "N/A" ? "—" : "○";
+              const instrText = f.instruction_text || '(未命名)';
+              const catTag = f.category ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">' + escapeHtml(f.category) + '</span>' : '';
+              const derivTag = f.derived_from_transcript ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:0.25rem;">反推</span>' : '';
+              const confTag = (f.confidence != null && f.confidence < 1) ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:0.25rem;">置信 ' + f.confidence.toFixed(2) + '</span>' : '';
+              html += '<li class="assertion-item">';
+              html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
+              html += '<span>' + escapeHtml(instrText) + catTag + derivTag + confTag + '</span>';
+              if (f.evidence) {
+                html += '<div class="assertion-evidence">' + escapeHtml(f.evidence) + '</div>';
+              }
+              html += '</li>';
+            }
+            html += '</ul>';
+          }
+          if (cr.warnings && cr.warnings.length) {
+            html += '<ul style="font-size:0.75rem;color:var(--accent);margin:0.25rem 0 0 1.25rem;">';
+            for (const w of cr.warnings) html += '<li>' + escapeHtml(w) + '</li>';
+            html += '</ul>';
+          }
+        }
+        html += '</div>';
+      }
+
+      // ── 校准(Calibration:阅卷可信度,meta,垫底)──
+      if (run.calibration) {
+        const cal = run.calibration;
+        const gradeColor = cal.grade === "HIGH" ? "var(--green)" : cal.grade === "MEDIUM" ? "var(--accent)" : cal.grade === "LOW" ? "var(--text-muted)" : "var(--red)";
+        html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
+        html += '<strong>校准等级：</strong> <span style="color:' + gradeColor + ';font-weight:600;">' + (cal.grade || "—") + '</span>';
+        html += '（一致性：' + (cal.agreement_rate != null ? (cal.agreement_rate * 100).toFixed(0) + '%' : '—') + '，整体置信度：' + (cal.overall_confidence != null ? cal.overall_confidence.toFixed(2) : '—') + '）';
+        // 计数行(常显):双判/仅程序/仅LLM;agreement_rate 为 null 时正好解释为何一致性显 "—"
+        html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">双判 ' + (cal.both_evaluated != null ? cal.both_evaluated : 0) + ' · 仅程序 ' + (cal.programmatic_only_count != null ? cal.programmatic_only_count : 0) + ' · 仅LLM ' + (cal.llm_only_count != null ? cal.llm_only_count : 0) + '</div>';
+        // confidence_signals(非空时显):只 description + impact 色片,不显 signal_type 枚举码
+        if (cal.confidence_signals && cal.confidence_signals.length) {
+          html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
+          for (const s of cal.confidence_signals) {
+            let impactColor = "var(--text-muted)";
+            if (s.impact != null) {
+              if (s.impact < 0) impactColor = s.impact <= -0.15 ? "var(--red)" : "var(--accent)";
+              else if (s.impact > 0) impactColor = "var(--green)";
+            }
+            const impactTag = (s.impact != null) ? '<span style="color:' + impactColor + ';margin-left:0.25rem;">(' + (s.impact > 0 ? '+' : '') + s.impact.toFixed(2) + ')</span>' : '';
+            html += '<li>' + escapeHtml(s.description || '') + impactTag + '</li>';
+          }
+          html += '</ul>';
+        }
+        // disagreements(仅非空时显;空时完全不渲染,计数行已解释无双判)
+        if (cal.disagreements && cal.disagreements.length) {
+          const fmtVerdict = (v) => v === true ? '通过' : (v === false ? '失败' : '—');
+          html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
+          for (const d of cal.disagreements) {
+            html += '<li>' + escapeHtml(d.expectation_text || '') + '<span style="color:var(--text-muted);margin-left:0.25rem;">（程序判 ' + fmtVerdict(d.programmatic_verdict) + ' / LLM判 ' + fmtVerdict(d.llm_verdict) + (d.resolution ? ' · ' + escapeHtml(d.resolution) : '') + '）</span>';
+            if (d.evidence_analysis) html += '<div style="color:var(--text-muted);margin-top:0.15rem;">' + escapeHtml(d.evidence_analysis) + '</div>';
+            html += '</li>';
+          }
+          html += '</ul>';
+        }
+        if (cal.recommendations && cal.recommendations.length) {
+          html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
+          for (const r of cal.recommendations) html += '<li>' + escapeHtml(r) + '</li>';
+          html += '</ul>';
+        }
+        html += '</div>';
       }
 
       html += '</div>';
