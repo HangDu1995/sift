@@ -630,6 +630,7 @@
       <div class="benchmark-view" id="benchmark-content">
         <div class="benchmark-empty">暂无基准测试数据。请先运行基准测试以查看量化结果。</div>
       </div>
+      <div class="benchmark-view" id="compliance-aggregate-content" style="display:none;"></div>
     </div>
   </div>
 
@@ -871,7 +872,7 @@
       const section = document.getElementById("grades-section");
       const content = document.getElementById("grades-content");
 
-      if (!run.grading && !run.compliance && !run.calibration) {
+      if (!run.grading && !run.calibration) {
         section.style.display = "none";
         return;
       }
@@ -882,60 +883,9 @@
 
       let html = '<div style="padding: 1rem;">';
 
-      // ── Compliance(= audit 对账,AuditReport 形)──
-      if (run.compliance) {
-        const cr = run.compliance;
-        const s = cr.summary || {};
-        const totalInstr = s.total || 0;
-        html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
-        if (totalInstr === 0) {
-          // 空 digest(常见 L1 理解类题):cc 纯推理作答、无工具调用/文件产出 → 无流程可审。
-          // 明示 N/A、非失败,不显"遵循度:— + 目标≥80%"框架(那读着像遵循性挂了)。
-          html += '<strong>遵循性：</strong> <span style="color:var(--text-muted);font-weight:600;">无可对账内容</span>';
-          html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">此 run 无工具调用 / 文件产出(cc 纯推理作答,常见于理解类题)。遵循性审的是流程执行 —— 无流程可审,非失败。</div>';
-        } else {
-          const passN = s.pass || 0, failN = s.fail || 0, naN = s.na || 0, unclearN = s.unclear || 0;
-          // 遵循度 = pass/(pass+fail),排除 na(不适用)+ unclear(判不准);全无可判定 → null
-          const judged = passN + failN;
-          const rate = judged > 0 ? passN / judged : null;
-          const target = 0.8;
-          const hasRate = rate != null;
-          const met = hasRate && rate >= target;
-          const rateColor = !hasRate ? "var(--text-muted)" : met ? "var(--green)" : rate >= 0.5 ? "var(--accent)" : "var(--red)";
-          const fmtPct = v => (v != null ? (v * 100).toFixed(0) + '%' : '—');
-          html += '<strong>遵循度：</strong> <span style="color:' + rateColor + ';font-weight:600;">' + fmtPct(rate) + '</span>';
-          html += ' <span style="font-size:0.75rem;color:var(--text-muted);">（目标 ≥ ' + (target * 100).toFixed(0) + '%' + (met ? ' ✓' : '') + '）</span>';
-          html += ' <span style="font-size:0.75rem;color:var(--text-muted);">PASS ' + passN + ' / FAIL ' + failN + (naN ? ' / 不适用 ' + naN : '') + (unclearN ? ' / 判不准 ' + unclearN : '') + '</span>';
-          // per-instruction 明细(audit findings,四态 PASS/FAIL/N/A/UNCLEAR)
-          const findings = cr.findings || [];
-          if (findings.length) {
-            html += '<ul class="assertion-list" style="margin-top:0.5rem;">';
-            for (const f of findings) {
-              const verdict = f.verdict || "UNCLEAR";
-              const statusClass = verdict === "PASS" ? "pass" : verdict === "FAIL" ? "fail" : verdict === "N/A" ? "na" : "unclear";
-              const statusIcon = verdict === "PASS" ? "✓" : verdict === "FAIL" ? "✗" : verdict === "N/A" ? "—" : "○";
-              const instrText = f.instruction_text || '(未命名)';
-              const catTag = f.category ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">' + escapeHtml(f.category) + '</span>' : '';
-              const derivTag = f.derived_from_transcript ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:0.25rem;">反推</span>' : '';
-              const confTag = (f.confidence != null && f.confidence < 1) ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:0.25rem;">置信 ' + f.confidence.toFixed(2) + '</span>' : '';
-              html += '<li class="assertion-item">';
-              html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
-              html += '<span>' + escapeHtml(instrText) + catTag + derivTag + confTag + '</span>';
-              if (f.evidence) {
-                html += '<div class="assertion-evidence">' + escapeHtml(f.evidence) + '</div>';
-              }
-              html += '</li>';
-            }
-            html += '</ul>';
-          }
-          if (cr.warnings && cr.warnings.length) {
-            html += '<ul style="font-size:0.75rem;color:var(--accent);margin:0.25rem 0 0 1.25rem;">';
-            for (const w of cr.warnings) html += '<li>' + escapeHtml(w) + '</li>';
-            html += '</ul>';
-          }
-        }
-        html += '</div>';
-      }
+      // 遵循性已改为整个考试聚合显示(基准测试 tab 的 renderComplianceAggregate),
+      // 不再 per-run —— 避免 L1 理解题(无工具活动)刷出一片"无可对账内容"噪音。
+      // per-run compliance.json 仍留存(calibrator 用),仅不在此逐个渲染。
 
       // ── Calibration ──
       if (run.calibration) {
@@ -1235,6 +1185,42 @@
       document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
       document.querySelector(`[onclick="switchView('${view}')"]`).classList.add("active");
       document.getElementById("panel-" + view).classList.add("active");
+    }
+
+    // ---- Compliance aggregate(整个考试聚合,非 per-run)----
+    // 遵循性按 SKILL 出题,跨所有 with run 聚合(= 把 N 个 transcript 一次性喂 audit 多会话审计)。
+    // 理解类题(L1 无工具活动)不产判定,自然不计入,不再刷"无可对账内容"噪音。
+    function renderComplianceAggregate() {
+      const container = document.getElementById("compliance-aggregate-content");
+      const aggs = (EMBEDDED_DATA.compliance_aggregate) || [];
+      if (!aggs.length) { container.style.display = "none"; return; }
+      container.style.display = "block";
+      const fmtPct = v => (v != null ? (v * 100).toFixed(0) + '%' : '—');
+      let html = '<h2 style="margin:1.5rem 0 0.25rem;">遵循性 · 指令对账(整个考试聚合)</h2>';
+      html += '<div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.75rem;">遵循性以 SKILL 为出题依据,跨所有注入侧 run 聚合(等同把 N 个 transcript 一次性喂给 audit 多会话审计)。理解类题(无工具/文件活动)不产判定,不计入。</div>';
+      for (const agg of aggs) {
+        const s = agg.summary || {};
+        const passN = s.pass || 0, failN = s.fail || 0, naN = s.na || 0, unclearN = s.unclear || 0;
+        const judged = passN + failN;
+        const rate = judged > 0 ? passN / judged : null;
+        const rateColor = rate == null ? "var(--text-muted)" : rate >= 0.8 ? "var(--green)" : rate >= 0.5 ? "var(--accent)" : "var(--red)";
+        html += '<div class="section" style="margin-bottom:1rem;">';
+        html += '<div class="section-header">' + escapeHtml(agg.side || '') + ' 侧 · 遵循度 <span style="color:' + rateColor + ';font-weight:600;">' + fmtPct(rate) + '</span></div>';
+        html += '<div class="section-body">';
+        html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">PASS ' + passN + ' / FAIL ' + failN + (naN ? ' / 不适用 ' + naN : '') + (unclearN ? ' / 判不准 ' + unclearN : '') + ' · 聚合自 ' + (agg.runs_contributed || 0) + ' 个有判定的 run</div>';
+        const bi = agg.by_instruction || [];
+        if (bi.length) {
+          html += '<table class="benchmark-table"><thead><tr><th style="text-align:left;">指令</th><th>通过</th><th>失败</th><th>不适用</th><th style="text-align:left;">失败出现在</th></tr></thead><tbody>';
+          for (const inst of bi) {
+            const failIn = (inst.fail_in_transcripts || []).join(', ') || '—';
+            const failCell = inst.fail_count ? '<span style="color:var(--red);font-weight:600;">' + inst.fail_count + '</span>' : String(inst.fail_count || 0);
+            html += '<tr><td style="text-align:left;">' + escapeHtml(inst.instruction_text || '(未命名)') + '</td><td>' + (inst.pass_count || 0) + '</td><td>' + failCell + '</td><td>' + (inst.na_count || 0) + '</td><td style="text-align:left;font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(failIn) + '</td></tr>';
+          }
+          html += '</tbody></table>';
+        }
+        html += '</div></div>';
+      }
+      container.innerHTML = html;
     }
 
     // ---- Benchmark rendering ----
@@ -1770,6 +1756,7 @@
     // ---- Start ----
     init();
     renderBenchmark();
+    renderComplianceAggregate();
   </script>
 </body>
 </html>

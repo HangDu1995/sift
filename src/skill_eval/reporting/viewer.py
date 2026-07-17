@@ -238,6 +238,49 @@ def load_previous_iteration(workspace: Path) -> dict | None:
     return None
 
 
+def _aggregate_compliance(runs: list[dict]) -> list[dict]:
+    """把 per-run compliance.json 按 side(config)聚合成整体遵循性。
+
+    遵循性出题依据是 SKILL(非 eval),故 N 个 transcript 各审一次 = 一次性喂给 audit 多会话审计;
+    per-slot findings 合并再 aggregate_by_instruction,与一次喂 N transcript **结果等价**(聚合可交换)。
+    复用 audit.aggregate_by_instruction。全空 digest 的 side(L1 理解题 cc 纯推理无工具)贡献 0 findings → 不产空聚合。
+    """
+    from collections import defaultdict
+    from skill_eval.audit.aggregate import aggregate_by_instruction
+    from skill_eval.models import AuditFinding
+
+    by_side: dict[str, list[dict]] = defaultdict(list)   # side -> findings(dict)
+    side_runs: dict[str, int] = defaultdict(int)        # side -> 贡献了非空 findings 的 run 数
+    for r in runs:
+        comp = r.get("compliance")
+        if not comp:
+            continue
+        side = r.get("config") or "?"
+        findings = comp.get("findings") or []
+        by_side[side].extend(findings)
+        if findings:  # 只数真贡献了判定的 run(空 digest 的 L1 题不计)
+            side_runs[side] += 1
+
+    out: list[dict] = []
+    for side, findings in by_side.items():
+        if not findings:
+            continue  # 该 side 全空 digest → 跳过(不产空聚合)
+        ai = aggregate_by_instruction([AuditFinding.model_validate(f) for f in findings])
+        out.append({
+            "side": side,
+            "summary": {
+                "total": len(findings),
+                "pass": sum(1 for f in findings if f.get("verdict") == "PASS"),
+                "fail": sum(1 for f in findings if f.get("verdict") == "FAIL"),
+                "na": sum(1 for f in findings if f.get("verdict") == "N/A"),
+                "unclear": sum(1 for f in findings if f.get("verdict") == "UNCLEAR"),
+            },
+            "by_instruction": [a.model_dump(mode="json") for a in ai],
+            "runs_contributed": side_runs[side],
+        })
+    return out
+
+
 class ReportGenerator:
     def __init__(self):
         self.template_dir = Path(__file__).parent / "templates"
@@ -282,6 +325,7 @@ class ReportGenerator:
         data = {
             "skill_name": skill_name,
             "runs": runs,
+            "compliance_aggregate": _aggregate_compliance(runs),
             "previous": previous,
             "previous_feedback": prev_feedback,
             "previous_outputs": prev_outputs,

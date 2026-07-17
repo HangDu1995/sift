@@ -214,12 +214,9 @@ class TestReportGeneratorStatic:
         # 数据流断言(文档性,改前改后都通过):confidence_signals 描述真嵌入了 EMBEDDED_DATA
         assert "测试信号" in html
 
-    def test_generate_html_compliance_is_audit_report(self, tmp_path):
-        """compliance 块读 AuditReport(summary+findings 四态),不再读旧 ComplianceReport 字段。
-
-        RED 驱动:renderGrades 的 compliance 块现引用 cr.summary / findings 循环 f.instruction_text
-        (旧 code 用 cr.compliance_rate / cr.checks / c.instruction),锚定新字段避开旧字面量。
-        """
+    def test_generate_html_compliance_aggregate_not_per_run(self, tmp_path):
+        """遵循性整体聚合显示(基准测试 tab),不再 per-run:report 含聚合渲染块、
+        不含 per-run 的 cr.summary;聚合 findings 文本可见。"""
         workspace = tmp_path / "iteration-1"
         ws_dir = workspace / "with_skill" / "run-1"
         ws_dir.mkdir(parents=True)
@@ -228,48 +225,23 @@ class TestReportGeneratorStatic:
         (ws_dir / "compliance.json").write_text(json.dumps({
             "skill_name": "myskill",
             "transcripts": ["transcript.jsonl"],
-            "summary": {"total": 3, "pass": 2, "fail": 1, "na": 0, "unclear": 0},
+            "summary": {"total": 1, "pass": 1, "fail": 0, "na": 0, "unclear": 0},
             "findings": [
                 {"instruction_text": "禁止编造错误码", "source": "CONSTRAINT",
-                 "verdict": "PASS", "category": "prohibition", "evidence": "未发现编造", "confidence": 0.9},
-                {"instruction_text": "必须读日志", "source": "TOOL_REQUIREMENT",
-                 "verdict": "FAIL", "category": "conditional", "evidence": "未调用 Read", "confidence": 0.7},
+                 "verdict": "PASS", "category": "prohibition", "evidence": "未发现编造",
+                 "confidence": 0.9, "transcript": "transcript.jsonl"},
             ],
         }))
 
         gen = ReportGenerator()
         html = gen.generate_html(workspace, None)
-        # 新 JS 读 AuditReport 字段(RED 驱动)
-        assert "cr.summary" in html
-        assert "f.instruction_text" in html
-        # 旧 ComplianceReport 字段已从 JS 移除
-        assert "cr.compliance_rate" not in html
-        assert "cr.checks" not in html
-        # AuditReport 数据真嵌入 EMBEDDED_DATA(findings 文本可见)
+        # 聚合渲染块存在(RED 驱动)
+        assert "renderComplianceAggregate" in html
+        # per-run compliance 块已删(renderGrades 不再读 cr.summary)
+        assert "cr.summary" not in html
+        # 聚合数据嵌入 + findings 文本可见
+        assert "compliance_aggregate" in html
         assert "禁止编造错误码" in html
-        assert "必须读日志" in html
-
-    def test_generate_html_compliance_empty_digest_shows_na_notice(self, tmp_path):
-        """空 digest(summary.total=0,如 L1 理解类题 cc 纯推理无工具活动):渲染"无可对账内容(非失败)",
-        不显"遵循度:— + 目标≥80%"的误导框架(那读着像遵循性挂了)。"""
-        workspace = tmp_path / "iteration-1"
-        ws_dir = workspace / "with_skill" / "run-1"
-        ws_dir.mkdir(parents=True)
-        (ws_dir / "outputs").mkdir()
-        (ws_dir / "outputs" / "out.txt").write_text("hello")
-        (ws_dir / "compliance.json").write_text(json.dumps({
-            "skill_name": "myskill",
-            "transcripts": ["transcript.jsonl"],
-            "summary": {"total": 0, "pass": 0, "fail": 0, "na": 0, "unclear": 0},
-            "findings": [],
-            "warnings": ["transcript.jsonl: transcript 未产出可用内容(无 user turn / 文件 / 工具调用)"],
-        }))
-
-        gen = ReportGenerator()
-        html = gen.generate_html(workspace, None)
-        # 模板含空-digest 特判分支(RED 驱动)
-        assert "无可对账内容" in html
-        assert "totalInstr" in html
 
     def test_generate_html_renders_comparison_labels(self, tmp_path):
         """comparison_summary 的 label_a/b 驱动盲评头条显示(块 B v1/v2 真标签)。"""
@@ -554,3 +526,48 @@ class TestGenerateReportHtml:
         with patch.object(ReportGenerator, "write_static", fake_write_static):
             generate_report_html(tmp_path)
         assert captured["scorecard"] is None
+
+
+class TestComplianceAggregate:
+    """_aggregate_compliance:把 per-run compliance.json 按 side 聚合成整体遵循性,
+    复用 audit.aggregate_by_instruction(= 把 N 个 transcript 喂给 audit 多会话审计的等价结果)。"""
+
+    @staticmethod
+    def _finding(text: str, verdict: str, transcript: str) -> dict:
+        return {"instruction_text": text, "source": "CONSTRAINT", "verdict": verdict,
+                "category": "prohibition", "evidence": "e", "confidence": 0.9, "transcript": transcript}
+
+    def test_groups_by_side_same_instruction_across_runs(self):
+        from skill_eval.reporting.viewer import _aggregate_compliance
+        runs = [
+            {"config": "with_skill", "compliance": {"findings": [self._finding("禁止编造", "PASS", "run-1.jsonl")]}},
+            {"config": "with_skill", "compliance": {"findings": [self._finding("禁止编造", "FAIL", "run-2.jsonl")]}},
+            {"config": "without_skill"},  # baseline 无 compliance
+        ]
+        agg = _aggregate_compliance(runs)
+        assert len(agg) == 1, "只 with_skill 一个 side 有 compliance(baseline 无)"
+        assert agg[0]["side"] == "with_skill"
+        # 同一指令跨 2 run:pass1/fail1
+        bi = agg[0]["by_instruction"]
+        assert len(bi) == 1
+        assert bi[0]["instruction_text"] == "禁止编造"
+        assert bi[0]["pass_count"] == 1 and bi[0]["fail_count"] == 1
+        assert agg[0]["summary"]["pass"] == 1 and agg[0]["summary"]["fail"] == 1
+        assert agg[0]["runs_contributed"] == 2
+
+    def test_skips_all_empty_side(self):
+        from skill_eval.reporting.viewer import _aggregate_compliance
+        # 一个 side 全空 digest(L1 理解题,findings=[])→ 不产空聚合
+        runs = [{"config": "with_skill", "compliance": {"summary": {"total": 0}, "findings": []}}]
+        assert _aggregate_compliance(runs) == []
+
+    def test_mixed_empty_and_real_only_counts_real(self):
+        from skill_eval.reporting.viewer import _aggregate_compliance
+        # eval-1/2 空 digest + eval-3 真判定,同 side → 聚合只反映真判定的 run
+        runs = [
+            {"config": "with_skill", "compliance": {"findings": []}},  # L1 空
+            {"config": "with_skill", "compliance": {"findings": [self._finding("必须读日志", "PASS", "eval3-r1.jsonl")]}},
+        ]
+        agg = _aggregate_compliance(runs)
+        assert len(agg) == 1
+        assert agg[0]["summary"]["pass"] == 1 and agg[0]["summary"]["total"] == 1
