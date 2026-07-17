@@ -249,6 +249,28 @@ class TestReportGeneratorStatic:
         assert "禁止编造错误码" in html
         assert "必须读日志" in html
 
+    def test_generate_html_compliance_empty_digest_shows_na_notice(self, tmp_path):
+        """空 digest(summary.total=0,如 L1 理解类题 cc 纯推理无工具活动):渲染"无可对账内容(非失败)",
+        不显"遵循度:— + 目标≥80%"的误导框架(那读着像遵循性挂了)。"""
+        workspace = tmp_path / "iteration-1"
+        ws_dir = workspace / "with_skill" / "run-1"
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "outputs").mkdir()
+        (ws_dir / "outputs" / "out.txt").write_text("hello")
+        (ws_dir / "compliance.json").write_text(json.dumps({
+            "skill_name": "myskill",
+            "transcripts": ["transcript.jsonl"],
+            "summary": {"total": 0, "pass": 0, "fail": 0, "na": 0, "unclear": 0},
+            "findings": [],
+            "warnings": ["transcript.jsonl: transcript 未产出可用内容(无 user turn / 文件 / 工具调用)"],
+        }))
+
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, None)
+        # 模板含空-digest 特判分支(RED 驱动)
+        assert "无可对账内容" in html
+        assert "totalInstr" in html
+
     def test_generate_html_renders_comparison_labels(self, tmp_path):
         """comparison_summary 的 label_a/b 驱动盲评头条显示(块 B v1/v2 真标签)。"""
         workspace = tmp_path / "iteration-1"

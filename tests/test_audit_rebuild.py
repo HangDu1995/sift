@@ -83,13 +83,13 @@ def test_rebuild_missing_file_raises(tmp_path: Path) -> None:
 
 
 def test_rebuild_empty_file_raises(tmp_path: Path) -> None:
-    """完全空文件 → digest 全空 → SkillEvalError(消息含"未产出可用内容")。"""
+    """完全空文件 → digest 全空 → SkillEvalError(消息含"无可对账内容")。"""
     p = tmp_path / "empty.jsonl"
     p.write_text("", encoding="utf-8")
 
     with pytest.raises(SkillEvalError) as exc:
         rebuild(p)
-    assert "未产出可用内容" in str(exc.value)
+    assert "无可对账内容" in str(exc.value)
 
 
 def test_rebuild_whitespace_only_file_raises(tmp_path: Path) -> None:
@@ -99,7 +99,7 @@ def test_rebuild_whitespace_only_file_raises(tmp_path: Path) -> None:
 
     with pytest.raises(SkillEvalError) as exc:
         rebuild(p)
-    assert "未产出可用内容" in str(exc.value)
+    assert "无可对账内容" in str(exc.value)
 
 
 def test_rebuild_bad_lines_skipped_when_good_lines_present(tmp_path: Path) -> None:

@@ -886,45 +886,53 @@
       if (run.compliance) {
         const cr = run.compliance;
         const s = cr.summary || {};
-        const passN = s.pass || 0, failN = s.fail || 0, naN = s.na || 0, unclearN = s.unclear || 0;
-        // 遵循度 = pass/(pass+fail),排除 na(不适用)+ unclear(判不准);全无可判定 → null
-        const judged = passN + failN;
-        const rate = judged > 0 ? passN / judged : null;
-        const target = 0.8;
-        const hasRate = rate != null;
-        const met = hasRate && rate >= target;
-        const rateColor = !hasRate ? "var(--text-muted)" : met ? "var(--green)" : rate >= 0.5 ? "var(--accent)" : "var(--red)";
-        const fmtPct = v => (v != null ? (v * 100).toFixed(0) + '%' : '—');
+        const totalInstr = s.total || 0;
         html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
-        html += '<strong>遵循度：</strong> <span style="color:' + rateColor + ';font-weight:600;">' + fmtPct(rate) + '</span>';
-        html += ' <span style="font-size:0.75rem;color:var(--text-muted);">（目标 ≥ ' + (target * 100).toFixed(0) + '%' + (met ? ' ✓' : '') + '）</span>';
-        html += ' <span style="font-size:0.75rem;color:var(--text-muted);">PASS ' + passN + ' / FAIL ' + failN + (naN ? ' / 不适用 ' + naN : '') + (unclearN ? ' / 判不准 ' + unclearN : '') + '</span>';
-        // per-instruction 明细(audit findings,四态 PASS/FAIL/N/A/UNCLEAR)
-        const findings = cr.findings || [];
-        if (findings.length) {
-          html += '<ul class="assertion-list" style="margin-top:0.5rem;">';
-          for (const f of findings) {
-            const verdict = f.verdict || "UNCLEAR";
-            const statusClass = verdict === "PASS" ? "pass" : verdict === "FAIL" ? "fail" : verdict === "N/A" ? "na" : "unclear";
-            const statusIcon = verdict === "PASS" ? "✓" : verdict === "FAIL" ? "✗" : verdict === "N/A" ? "—" : "○";
-            const instrText = f.instruction_text || '(未命名)';
-            const catTag = f.category ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">' + escapeHtml(f.category) + '</span>' : '';
-            const derivTag = f.derived_from_transcript ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:0.25rem;">反推</span>' : '';
-            const confTag = (f.confidence != null && f.confidence < 1) ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:0.25rem;">置信 ' + f.confidence.toFixed(2) + '</span>' : '';
-            html += '<li class="assertion-item">';
-            html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
-            html += '<span>' + escapeHtml(instrText) + catTag + derivTag + confTag + '</span>';
-            if (f.evidence) {
-              html += '<div class="assertion-evidence">' + escapeHtml(f.evidence) + '</div>';
+        if (totalInstr === 0) {
+          // 空 digest(常见 L1 理解类题):cc 纯推理作答、无工具调用/文件产出 → 无流程可审。
+          // 明示 N/A、非失败,不显"遵循度:— + 目标≥80%"框架(那读着像遵循性挂了)。
+          html += '<strong>遵循性：</strong> <span style="color:var(--text-muted);font-weight:600;">无可对账内容</span>';
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">此 run 无工具调用 / 文件产出(cc 纯推理作答,常见于理解类题)。遵循性审的是流程执行 —— 无流程可审,非失败。</div>';
+        } else {
+          const passN = s.pass || 0, failN = s.fail || 0, naN = s.na || 0, unclearN = s.unclear || 0;
+          // 遵循度 = pass/(pass+fail),排除 na(不适用)+ unclear(判不准);全无可判定 → null
+          const judged = passN + failN;
+          const rate = judged > 0 ? passN / judged : null;
+          const target = 0.8;
+          const hasRate = rate != null;
+          const met = hasRate && rate >= target;
+          const rateColor = !hasRate ? "var(--text-muted)" : met ? "var(--green)" : rate >= 0.5 ? "var(--accent)" : "var(--red)";
+          const fmtPct = v => (v != null ? (v * 100).toFixed(0) + '%' : '—');
+          html += '<strong>遵循度：</strong> <span style="color:' + rateColor + ';font-weight:600;">' + fmtPct(rate) + '</span>';
+          html += ' <span style="font-size:0.75rem;color:var(--text-muted);">（目标 ≥ ' + (target * 100).toFixed(0) + '%' + (met ? ' ✓' : '') + '）</span>';
+          html += ' <span style="font-size:0.75rem;color:var(--text-muted);">PASS ' + passN + ' / FAIL ' + failN + (naN ? ' / 不适用 ' + naN : '') + (unclearN ? ' / 判不准 ' + unclearN : '') + '</span>';
+          // per-instruction 明细(audit findings,四态 PASS/FAIL/N/A/UNCLEAR)
+          const findings = cr.findings || [];
+          if (findings.length) {
+            html += '<ul class="assertion-list" style="margin-top:0.5rem;">';
+            for (const f of findings) {
+              const verdict = f.verdict || "UNCLEAR";
+              const statusClass = verdict === "PASS" ? "pass" : verdict === "FAIL" ? "fail" : verdict === "N/A" ? "na" : "unclear";
+              const statusIcon = verdict === "PASS" ? "✓" : verdict === "FAIL" ? "✗" : verdict === "N/A" ? "—" : "○";
+              const instrText = f.instruction_text || '(未命名)';
+              const catTag = f.category ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">' + escapeHtml(f.category) + '</span>' : '';
+              const derivTag = f.derived_from_transcript ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:0.25rem;">反推</span>' : '';
+              const confTag = (f.confidence != null && f.confidence < 1) ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:0.25rem;">置信 ' + f.confidence.toFixed(2) + '</span>' : '';
+              html += '<li class="assertion-item">';
+              html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
+              html += '<span>' + escapeHtml(instrText) + catTag + derivTag + confTag + '</span>';
+              if (f.evidence) {
+                html += '<div class="assertion-evidence">' + escapeHtml(f.evidence) + '</div>';
+              }
+              html += '</li>';
             }
-            html += '</li>';
+            html += '</ul>';
           }
-          html += '</ul>';
-        }
-        if (cr.warnings && cr.warnings.length) {
-          html += '<ul style="font-size:0.75rem;color:var(--accent);margin:0.25rem 0 0 1.25rem;">';
-          for (const w of cr.warnings) html += '<li>' + escapeHtml(w) + '</li>';
-          html += '</ul>';
+          if (cr.warnings && cr.warnings.length) {
+            html += '<ul style="font-size:0.75rem;color:var(--accent);margin:0.25rem 0 0 1.25rem;">';
+            for (const w of cr.warnings) html += '<li>' + escapeHtml(w) + '</li>';
+            html += '</ul>';
+          }
         }
         html += '</div>';
       }
