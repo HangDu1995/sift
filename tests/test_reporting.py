@@ -100,6 +100,37 @@ class TestFindRuns:
         runs = find_runs(tmp_path)
         assert len(runs) == 0
 
+    def test_dedup_retry_dirs_keeps_final(self, tmp_path: Path):
+        """runner 在 UNEVAL/失败时自动重试,产出 run-N + run-N-retry-K。
+        viewer 只应显示最终 retry(canonical),被取代的失败旧尝试当独立 run 显示会误导。
+        与 benchmark/comparison 的 index_runs 同口径。"""
+        base = tmp_path / "with_skill/eval-1"
+        for name, passed in (("run-1", 0), ("run-1-retry-1", 0), ("run-1-retry-2", 3)):
+            d = base / name
+            d.mkdir(parents=True)
+            (d / "outputs").mkdir()
+            (d / "outputs/file.txt").write_text("data")
+            (d / "grading.json").write_text(json.dumps({
+                "summary": {"pass_rate": passed / 3, "passed": passed, "failed": 3 - passed, "total": 3},
+                "expectations": [],
+            }))
+
+        runs = find_runs(tmp_path)
+        # 只保留最终 retry(run-1-retry-2),不是 3 个
+        assert len(runs) == 1
+        assert runs[0]["id"].endswith("run-1-retry-2")
+        assert runs[0]["grading"]["summary"]["passed"] == 3
+
+    def test_dedup_retry_no_retry_keeps_base(self, tmp_path: Path):
+        """无 retry 的普通 run 不受去重影响。"""
+        for i in (1, 2):
+            d = tmp_path / f"with_skill/eval-{i}/run-1"
+            d.mkdir(parents=True)
+            (d / "outputs").mkdir()
+            (d / "outputs/file.txt").write_text("data")
+        runs = find_runs(tmp_path)
+        assert len(runs) == 2
+
 
 class TestReportGeneratorStatic:
     def test_generate_html_writes_static(self, tmp_path: Path):

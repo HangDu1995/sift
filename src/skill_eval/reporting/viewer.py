@@ -40,8 +40,29 @@ def get_mime_type(path: Path) -> str:
 def find_runs(workspace: Path) -> list[dict]:
     runs: list[dict] = []
     _find_runs_recursive(workspace, workspace, runs)
+    runs = _dedup_retries(runs)
     runs.sort(key=lambda r: (r.get("eval_id", float("inf")), r["id"]))
     return runs
+
+
+def _dedup_retries(runs: list[dict]) -> list[dict]:
+    """同 ``(config, eval_id, run_number)`` 只保留**最终 retry**。
+
+    runner 在 UNEVAL/失败时自动重试,产出 ``run-N`` + ``run-N-retry-K``。被 retry
+    取代的旧尝试若当独立 run 显示,会让用户看到已被覆盖的失败结果(如全 UNEVAL 的
+    首次尝试),误读成 skill 表现差。与 benchmark/comparison 的 ``index_runs`` 同口径:
+    同一逻辑 run 只取最高 retry = 最终尝试(canonical)。
+    """
+    from skill_eval.execution.run_paths import retry_count
+
+    best: dict[tuple, tuple[int, dict]] = {}  # key -> (retry_count, run)
+    for r in runs:
+        key = (r.get("config"), r.get("eval_id"), r.get("run_number"))
+        rc = retry_count(r.get("id", "").rsplit("/", 1)[-1])
+        prev = best.get(key)
+        if prev is None or rc > prev[0]:
+            best[key] = (rc, r)
+    return [v[1] for v in best.values()]
 
 
 def _find_runs_recursive(root: Path, current: Path, runs: list[dict]) -> None:
