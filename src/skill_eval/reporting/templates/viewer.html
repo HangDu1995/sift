@@ -968,6 +968,11 @@
         html += '<div class="grades-summary">';
         html += '<span class="grade-badge ' + badgeClass + '">' + passRate + '</span>';
         html += '<span>' + (summary.passed || 0) + ' 通过，' + (summary.failed || 0) + ' 失败，共 ' + (summary.total || 0) + ' 项</span>';
+        // per-source 计数(programmatic 客观/稳 vs llm 主观/漂):数据早有(ab5ae58),此前 viewer 只显合并率
+        const srcParts = [];
+        if (summary.total_programmatic != null) srcParts.push('程序化 ' + (summary.passed_programmatic || 0) + '/' + summary.total_programmatic);
+        if (summary.total_llm != null) srcParts.push('LLM ' + (summary.passed_llm || 0) + '/' + summary.total_llm);
+        if (srcParts.length) html += '<span style="font-size:0.75rem;color:var(--text-muted);margin-left:0.5rem;">（' + srcParts.join(' · ') + '）</span>';
         html += '</div>';
 
         html += '<ul class="assertion-list">';
@@ -1037,7 +1042,14 @@
               const instrText = f.instruction_text || '(未命名)';
               const catTag = f.category ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">' + escapeHtml(f.category) + '</span>' : '';
               const derivTag = f.derived_from_transcript ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:0.25rem;">反推</span>' : '';
-              const confTag = (f.confidence != null && f.confidence < 1) ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:0.25rem;">置信 ' + f.confidence.toFixed(2) + '</span>' : '';
+              // confidence → 分类标签(口径同 audit-report.html confTag,但确定项 1.0 不打标签:
+              // verdict 图标已表达通过/失败,「确定」冗余)。0.8=LLM 判 / <0.8=判不准;数字只进 title
+              const confTag = (() => {
+                const c = f.confidence;
+                if (typeof c !== "number" || c >= 1.0) return "";
+                if (c >= 0.8) return '<span style="font-size:0.7rem;color:var(--text-muted);margin-left:0.25rem;" title="confidence ' + c.toFixed(2) + ' · LLM 给出明确结论">LLM 判定</span>';
+                return '<span style="font-size:0.7rem;color:var(--red);font-weight:600;margin-left:0.25rem;" title="confidence ' + c.toFixed(2) + ' · 判定失败/未提及,本条不完整建议重跑">⚠ 判不准</span>';
+              })();
               html += '<li class="assertion-item">';
               html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
               html += '<span>' + escapeHtml(instrText) + catTag + derivTag + confTag + '</span>';

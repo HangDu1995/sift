@@ -297,6 +297,42 @@ class TestReportGeneratorStatic:
         assert "buildRunSelect" in html      # 填充入口 JS 存在
         assert "optgroup" in html            # 按 eval 分组
 
+    def test_generate_html_grading_summary_shows_per_source_split(self, tmp_path):
+        """打分 summary 行显 programmatic/llm per-source 计数——数据早有(ab5ae58),
+        viewer 此前只显合并 pass_rate。RED 锚定 summary.passed_programmatic / total_llm。"""
+        workspace = tmp_path / "iteration-1"
+        ws_dir = workspace / "with_skill" / "run-1"
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "outputs").mkdir()
+        (ws_dir / "outputs/out.txt").write_text("hello")
+        (ws_dir / "grading.json").write_text(json.dumps({
+            "summary": {"pass_rate": 0.76, "passed": 22, "failed": 7, "total": 29,
+                        "passed_programmatic": 10, "total_programmatic": 14,
+                        "passed_llm": 12, "total_llm": 15},
+            "expectations": [{"text": "ok", "passed": True}],
+        }))
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, None)
+        assert "summary.passed_programmatic" in html   # 打分块引用 per-source 字段
+        assert "summary.total_llm" in html
+
+    def test_generate_html_compliance_confidence_label_not_number(self, tmp_path):
+        """遵循性块 confidence 显分类标签(LLM 判定/判不准),不显裸数字——对齐
+        audit-report.html confTag(数字只进 title)。RED:'LLM 判定' 在、'置信 ' 不在。"""
+        workspace = tmp_path / "iteration-1"
+        ws_dir = workspace / "with_skill" / "run-1"
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "outputs").mkdir()
+        (ws_dir / "outputs/out.txt").write_text("hello")
+        (ws_dir / "grading.json").write_text(json.dumps({
+            "summary": {"pass_rate": 1.0, "passed": 1, "failed": 0, "total": 1},
+            "expectations": [{"text": "ok", "passed": True}],
+        }))
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, None)
+        assert "LLM 判定" in html        # 分类标签口径同 audit-report.html
+        assert "置信 " not in html       # 旧「置信 0.80」裸数字已去
+
     def test_generate_html_renders_comparison_labels(self, tmp_path):
         """comparison_summary 的 label_a/b 驱动盲评头条显示(块 B v1/v2 真标签)。"""
         workspace = tmp_path / "iteration-1"
