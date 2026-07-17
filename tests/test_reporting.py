@@ -274,6 +274,29 @@ class TestReportGeneratorStatic:
         # findings 文本 per-run 与聚合两处都可见
         assert "禁止编造错误码" in html
 
+    def test_generate_html_has_run_jump_select(self, tmp_path):
+        """单次执行 tab 支持跳转到指定 run(不必逐个翻 上一个/下一个)。
+
+        RED 驱动:header 加 <select id="run-jump">,JS buildRunSelect 从 EMBEDDED_DATA.runs
+        按 eval 分组(<optgroup>)填充、change → showRun 跳转。断言 id + JS 入口存在
+        (纯 JS 交互行为靠 node --check 语法 + 重生成 report 肉眼验证,pytest render-smoke 不执行 JS)。
+        """
+        workspace = tmp_path / "iteration-1"
+        ws_dir = workspace / "with_skill" / "run-1"
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "outputs").mkdir()
+        (ws_dir / "outputs/out.txt").write_text("hello")
+        (ws_dir / "grading.json").write_text(json.dumps({
+            "summary": {"pass_rate": 1.0, "passed": 1, "failed": 0, "total": 1},
+            "expectations": [{"text": "ok", "passed": True}],
+        }))
+
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, None)
+        assert 'id="run-jump"' in html      # 跳转 select 存在
+        assert "buildRunSelect" in html      # 填充入口 JS 存在
+        assert "optgroup" in html            # 按 eval 分组
+
     def test_generate_html_renders_comparison_labels(self, tmp_path):
         """comparison_summary 的 label_a/b 驱动盲评头条显示(块 B v1/v2 真标签)。"""
         workspace = tmp_path / "iteration-1"

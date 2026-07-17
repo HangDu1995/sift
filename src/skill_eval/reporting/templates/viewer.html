@@ -63,6 +63,18 @@
       opacity: 0.8;
       text-align: right;
     }
+    .header-right { display: flex; align-items: center; gap: 0.75rem; }
+    .header .run-jump {
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.8rem;
+      padding: 0.3rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      max-width: 16rem;
+    }
 
     /* ---- Main content ---- */
     .main {
@@ -550,7 +562,10 @@
         <h1>评测回顾：<span id="skill-name"></span><span id="gate-badge" style="display:none; font-weight:bold; margin-left:12px; padding:2px 10px; border-radius:4px;"></span></h1>
         <div class="instructions">查看每条输出并在下方留下反馈。使用方向键或按钮导航。完成后，复制反馈并粘贴到 Claude Code。</div>
       </div>
-      <div class="progress" id="progress"></div>
+      <div class="header-right">
+        <select id="run-jump" class="run-jump" style="display:none;" aria-label="跳转到指定执行"></select>
+        <div class="progress" id="progress"></div>
+      </div>
     </div>
 
     <!-- View tabs (only shown when benchmark data exists) -->
@@ -686,6 +701,7 @@
           el.title = gate.reason || "";
           el.style.display = "inline-block";
       }
+      buildRunSelect();
       showRun(0);
 
       // Wire up feedback auto-save
@@ -713,6 +729,53 @@
         currentIndex === EMBEDDED_DATA.runs.length - 1;
     }
 
+    // ---- Run jump selector (跳转到指定 run,不必逐个翻 上一个/下一个) ----
+    function buildRunSelect() {
+      const sel = document.getElementById("run-jump");
+      const runs = EMBEDDED_DATA.runs;
+      if (!sel || runs.length <= 1) { if (sel) sel.style.display = "none"; return; }
+      const configs = new Set(runs.map(r => r.config));
+      const multiConfig = configs.size > 1;
+      // runs 已按 (eval_id, id) 排序;按 eval 分组方便直接跳到「eval 3 的 run」
+      const groups = new Map();
+      runs.forEach((r, i) => {
+        const eid = (r.eval_id != null ? r.eval_id : 0);
+        if (!groups.has(eid)) groups.set(eid, []);
+        groups.get(eid).push([i, r]);
+      });
+      const evalIds = [...groups.keys()].sort((a, b) => a - b);
+      const useGroups = evalIds.length > 1;
+      const makeOpt = (i, r) => {
+        const opt = document.createElement("option");
+        opt.value = String(i);
+        let label = "run " + (r.run_number != null ? r.run_number : (i + 1));
+        if (multiConfig && r.config && r.config !== "unknown") {
+          label += " · " + r.config.replace(/_/g, " ");
+        }
+        opt.textContent = label;
+        return opt;
+      };
+      for (const eid of evalIds) {
+        const items = groups.get(eid);
+        if (useGroups) {
+          const og = document.createElement("optgroup");
+          og.label = "eval " + eid;
+          for (const [i, r] of items) og.appendChild(makeOpt(i, r));
+          sel.appendChild(og);
+        } else {
+          for (const [i, r] of items) sel.appendChild(makeOpt(i, r));
+        }
+      }
+      sel.style.display = "inline-block";
+      sel.addEventListener("change", () => {
+        const idx = parseInt(sel.value, 10);
+        if (!isNaN(idx) && idx >= 0 && idx < runs.length) {
+          saveCurrentFeedback();
+          showRun(idx);
+        }
+      });
+    }
+
     // ---- Show a run ----
     function showRun(index) {
       currentIndex = index;
@@ -721,6 +784,10 @@
       // Progress
       document.getElementById("progress").textContent =
         `${index + 1} of ${EMBEDDED_DATA.runs.length}`;
+
+      // Keep the jump selector in sync with the current run
+      const jumpSel = document.getElementById("run-jump");
+      if (jumpSel) jumpSel.value = String(index);
 
       // Prompt
       document.getElementById("prompt-text").textContent = run.prompt;
@@ -1208,8 +1275,9 @@
 
     // ---- Keyboard nav ----
     document.addEventListener("keydown", (e) => {
-      // Don't capture when typing in textarea
-      if (e.target.tagName === "TEXTAREA") return;
+      // Don't capture when typing in textarea, or focused on the jump select
+      // (arrows there should change the select, not also fire navigate)
+      if (e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
 
       if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
         e.preventDefault();
