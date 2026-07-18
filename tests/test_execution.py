@@ -118,6 +118,40 @@ class TestBenchmarkAggregator:
         assert len(benchmark.runs) == 2
         assert benchmark.run_summary["delta"]["pass_rate"] == "+1.00"
 
+    def test_real_model_from_transcript(self, tmp_path):
+        """从 transcript.jsonl 的 result event.modelUsage key 抓真实模型名。"""
+        from skill_eval.execution.benchmark import _real_model_from_transcript
+        rd = tmp_path / "run-1"; rd.mkdir()
+        (rd / "transcript.jsonl").write_text(
+            '{"type":"assistant","message":{"model":"x"}}\n'
+            '{"type":"result","modelUsage":{"glm-5.2[1m]":{"inputTokens":100}}}\n',
+            encoding="utf-8")
+        assert _real_model_from_transcript(rd) == "glm-5.2[1m]"
+        assert _real_model_from_transcript(tmp_path / "nope") == ""  # 无 transcript
+        rd2 = tmp_path / "run-2"; rd2.mkdir()
+        (rd2 / "transcript.jsonl").write_text('{"type":"assistant","message":{"model":"x"}}', encoding="utf-8")
+        assert _real_model_from_transcript(rd2) == ""  # 无 result event
+
+    def test_aggregate_fills_executor_model_from_transcript(self, tmp_path: Path):
+        """aggregate 从 transcript 抓真实模型名填 metadata.executor_model。
+        comparator/analyzer 同源复用(真实 run 验证,单测环境 comparison/analysis 跳过)。"""
+        iteration = tmp_path / "iteration-1"
+        iteration.mkdir(parents=True)
+        config_dir = iteration / "with_skill" / "run-1"
+        config_dir.mkdir(parents=True)
+        (config_dir / "outputs").mkdir()
+        (config_dir / "grading.json").write_text(json.dumps({
+            "expectations": [], "summary": {"passed": 1, "failed": 0, "total": 1, "pass_rate": 1.0},
+        }), encoding="utf-8")
+        (config_dir / "transcript.jsonl").write_text(
+            '{"type":"result","modelUsage":{"glm-5.2[1m]":{"inputTokens":100}}}',
+            encoding="utf-8")
+        agg = BenchmarkAggregator()
+        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+            benchmark = agg.aggregate(iteration, tmp_path)
+        assert benchmark.metadata.executor_model == "glm-5.2[1m]"
+
     def test_aggregate_dual_rate_delta(self, tmp_path: Path):
         """双率:grading summary 含 pass_rate_programmatic/_llm → run_summary + delta 双率。"""
         iteration = tmp_path / "iteration-1"

@@ -37,6 +37,32 @@ def calculate_stats(values: list[float]) -> StatsValue:
     )
 
 
+def _real_model_from_transcript(run_dir: Path) -> str:
+    """从 transcript.jsonl 的 result event.modelUsage key 抓真实模型名。
+
+    transcript.jsonl 是 cc stream-json 原文落盘,result event 顶层 modelUsage =
+    {真实模型名: {token 明细}};取第一个 key(常规单模型)。无 transcript / 无
+    result event / 解析失败 → ""。comparator/analyzer 走 call_claude(text 模式)
+    不落盘,故三模型字段都借 executor 抓的这个真名(三者同源:同一 CLI/env 解析)。
+    """
+    tp = run_dir / "transcript.jsonl"
+    if not tp.exists():
+        return ""
+    try:
+        for line in tp.read_text(encoding="utf-8").splitlines():
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("type") == "result":
+                mu = ev.get("modelUsage") or {}
+                if isinstance(mu, dict) and mu:
+                    return next(iter(mu))
+    except Exception:
+        pass
+    return ""
+
+
 class BenchmarkAggregator:
     def __init__(self, model: str | None = None, timeout: int = 120, enable_llm: bool = True):
         self.model = model
@@ -57,6 +83,7 @@ class BenchmarkAggregator:
         configs_data: dict[str, list[dict]] = {}
         anomalies: list[RunAnomaly] = []
         duration_map: dict[str, list[dict]] = {}
+        real_model = ""  # 从 transcript 抓的真实模型名(executor 落盘,三模型字段复用)
 
         for config_dir in sorted(iteration_dir.iterdir()):
             if not config_dir.is_dir():
@@ -73,6 +100,8 @@ class BenchmarkAggregator:
                 configs_data[config_name] = []
 
             for run_dir in run_dirs:
+                if not real_model:
+                    real_model = _real_model_from_transcript(run_dir)
                 run_number = int(run_dir.name.split("-")[1])
                 retry_count = 0
                 if "-retry-" in run_dir.name:
@@ -264,6 +293,7 @@ class BenchmarkAggregator:
             metadata=BenchmarkMetadata(
                 skill_name=name,
                 skill_path=str(skill_path),
+                executor_model=real_model or self.model or "",
                 timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 evals_run=eval_ids,
                 runs_per_configuration=self._guess_runs_per_config(runs),
@@ -286,7 +316,7 @@ class BenchmarkAggregator:
                     update={
                         "comparisons": comparisons,
                         "comparison_summary": ComparisonSummary.from_comparisons(comparisons, label_a, label_b),
-                        "metadata": main_benchmark.metadata.model_copy(update={"comparator_model": self.model or "default"}),
+                        "metadata": main_benchmark.metadata.model_copy(update={"comparator_model": real_model or self.model or "default"}),
                     }
                 )
         except Exception as exc:
@@ -302,7 +332,7 @@ class BenchmarkAggregator:
                 main_benchmark = main_benchmark.model_copy(
                     update={
                         "analysis": analysis_result,
-                        "metadata": main_benchmark.metadata.model_copy(update={"analyzer_model": self.model or "default"}),
+                        "metadata": main_benchmark.metadata.model_copy(update={"analyzer_model": real_model or self.model or "default"}),
                     }
                 )
         except Exception as exc:
