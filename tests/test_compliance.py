@@ -199,6 +199,44 @@ class TestInstructionExtractor:
         checks = ext.extract("")
         assert checks == []
 
+    def test_output_format_only_from_output_section(self):
+        """Bug B 回归:非'输出/格式'标题下的代码块不应被当成必须遵守的输出模板(否则 audit 假 FAIL)。"""
+        ext = InstructionExtractor()
+        body = (
+            "# Workflow\n\n"
+            "1. 读文件\n\n"
+            "## 命令示例\n\n"
+            "运行这个命令:\n\n"
+            "```bash\npython some_tool.py --flag value\n```\n\n"
+            "## 输出格式\n\n"
+            "结果写成这样:\n\n"
+            '```json\n{"code": "E-001", "level": "error"}\n```\n'
+        )
+        checks = ext._extract_output_format(body)
+        samples = [c.params.get("sample", "") for c in checks]
+        # 只"输出格式"section 的 json 块该被抽;"命令示例"的 bash 块绝不能进来
+        assert any("E-001" in s for s in samples), "输出格式 section 的代码块应被抽取"
+        assert not any("some_tool.py" in s for s in samples), "非输出 section 的代码块不应被当输出格式"
+
+    def test_output_format_block_with_hash_lines_not_split(self):
+        """输出模板代码块内含 # 行(markdown 示例/注释)时,不能被 _split_sections 的
+        fence-naive 切分误伤 → 整块归属到输出 heading 仍被抽取(回归保护)。"""
+        ext = InstructionExtractor()
+        body = (
+            "## 输出格式\n\n"
+            "changelog 写法:\n\n"
+            "```\n"
+            "## [未发布]\n"
+            "### 新增\n"
+            "- 新功能 A\n"
+            "```\n"
+        )
+        checks = ext._extract_output_format(body)
+        samples = [c.params.get("sample", "") for c in checks]
+        # 块内 ## [未发布] 是示例内容,不是 heading;整块应被抽到,且 sample 含块内文本
+        assert len(samples) == 1
+        assert "未发布" in samples[0]
+
 
 class TestInstructionExtractorChinese:
     """中文 SKILL.md 提取(P0-1:补中文关键词后,约束 / 工具 / 反捏造不再漏判)."""

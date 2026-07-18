@@ -83,6 +83,7 @@ SKILL_BODY = (
     "NEVER delete production data\n\n"
     "## 步骤一:分析问题\n"
     "1. Analyze the input format carefully\n\n"
+    "## 输出格式\n"
     "```\n"
     "EXPECTED_TOKEN\n"
     "```\n"

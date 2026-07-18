@@ -164,18 +164,42 @@ class InstructionExtractor:
         return checks
 
     def _extract_output_format(self, body: str) -> list[InstructionCheck]:
+        # Bug B 修复:只在"输出/格式/template/result"标题下抽代码块当输出模板,
+        # 否则 SKILL 里任意命令示例/JSON 片段都会被当"必须遵守的输出模板"→ audit 假 FAIL。
+        # fence-aware:代码块内含 # 行(markdown 示例/注释)不算 heading,整块归属到
+        # 它开 fence 时所处的 heading(不用 _split_sections——它 fence-naive 会把块切碎)。
+        # 取舍:宁可漏抽(输出格式没放在匹配标题下 → 少几条 output 检查)也别过抽(假 FAIL)。
         checks: list[InstructionCheck] = []
-        if "```" in body:
-            blocks = re.findall(r"```[\w]*\n(.*?)```", body, re.DOTALL)
-            for block in blocks[:3]:
-                checks.append(InstructionCheck(
-                    source=InstructionSource.OUTPUT_FORMAT,
-                    instruction_text=f"Output should follow template format",
-                    section="Format",
-                    priority=InstructionPriority.RECOMMENDED,
-                    check_method=CheckMethod.PATTERN_MATCH,
-                    params={"sample": block[:200]},
-                ))
+        OUTPUT_HEADINGS = ("输出", "格式", "template", "result", "output", "format")
+        current_heading = "Root"
+        in_fence = False
+        fence_heading = "Root"
+        block_lines: list[str] = []
+        per_section_count: dict[str, int] = {}
+        for line in body.split("\n"):
+            if line.lstrip().startswith("```"):
+                if not in_fence:
+                    in_fence = True
+                    fence_heading = current_heading
+                    block_lines = []
+                else:
+                    in_fence = False
+                    h = fence_heading.lower()
+                    if any(kw in h for kw in OUTPUT_HEADINGS) and per_section_count.get(fence_heading, 0) < 3:
+                        per_section_count[fence_heading] = per_section_count.get(fence_heading, 0) + 1
+                        checks.append(InstructionCheck(
+                            source=InstructionSource.OUTPUT_FORMAT,
+                            instruction_text="Output should follow template format",
+                            section=fence_heading,
+                            priority=InstructionPriority.RECOMMENDED,
+                            check_method=CheckMethod.PATTERN_MATCH,
+                            params={"sample": "\n".join(block_lines)[:200]},
+                        ))
+                continue
+            if in_fence:
+                block_lines.append(line)
+            elif line.startswith("#"):
+                current_heading = line.lstrip("#").strip()
         return checks
 
     def _extract_reference_usage(self, body: str) -> list[InstructionCheck]:

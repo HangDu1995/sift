@@ -31,6 +31,7 @@ BODY = (
     "use Bash\n\n"
     "NEVER delete production data\n\n"
     "1. Analyze the input format carefully\n\n"
+    "## 输出格式\n\n"
     "```\nEXPECTED_TOKEN\n```\n"
 )
 
