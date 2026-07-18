@@ -591,6 +591,38 @@ class TestReportGeneratorStatic:
         assert "模型" in html
         assert "执行 / 对比 / 分析 同源" in html   # 三值同 → 合卡标同源(源码字面锚点)
 
+    def test_generate_html_passrate_chart_is_dual_rate(self, tmp_path):
+        """通过率柱状图改双率 grouped bar(混合 + 客观 + 主观三 dataset,与表格双率行对齐)。
+
+        旧柱状图只画混合 pass_rate 单柱,是双率优化主线的漏网之鱼(顶部 Δ / 表格 / 校准结果轴
+        都已双率)。改后每 config 三柱;某 config 无 programmatic/llm 时该 dataset 不画(诚实缺值)。
+
+        viewer 客户端渲染,pytest 只验模板 JS 源码字面(与模型卡/执行规模卡测试同口径)。
+        RED 锚点:旧 chart dataset label 只有「通过率 (%)」,无「程序化(客观)」/「LLM(主观)」。
+        """
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        benchmark = {
+            "metadata": {"skill_name": "x"},
+            "runs": [],
+            "run_summary": {
+                "with_skill": {
+                    "pass_rate": {"mean": 0.9, "stddev": 0.1, "min": 0.8, "max": 1.0},
+                    "pass_rate_programmatic": {"mean": 1.0, "stddev": 0.0, "min": 1.0, "max": 1.0},
+                    "pass_rate_llm": {"mean": 0.8, "stddev": 0.2, "min": 0.6, "max": 1.0},
+                },
+                "without_skill": {
+                    "pass_rate": {"mean": 0.4, "stddev": 0.1, "min": 0.3, "max": 0.5},
+                    "pass_rate_programmatic": {"mean": 0.5, "stddev": 0.0, "min": 0.5, "max": 0.5},
+                    "pass_rate_llm": {"mean": 0.3, "stddev": 0.2, "min": 0.1, "max": 0.5},
+                },
+            },
+        }
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        assert "程序化(客观)" in html   # 新 chart dataset label(旧 chart 无)
+        assert "LLM(主观)" in html      # 新 chart dataset label(旧 chart 无)
+
     def test_generate_html_execution_scale_uses_run_count(self, tmp_path):
         """执行规模卡:总数用 data.runs.length(A/B 两侧已计入),分解 侧×题×runs/题。
 

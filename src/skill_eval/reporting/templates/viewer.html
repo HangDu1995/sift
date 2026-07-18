@@ -1633,27 +1633,26 @@
 
       container.innerHTML = html;
 
-      // ── Chart.js pass rate bar chart ──
+      // ── Chart.js pass rate bar chart(grouped bar:混合 + 客观 + 主观,与表格双率行对齐)──
       if (configA && configB) {
         setTimeout(() => {
           const canvas = document.getElementById("passRateChart");
           if (!canvas) return;
-          const prA = a.pass_rate ? a.pass_rate.mean * 100 : 0;
-          const prB = b.pass_rate ? b.pass_rate.mean * 100 : 0;
+          const labels = [configA.replace(/_/g, " "), configB.replace(/_/g, " ")];
+          // 每 config 三率(混合/客观/主观);某 config 无该类 expectation → null(该柱不画)
+          const mix = [a.pass_rate, b.pass_rate].map(s => s ? s.mean * 100 : null);
+          const prog = [a.pass_rate_programmatic, b.pass_rate_programmatic].map(s => s ? s.mean * 100 : null);
+          const llm = [a.pass_rate_llm, b.pass_rate_llm].map(s => s ? s.mean * 100 : null);
+          const datasets = [];
+          if (mix.some(v => v != null))  datasets.push({ label: "混合",         data: mix,  backgroundColor: "#8a8a8a", borderRadius: 4 });
+          if (prog.some(v => v != null)) datasets.push({ label: "程序化(客观)", data: prog, backgroundColor: "#788c5d", borderRadius: 4 });
+          if (llm.some(v => v != null))  datasets.push({ label: "LLM(主观)",    data: llm,  backgroundColor: "#c89b5a", borderRadius: 4 });
           new Chart(canvas, {
             type: "bar",
-            data: {
-              labels: [configA.replace(/_/g, " "), configB.replace(/_/g, " ")],
-              datasets: [{
-                label: "通过率 (%)",
-                data: [prA, prB],
-                backgroundColor: [prA >= prB ? "#788c5d" : "#c44", prB >= prA ? "#788c5d" : "#c44"],
-                borderRadius: 4,
-              }]
-            },
+            data: { labels: labels, datasets: datasets },
             options: {
               responsive: true,
-              plugins: { legend: { display: false } },
+              plugins: { legend: { display: true } },
               scales: { y: { beginAtZero: true, max: 100, ticks: { callback: v => v + "%" } } }
             }
           });
