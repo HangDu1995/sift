@@ -639,6 +639,20 @@ class TestReportGeneratorStatic:
         html = gen.generate_html(workspace, benchmark)
         assert 'mkCard("盲评胜率"' in html   # 顶部新卡(旧无;section 的「盲评胜率」不走 mkCard)
 
+    def test_generate_html_dashboard_has_vs_previous_card(self, tmp_path):
+        """Task 3:顶部仪表盘加「vs 上次」纵向 delta 卡(跨 run 同 side 对比,与 A/B Δ 横向并列)。
+
+        viewer 客户端渲染,pytest 验模板 JS 源码字面(运行时是否显由 previous_delta 数据决定)。
+        RED 锚点:旧模板无 data.previous_delta / vs 上次 卡渲染代码。
+        """
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        benchmark = {"metadata": {"skill_name": "x"}, "runs": [], "run_summary": {}}
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        assert "data.previous_delta" in html       # 数据流接入 + 卡片条件
+        assert ">vs 上次</div>" in html             # 卡片标题渲染代码(模板字面)
+
     def test_generate_html_execution_scale_uses_run_count(self, tmp_path):
         """执行规模卡:总数用 data.runs.length(A/B 两侧已计入),分解 侧×题×runs/题。
 
@@ -818,3 +832,118 @@ class TestComplianceAggregate:
         agg = _aggregate_compliance(runs)
         assert len(agg) == 1
         assert agg[0]["summary"]["pass"] == 1 and agg[0]["summary"]["total"] == 1
+
+
+class TestPreviousDelta:
+    """Task 3:_compute_previous_delta 算 current vs previous/benchmark.json 的聚合纵向 delta。
+
+    双率(客观 programmatic / 主观 llm)+ 盲评胜率 + 样本数,预算成百分比/百分点(模板直接插)。
+    """
+
+    @staticmethod
+    def _extract_embedded_data(html: str) -> dict:
+        """从 generate_html 产出里抽 EMBEDDED_DATA(raw_decode 正确处理嵌套大括号,regex 贪婪会吞后续 JS)。"""
+        import json
+        prefix = "const EMBEDDED_DATA = "
+        idx = html.index(prefix) + len(prefix)
+        obj, _end = json.JSONDecoder().raw_decode(html, idx)
+        return obj
+
+    @staticmethod
+    def _bench(prog_a, llm_a, prog_b=None, llm_b=None, win=None, runs=3):
+        """造一个 benchmark:with/without 两侧(+ 可选盲评 + 样本数)。None = 该率缺失。"""
+        def side(p, l):
+            return {
+                "pass_rate": {"mean": (p or l or 0)},
+                "pass_rate_programmatic": {"mean": p} if p is not None else None,
+                "pass_rate_llm": {"mean": l} if l is not None else None,
+            }
+        run_summary = {"with_skill": side(prog_a, llm_a)}
+        if prog_b is not None or llm_b is not None:
+            run_summary["without_skill"] = side(prog_b, llm_b)
+        bench = {"run_summary": run_summary, "metadata": {"runs_per_configuration": runs}}
+        if win is not None:
+            bench["comparison_summary"] = {"win_rate": win}
+        return bench
+
+    def test_none_when_no_previous(self):
+        from skill_eval.reporting.viewer import _compute_previous_delta
+        assert _compute_previous_delta(self._bench(0.8, 0.7), None) is None
+
+    def test_none_when_previous_has_no_run_summary(self):
+        from skill_eval.reporting.viewer import _compute_previous_delta
+        assert _compute_previous_delta(self._bench(0.8, 0.7), {"metadata": {}}) is None
+
+    def test_dual_rate_delta_per_side(self):
+        """两侧双率都算出 cur/prev/d(百分点);d = (cur - prev)*100 四舍五入。"""
+        from skill_eval.reporting.viewer import _compute_previous_delta
+        cur = self._bench(0.78, 0.80, 0.40, 0.50, win=0.65, runs=6)
+        prev = self._bench(0.72, 0.85, 0.40, 0.50, win=0.70, runs=3)
+        d = _compute_previous_delta(cur, prev)
+        assert d is not None
+        with_s = next(s for s in d["sides"] if s["label"] == "with_skill")
+        assert with_s["cur_prog"] == 78 and with_s["prev_prog"] == 72 and with_s["d_prog"] == 6
+        assert with_s["cur_llm"] == 80 and with_s["prev_llm"] == 85 and with_s["d_llm"] == -5
+        assert d["cur_win"] == 65 and d["prev_win"] == 70 and d["d_win"] == -5
+        assert d["cur_runs"] == 6 and d["prev_runs"] == 3, "样本数必须带上(3-vs-6 要提醒)"
+
+    def test_missing_rate_yields_none_delta(self):
+        """某率缺失(纯主观题 programmatic=None)→ cur/prev/d 该率为 None,不报假 0。"""
+        from skill_eval.reporting.viewer import _compute_previous_delta
+        cur = self._bench(None, 0.80)   # with 侧纯主观
+        prev = self._bench(None, 0.75)
+        d = _compute_previous_delta(cur, prev)
+        with_s = d["sides"][0]
+        assert with_s["cur_prog"] is None and with_s["d_prog"] is None
+        assert with_s["cur_llm"] == 80 and with_s["prev_llm"] == 75 and with_s["d_llm"] == 5
+
+    def test_side_missing_in_previous(self):
+        """current 有该 side、previous 没有(v1/v2 换 label 等)→ prev 率 None、d None。"""
+        from skill_eval.reporting.viewer import _compute_previous_delta
+        cur = self._bench(0.78, 0.80)
+        prev_bench = {"run_summary": {"other_side": {"pass_rate_programmatic": {"mean": 0.5}}}, "metadata": {}}
+        d = _compute_previous_delta(cur, prev_bench)
+        with_s = d["sides"][0]
+        assert with_s["label"] == "with_skill"
+        assert with_s["prev_prog"] is None and with_s["d_prog"] is None
+        assert with_s["cur_prog"] == 78  # current 侧仍有
+
+    def test_no_win_rate_yields_none(self):
+        """无比评(comparison_summary 缺)→ 盲评 delta 全 None。"""
+        from skill_eval.reporting.viewer import _compute_previous_delta
+        cur = self._bench(0.8, 0.7)
+        prev = self._bench(0.7, 0.7)
+        d = _compute_previous_delta(cur, prev)
+        assert d["cur_win"] is None and d["prev_win"] is None and d["d_win"] is None
+
+    def test_generate_html_embeds_previous_delta_from_previous_benchmark(self, tmp_path):
+        """端到端 wiring:workspace/previous/benchmark.json 在盘上 → generate_html 读它、
+        算 previous_delta、嵌进 EMBEDDED_DATA(防漏接 _load_previous_benchmark 或 data key 写错)。"""
+        workspace = tmp_path / "out"
+        workspace.mkdir()
+        (workspace / "previous").mkdir()
+        (workspace / "previous" / "benchmark.json").write_text(json.dumps({
+            "run_summary": {"with_skill": {"pass_rate_programmatic": {"mean": 0.72}, "pass_rate_llm": {"mean": 0.85}}},
+            "metadata": {"runs_per_configuration": 3},
+        }), encoding="utf-8")
+        current = {
+            "metadata": {"skill_name": "x", "runs_per_configuration": 6},
+            "runs": [],
+            "run_summary": {"with_skill": {"pass_rate_programmatic": {"mean": 0.78}, "pass_rate_llm": {"mean": 0.80}}},
+        }
+        html = ReportGenerator().generate_html(workspace, current)
+        data = self._extract_embedded_data(html)
+        pd = data["previous_delta"]
+        assert pd is not None, "previous/benchmark.json 在盘但 previous_delta 为 null → _load_previous_benchmark 没接上"
+        assert pd["cur_runs"] == 6 and pd["prev_runs"] == 3
+        with_s = pd["sides"][0]
+        assert with_s["cur_prog"] == 78 and with_s["prev_prog"] == 72 and with_s["d_prog"] == 6
+
+    def test_generate_html_previous_delta_null_when_no_previous(self, tmp_path):
+        """无 previous/ → previous_delta 为 null(模板不显卡,不是假数据)。"""
+        workspace = tmp_path / "out"
+        workspace.mkdir()
+        current = {"metadata": {"skill_name": "x"}, "runs": [], "run_summary": {"with_skill": {"pass_rate_programmatic": {"mean": 0.8}}}}
+        html = ReportGenerator().generate_html(workspace, current)
+        data = self._extract_embedded_data(html)
+        assert data["previous_delta"] is None

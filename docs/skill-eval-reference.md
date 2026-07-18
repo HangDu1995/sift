@@ -648,7 +648,8 @@ skill-eval batch-report batch-workspace/ --open
 | 文件 | 内容 |
 |------|------|
 | `benchmark.json` | 聚合结果（双率 delta + 盲比较 comparison_summary） |
-| `report.html` | 自包含 HTML 报告（读 gate.json 显门禁徽章）；run 末尾自动产（也可 `report` 命令重生成 / 带 `--previous` 基线对照） |
+| `report.html` | 自包含 HTML 报告（读 gate.json 显门禁徽章 + previous/benchmark.json 显「vs 上次」纵向 delta 卡）；run 末尾自动产（也可 `report` 命令重生成 / 带 `--previous` 基线对照） |
+| `previous/` | 重跑归档：fresh 重跑时把上一次完整 run 树整体 MOVE 到此（单槽覆盖）。含旧 `benchmark.json`（聚合纵向 delta 数据源）+ 旧 outputs/（report「上次输出」文件级面板）。仅 fresh 产生；accumulate/resume 不产。见下「重跑归档」 |
 | `gate.json` | `gate` 命令产出（非 run 产出）；判决 + 两轴明细 |
 | `scorecard.json` | run 末尾自动产（静态评分卡；也可 `analyze -o` 单独产） |
 | `vet-report.json` | run 末尾自动产（原生安全扫描；也可 `vet -o` 单独产） |
@@ -657,6 +658,21 @@ skill-eval batch-report batch-workspace/ --open
 | `with_skill/eval-<id>/run-1/calibration.json` | 结果×过程 coherence 判决（5 态 verdict；仅 with_skill 产） |
 | `with_skill/eval-<id>/run-1/run_debug.json` | 完整回复 + tool_calls + timing |
 | `with_skill/eval-<id>/run-1/timing.json` | 执行耗时和 token 统计 |
+
+#### 重跑归档（resume / accumulate / fresh）
+
+`run` 开始时按 `output/benchmark.json` 是否存在 + 现有 slot 的 cache_key 是否仍匹配 + `--runs` 是否调大，判三种行为：
+
+| 情况 | `--runs` vs 已有 | 行为 | previous/ |
+|---|---|---|---|
+| 上次没跑完（`benchmark.json` 不在） | 任意 | **resume**：cache 续跑已完成的 slot，补跑剩下的 | 不产 |
+| 上次跑完 + inputs 没改 | 调大 | **accumulate**：旧 slot cache 复用 + 补新 run 号，聚合算全部 | 不产 |
+| 上次跑完 + inputs 改了（skill/代码/eval/model） | 任意 | **fresh**：旧树 MOVE 到 `previous/` + 全部 fresh 重跑 | ✅ 产生 |
+| 上次跑完 + inputs 没改 | 同/变小 | **fresh**：MOVE 旧树 + fresh 重跑（看复现性 / 主观侧方差） | ✅ 产生 |
+
+fresh 用 **MOVE**（非 copy）：清空原位 → 全 slot cache miss → 必然 fresh 重跑；同时旧树进 `previous/` 供对比。重跑要看的就是方差（cc 非确定性，主观侧有真方差），copy 反而会让 cache skip 出"和上次一模一样"的无意义归档。accumulate 的"复用旧"靠 cache_key 匹配自然达成（不 MOVE → grading.json 在位 → skip）。
+
+report 读 `previous/benchmark.json` 算「vs 上次」聚合 delta（双率 + 盲评 + 样本数）；样本数不同（如 6 vs 上次 3 runs）时显式标出提醒可比性。文件级「上次输出」面板只对 previous 里也存在的 run 显示，本次新增的 run 自然无对照（隐藏）。
 
 ---
 

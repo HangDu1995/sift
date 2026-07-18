@@ -294,6 +294,70 @@ def _aggregate_compliance(runs: list[dict]) -> list[dict]:
     return out
 
 
+def _load_previous_benchmark(workspace: Path) -> dict | None:
+    """读 workspace/previous/benchmark.json(run 端 fresh 重跑时 MOVE 进去的旧聚合)。
+    与 load_previous_iteration(读 run 树,供文件级面板)互补:这里读的是聚合数字,供「vs 上次」纵向 delta。"""
+    path = workspace / "previous" / "benchmark.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return None
+
+
+def _pct(rate) -> int | None:
+    """率(0-1 fraction)→ 百分比整数;None 透传(指标缺失)。"""
+    return None if rate is None else round(rate * 100)
+
+
+def _pp(cur_rate, prev_rate) -> int | None:
+    """两率之差 → 百分点(cur - prev)*100 四舍五入;任一缺失 → None。"""
+    if cur_rate is None or prev_rate is None:
+        return None
+    return round((cur_rate - prev_rate) * 100)
+
+
+def _compute_previous_delta(current: dict | None, previous: dict | None) -> dict | None:
+    """current vs previous benchmark 的聚合纵向 delta(Task 3「vs 上次」卡的数据)。
+
+    预算成百分比/百分点(模板直接插,免 JS 算术)。双率(客观 programmatic / 主观 llm,
+    与 dashboard Δ 卡同源)+ 盲评胜率 + 样本数(不同样本数时模板显式标出,提醒可比性)。
+    None / 缺字段 → 该指标省略(不报假 0)。无 run_summary 可比 → 整体返 None(模板不显卡)。"""
+    if not isinstance(current, dict) or not isinstance(previous, dict):
+        return None
+    cur_summary = current.get("run_summary") or {}
+    prev_summary = previous.get("run_summary") or {}
+    if not cur_summary or not prev_summary:
+        return None
+
+    def _rates(summary, side):
+        s = summary.get(side) or {}
+        prog = s.get("pass_rate_programmatic") or {}
+        llm = s.get("pass_rate_llm") or {}
+        return prog.get("mean"), llm.get("mean")
+
+    sides = []
+    for side in [k for k in cur_summary if k != "delta"]:
+        cur_prog, cur_llm = _rates(cur_summary, side)
+        prev_prog, prev_llm = _rates(prev_summary, side) if side in prev_summary else (None, None)
+        sides.append({
+            "label": side,
+            "cur_prog": _pct(cur_prog), "prev_prog": _pct(prev_prog), "d_prog": _pp(cur_prog, prev_prog),
+            "cur_llm": _pct(cur_llm), "prev_llm": _pct(prev_llm), "d_llm": _pp(cur_llm, prev_llm),
+        })
+
+    cur_wr = (current.get("comparison_summary") or {}).get("win_rate")
+    prev_wr = (previous.get("comparison_summary") or {}).get("win_rate")
+
+    return {
+        "sides": sides,
+        "cur_win": _pct(cur_wr), "prev_win": _pct(prev_wr), "d_win": _pp(cur_wr, prev_wr),
+        "cur_runs": (current.get("metadata") or {}).get("runs_per_configuration"),
+        "prev_runs": (previous.get("metadata") or {}).get("runs_per_configuration"),
+    }
+
+
 class ReportGenerator:
     def __init__(self):
         self.template_dir = Path(__file__).parent / "templates"
@@ -336,6 +400,7 @@ class ReportGenerator:
             "compliance_aggregate": _aggregate_compliance(runs),
             "previous": previous,
             "previous_outputs": prev_outputs,
+            "previous_delta": _compute_previous_delta(benchmark, _load_previous_benchmark(workspace)),
             "benchmark": benchmark,
             "scorecard": scorecard,
             "vet_report": _load_vet_report(workspace),

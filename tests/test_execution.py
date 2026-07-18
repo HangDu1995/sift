@@ -1383,3 +1383,122 @@ class TestProgressCallbackWiring:
         assert captured["grading"] is g, "grading 必须原样转发,不能错位成 run_duration"
         assert captured["completed"] == 1 and captured["total"] == 2
         assert captured["run_duration"] == 5.0 and captured["phase"] == "executing"
+
+
+class TestRerunClassification:
+    """Task 3:重跑归档分类(resume/accumulate/fresh)+ archive_previous 单槽 MOVE。
+
+    决策表(见与用户敲定):
+    - benchmark.json 不在 → resume(cache 续跑,不动)
+    - benchmark.json 在 + inputs 没改 + runs 调大 → accumulate(复用旧 slot + 补 run 号,不归档)
+    - benchmark.json 在 + inputs 改了 或 runs 没调大 → fresh(MOVE 旧树到 previous/ + fresh 重跑)
+    """
+
+    @staticmethod
+    def _slot(parent: Path, config_name: str, eval_id: int, run_num: int, cache_key: str):
+        d = parent / config_name / f"eval-{eval_id}" / f"run-{run_num}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "outputs").mkdir(exist_ok=True)
+        (d / "grading.json").write_text(json.dumps({
+            "expectations": [],
+            "summary": {"passed": 0, "failed": 0, "total": 0, "pass_rate": 0.0},
+            "cache_key": cache_key,
+        }), encoding="utf-8")
+
+    @staticmethod
+    def _inputs(tmp_path: Path):
+        """BASE 侧(inject_skill=None → cache_key 不含 skill_body,简化测试)。"""
+        from skill_eval.models import EvalCase, RunConfig, ScoringConfig
+        from skill_eval.execution.runner import _compute_cache_key
+        ec = EvalCase(id=1, prompt="do it")
+        sides = [("without_skill", None, "without")]
+        config = RunConfig(model="m1", max_turns=10, timeout_seconds=120)
+        scoring = ScoringConfig()
+        key = _compute_cache_key(ec, None, config, scoring)
+        return ec, sides, config, scoring, key
+
+    def test_no_benchmark_means_resume(self, tmp_path: Path):
+        """benchmark.json 不在(中断/首次)→ resume,即便有零散 slot 也走续跑。"""
+        from skill_eval.execution.runner import classify_rerun
+        ec, sides, config, scoring, key = self._inputs(tmp_path)
+        self._slot(tmp_path, "without_skill", 1, 1, key)  # 有 slot 但无 benchmark = 中断态
+        assert classify_rerun(tmp_path, [ec], sides, 1, config, scoring) == "resume"
+
+    def test_same_runs_inputs_unchanged_means_fresh(self, tmp_path: Path):
+        """啥也没改、同 runs 重跑 → fresh(用户要看方差,MOVE + fresh)。"""
+        from skill_eval.execution.runner import classify_rerun
+        ec, sides, config, scoring, key = self._inputs(tmp_path)
+        self._slot(tmp_path, "without_skill", 1, 1, key)
+        (tmp_path / "benchmark.json").write_text("{}", encoding="utf-8")
+        assert classify_rerun(tmp_path, [ec], sides, 1, config, scoring) == "fresh"
+
+    def test_more_runs_inputs_unchanged_means_accumulate(self, tmp_path: Path):
+        """inputs 没改 + runs 调大 → accumulate(复用旧 slot + 补 run 号,不归档)。"""
+        from skill_eval.execution.runner import classify_rerun
+        ec, sides, config, scoring, key = self._inputs(tmp_path)
+        self._slot(tmp_path, "without_skill", 1, 1, key)  # 旧 run-1
+        (tmp_path / "benchmark.json").write_text("{}", encoding="utf-8")
+        assert classify_rerun(tmp_path, [ec], sides, 3, config, scoring) == "accumulate"
+
+    def test_inputs_changed_means_fresh_even_if_more_runs(self, tmp_path: Path):
+        """inputs 改了(cache_key 不匹配)→ 即使 runs 调大也 fresh(旧样本是旧输入产物,不能 accumulate)。"""
+        from skill_eval.execution.runner import classify_rerun
+        ec, sides, config, scoring, _key = self._inputs(tmp_path)
+        self._slot(tmp_path, "without_skill", 1, 1, "STALE_KEY_FROM_OLD_INPUT")
+        (tmp_path / "benchmark.json").write_text("{}", encoding="utf-8")
+        assert classify_rerun(tmp_path, [ec], sides, 3, config, scoring) == "fresh"
+
+    def test_side_no_longer_present_means_fresh(self, tmp_path: Path):
+        """旧 config 名不在当前 sides(v1/v2 换了等)→ 结构变 → fresh。"""
+        from skill_eval.execution.runner import classify_rerun
+        ec, sides, config, scoring, _key = self._inputs(tmp_path)
+        # 旧 run 落在 with_skill(当前 sides 只有 without_skill)
+        self._slot(tmp_path, "with_skill", 1, 1, "whatever")
+        (tmp_path / "benchmark.json").write_text("{}", encoding="utf-8")
+        assert classify_rerun(tmp_path, [ec], sides, 3, config, scoring) == "fresh"
+
+
+class TestArchivePrevious:
+    """archive_previous:把当前 run 树整体 MOVE 到 previous/(单槽覆盖)。"""
+
+    def test_moves_whole_tree_to_previous(self, tmp_path: Path):
+        from skill_eval.execution.runner import archive_previous
+        # 造一棵完整旧树:config 目录 + 顶层 artifacts
+        (tmp_path / "without_skill" / "eval-1" / "run-1" / "outputs").mkdir(parents=True)
+        (tmp_path / "without_skill" / "eval-1" / "run-1" / "grading.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "benchmark.json").write_text('{"old": true}', encoding="utf-8")
+        (tmp_path / "scorecard.json").write_text("{}", encoding="utf-8")
+
+        prev = archive_previous(tmp_path)
+
+        assert prev == tmp_path / "previous"
+        # 顶层散文件 + config 目录都进 previous/
+        assert (prev / "benchmark.json").read_text() == '{"old": true}'
+        assert (prev / "scorecard.json").exists()
+        assert (prev / "without_skill" / "eval-1" / "run-1" / "grading.json").exists()
+        # output 顶层已被清空(只剩 previous/)
+        assert [p.name for p in tmp_path.iterdir()] == ["previous"]
+
+    def test_single_slot_overwrites_old_previous(self, tmp_path: Path):
+        """连续两次 fresh 重跑:第二次归档覆盖第一次的 previous/(单槽,不堆积)。"""
+        from skill_eval.execution.runner import archive_previous
+        # 第一次归档留下的 previous/
+        (tmp_path / "previous" / "without_skill" / "eval-1" / "run-1").mkdir(parents=True)
+        (tmp_path / "previous" / "benchmark.json").write_text('{"first": true}', encoding="utf-8")
+        # 第二次的新树
+        (tmp_path / "without_skill" / "eval-2" / "run-1").mkdir(parents=True)
+        (tmp_path / "benchmark.json").write_text('{"second": true}', encoding="utf-8")
+
+        archive_previous(tmp_path)
+
+        prev = tmp_path / "previous"
+        assert (prev / "benchmark.json").read_text() == '{"second": true}'  # 覆盖,非第一次
+        assert (prev / "without_skill" / "eval-2").exists()
+        assert not (prev / "without_skill" / "eval-1").exists(), "旧 previous/ 必须整体清掉,不能混进新归档"
+
+    def test_empty_output_returns_none(self, tmp_path: Path):
+        """output 空无可移(或只剩 previous/)→ 返回 None,不动。"""
+        from skill_eval.execution.runner import archive_previous
+        (tmp_path / "previous").mkdir()  # 只剩 previous/(无他物)
+        assert archive_previous(tmp_path) is None
+        assert (tmp_path / "previous").exists()

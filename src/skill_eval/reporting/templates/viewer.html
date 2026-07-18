@@ -1160,6 +1160,39 @@
         html += mkCard("盲评胜率", wrPct, (compSummary.label_a || "with") + " · " + compSummary.a_wins + "胜/" + compSummary.b_wins + "负/" + compSummary.ties + "平" + wrFail, wrClr);
       }
 
+      // vs 上次(纵向 delta,Task 3):仅当 previous/benchmark.json 存在(run 端 fresh 重跑 MOVE 进去)
+      // 才显示。与上面 A/B Δ 卡区分:那是同次 run 两 side 之差(横向),这是同 side 上次 vs 本次(纵向)。
+      // 客观稳 / 主观漂同款哲学;样本数不同时显式标出(3 vs 6 runs)提醒可比性。
+      if (data.previous_delta) {
+        const pd = data.previous_delta;
+        const dClr = d => d == null ? "var(--text-muted)" : d > 0 ? "var(--green)" : d < 0 ? "var(--red)" : "var(--text-muted)";
+        const line = (cur, prev, d) => {
+          if (cur == null && prev == null) return null;
+          let out = cur == null ? "—" : cur + "%";
+          if (prev != null || d != null) {
+            out += " <span style='color:var(--text-muted);font-size:0.85em'>(上次 " + (prev == null ? "—" : prev + "%");
+            if (d != null) out += "<span style='color:" + dClr(d) + ";'> " + (d > 0 ? "+" : "") + d + "pp</span>";
+            out += ")</span>";
+          }
+          return out;
+        };
+        const rows = [];
+        for (const s of pd.sides) {
+          const prog = line(s.cur_prog, s.prev_prog, s.d_prog);
+          const llm = line(s.cur_llm, s.prev_llm, s.d_llm);
+          if (prog || llm) rows.push("<strong>" + escapeHtml(s.label) + "</strong> · 客观 " + (prog || "—") + " · 主观 " + (llm || "—"));
+        }
+        const win = line(pd.cur_win, pd.prev_win, pd.d_win);
+        if (win) rows.push("盲评 " + win);
+        const countNote = (pd.cur_runs != null && pd.prev_runs != null && pd.cur_runs !== pd.prev_runs)
+          ? pd.cur_runs + " vs 上次 " + pd.prev_runs + " runs" : "";
+        html += '<div style="flex:1;min-width:200px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;">'
+          + '<div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem;">vs 上次</div>'
+          + '<div style="font-size:0.8rem;line-height:1.7;">' + rows.join("<br>") + '</div>'
+          + (countNote ? '<div style="font-size:0.7rem;color:var(--accent);margin-top:0.4rem;">⚠ ' + countNote + ' · 均值可比但样本数不同</div>' : '')
+          + '</div>';
+      }
+
       // 执行规模:总数 = 实际聚合的 run 条数(data.runs.length,A/B 两侧已计入,免疫
       // evals_run 计数 bug);副标题分解 侧 × 题 × runs/题 解释结构。
       {

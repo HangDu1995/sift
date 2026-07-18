@@ -148,6 +148,122 @@ def _compute_cache_key(
     ).hexdigest()[:16]
 
 
+# ---------------------------------------------------------------------------
+# Task 3:重跑归档(resume / accumulate / fresh)
+#
+# run 开始时判归档行为,用 benchmark.json 是否存在 + 现有 slot 的 cache_key 是否仍匹配
+# + runs 是否调大,三信号区分(见 docs/skill-eval-analysis.md Task 3 决策表):
+#   resume     上次没跑完(benchmark.json 不在)→ cache 续跑,不动 output。
+#   accumulate 上次跑完 + inputs 没改 + runs 调大 → 不归档,旧 slot cache 复用 + 补新 run 号。
+#   fresh      上次跑完 + inputs 改了 或 runs 没调大 → MOVE 旧树到 previous/(单槽)+ fresh 重跑。
+# fresh 用 MOVE(非 copy):清空原位 → 全 slot cache miss → fresh execute;同时旧树进 previous/。
+# 重跑必须 fresh(用户要看方差/对比),copy 反而会让 cache skip 出"和上次一模一样"的无意义归档。
+# accumulate 的"复用旧"靠 cache_key 匹配自然达成(不 MOVE → grading.json 在位 → skip);本机制只负责"何时该归档"。
+# ---------------------------------------------------------------------------
+
+
+def _max_existing_run_number(iteration_dir: Path) -> int:
+    """扫 output_dir/<config>/eval-*/run-*/,返回最大 run 号(无则 0)。
+    兼容 run-N-retry-M(取 N);previous/ 跳过。"""
+    max_n = 0
+    for config_dir in iteration_dir.iterdir():
+        if not config_dir.is_dir() or config_dir.name == "previous":
+            continue
+        for run_dir in config_dir.glob("eval-*/run-*"):
+            name = run_dir.name  # "run-N" 或 "run-N-retry-M"
+            if name.startswith("run-"):
+                num_part = name[4:].split("-")[0]
+                try:
+                    max_n = max(max_n, int(num_part))
+                except ValueError:
+                    pass
+    return max_n
+
+
+def _existing_slots_all_cache_hit(
+    iteration_dir: Path,
+    evals: list[EvalCase],
+    sides: list,
+    config: RunConfig,
+    scoring_config: ScoringConfig,
+) -> bool:
+    """现有 slot 的 grading.json 是否**全部** cache_key 仍匹配(= inputs 没改)。
+
+    用于区分 accumulate(inputs 没改 → 旧 slot 可复用)vs fresh(改了 → 旧样本是旧输入产物,须重跑)。
+    任一现有 slot:缺失、坏文件、cache_key 不匹配、config 名不在当前 sides、eval 被删 → False(变了)。
+    无任何现有 slot → False(没证据说"没变",且 accumulate 还需 runs>existing 由调用方另判)。"""
+    inject_by_config = {name: inj for (name, inj, _label) in sides}
+    eval_by_id = {e.id: e for e in evals}
+    found_any = False
+    for config_dir in iteration_dir.iterdir():
+        if not config_dir.is_dir() or config_dir.name == "previous":
+            continue
+        config_name = config_dir.name
+        if config_name not in inject_by_config:
+            return False  # config 名消失(v1/v2 换了)→ 结构变
+        inject_skill = inject_by_config[config_name]
+        for grading_path in config_dir.glob("eval-*/run-*/grading.json"):
+            found_any = True
+            eval_dir_name = grading_path.parent.parent.name  # "eval-<id>"
+            try:
+                eval_id = int(eval_dir_name.split("-", 1)[1])
+            except (ValueError, IndexError):
+                return False
+            eval_case = eval_by_id.get(eval_id)
+            if eval_case is None:
+                return False  # eval 被删 → 结构变
+            try:
+                existing = GradingResult.model_validate(
+                    json.loads(grading_path.read_text(encoding="utf-8")))
+            except Exception:
+                return False  # 坏文件 → 当不匹配
+            current_key = _compute_cache_key(eval_case, inject_skill, config, scoring_config)
+            if existing.cache_key != current_key:
+                return False
+    return found_any
+
+
+def classify_rerun(
+    iteration_dir: Path,
+    evals: list[EvalCase],
+    sides: list,
+    runs_per_config: int,
+    config: RunConfig,
+    scoring_config: ScoringConfig,
+) -> str:
+    """run 开始时判归档行为:'resume' | 'accumulate' | 'fresh'。纯函数。
+
+    - benchmark.json 不在 → 'resume'(中断/首次,cache 续跑)。
+    - benchmark.json 在 + inputs 没改(现有 slot 全 cache_key 匹配)+ runs 调大 → 'accumulate'(复用旧 + 补 run 号)。
+    - 否则(benchmark.json 在,inputs 改了 或 runs 没调大)→ 'fresh'(MOVE 旧树到 previous/ + fresh 重跑)。
+    """
+    if not (iteration_dir / "benchmark.json").exists():
+        return "resume"
+    existing_max = _max_existing_run_number(iteration_dir)
+    inputs_unchanged = _existing_slots_all_cache_hit(
+        iteration_dir, evals, sides, config, scoring_config)
+    if inputs_unchanged and runs_per_config > existing_max:
+        return "accumulate"
+    return "fresh"
+
+
+def archive_previous(iteration_dir: Path) -> Path | None:
+    """把当前 run 树整体 MOVE 到 previous/(单槽:已存在则先清空再移)。fresh 重跑前调用。
+
+    顶层所有内容(config 目录 + benchmark/scorecard/gate/vet-report/report.html)一并进 previous/,
+    output 顶层被清空(只剩 previous/),供本次 fresh 重跑重建。返回 previous/ 路径;output 无可移(空/只剩 previous/)→ None。"""
+    previous = iteration_dir / "previous"
+    to_move = [p for p in iteration_dir.iterdir() if p.name != "previous"]
+    if not to_move:
+        return None
+    if previous.exists():
+        shutil.rmtree(previous)
+    previous.mkdir(parents=True)
+    for item in to_move:
+        shutil.move(str(item), str(previous / item.name))
+    return previous
+
+
 class ABTestRunner:
     def __init__(
         self,
@@ -185,6 +301,14 @@ class ABTestRunner:
         # vet-report.json/report.html 同层(benchmark.aggregate 的 iterdir 已 is_dir 过滤)。
         iteration_dir = output_dir
         iteration_dir.mkdir(parents=True, exist_ok=True)
+
+        # Task 3:重跑归档。fresh → MOVE 旧树到 previous/(单槽);accumulate/resume 不动
+        # (accumulate 靠 cache_key 匹配自然复用旧 slot + 补新 run 号;resume 靠 cache 续跑)。
+        rerun_mode = classify_rerun(
+            iteration_dir, evals, sides, self.config.runs_per_config,
+            self.config, self.scoring_config)
+        if rerun_mode == "fresh":
+            archive_previous(iteration_dir)
 
         total_jobs = len(evals) * len(sides) * self.config.runs_per_config
         completed = [0]
