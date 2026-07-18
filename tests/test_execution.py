@@ -1213,6 +1213,28 @@ class TestCacheKey:
         assert _compute_cache_key(ec, skill, cfg, sc) != _compute_cache_key(ec, skill, cfg2, sc)
         assert _compute_cache_key(ec, skill, cfg, sc) != _compute_cache_key(ec, skill, cfg, sc2)
 
+    def test_code_version_hash_is_stable_nonempty(self):
+        """_code_version_hash 聚合 src/skill_eval 全部 .py,进程内稳定、16 hex、非空。"""
+        from skill_eval.execution.runner import _code_version_hash
+        h1 = _code_version_hash()
+        h2 = _code_version_hash()
+        assert h1 and len(h1) == 16 and h1 == h2, \
+            "code 版本 hash 应非空、16 hex、进程内稳定(只算一次)"
+
+    def test_code_version_change_invalidates(self, tmp_path: Path, monkeypatch):
+        """工具自身源码升级(修 runner/grader bug)→ cache_key 必须变。
+        否则默认目录重跑命中旧 grading.json、全 skip(2026-07-18 用户撞的 skip:18)。
+        进程内代码不变 → _code_version_hash 模块级缓存,monkeypatch 模拟「代码变了」。"""
+        from skill_eval.execution import runner as runner_mod
+        from skill_eval.execution.runner import _compute_cache_key
+        ec, cfg, sc = self._base()
+        skill = self._skill(tmp_path, "s", "# 步骤\n1. A")
+        monkeypatch.setattr(runner_mod, "_CODE_HASH_CACHE", "aaaa1111", raising=False)
+        k_old = _compute_cache_key(ec, skill, cfg, sc)
+        monkeypatch.setattr(runner_mod, "_CODE_HASH_CACHE", "bbbb2222", raising=False)
+        k_new = _compute_cache_key(ec, skill, cfg, sc)
+        assert k_old != k_new, "工具源码变了,cache_key 必须随之失效重跑,否则改了代码默认目录重跑仍复用旧结果"
+
 
 class TestResumeCacheKey:
     """续跑缓存键接入 skip 路径:cache_key 匹配→跳过、不匹配→重跑、老格式(无 key)→重跑。"""

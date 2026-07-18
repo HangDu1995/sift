@@ -70,6 +70,34 @@ def build_sides(
     return [(la, skill_path, la), (lb, skill_b, lb)]
 
 
+_CODE_HASH_CACHE: str | None = None
+
+
+def _code_version_hash() -> str:
+    """聚合 src/skill_eval 全部 .py 的内容 hash,作为工具自身代码版本。
+
+    cache_key 只追踪输入(skill/eval/model/config),不含工具代码 → 改了 runner/grader
+    bug 后、默认目录重跑仍命中旧 grading.json(skip:18,2026-07-18 用户撞的坑)。把代码
+    版本塞进 cache_key,工具升级也失效重跑。进程内代码不变 → 模块级缓存,只算一次(并发安全)。
+
+    刻意取**整个包**(含 report/viewer):保守换稳健——漏掉某文件的危险(stale 结果静默复用)
+    大于多算的危险(改了 report 也重跑)。report 工作通常靠 `report` 命令在既有数据上验证、
+    不重跑 `run`;真重跑时全量复核也符合「改了工具就应重验」的直觉。
+    """
+    global _CODE_HASH_CACHE
+    if _CODE_HASH_CACHE is not None:
+        return _CODE_HASH_CACHE
+    import hashlib
+    import skill_eval
+    pkg_dir = Path(skill_eval.__file__).parent
+    h = hashlib.sha256()
+    for py in sorted(pkg_dir.rglob("*.py")):
+        h.update(py.read_bytes())
+        h.update(b"\x00")  # 分隔符,防 A.py 末尾 + B.py 开头拼接碰撞
+    _CODE_HASH_CACHE = h.hexdigest()[:16]
+    return _CODE_HASH_CACHE
+
+
 def _compute_cache_key(
     eval_case: EvalCase,
     inject_skill: Path | None,
@@ -78,11 +106,11 @@ def _compute_cache_key(
 ) -> str:
     """内容感知缓存键:决定一个 run 槽的既有 grading.json 能否被续跑复用。
 
-    = sha256(SKILL 正文 + eval 全身 + model/配置)[:16]。改了 SKILL.md / eval / model /
-    scoring 开关 → key 变 → 续跑时与既有 grading.json.cache_key 不符 → 失效重跑。
-    BASE 侧(inject_skill=None)不含 skill_body → 改 SKILL.md 只重跑 with 侧(BASE 不被牵连)。
-    run_num 不进键(各 run 是同输入独立采样);skill 目录 source/reference 文件改动不检测(已知缺口)。
-    纯函数、无共享状态(并发安全)。
+    = sha256(SKILL 正文 + eval 全身 + model/配置 + **工具代码版本**)[:16]。改了 SKILL.md /
+    eval / model / scoring 开关 / **skill-eval 源码** → key 变 → 续跑时与既有 grading.json.cache_key
+    不符 → 失效重跑。BASE 侧(inject_skill=None)不含 skill_body → 改 SKILL.md 只重跑 with 侧(BASE
+    不被牵连)。run_num 不进键(各 run 是同输入独立采样);skill 目录 source/reference 文件改动不检测
+    (已知缺口)。纯函数、无跨调用共享状态(并发安全;code 版本走模块级缓存只算一次)。
     """
     import hashlib
     skill_body = ""
@@ -90,6 +118,7 @@ def _compute_cache_key(
         _, _, _, _, skill_body = parse_skill_md(inject_skill)
     payload = {
         "skill_body": skill_body,
+        "code_version": _code_version_hash(),
         "eval": {
             "prompt": eval_case.prompt,
             "expected_output": eval_case.expected_output,
