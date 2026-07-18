@@ -623,6 +623,34 @@ class TestReportGeneratorStatic:
         assert "程序化(客观)" in html   # 新 chart dataset label(旧 chart 无)
         assert "LLM(主观)" in html      # 新 chart dataset label(旧 chart 无)
 
+    def test_generate_html_dashboard_has_blind_winrate_card(self, tmp_path):
+        """顶部仪表盘加「盲评胜率」卡(主观主指标 win-rate),与 Δ 卡(客观 delta)并列 = §45 汇总层落地。
+
+        现状:主观主指标 win-rate 埋在下游「盲评对比」section,顶部 Δ 卡的「主观」用的是
+        pass_rate_llm(阅卷层、非主指标)。加一张「盲评胜率」卡到顶部汇总,主观主指标上提。
+        Δ 卡的 pass_rate_llm 行保留(用户决定,作「看方向」参考)。
+
+        viewer 客户端渲染,pytest 验模板 JS 源码字面。
+        RED 锚点:旧模板无 mkCard("盲评胜率"(「盲评胜率」字面已在盲评 section 1343,故用 mkCard 调用锚点)。
+        """
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        benchmark = {
+            "metadata": {"skill_name": "x"},
+            "runs": [],
+            "run_summary": {
+                "with_skill": {"pass_rate": {"mean": 0.9, "stddev": 0.1, "min": 0.8, "max": 1.0}},
+                "without_skill": {"pass_rate": {"mean": 0.4, "stddev": 0.1, "min": 0.3, "max": 0.5}},
+            },
+            "comparison_summary": {
+                "total": 9, "a_wins": 6, "b_wins": 3, "ties": 0, "failed": 0,
+                "valid": 9, "win_rate": 0.667, "label_a": "with", "label_b": "without",
+            },
+        }
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        assert 'mkCard("盲评胜率"' in html   # 顶部新卡(旧无;section 的「盲评胜率」不走 mkCard)
+
     def test_generate_html_execution_scale_uses_run_count(self, tmp_path):
         """执行规模卡:总数用 data.runs.length(A/B 两侧已计入),分解 侧×题×runs/题。
 

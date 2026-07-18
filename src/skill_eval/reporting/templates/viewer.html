@@ -1150,6 +1150,16 @@
         + '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;">客观稳 · 主观看方向</div>'
         + '</div>';
 
+      // 盲评胜率(主观主指标,§45 与客观 delta_programmatic 并列报出;紧挨 Δ 卡 = 两主指标并列)
+      if (compSummary) {
+        const wr = compSummary.win_rate;
+        const wrPct = wr != null ? (wr * 100).toFixed(0) + "%" : "—";
+        const wrClr = wr == null ? "var(--text-muted)"
+          : wr >= 0.6 ? "var(--green)" : wr >= 0.4 ? "var(--accent)" : "var(--red)";
+        const wrFail = compSummary.failed > 0 ? " · " + compSummary.failed + "失败" : "";
+        html += mkCard("盲评胜率", wrPct, (compSummary.label_a || "with") + " · " + compSummary.a_wins + "胜/" + compSummary.b_wins + "负/" + compSummary.ties + "平" + wrFail, wrClr);
+      }
+
       // 执行规模:总数 = 实际聚合的 run 条数(data.runs.length,A/B 两侧已计入,免疫
       // evals_run 计数 bug);副标题分解 侧 × 题 × runs/题 解释结构。
       {
