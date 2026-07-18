@@ -247,15 +247,7 @@ def load_previous_iteration(workspace: Path) -> dict | None:
     for name in ("previous", "previous_iteration"):
         prev_dir = workspace / name
         if prev_dir.is_dir():
-            feedback_path = prev_dir / "feedback.json"
-            feedback = None
-            if feedback_path.exists():
-                try:
-                    feedback = json.loads(feedback_path.read_text(encoding="utf-8"))
-                except Exception:
-                    pass
-            prev_runs = find_runs(prev_dir)
-            return {"feedback": feedback, "runs": prev_runs}
+            return {"runs": find_runs(prev_dir)}
     return None
 
 
@@ -330,13 +322,8 @@ class ReportGenerator:
         if previous is None:
             previous = load_previous_iteration(workspace)
 
-        prev_feedback: dict = {}
         prev_outputs: dict = {}
         if previous:
-            fb = previous.get("feedback") or {}
-            reviews = fb.get("reviews", [])
-            for r in reviews:
-                prev_feedback[r.get("run_id", "")] = r.get("feedback", "")
             for prev_run in previous.get("runs", []):
                 rid = prev_run.get("id", "")
                 po = prev_run.get("outputs")
@@ -348,7 +335,6 @@ class ReportGenerator:
             "runs": runs,
             "compliance_aggregate": _aggregate_compliance(runs),
             "previous": previous,
-            "previous_feedback": prev_feedback,
             "previous_outputs": prev_outputs,
             "benchmark": benchmark,
             "scorecard": scorecard,
@@ -370,21 +356,6 @@ class ReportGenerator:
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
-                if self.path == "/api/feedback":
-                    feedback_path = workspace / "feedback.json"
-                    if feedback_path.exists():
-                        data = feedback_path.read_text(encoding="utf-8")
-                        self.send_response(200)
-                        self.send_header("Content-Type", "application/json")
-                        self.end_headers()
-                        self.wfile.write(data.encode("utf-8"))
-                    else:
-                        self.send_response(200)
-                        self.send_header("Content-Type", "application/json")
-                        self.end_headers()
-                        self.wfile.write(b"{}")
-                    return
-
                 html = gen.generate_html(workspace, benchmark)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -392,14 +363,6 @@ class ReportGenerator:
                 self.wfile.write(html.encode("utf-8"))
 
             def do_POST(self):
-                if self.path == "/api/feedback":
-                    length = int(self.headers.get("Content-Length", 0))
-                    body = self.rfile.read(length)
-                    feedback_path = workspace / "feedback.json"
-                    feedback_path.write_bytes(body)
-                    self.send_response(200)
-                    self.end_headers()
-                    return
                 self.send_response(404)
                 self.end_headers()
 

@@ -78,7 +78,7 @@ def report(
         if prev_data is None:
             try:
                 prev_runs_data = json.loads(previous.read_text(encoding="utf-8"))
-                prev_data = {"feedback": None, "runs": prev_runs_data.get("runs", [])}
+                prev_data = {"runs": prev_runs_data.get("runs", [])}
             except Exception:
                 pass
 

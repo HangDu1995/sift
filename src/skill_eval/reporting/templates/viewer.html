@@ -230,49 +230,6 @@
       text-align: center;
     }
 
-    /* ---- Feedback ---- */
-    .prev-feedback {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 0.625rem 0.75rem;
-      margin-top: 0.75rem;
-      font-size: 0.8125rem;
-      color: var(--text-muted);
-      line-height: 1.5;
-    }
-    .prev-feedback-label {
-      font-size: 0.7rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      margin-bottom: 0.25rem;
-      color: var(--text-muted);
-    }
-    .feedback-textarea {
-      width: 100%;
-      min-height: 100px;
-      padding: 0.75rem;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      font-family: inherit;
-      font-size: 0.9375rem;
-      line-height: 1.5;
-      resize: vertical;
-      color: var(--text);
-    }
-    .feedback-textarea:focus {
-      outline: none;
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-    }
-    .feedback-status {
-      font-size: 0.75rem;
-      color: var(--text-muted);
-      margin-top: 0.5rem;
-      min-height: 1.1em;
-    }
-
     /* ---- Grades (collapsible) ---- */
     .grades-toggle {
       display: flex;
@@ -463,77 +420,6 @@
       opacity: 0.4;
       cursor: not-allowed;
     }
-    .done-btn {
-      font-family: 'Poppins', sans-serif;
-      padding: 0.5rem 1.5rem;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--surface);
-      color: var(--text);
-      cursor: pointer;
-      font-size: 0.875rem;
-      font-weight: 500;
-      transition: all 0.15s;
-    }
-    .done-btn:hover {
-      background: var(--bg);
-      border-color: var(--text-muted);
-    }
-    .done-btn.ready {
-      border: none;
-      background: var(--accent);
-      color: white;
-      font-weight: 600;
-    }
-    .done-btn.ready:hover {
-      background: var(--accent-hover);
-    }
-    /* ---- Done overlay ---- */
-    .done-overlay {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.5);
-      z-index: 100;
-      justify-content: center;
-      align-items: center;
-    }
-    .done-overlay.visible {
-      display: flex;
-    }
-    .done-card {
-      background: var(--surface);
-      border-radius: 12px;
-      padding: 2rem 3rem;
-      text-align: center;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-      max-width: 500px;
-    }
-    .done-card h2 {
-      font-size: 1.5rem;
-      margin-bottom: 0.5rem;
-    }
-    .done-card p {
-      color: var(--text-muted);
-      margin-bottom: 1.5rem;
-      line-height: 1.5;
-    }
-    .done-card .btn-row {
-      display: flex;
-      gap: 0.5rem;
-      justify-content: center;
-    }
-    .done-card button {
-      padding: 0.5rem 1.25rem;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--surface);
-      cursor: pointer;
-      font-size: 0.875rem;
-    }
-    .done-card button:hover {
-      background: var(--bg);
-    }
     /* ---- Toast ---- */
     .toast {
       position: fixed;
@@ -614,28 +500,10 @@
         </div>
         <div class="grades-content" id="grades-content"></div>
       </div>
-
-      <!-- Feedback -->
-      <div class="section">
-        <div class="section-header">你的反馈</div>
-        <div class="section-body">
-          <textarea
-            class="feedback-textarea"
-            id="feedback"
-            placeholder="你对这个输出有什么看法？有什么问题、建议或做得好的地方？"
-          ></textarea>
-          <div class="feedback-status" id="feedback-status"></div>
-          <div class="prev-feedback" id="prev-feedback" style="display:none;">
-            <div class="prev-feedback-label">上次反馈</div>
-            <div id="prev-feedback-text"></div>
-          </div>
-        </div>
-      </div>
     </div>
 
     <div class="nav" id="outputs-nav">
       <button class="nav-btn" id="prev-btn" onclick="navigate(-1)">&#8592; 上一个</button>
-      <button class="done-btn" id="done-btn" onclick="showDoneDialog()">提交所有评审</button>
       <button class="nav-btn" id="next-btn" onclick="navigate(1)">下一个 &#8594;</button>
     </div>
     </div><!-- end panel-outputs -->
@@ -649,17 +517,6 @@
     </div>
   </div>
 
-  <!-- Done overlay -->
-  <div class="done-overlay" id="done-overlay">
-    <div class="done-card">
-      <h2>评审完成</h2>
-      <p>你的反馈已保存。返回 Claude Code 会话并告诉 Claude 你已完成评审。</p>
-      <div class="btn-row">
-        <button onclick="closeDoneDialog()">确定</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Toast -->
   <div class="toast" id="toast"></div>
 
@@ -668,28 +525,10 @@
     /*__EMBEDDED_DATA__*/
 
     // ---- State ----
-    let feedbackMap = {};  // run_id -> feedback text
     let currentIndex = 0;
-    let visitedRuns = new Set();
 
     // ---- Init ----
     async function init() {
-      // Load saved feedback from server — but only if this isn't a fresh
-      // iteration (indicated by previous_feedback being present). When
-      // previous feedback exists, the feedback.json on disk is stale from
-      // the prior iteration and should not pre-fill the textareas.
-      const hasPrevious = Object.keys(EMBEDDED_DATA.previous_feedback || {}).length > 0
-        || Object.keys(EMBEDDED_DATA.previous_outputs || {}).length > 0;
-      if (!hasPrevious) {
-        try {
-          const resp = await fetch("/api/feedback");
-          const data = await resp.json();
-          if (data.reviews) {
-            for (const r of data.reviews) feedbackMap[r.run_id] = r.feedback;
-          }
-        } catch { /* first run, no feedback yet */ }
-      }
-
       document.getElementById("skill-name").textContent = EMBEDDED_DATA.skill_name;
       const gate = EMBEDDED_DATA.gate;
       if (gate && gate.decision) {
@@ -703,22 +542,12 @@
       }
       buildRunSelect();
       showRun(0);
-
-      // Wire up feedback auto-save
-      const textarea = document.getElementById("feedback");
-      let saveTimeout = null;
-      textarea.addEventListener("input", () => {
-        clearTimeout(saveTimeout);
-        document.getElementById("feedback-status").textContent = "";
-        saveTimeout = setTimeout(() => saveCurrentFeedback(), 800);
-      });
     }
 
     // ---- Navigation ----
     function navigate(delta) {
       const newIndex = currentIndex + delta;
       if (newIndex >= 0 && newIndex < EMBEDDED_DATA.runs.length) {
-        saveCurrentFeedback();
         showRun(newIndex);
       }
     }
@@ -770,7 +599,6 @@
       sel.addEventListener("change", () => {
         const idx = parseInt(sel.value, 10);
         if (!isNaN(idx) && idx >= 0 && idx < runs.length) {
-          saveCurrentFeedback();
           showRun(idx);
         }
       });
@@ -813,28 +641,7 @@
       // Grades
       renderGrades(run);
 
-      // Previous feedback
-      const prevFb = (EMBEDDED_DATA.previous_feedback || {})[run.id];
-      const prevEl = document.getElementById("prev-feedback");
-      if (prevFb) {
-        document.getElementById("prev-feedback-text").textContent = prevFb;
-        prevEl.style.display = "block";
-      } else {
-        prevEl.style.display = "none";
-      }
-
-      // Feedback
-      document.getElementById("feedback").value = feedbackMap[run.id] || "";
-      document.getElementById("feedback-status").textContent = "";
-
       updateNavButtons();
-
-      // Track visited runs and promote done button when all visited
-      visitedRuns.add(index);
-      const doneBtn = document.getElementById("done-btn");
-      if (visitedRuns.size >= EMBEDDED_DATA.runs.length) {
-        doneBtn.classList.add("ready");
-      }
 
       // Scroll main content to top
       document.querySelector(".main").scrollTop = 0;
@@ -1218,82 +1025,6 @@
       const arrow = document.getElementById("prev-outputs-arrow");
       content.classList.toggle("open");
       arrow.classList.toggle("open");
-    }
-
-    // ---- Feedback (saved to server -> feedback.json) ----
-    function saveCurrentFeedback() {
-      const run = EMBEDDED_DATA.runs[currentIndex];
-      const text = document.getElementById("feedback").value;
-
-      if (text.trim() === "") {
-        delete feedbackMap[run.id];
-      } else {
-        feedbackMap[run.id] = text;
-      }
-
-      // Build reviews array from map
-      const reviews = [];
-      for (const [run_id, feedback] of Object.entries(feedbackMap)) {
-        if (feedback.trim()) {
-          reviews.push({ run_id, feedback, timestamp: new Date().toISOString() });
-        }
-      }
-
-      fetch("/api/feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reviews, status: "in_progress" }),
-      }).then(() => {
-        document.getElementById("feedback-status").textContent = "已保存";
-      }).catch(() => {
-        // Static mode or server unavailable — no-op on auto-save,
-        // feedback will be downloaded on final submit
-        document.getElementById("feedback-status").textContent = "提交时下载";
-      });
-    }
-
-    // ---- Done ----
-    function showDoneDialog() {
-      // Save current textarea to feedbackMap (but don't POST yet)
-      const run = EMBEDDED_DATA.runs[currentIndex];
-      const text = document.getElementById("feedback").value;
-      if (text.trim() === "") {
-        delete feedbackMap[run.id];
-      } else {
-        feedbackMap[run.id] = text;
-      }
-
-      // POST once with status: complete — include ALL runs so the model
-      // can distinguish "no feedback" (looks good) from "not reviewed"
-      const reviews = [];
-      const ts = new Date().toISOString();
-      for (const r of EMBEDDED_DATA.runs) {
-        reviews.push({ run_id: r.id, feedback: feedbackMap[r.id] || "", timestamp: ts });
-      }
-      const payload = JSON.stringify({ reviews, status: "complete" }, null, 2);
-      fetch("/api/feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: payload,
-      }).then(() => {
-        document.getElementById("done-overlay").classList.add("visible");
-      }).catch(() => {
-        // Server not available (static mode) — download as file
-        const blob = new Blob([payload], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "feedback.json";
-        a.click();
-        URL.revokeObjectURL(url);
-        document.getElementById("done-overlay").classList.add("visible");
-      });
-    }
-
-    function closeDoneDialog() {
-      // Reset status back to in_progress
-      saveCurrentFeedback();
-      document.getElementById("done-overlay").classList.remove("visible");
     }
 
     // ---- Toast ----
