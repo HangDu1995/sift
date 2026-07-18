@@ -211,8 +211,8 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 | `--no-compliance` / `--compliance` | 自动 | 跳过/强制遵循性检查（默认自动：`--runs<3` 时开） |
 | `--no-calibration` | 关闭 | 跳过校准（结果×过程 coherence 判决） |
 | `--security-gate` | 关闭 | 安全审查返回 BLOCKED / REVIEW_NEEDED 时判失败 |
-| `--no-static` | 关闭 | 跳过末尾自动产静态评分卡（默认产，写进 iteration-1/，供 report 评分卡面板） |
-| `--no-vet` | 关闭 | 跳过末尾自动产安全审查（默认产，写进 iteration-1/，供 report 安全面板） |
+| `--no-static` | 关闭 | 跳过末尾自动产静态评分卡（默认产，写进 output 目录根，供 report 评分卡面板） |
+| `--no-vet` | 关闭 | 跳过末尾自动产安全审查（默认产，写进 output 目录根，供 report 安全面板） |
 | `--no-report` | 关闭 | 跳过末尾自动产 HTML 报告（默认产 report.html；聚合 benchmark/评分卡/安全） |
 | `--output` / `-o` | output/ | 输出目录 |
 | `--eval-samples` | 无 | 运行 eval 的数量或比例（如 `10` 或 `0.25`） |
@@ -231,7 +231,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 **输出目录结构**（默认 with/without 模式；v1/v2 模式把 `with_skill`/`without_skill` 换成各自标签名）：
 
 ```
-output/iteration-1/
+output/
   with_skill/
     eval-<id>/
       run-1/                 ← 多次 run(--runs N);UNEVAL/出错会有 run-1-retry-*
@@ -255,9 +255,9 @@ output/iteration-1/
 对已有 benchmark.json 出通过/失败判决。**post-hoc 纯函数**——不重跑 claude、毫秒级、可反复改阈值重判（与 report/audit 同为 artifact 消费家族）。
 
 ```bash
-skill-eval gate output/iteration-1/benchmark.json                        # 仅客观回归守卫
-skill-eval gate output/iteration-1/benchmark.json --min-win-rate 0.5     # 加主观 gate
-skill-eval gate output/iteration-1/benchmark.json --no-programmatic-guard --min-win-rate 0.6
+skill-eval gate output/benchmark.json                        # 仅客观回归守卫
+skill-eval gate output/benchmark.json --min-win-rate 0.5     # 加主观 gate
+skill-eval gate output/benchmark.json --no-programmatic-guard --min-win-rate 0.6
 ```
 
 **参数**：
@@ -336,8 +336,8 @@ skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
 ### `report` — HTML 报告
 
 ```bash
-skill-eval report output/iteration-1/        # 生成静态 report.html
-skill-eval report output/iteration-1/ --open # 生成并打开
+skill-eval report output/        # 生成静态 report.html
+skill-eval report output/ --open # 生成并打开
 ```
 
 **参数**：
@@ -629,7 +629,7 @@ skill-eval batch-report batch-workspace/ --open
   "decision": "PASS",
   "exit_code": 0,
   "reason": "客观侧无回归(+0.27); 主观胜率 0.75 >= 0.50 (8 决定性)",
-  "artifact": "output/iteration-1/benchmark.json",
+  "artifact": "output/benchmark.json",
   "candidate": "with_skill",
   "baseline": "without_skill",
   "thresholds": {"min_win_rate": 0.5, "min_valid": 3, "programmatic_guard": true},
@@ -643,7 +643,7 @@ skill-eval batch-report batch-workspace/ --open
 
 ### 输出文件说明
 
-`run` 命令完成后，`output/iteration-1/` 目录：
+`run` 命令完成后，`output/` 目录：
 
 | 文件 | 内容 |
 |------|------|
@@ -761,7 +761,7 @@ Skill-Eval 从 skill-creator 移植并改造了以下核心代码：
 
 ```bash
 skill-eval run v2/ --skill-b v1/ --evals baseline.json --runs 3 -o out/
-skill-eval gate out/iteration-1/benchmark.json --min-win-rate 0.5
+skill-eval gate out/benchmark.json --min-win-rate 0.5
 echo $?   # 0=PASS / 1=FAIL / 2=N/A(不适用) 或 UNCLEAR(判不准)
 ```
 
@@ -787,7 +787,7 @@ skill-eval freeze path/to/evals.json --name baseline
 skill-eval run v2/ --skill-b v1/ --evals baseline.json --runs 3 -o out/
 
 # 4. 出判决 → exit code 驱动 CI check
-skill-eval gate out/iteration-1/benchmark.json --min-win-rate 0.5
+skill-eval gate out/benchmark.json --min-win-rate 0.5
 # exit: 0=PASS(放行) / 1=FAIL(卡合并) / 2=N/A(不适用) 或 UNCLEAR(判不准),消费方定
 ```
 

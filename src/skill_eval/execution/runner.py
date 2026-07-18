@@ -179,7 +179,11 @@ class ABTestRunner:
 
     def _run_per_eval(self, skill_path: Path, eval_set: EvalSet, evals: list[EvalCase], sides: list) -> Path:
         output_dir = self.config.output_dir
-        iteration_dir = output_dir / "iteration-1"
+        # run 树根 = output_dir 本身(曾有过 iteration-1 死层:硬编码恒为 1、无递增、
+        # 无消费方要求该嵌套,2026-07-18 删除)。config 目录(with_skill/without_skill
+        # 或 v1/v2)直接落 output_dir 下,与 benchmark.json/scorecard.json/gate.json/
+        # vet-report.json/report.html 同层(benchmark.aggregate 的 iterdir 已 is_dir 过滤)。
+        iteration_dir = output_dir
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
         total_jobs = len(evals) * len(sides) * self.config.runs_per_config

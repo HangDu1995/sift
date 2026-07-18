@@ -464,18 +464,6 @@ class TestReportGeneratorStatic:
         html = gen.generate_html(workspace, {"metadata": {"skill_name": "x"}, "runs": [], "run_summary": {}})
         assert "EMBEDDED_DATA.gate" in html  # 模板逻辑仍在
 
-    def test_gate_badge_finds_gate_json_in_iteration_subdir(self, tmp_path):
-        """canonical 流:gate.json 落 iteration-1/(gate 默认写 benchmark_path.parent),
-        report workspace 是父目录 → 仍能找到(与 _load_vet_report 同款 fallback)。"""
-        workspace = tmp_path / "out"           # report 的 workspace(输出目录)
-        (workspace / "iteration-1").mkdir(parents=True)
-        (workspace / "iteration-1" / "gate.json").write_text(json.dumps({
-            "decision": "FAIL", "exit_code": 1, "reason": "regressed",
-        }))
-        gen = ReportGenerator()
-        html = gen.generate_html(workspace, {"metadata": {"skill_name": "x"}, "runs": [], "run_summary": {}})
-        assert '"decision": "FAIL"' in html   # 从 iteration-1/gate.json 读到
-
     def test_generate_html_comparison_quality_shows_all_strengths_weaknesses(self, tmp_path):
         """A: comparison 的 strengths/weaknesses 上游是 list[str] 可多项,viewer 旧实现只显首项 [0] → 显全部。
 

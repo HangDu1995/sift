@@ -18,7 +18,7 @@ def _skill(tmp_path: Path, name: str) -> Path:
 
 def _wire(tmp_path: Path, captured: dict):
     """返回 (fake_run_ab_test, fake_aggregate);iteration_dir 预建。捕获 sides。"""
-    iter_dir = tmp_path / "out" / "iteration-1"
+    iter_dir = tmp_path / "out"
     iter_dir.mkdir(parents=True)
 
     def fake_run_ab_test(self, skill_path, eval_set, sides=None):
@@ -109,12 +109,12 @@ def test_run_cli_v1v2_end_to_end(tmp_path):
         ])
 
     assert r.exit_code == 0, f"CLI 失败:{r.output}\n{r.exception}"
-    # v1/v2 dir(label 作 config 名,非 with_skill/without_skill)
-    assert (out / "iteration-1" / "v1").is_dir()
-    assert (out / "iteration-1" / "v2").is_dir()
-    assert not (out / "iteration-1" / "with_skill").exists()
+    # v1/v2 dir(label 作 config 名,非 with_skill/without_skill);iteration-1 死层已删 → 直接落 out/
+    assert (out / "v1").is_dir()
+    assert (out / "v2").is_dir()
+    assert not (out / "with_skill").exists()
     # run_summary 用 v1/v2 key + delta(config-agnostic 聚合生效)
-    bench = json.loads((out / "iteration-1" / "benchmark.json").read_text(encoding="utf-8"))
+    bench = json.loads((out / "benchmark.json").read_text(encoding="utf-8"))
     summary = bench["run_summary"]
     assert "v1" in summary and "v2" in summary
     assert "delta" in summary
@@ -173,7 +173,7 @@ def test_run_does_not_exit_on_negative_delta(tmp_path):
     from skill_eval.models import BenchmarkData, BenchmarkMetadata
     skill = _skill(tmp_path, "sk")
     eval_set = EvalSet(skill_name="sk", evals=[EvalCase(id=1, prompt="do")])
-    iter_dir = tmp_path / "out" / "iteration-1"
+    iter_dir = tmp_path / "out"
     iter_dir.mkdir(parents=True)
 
     def fake_run_ab_test(self, skill_path, eval_set, sides=None):

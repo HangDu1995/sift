@@ -99,7 +99,7 @@ Results:
 ### 输出文件结构
 
 ```
-output/iteration-1/
+output/
 ├── benchmark.json          # 聚合结果（核心文件）
 │   ├── runs[]              #   每条 run 的 pass_rate / time / tokens
 │   ├── run_summary         #   mean / stddev / delta
@@ -235,7 +235,7 @@ skill-eval batch fixtures/test-skills/data-pipeline/manifest.json --runs 1
 按 DAG 顺序依次评测 data-validator → data-transform → report-generator。
 
 ```bash
-skill-eval report output/iteration-1/ --open
+skill-eval report output/ --open
 ```
 
 ---
@@ -269,5 +269,5 @@ skill-eval run my-skill/ --runs 1 --eval-samples 5
 skill-eval run my-skill/ --runs 3 --compliance-gate
 
 # 6. 生成报告
-skill-eval report output/iteration-1/ --open
+skill-eval report output/ --open
 ```

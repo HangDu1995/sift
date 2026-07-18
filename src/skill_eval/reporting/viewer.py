@@ -222,24 +222,24 @@ def _embed_file(path: Path) -> dict:
 
 
 def _load_vet_report(workspace: Path) -> dict | None:
-    for candidate in [workspace / "vet-report.json", workspace / "iteration-1" / "vet-report.json"]:
-        if candidate.exists():
-            try:
-                return json.loads(candidate.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+    path = workspace / "vet-report.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
     return None
 
 
 def _load_gate_verdict(root: Path) -> dict | None:
-    # 与 _load_vet_report / benchmark 查找同款双位置 fallback:gate.json 落在
-    # iteration-1/(gate 默认写 benchmark_path.parent),而 report workspace 常是父目录。
-    for candidate in [root / "gate.json", root / "iteration-1" / "gate.json"]:
-        if candidate.exists():
-            try:
-                return json.loads(candidate.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+    # gate.json 落在 run 树根(= output_dir,gate 默认写 benchmark_path.parent),
+    # report workspace 即该根(iteration-1 死层删除后无父子之分)。
+    path = root / "gate.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
     return None
 
 

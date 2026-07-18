@@ -15,8 +15,7 @@ def collect_batch_data(workspace: Path, manifest: dict | None = None) -> dict:
         for skill_dir in sorted(unit_dir.iterdir()):
             if not skill_dir.is_dir():
                 continue
-            iteration = skill_dir / "iteration-1"
-            bench_path = iteration / "benchmark.json"
+            bench_path = skill_dir / "benchmark.json"
             if not bench_path.exists():
                 continue
 

@@ -13,7 +13,7 @@ def generate_report_html(workspace: Path) -> Path | None:
     """从 workspace 的 benchmark.json(+ scorecard.json)生成自包含 report.html。best-effort。
 
     生产者(run 末尾自动产)与 `report` 命令共用此「workspace → report.html」核心;report 命令
-    额外支持 --benchmark/--previous 覆盖与候选路径搜索(workspace vs iteration-1)。无
+    额外支持 --benchmark/--previous 覆盖与候选路径搜索。无
     benchmark.json → 返回 None(没东西可报,如路径1 --task 模式无 benchmark)。ReportGenerator
     .write_static 内部自读 vet-report.json / gate.json(存在则带对应面板/徽章)。
     """
@@ -50,19 +50,13 @@ def report(
     bench_data = None
     bench_path = benchmark
     if not bench_path or not bench_path.exists():
-        for candidate in [workspace / "benchmark.json", workspace / "iteration-1" / "benchmark.json"]:
-            if candidate.exists():
-                bench_path = candidate
-                break
+        bench_path = workspace / "benchmark.json"
     if bench_path and bench_path.exists():
         bench_data = json.loads(bench_path.read_text(encoding="utf-8"))
 
     scorecard_path = scorecard
     if not scorecard_path or not scorecard_path.exists():
-        for candidate in [workspace / "scorecard.json", workspace / "iteration-1" / "scorecard.json"]:
-            if candidate.exists():
-                scorecard_path = candidate
-                break
+        scorecard_path = workspace / "scorecard.json"
     scorecard_data = None
     if scorecard_path and scorecard_path.exists():
         try:

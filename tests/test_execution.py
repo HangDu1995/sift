@@ -95,8 +95,7 @@ class TestCalculateStats:
 
 class TestBenchmarkAggregator:
     def test_aggregate_from_iteration(self, tmp_path: Path):
-        iteration = tmp_path / "iteration-1"
-        iteration.mkdir(parents=True)
+        iteration = tmp_path  # iteration-1 死层已删:run 树根即 output_dir,config 目录直接落其下
 
         for config in ("with_skill", "without_skill"):
             config_dir = iteration / config / "run-1"
@@ -135,8 +134,7 @@ class TestBenchmarkAggregator:
     def test_aggregate_fills_executor_model_from_transcript(self, tmp_path: Path):
         """aggregate 从 transcript 抓真实模型名填 metadata.executor_model。
         comparator/analyzer 同源复用(真实 run 验证,单测环境 comparison/analysis 跳过)。"""
-        iteration = tmp_path / "iteration-1"
-        iteration.mkdir(parents=True)
+        iteration = tmp_path  # iteration-1 死层已删:run 树根即 output_dir,config 目录直接落其下
         config_dir = iteration / "with_skill" / "run-1"
         config_dir.mkdir(parents=True)
         (config_dir / "outputs").mkdir()
@@ -159,8 +157,7 @@ class TestBenchmarkAggregator:
         旧 `eval_ids = ... checkpoints_data if checkpoints_data else runs` 会短路到 checkpoints
         → evals_run 只含那个 run 的 eval(如 [1]),漏掉其余 eval。真实多 eval run 应得完整列表。
         """
-        iteration = tmp_path / "iteration-1"
-        iteration.mkdir(parents=True)
+        iteration = tmp_path  # iteration-1 死层已删:run 树根即 output_dir,config 目录直接落其下
         config = iteration / "with_skill"
         for eval_id in (1, 2, 3):
             rd = config / f"eval-{eval_id}" / "run-1"
@@ -180,8 +177,7 @@ class TestBenchmarkAggregator:
 
     def test_aggregate_dual_rate_delta(self, tmp_path: Path):
         """双率:grading summary 含 pass_rate_programmatic/_llm → run_summary + delta 双率。"""
-        iteration = tmp_path / "iteration-1"
-        iteration.mkdir(parents=True)
+        iteration = tmp_path  # iteration-1 死层已删:run 树根即 output_dir,config 目录直接落其下
         summaries = {
             "with_skill": {"passed": 2, "failed": 1, "total": 3, "pass_rate": 2 / 3,
                            "pass_rate_programmatic": 1.0, "pass_rate_llm": 0.5},
@@ -214,8 +210,7 @@ class TestBenchmarkAggregator:
 
     def test_aggregate_dual_rate_null_when_class_missing(self, tmp_path: Path):
         """某类 expectation 全无(pass_rate_xx 缺)→ 该双率 stats None、delta 该项 None。"""
-        iteration = tmp_path / "iteration-1"
-        iteration.mkdir(parents=True)
+        iteration = tmp_path  # iteration-1 死层已删:run 树根即 output_dir,config 目录直接落其下
         for config in ("with_skill", "without_skill"):
             config_dir = iteration / config / "run-1"
             config_dir.mkdir(parents=True)
@@ -243,8 +238,7 @@ class TestBenchmarkAggregator:
         """benchmark 聚合 retry-glob bug 回归:被 retry 取代的失败 base 不当独立 run 计入。
         with eval-1 有 run-1(base 0.0)+ run-1-retry-1(最终 0.75),聚合应只算 retry-1。
         旧 glob("eval-*/run-*") 两条都读 → with 均值被失败 base 拖低 → delta 失真。"""
-        iteration = tmp_path / "iteration-1"
-        iteration.mkdir(parents=True)
+        iteration = tmp_path  # iteration-1 死层已删:run 树根即 output_dir,config 目录直接落其下
 
         def make(run_dir: Path, pass_rate: float) -> None:
             run_dir.mkdir(parents=True, exist_ok=True)
@@ -760,8 +754,8 @@ class TestABTestRunnerReferencesAutoCopy:
         with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
             runner.run_ab_test(skill, eval_set)
 
-        with_ref = tmp_path / "out" / "iteration-1" / "with_skill" / "eval-1" / "run-1" / "outputs" / "references" / "guide.md"
-        without_ref = tmp_path / "out" / "iteration-1" / "without_skill" / "eval-1" / "run-1" / "outputs" / "references"
+        with_ref = tmp_path / "out" / "with_skill" / "eval-1" / "run-1" / "outputs" / "references" / "guide.md"
+        without_ref = tmp_path / "out" / "without_skill" / "eval-1" / "run-1" / "outputs" / "references"
         assert with_ref.exists(), "with_skill 考场应自动拷 references/(body 引用了它)"
         assert not without_ref.exists(), "without_skill 不注入 body,不该拷 references/"
 
@@ -817,7 +811,7 @@ class TestABTestRunnerComplianceIsAudit:
             MockAuditor.return_value.audit.return_value = canned
             runner.run_ab_test(skill, eval_set)
 
-        base = tmp_path / "out" / "iteration-1"
+        base = tmp_path / "out"
         with_comp = base / "with_skill" / "eval-1" / "run-1" / "compliance.json"
         without_comp = base / "without_skill" / "eval-1" / "run-1" / "compliance.json"
         assert with_comp.exists(), "with_skill 应产 compliance.json"
@@ -895,9 +889,9 @@ class TestABTestRunnerV1v2:
         # 两边都注入了各自的 skill(非 None)
         assert skill_a in injected and skill_b in injected, f"应各注入 skill_a/skill_b,实得 {injected}"
         # dir 名用 label
-        assert (tmp_path / "out" / "iteration-1" / "v1").is_dir()
-        assert (tmp_path / "out" / "iteration-1" / "v2").is_dir()
-        assert not (tmp_path / "out" / "iteration-1" / "with_skill").exists()
+        assert (tmp_path / "out" / "v1").is_dir()
+        assert (tmp_path / "out" / "v2").is_dir()
+        assert not (tmp_path / "out" / "with_skill").exists()
 
     def test_same_paper_setup_source_pinned_to_primary(self, tmp_path):
         """setup_source 钉主 skill:两边 outputs 里 source fixture 都来自 skill_a(同卷)。"""
@@ -925,8 +919,8 @@ class TestABTestRunnerV1v2:
         with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
             runner.run_ab_test(skill_a, eval_set, sides=sides)
 
-        a_log = (tmp_path / "out" / "iteration-1" / "v1" / "eval-1" / "run-1" / "outputs" / "data" / "log.txt")
-        b_log = (tmp_path / "out" / "iteration-1" / "v2" / "eval-1" / "run-1" / "outputs" / "data" / "log.txt")
+        a_log = (tmp_path / "out" / "v1" / "eval-1" / "run-1" / "outputs" / "data" / "log.txt")
+        b_log = (tmp_path / "out" / "v2" / "eval-1" / "run-1" / "outputs" / "data" / "log.txt")
         assert a_log.exists() and b_log.exists()
         # 两边都应是主 skill(skill_a)的 A-MARKER —— 同卷保证
         assert a_log.read_text(encoding="utf-8") == "A-MARKER"
@@ -954,8 +948,8 @@ class TestABTestRunnerV1v2:
             runner.run_ab_test(skill, eval_set)  # 默认 sides=None
 
         assert skill in injected and None in injected, f"默认应注入 skill + None,实得 {injected}"
-        assert (tmp_path / "out" / "iteration-1" / "with_skill").is_dir()
-        assert (tmp_path / "out" / "iteration-1" / "without_skill").is_dir()
+        assert (tmp_path / "out" / "with_skill").is_dir()
+        assert (tmp_path / "out" / "without_skill").is_dir()
 
 
 class TestABTestRunnerPerEvalTimeout:
@@ -1134,7 +1128,7 @@ class TestRunDumpsTranscript:
         with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
             runner.run_ab_test(skill, eval_set)
 
-        tp = tmp_path / "out" / "iteration-1" / "with_skill" / "eval-1" / "run-1" / "transcript.jsonl"
+        tp = tmp_path / "out" / "with_skill" / "eval-1" / "run-1" / "transcript.jsonl"
         assert tp.exists(), "run 应 dump transcript.jsonl(raw stream-json stdout)"
         # build_digest 直接解析 stream-json(assistant/user event 带 message;result 跳过)
         d = build_digest(tp)
@@ -1249,7 +1243,7 @@ class TestResumeCacheKey:
 
     @staticmethod
     def _slot_grading_path(output_dir: Path) -> Path:
-        return output_dir / "iteration-1" / "with_skill" / "eval-1" / "run-1" / "grading.json"
+        return output_dir / "with_skill" / "eval-1" / "run-1" / "grading.json"
 
     def _setup(self, tmp_path: Path):
         from skill_eval.models import RunConfig, ScoringConfig, EvalSet, EvalCase
