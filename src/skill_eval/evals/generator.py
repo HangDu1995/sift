@@ -38,6 +38,87 @@ MAX_EVALS = 50
 MAX_EXPECTATIONS_PER_EVAL = 8
 
 
+# ---------------------------------------------------------------------------
+# 同 prompt eval 合并前的一致性门(见 _merge_same_task_evals)
+# ---------------------------------------------------------------------------
+# 正则元字符:pattern 含任一即视为正则而非纯字面量(只有纯字面量才可安全做包含/常量比较)
+_MERGE_REGEX_META = frozenset(".^$*+?{}[]\\|()")
+# CONTAINS_PATTERN 字面量里的 "key": value 形状(JSON-ish)——用于抽同 key 不同常量
+_MERGE_KV_RE = re.compile(r'"([\w\-]+)"\s*:\s*("[^"]*"|true|false|null|-?\d+(?:\.\d+)?)')
+
+
+def _merge_is_literal_pattern(pattern: str) -> bool:
+    """无正则元字符 → 纯字面量(可安全做包含/常量比较)。"""
+    return bool(pattern) and not (_MERGE_REGEX_META & set(pattern))
+
+
+def _merge_fixtures_conflict(group: list[EvalCase]) -> bool:
+    """Gate 1:同 fixture path 出现 ≥2 不同 content → 不同 scenario,合并不安全。
+
+    (原 union dedup key 本就是 ``(path, content)``,这里拿来做门:同 path 不同 content
+    = transcript 成功段与失败段两套互斥 ground truth,合并必出自相矛盾题。)
+    """
+    by_path: dict[str, set[str]] = {}
+    for e in group:
+        for fx in (e.fixtures or []):
+            by_path.setdefault(fx.path or "", set()).add(fx.content or "")
+    return any(len(values) > 1 for values in by_path.values())
+
+
+def _merge_assertions_conflict(group: list[EvalCase]) -> bool:
+    """Gate 2:断言互相矛盾 → 合并必出自相矛盾题。保守:只判两种确定性矛盾。
+
+    (a) CONTAINS_PATTERN 字面量 L 命中 NOT_CONTAINS 正则 R(同 file 作用域):一要含、一不许出现。
+    (b) 同 (file,key) 的 CONTAINS_PATTERN 字面量钉成不同常量(按 ``"key": value`` 形状抽取)。
+
+    跳过(证不了,保守放过):LLM_GRADE/LLM_FACT/CUSTOM_SCRIPT(语义)、正则对可满足性
+    (不可判定)、含元字符的 CONTAINS(非字面量,证不了字面重叠)、主观 expectation 文本对立。
+    """
+    contains: list[Assertion] = []
+    not_contains: list[Assertion] = []
+    for e in group:
+        for a in (e.assertions or []):
+            if a.type == AssertionType.CONTAINS_PATTERN:
+                contains.append(a)
+            elif a.type == AssertionType.NOT_CONTAINS:
+                not_contains.append(a)
+
+    def _scope(a: Assertion) -> str:
+        return (a.params.get("path") or "").strip()
+
+    def _same_scope(p: str, q: str) -> bool:
+        # 空 path = 未限定 = 覆盖任意显式 file;仅两者都显式且不同才视为不同作用域
+        return (not p or not q) or p == q
+
+    # (a) CONTAINS 字面量 ⊆ NOT_CONTAINS 正则
+    for c in contains:
+        cp = (c.params.get("pattern") or "")
+        if not _merge_is_literal_pattern(cp):
+            continue
+        for n in not_contains:
+            nr = (n.params.get("pattern") or "")
+            if nr and _same_scope(_scope(c), _scope(n)):
+                try:
+                    if re.search(nr, cp):
+                        return True
+                except re.error:
+                    continue
+
+    # (b) 同 (file,key) 不同常量
+    kv: dict[tuple[str, str], set[str]] = {}
+    for c in contains:
+        cp = (c.params.get("pattern") or "")
+        if not _merge_is_literal_pattern(cp):
+            continue
+        scope = _scope(c)
+        for m in _MERGE_KV_RE.finditer(cp):
+            kv.setdefault((scope, m.group(1)), set()).add(m.group(2))
+    if any(len(values) > 1 for values in kv.values()):
+        return True
+
+    return False
+
+
 class EvalInitGenerator:
     def __init__(
         self,
@@ -648,6 +729,12 @@ class EvalInitGenerator:
         分组合并:assertions / expectations / fixtures 取并集去重、expected_output 拼成 rubric、
         level 取有 fixture→L2。无同 prompt 则原样返回(仅重排 id)。flag 标 ``merged:N-evals``
         (不触发改降级警告,只认 ``degraded:`` 前缀)。
+
+        合并前过两道确定性一致性门,任一冲突 → 不合并(各 eval 原样独立保留、仅重排 id,
+        flag ``split:N-evals-conflict``):(1) fixture 冲突:同 path 出现 ≥2 不同 content
+        (不同 scenario,如成功/失败两段 transcript);(2) 断言冲突:CONTAINS 字面量命中某
+        NOT_CONTAINS 正则,或同 (file,key) 钉成不同常量。模糊/语义断言不参与(证不了,
+        保守放过)——只合并能确定一致的组(见 ``_merge_fixtures_conflict`` / ``_merge_assertions_conflict``)。
         """
         evals = eval_set.evals
         if len(evals) <= 1:
@@ -666,11 +753,21 @@ class EvalInitGenerator:
                            evals=[e.model_copy(update={"id": i}) for i, e in enumerate(evals, 1)])
 
         merged: list[EvalCase] = []
-        for new_id, key in enumerate(order, 1):
+        next_id = 1
+        for key in order:
             group = groups[key]
             first = group[0]
             if len(group) == 1:
-                merged.append(first.model_copy(update={"id": new_id}))
+                merged.append(first.model_copy(update={"id": next_id}))
+                next_id += 1
+                continue
+            if _merge_fixtures_conflict(group) or _merge_assertions_conflict(group):
+                # 确定性冲突 → 不合并:各 eval 原样独立保留(仅重排 id),flag 留痕
+                split_flag = f"split:{len(group)}-evals-conflict"
+                for e in group:
+                    flags = list(dict.fromkeys([*(e.flags or []), split_flag]))
+                    merged.append(e.model_copy(update={"id": next_id, "flags": flags}))
+                    next_id += 1
                 continue
             seen_a, assertions = set(), []
             seen_x, expectations = set(), []
@@ -693,7 +790,7 @@ class EvalInitGenerator:
                     seen_o.add(eo); eouts.append(eo)
             flags = list(dict.fromkeys([*(first.flags or []), f"merged:{len(group)}-evals"]))
             merged.append(EvalCase(
-                id=new_id,
+                id=next_id,
                 name=first.name,
                 prompt=first.prompt,
                 expected_output="\n".join(f"- {x}" for x in eouts) if eouts else "",
@@ -708,6 +805,7 @@ class EvalInitGenerator:
                 timeout=first.timeout,
                 flags=flags,
             ))
+            next_id += 1
         return EvalSet(skill_name=eval_set.skill_name, evals=merged)
 
     def _extract_skill_outputs(self, body: str) -> set[str]:

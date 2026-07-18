@@ -212,6 +212,114 @@ def test_merge_no_op_when_all_prompts_distinct():
     assert not any(f.startswith("merged:") for e in out.evals for f in (e.flags or []))
 
 
+# ---------------------------------------------------------------------------
+# 合并一致性门:确定性冲突 → 不合并(各 eval 独立保留 + split flag)
+# 治本:transcript 挖掘常给同 prompt 出多套互斥 rubric(成功段/失败段两套 ground truth),
+# 旧逻辑按 prompt 无条件 union → 自相矛盾题(同一 app.log 不可能既是 E1 又是 E2)。
+# ---------------------------------------------------------------------------
+
+def test_merge_same_task_evals_split_on_fixture_conflict():
+    """Gate 1:同 prompt 但同 path 不同 content(不同 scenario)→ 不合并。
+    复现 eval-3 根因:LLM 给同 prompt 出了 fixture 互斥的多题。"""
+    evals = [
+        EvalCase(id=1, prompt="分析 app.log 写报告", level="L2",
+                 fixtures=[FixtureFile(path="app.log", content="E-AUTH-001 login failed")]),
+        EvalCase(id=2, prompt="分析 app.log 写报告", level="L2",
+                 fixtures=[FixtureFile(path="app.log", content="E-DB-002 query error")]),
+    ]
+    out = EvalInitGenerator._merge_same_task_evals(EvalSet(skill_name="s", evals=evals))
+    assert len(out.evals) == 2                       # 不合并:两条独立题
+    assert not any(f.startswith("merged:") for e in out.evals for f in (e.flags or []))
+    assert all(any(f.startswith("split:") for f in (e.flags or [])) for e in out.evals)
+    # 各自的 fixture 原样保留(没被 union 混在一起)
+    contents = sorted(fx.content for e in out.evals for fx in e.fixtures)
+    assert contents == ["E-AUTH-001 login failed", "E-DB-002 query error"]
+
+
+def test_merge_same_task_evals_split_on_contains_vs_not_contains():
+    """Gate 2a:同 prompt、同 fixture(隔离掉 Gate 1),CONTAINS 字面量命中 NOT_CONTAINS 正则 → 矛盾。
+    (transcript 出题:同任务既挖到'要含 E-AUTH-001'又挖到'不许含错误码正则'。)"""
+    evals = [
+        EvalCase(id=1, prompt="分析 app.log 写报告", level="L2",
+                 fixtures=[FixtureFile(path="app.log", content="x")],
+                 assertions=[Assertion(name="has", type=AssertionType.CONTAINS_PATTERN,
+                                       params={"pattern": "E-AUTH-001", "path": "report.md"})]),
+        EvalCase(id=2, prompt="分析 app.log 写报告", level="L2",
+                 fixtures=[FixtureFile(path="app.log", content="x")],
+                 assertions=[Assertion(name="no", type=AssertionType.NOT_CONTAINS,
+                                       params={"pattern": r"E-[A-Z]+-\d+", "path": "report.md"})]),
+    ]
+    out = EvalInitGenerator._merge_same_task_evals(EvalSet(skill_name="s", evals=evals))
+    assert len(out.evals) == 2
+    assert all(any(f.startswith("split:") for f in (e.flags or [])) for e in out.evals)
+
+
+def test_merge_same_task_evals_split_on_same_key_different_constant():
+    """Gate 2b:同 (file,key) 的 CONTAINS_PATTERN 钉成不同常量 → 矛盾。
+    (transcript 出题:成功段挖到 total_errors=0、失败段挖到 total_errors=3。)"""
+    evals = [
+        EvalCase(id=1, prompt="分析 app.log 写报告", level="L2",
+                 fixtures=[FixtureFile(path="app.log", content="x")],
+                 assertions=[Assertion(name="zero", type=AssertionType.CONTAINS_PATTERN,
+                                       params={"pattern": '"total_errors": 0', "path": "report.json"})]),
+        EvalCase(id=2, prompt="分析 app.log 写报告", level="L2",
+                 fixtures=[FixtureFile(path="app.log", content="x")],
+                 assertions=[Assertion(name="three", type=AssertionType.CONTAINS_PATTERN,
+                                       params={"pattern": '"total_errors": 3', "path": "report.json"})]),
+    ]
+    out = EvalInitGenerator._merge_same_task_evals(EvalSet(skill_name="s", evals=evals))
+    assert len(out.evals) == 2
+    assert all(any(f.startswith("split:") for f in (e.flags or [])) for e in out.evals)
+
+
+def test_merge_does_not_flag_regex_contains_as_conflict():
+    """保守:CONTAINS_PATTERN 本身是正则(含元字符)→ 证不了字面重叠,跳过,不误判冲突。
+    两条 otherwise 一致的同 prompt eval(一条 CONTAINS 正则、一条 NOT_CONTAINS 不相干)→ 仍合并。"""
+    evals = [
+        EvalCase(id=1, prompt="分析 app.log 写报告", level="L2",
+                 fixtures=[FixtureFile(path="app.log", content="x")],
+                 assertions=[Assertion(name="re", type=AssertionType.CONTAINS_PATTERN,
+                                       params={"pattern": r"E-\d+", "path": "report.md"})]),
+        EvalCase(id=2, prompt="分析 app.log 写报告", level="L2",
+                 fixtures=[FixtureFile(path="app.log", content="x")],
+                 assertions=[Assertion(name="no", type=AssertionType.NOT_CONTAINS,
+                                       params={"pattern": "TODO", "path": "report.md"})]),
+    ]
+    out = EvalInitGenerator._merge_same_task_evals(EvalSet(skill_name="s", evals=evals))
+    assert len(out.evals) == 1                       # 一致 → 合并
+    assert any(f.startswith("merged:") for f in (out.evals[0].flags or []))
+
+
+def test_merge_partial_conflict_only_splits_conflicting_group():
+    """一组同 prompt 冲突(拆)、一组同 prompt 一致(合)、一条不同 prompt(原样)→ 三类各得其所;
+    id 全局连续重排(拆出的多条也要各占一个 id)。"""
+    evals = [
+        # 组 A:冲突(同 path 异 content)→ 拆成 2 条
+        EvalCase(id=1, prompt="任务一", level="L2",
+                 fixtures=[FixtureFile(path="app.log", content="A1")]),
+        EvalCase(id=2, prompt="任务一", level="L2",
+                 fixtures=[FixtureFile(path="app.log", content="A2")]),
+        # 组 B:一致(同 path 同 content)→ 合成 1 条
+        EvalCase(id=3, prompt="任务二", level="L2",
+                 fixtures=[FixtureFile(path="app.log", content="B")]),
+        EvalCase(id=4, prompt="任务二", level="L2",
+                 fixtures=[FixtureFile(path="app.log", content="B")]),
+        # 组 C:不同 prompt → 原样
+        EvalCase(id=5, prompt="任务三", level="L1"),
+    ]
+    out = EvalInitGenerator._merge_same_task_evals(EvalSet(skill_name="s", evals=evals))
+    assert len(out.evals) == 4                       # 组 A 拆 2 + 组 B 合 1 + 组 C 1
+    assert [e.id for e in out.evals] == [1, 2, 3, 4] # id 连续
+    prompts = [e.prompt for e in out.evals]
+    assert prompts.count("任务一") == 2              # 拆开的两条都还在
+    assert prompts.count("任务二") == 1              # 合并
+    a_flags = [any(f.startswith("split:") for f in (e.flags or []))
+               for e in out.evals if e.prompt == "任务一"]
+    assert a_flags == [True, True]
+    b = next(e for e in out.evals if e.prompt == "任务二")
+    assert any(f.startswith("merged:") for f in (b.flags or []))
+
+
 def test_enforce_keeps_pathless_contains_pattern():
     ev = EvalCase(id=1, prompt="x", level="L1", assertions=[
         Assertion(name="k", type=AssertionType.CONTAINS_PATTERN, params={"pattern": "keyword"})])  # no path
