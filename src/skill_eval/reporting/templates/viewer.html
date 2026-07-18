@@ -513,7 +513,6 @@
       <div class="benchmark-view" id="benchmark-content">
         <div class="benchmark-empty">暂无基准测试数据。请先运行基准测试以查看量化结果。</div>
       </div>
-      <div class="benchmark-view" id="compliance-aggregate-content" style="display:none;"></div>
     </div>
   </div>
 
@@ -1076,12 +1075,11 @@
     // 遵循性按 SKILL 出题,跨所有 with run 聚合(= 把 N 个 transcript 一次性喂 audit 多会话审计)。
     // 理解类题(L1 无工具活动)不产判定,自然不计入,不再刷"无可对账内容"噪音。
     function renderComplianceAggregate() {
-      const container = document.getElementById("compliance-aggregate-content");
       const aggs = (EMBEDDED_DATA.compliance_aggregate) || [];
-      if (!aggs.length) { container.style.display = "none"; return; }
-      container.style.display = "block";
+      if (!aggs.length) return "";
       const fmtPct = v => (v != null ? (v * 100).toFixed(0) + '%' : '—');
-      let html = '<h2 style="margin:1.5rem 0 0.25rem;">遵循性 · 指令对账(整个考试聚合)</h2>';
+      let html = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+      html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">遵循性 · 指令对账(整个考试聚合)</div>';
       html += '<div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.75rem;">遵循性以 SKILL 为出题依据,跨所有注入侧 run 聚合(等同把 N 个 transcript 一次性喂给 audit 多会话审计)。理解类题(无工具/文件活动)不产判定,不计入。</div>';
       for (const agg of aggs) {
         const s = agg.summary || {};
@@ -1089,9 +1087,8 @@
         const judged = passN + failN;
         const rate = judged > 0 ? passN / judged : null;
         const rateColor = rate == null ? "var(--text-muted)" : rate >= 0.8 ? "var(--green)" : rate >= 0.5 ? "var(--accent)" : "var(--red)";
-        html += '<div class="section" style="margin-bottom:1rem;">';
-        html += '<div class="section-header">' + escapeHtml(agg.side || '') + ' 侧 · 遵循度 <span style="color:' + rateColor + ';font-weight:600;">' + fmtPct(rate) + '</span></div>';
-        html += '<div class="section-body">';
+        html += '<div style="margin-bottom:0.75rem;padding-bottom:0.75rem;border-bottom:1px solid var(--border);">';
+        html += '<div style="font-weight:600;margin-bottom:0.25rem;">' + escapeHtml(agg.side || '') + ' 侧 · 遵循度 <span style="color:' + rateColor + ';font-weight:600;">' + fmtPct(rate) + '</span></div>';
         html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">PASS ' + passN + ' / FAIL ' + failN + (naN ? ' / 不适用 ' + naN : '') + (unclearN ? ' / 判不准 ' + unclearN : '') + ' · 聚合自 ' + (agg.runs_contributed || 0) + ' 个有判定的 run</div>';
         const bi = agg.by_instruction || [];
         if (bi.length) {
@@ -1103,9 +1100,10 @@
           }
           html += '</tbody></table>';
         }
-        html += '</div></div>';
+        html += '</div>';
       }
-      container.innerHTML = html;
+      html += '</div>';
+      return html;
     }
 
     // ---- Benchmark rendering ----
@@ -1134,10 +1132,6 @@
       const a = summary[configA] || {};
       const b = summary[configB] || {};
 
-      const prDelta = delta.pass_rate || "—";
-      const prNum = parseFloat(prDelta);
-      const prGood = prNum > 0.05;
-
       function mkCard(title, value, sub, color) {
         return '<div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;text-align:center;">'
           + '<div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem;">' + title + '</div>'
@@ -1146,15 +1140,22 @@
           + '</div>';
       }
 
-      html += mkCard("通过率变化 (Δ)", (prNum > 0 ? "+" : "") + prDelta,
-        prGood ? "Skill 提升了 Claude" : prNum < -0.05 ? "Skill 拖累了 Claude" : "Skill 效果不明显",
-        prGood ? "var(--green)" : prNum < -0.05 ? "var(--red)" : "var(--text-muted)");
+      // 通过率变化:双率(客观稳 / 主观漂),不再用混合 pass_rate(与 gate 客观侧、校准结果轴同源)
+      const fmtD = v => { const n = parseFloat(v); return isNaN(n) ? "—" : (n > 0 ? "+" : "") + v; };
+      const dClr = v => { const n = parseFloat(v); if (isNaN(n)) return "var(--text-muted)"; if (n > 0.05) return "var(--green)"; if (n < -0.05) return "var(--red)"; return "var(--text-muted)"; };
+      html += '<div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;text-align:center;">'
+        + '<div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem;">通过率变化 (Δ)</div>'
+        + '<div style="font-size:1.4rem;font-family:Poppins,sans-serif;font-weight:600;color:' + dClr(delta.pass_rate_programmatic) + ';">客观 ' + fmtD(delta.pass_rate_programmatic) + '</div>'
+        + '<div style="font-size:1.1rem;font-family:Poppins,sans-serif;font-weight:600;color:' + dClr(delta.pass_rate_llm) + ';">主观 ' + fmtD(delta.pass_rate_llm) + '</div>'
+        + '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;">客观稳 · 主观看方向</div>'
+        + '</div>';
 
-      if (metadata.runs_per_configuration) {
+      // 执行规模:runs × evals 合并一张卡(每题跑几遍 × 几道题 = 每侧总次数)
+      if (metadata.runs_per_configuration && metadata.evals_run && metadata.evals_run.length) {
+        const total = metadata.runs_per_configuration * metadata.evals_run.length;
+        html += mkCard("执行规模", metadata.runs_per_configuration + " × " + metadata.evals_run.length, "runs × evals · " + total + " 次/侧", "var(--text)");
+      } else if (metadata.runs_per_configuration) {
         html += mkCard("每组运行次数", metadata.runs_per_configuration, Object.keys(summary).filter(k => k !== "delta").join(" / "), "var(--text)");
-      }
-      if (metadata.evals_run && metadata.evals_run.length) {
-        html += mkCard("评测数", metadata.evals_run.length, metadata.evals_run.join(", "), "var(--text)");
       }
       if (metadata.skill_name) {
         html += mkCard("Skill", metadata.skill_name, "", "var(--accent)");
@@ -1302,6 +1303,9 @@
         html += '<td class="' + deltaClass(delta.tokens) + '">' + (delta.tokens || "—") + "</td></tr>";
       }
       html += "</tbody></table>";
+
+      // ── Compliance aggregate(过程层,插盲评前:客观结果 → 过程 → 主观结果)──
+      html += renderComplianceAggregate();
 
       // ── Blind Comparison section ──
       if (comparisons.length > 0) {
@@ -1641,7 +1645,6 @@
     // ---- Start ----
     init();
     renderBenchmark();
-    renderComplianceAggregate();
   </script>
 </body>
 </html>
