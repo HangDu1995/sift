@@ -120,6 +120,54 @@ def test_run_cli_v1v2_end_to_end(tmp_path):
     assert "delta" in summary
 
 
+def test_run_does_not_leak_expected_output_to_cc_prompt(tmp_path):
+    """runner 不把 eval.expected_output(答案)塞进给 cc 的 prompt。
+
+    回归:旧 runner.py:209-210 把 expected_output 当 'Expected output:' 拼进 cc prompt →
+    cc 照抄答案,with/without 都抄对 → A/B 客观零信号(实测 log-error-analyzer-zh 逐条
+    verdict 完全一致)。expected_output 是 grader 评分用的答案,绝不能喂给被测 cc。
+    删拼接后 prompt 只含任务(prompt)+ source 位置。
+
+    RED 锚点:旧 prompt 含 'Expected output' + expected_output 原文;删后均不含。
+    """
+    import json
+    from typer.testing import CliRunner
+    from skill_eval.cli.main import app
+
+    skill = tmp_path / "sk"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: t\n---\nbody\n", encoding="utf-8")
+    evals_path = tmp_path / "evals.json"
+    evals_path.write_text(json.dumps({
+        "skill_name": "sk",
+        "evals": [{"id": 1, "prompt": "分析日志写 error-report.json",
+                   "expected_output": "TOTAL_ERRORS_IS_2_AND_CODES_E_AUTH_001"}],
+    }), encoding="utf-8")
+    out = tmp_path / "out"
+
+    captured = {}
+
+    def fake_run(self, prompt, skill_path=None, **kwargs):
+        captured["prompt"] = prompt
+        return RunOutput(exit_code=0, stdout="ok", transcript="done", result_text="done")
+
+    cli = CliRunner()
+    with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run), \
+         patch("skill_eval.cli.commands.run._check_claude_or_exit"):
+        r = cli.invoke(app, [
+            "run", str(skill),
+            "--evals", str(evals_path), "--scoring", "programmatic",
+            "--runs", "1", "-o", str(out),
+            "--no-compliance", "--no-calibration",
+        ])
+
+    assert r.exit_code == 0, f"CLI 失败:{r.output}\n{r.exception}"
+    assert captured, "fake_run 未被调用"
+    # expected_output(答案)绝不能出现在给 cc 的 prompt 里
+    assert "TOTAL_ERRORS_IS_2_AND_CODES_E_AUTH_001" not in captured["prompt"]
+    assert "Expected output" not in captured["prompt"]
+
+
 def test_run_does_not_exit_on_negative_delta(tmp_path):
     """块 C:run 退役 delta 退出码——负 delta 仍 exit 0(判决归 gate)。"""
     from skill_eval.models import BenchmarkData, BenchmarkMetadata

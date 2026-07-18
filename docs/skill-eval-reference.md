@@ -549,7 +549,7 @@ skill-eval batch-report batch-workspace/ --open
 |------|------|------|
 | `id` | 是 | 唯一标识，整数 |
 | `prompt` | 是 | 发给 claude 的任务描述 |
-| `expected_output` | 否 | 预期输出的文字描述 |
+| `expected_output` | 否 | 预期输出的文字描述(grader 评分参考,**不喂给被测 cc**;拼进 prompt = 答案泄露致 A/B 失真) |
 | `level` | 否 | 测试层级：`L1`/`L2`，默认 `L1` |
 | `fixtures` | 否 | 前置文件列表 |
 | `expectations` | 否 | 语义预期语句列表（LLM 判） |

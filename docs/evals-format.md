@@ -24,7 +24,7 @@
 | `expectations` | list[str] | — | free-text 期望,**LLM 判**(主观,见下) |
 | `assertions` | list[Assertion] | — | 结构化断言,**机械 / LLM 判**(客观,见下) |
 | `fixtures` | list[Fixture] | — | 内嵌测试数据(run 时写入 claude 工作目录) |
-| `expected_output` | str | — | 期望输出(参考) |
+| `expected_output` | str | — | 期望输出(grader 参考,**不喂 cc**;喂了=答案泄露致 A/B 失真) |
 | `files` | list[str] | — | 相关文件名 |
 | `timeout` | int\|null | — | per-eval 超时秒(覆盖全局;null 走全局) |
 | `flags` | list[str] | — | 后处理标记(`degraded:`/`review:`,见下) |

@@ -206,8 +206,8 @@ class ABTestRunner:
             prompt = eval_case.prompt
             if source_path:
                 prompt += f"\n\nSOURCE PROJECT AVAILABLE: '{source_name}' copied to working directory at {source_path}"
-            if eval_case.expected_output:
-                prompt += f"\n\nExpected output:\n{eval_case.expected_output}"
+            # NOTE: expected_output / expectations / assertions 是 grader 评分用的答案,绝不
+            # 拼进 cc prompt —— 喂给被测 cc = 考题印答案,with/without 都抄对 → A/B 客观零信号。
 
             self._emit_progress(
                 eval_case.get_name(), config_name,
