@@ -111,7 +111,7 @@ output/iteration-1/
 │   └── eval-<id>/run-<n>/
 │       ├── grading.json    #   每条 expectation + assertion 的 pass/fail + evidence
 │       ├── compliance.json #   SKILL.md 指令遵循性
-│       ├── calibration.json#   评分可信度校准
+│       ├── calibration.json#   结果×过程 coherence 判决
 │       └── run_debug.json  #   完整 transcript + tool_calls
 │
 └── without_skill/
@@ -159,16 +159,17 @@ output/iteration-1/
 
 每条检查结果为 `followed: true/false`，汇总为 `compliance_rate`。
 
-#### calibration.json —— 评分可信度
+#### calibration.json —— 结果×过程 coherence 判决
 
-校准引擎检查 7 种信号：
+单次执行的两轴判决：结果（打分 `pass_rate≥0.8`）× 过程（遵循性有无 prohibition/output 硬类违规），组合出 5 态 verdict：
 
-| 等级 | Agreement Rate | 含义 | 权重 |
-|------|----------------|------|------|
-| **HIGH** | ≥ 0.8 | 程序化和 LLM 评分高度一致 | 1.0 |
-| **MEDIUM** | ≥ 0.6 | 存在少量分歧 | 0.8 |
-| **LOW** | ≥ 0.4 | 分歧较多 | 0.5 |
-| **UNRELIABLE** | < 0.4 | 严重分歧 | 0.2 |
+| verdict | 含义 |
+|---------|------|
+| **可信** TRUSTED | 结果对 + 过程对（未发现过程问题） |
+| **高分存疑** HIGH_SCORE_SUSPECT | 结果对 + 过程违反硬性规则（列 evidence） |
+| **可修复** FIXABLE | 结果错 + 过程对 |
+| **技能失效** SKILL_FAILED | 结果错 + 过程违反硬性规则 |
+| **过程未知** PROCESS_UNKNOWN | compliance 缺失/无可判定 |
 
 ### 质量公式
 
@@ -177,7 +178,6 @@ Score = StaticAnalysis(0-11)
       + Delta × 100
       + ComplianceRate(%)
       - PerformancePenalty
-      × CalibrationWeight
 ```
 
 ---
@@ -247,7 +247,7 @@ skill-eval report output/iteration-1/ --open
 | **delta** | benchmark.json | with − without | > +0.3 | -0.1~+0.1 | < -0.1 |
 | **pass_rate** | grading.json | passed / total | > 0.8 | 0.5~0.8 | < 0.5 |
 | **compliance_rate** | compliance.json | followed / total | > 0.7 | 0.5~0.7 | < 0.5 |
-| **calibration grade** | calibration.json | agreement + signals | HIGH | MEDIUM/LOW | UNRELIABLE |
+| **calibration verdict** | calibration.json | 结果×过程 coherence | 可信/高分存疑 | 可修复 | 技能失效/过程未知 |
 | **static score** | analyze | 0-11 checks | 8+ | 5-7 | < 5 |
 
 ## 附录 B：从零开始的 5 步流程

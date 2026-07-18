@@ -98,7 +98,7 @@ python3 --version || python --version  # 必须：>= 3.10
 |------|------|------|
 | **Scoring** | 输出是否正确？ | grading.json |
 | **Compliance** | 过程是否遵循 SKILL.md？ | compliance.json |
-| **Calibration** | 评分是否可信？ | calibration.json |
+| **Calibration** | 结果×过程是否协调？ | calibration.json |
 
 输出对但过程未遵循 → 高分不可信；输出错但过程遵循 → 逻辑没问题，改指令即可。
 
@@ -375,7 +375,7 @@ skill-eval batch-report batch-workspace/ --open
 ### 关键规则
 
 1. **同一维度只用一层**：不要同时放 `NOT_CONTAINS "x"` 和 `LLM_NOT_DELEGATE`
-2. **双判让校准可信**：对关键产出，**同时**写一条 assertion（机械验证）和一条 expectation（语义描述）指向同一件事，校准才有 `agreement_rate` 数据。例：验证"生成了排序脚本" → 既写 `{"type":"FILE_EXISTS","params":{"filename":"sort.py"}}`，又写 expectation `"实现了排序算法"`
+2. **校准无需特殊 eval 设计**：校准是结果（打分 pass_rate≥0.8）× 过程（遵循性有无 prohibition/output 硬类违规）的 coherence 判决，自动跑、给 5 态 verdict（可信/高分存疑/可修复/技能失效/过程未知），不需要为它刻意"同一项同时写 assertion + expectation"
 3. **不为每条 expectation 自动套 CONTAINS_PATTERN**：expectation 是 LLM 语义判断，CONTAINS_PATTERN 是机器正则，量的是不同东西
 
 ---
@@ -499,8 +499,8 @@ PYEOF
 | pass_rate 全 0% | expectation 太模糊，重新 `init`；或用 `--scoring llm` |
 | 超时 | `--timeout 600`，`--eval-samples 5` |
 | without_skill 无 grading | 正常（无 skill 时 Claude 可能不产出可评判内容） |
-| calibration `agreement_rate` 为 null | 无双判数据（assertions 和 expectations 各评各的）；对关键产出补双判 |
-| calibration UNRELIABLE | 分歧较多，需人工复核 eval 设计 |
+| calibration 过程未知 | compliance 缺失或无可判定项（如纯推理题）；正常现象，非缺陷 |
+| calibration 高分存疑 | 输出对了但过程违反 prohibition/output 硬性规则；看 evidence 核对 |
 | benchmark.json 缺失 | aggregation 失败，单独 `skill-eval report iteration-1/` |
 | report 评分卡/安全面板空 | run 默认已自动产；若空说明跑了 `--no-static`/`--no-vet` 或 analyze/vet 失败（run 会打 Warning，不阻断）|
 | batch 显示 0 skills | 输入不是 skills 目录或 manifest.json 格式不对 |

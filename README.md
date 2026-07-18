@@ -7,7 +7,7 @@
 - **程序化断言** — 确定性验证（文件是否存在、内容是否匹配），零 LLM 成本，不可作弊
 - **盲比较** — 同一 LLM 盲评两份产出（with/without 或 v1/v2），相对判断消阅卷噪声
 - **遵循性检查** — 验证 Claude 是否真的按 SKILL.md 指令执行了，而不只是输出看起来对
-- **评分校准** — 交叉验证程序化 vs LLM 判分，告诉你分数本身是否可信
+- **校准** — 单次执行的结果×过程 coherence 判决：打分（结果）与遵循性（过程）协不协调，给出 5 态判决（可信/高分存疑/可修复/技能失效/过程未知）
 - **双率** — 客观（programmatic）与主观（llm）分开报，干净信号不被 LLM 噪声污染
 - **post-hoc 门禁** — `gate` 命令对 benchmark 出 PASS/FAIL 判决，exit code 直接驱动 CI
 - **CI 就绪** — `--format json` + exit code，合入 CI pipeline
@@ -208,7 +208,7 @@ skill-eval batch-report batch-workspace/ --open
 |------|------|------|
 | **Scoring** | 输出是否正确？ | grading.json |
 | **Compliance** | 过程是否遵循 SKILL.md？ | compliance.json |
-| **Calibration** | 评分是否可信？ | calibration.json |
+| **Calibration** | 结果×过程是否协调？ | calibration.json |
 
 三个维度独立运行、交叉验证。输出对但过程未遵循 → 高分不可信；输出错但过程遵循 → 逻辑没问题，改指令即可。
 
@@ -247,14 +247,17 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 
 ### 校准引擎
 
-交叉验证程序化断言和 LLM 评分的一致性（需"双判"——同一项既有 assertion 又有 expectation）。无双判数据时 `agreement_rate` 显式为 `null`（非"0%"）。可信度分四级：
+单次 with_skill 执行的**结果×过程 coherence 判决**——打分（结果面）与遵循性（过程面）协不协调。结果轴：打分 `pass_rate ≥ 0.8` 为结果对；过程轴：遵循性里有无 prohibition/output **硬类**违规（step/conditional 的 FAIL 只记软注、不翻判决，避免 LLM 方差污染）。两轴组合出 5 态：
 
-| 等级 | 含义 |
-|------|------|
-| HIGH | 两套评分高度一致，结果可信 |
-| MEDIUM | 少量分歧，基本可信 |
-| LOW | 分歧较多，需人工复核 |
-| UNRELIABLE | 严重分歧 |
+| verdict | 结果 | 过程 | 含义 |
+|---------|------|------|------|
+| 可信 TRUSTED | 对 | 对 | 未发现过程问题 |
+| 高分存疑 HIGH_SCORE_SUSPECT | 对 | 错 | 输出对了但过程违反硬性规则，建议核对（列 evidence） |
+| 可修复 FIXABLE | 错 | 对 | 输出未达标，过程无明显违规 |
+| 技能失效 SKILL_FAILED | 错 | 错 | 输出未达标且过程违反硬性规则 |
+| 过程未知 PROCESS_UNKNOWN | — | 无可对账 | compliance 缺失或无可判定（如纯推理题） |
+
+`calibration.json` 字段：`verdict` / `result_pass` / `process_status` / `hard_violations`（category+instruction+evidence）/ `soft_notes`（step/conditional FAIL 计数）/ `scoring_rate` / `compliance_rate`。gate 不读 calibration（纯显示层）；仅 with_skill 产（without 无 compliance → 不产）。
 
 ---
 
@@ -270,9 +273,9 @@ output/iteration-1/
 │       ├── outputs/        # Claude 产生的文件(skill references 已自动拷入)
 │       ├── grading.json    # 评分(expectations + assertions pass/fail,双率)
 │       ├── compliance.json # 遵循性检查(双率;仅 with_skill)
-│       └── calibration.json
+│       └── calibration.json # 结果×过程 coherence 判决(仅 with_skill)
 └── without_skill/
-    └── eval-<id>/run-<n>/  # 同上(无 compliance)
+    └── eval-<id>/run-<n>/  # 同上(无 compliance / 无校准)
 ```
 
 ---

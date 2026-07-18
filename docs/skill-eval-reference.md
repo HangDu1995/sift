@@ -209,7 +209,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 | `--max-retries` | 2 | 每 eval 在 UNEVAL/出错时的最大重试（每次重跑 claude+scoring+compliance，重 skill 可设 0-1 省 token） |
 | `--scoring` | hybrid | 评分模式：hybrid / programmatic / llm |
 | `--no-compliance` / `--compliance` | 自动 | 跳过/强制遵循性检查（默认自动：`--runs<3` 时开） |
-| `--no-calibration` | 关闭 | 跳过评分校准 |
+| `--no-calibration` | 关闭 | 跳过校准（结果×过程 coherence 判决） |
 | `--security-gate` | 关闭 | 安全审查返回 BLOCKED / REVIEW_NEEDED 时判失败 |
 | `--no-static` | 关闭 | 跳过末尾自动产静态评分卡（默认产，写进 iteration-1/，供 report 评分卡面板） |
 | `--no-vet` | 关闭 | 跳过末尾自动产安全审查（默认产，写进 iteration-1/，供 report 安全面板） |
@@ -409,10 +409,10 @@ skill-eval batch-report batch-workspace/ --open
 ┌─────────────────────────────────────────────────────────────┐
 │                    Skill 质量评估                            │
 ├─────────────┬─────────────────┬─────────────────────────────┤
-│  评分引擎    │  遵循性引擎      │  评分校准                   │
+│  评分引擎    │  遵循性引擎      │  校准                       │
 │ (Scoring)   │  (Compliance)   │  (Calibration)              │
 │             │                 │                             │
-│ 输出正确？   │  过程遵循？      │  评分可信？                  │
+│ 输出正确？   │  过程遵循？      │  结果×过程协调？             │
 │             │                 │                             │
 │ grading.json│ compliance.json │ calibration.json            │
 └─────────────┴─────────────────┴─────────────────────────────┘
@@ -496,20 +496,24 @@ skill-eval batch-report batch-workspace/ --open
 | **L1**（单元级） | 单个 Skill 的规则理解是否正确 | evals.json + expectations |
 | **L2**（Mock 场景） | Skill 在有 fixture 的场景下能否正确产出文件 | evals.json + assertions + fixtures |
 
-### 校准可信度与 eval 设计
+### 校准判决（结果×过程 coherence）
 
-`calibration.json` 的核心信号 `agreement_rate`（评分可信度）依赖 **程序化断言和 LLM 期望评同一项**（双判）：只有同一件事同时被 `assertions`（程序化）和 `expectations`（LLM 语义）覆盖，才能比较两者是否一致。
+`calibration.json` 是单次 with_skill 执行的**结果×过程 coherence 判决**——打分（结果面）与遵循性（过程面）协不协调，产出一个 5 态 `verdict`，不是凑出来的置信度数。
 
-| eval 设计 | agreement_rate | calibration 可信度 |
-|---|---|---|
-| **双判**（同一项既有 assertion 又有 expectation） | 有数据（一致率） | 可作为强参考 |
-| **无双判**（assertions 和 expectations 各评各的，无交集） | `null`（显示"—"，非"0%"） | 退化为基准值 + 弱信号，不宜作强参考 |
+- **结果轴**：打分 `pass_rate ≥ 0.8` → 结果对，否则结果错。
+- **过程轴**：遵循性（audit）里有无 prohibition/output **硬类**违规。有 → 过程错；无 → 过程对；compliance 缺失/无可判定 → 过程未知。step/conditional 的 FAIL 只记 `soft_notes`、不翻判决（避免 LLM 方差污染 verdict）。
 
-**建议**：对真正想验证的关键产出，在 `evals.json` 里**同时**写一条 `assertion`（可机械验证）和一条 `expectation`（语义描述）、两者指向同一件事，让校准有双判数据。例：验证"生成了排序脚本" → 既写 `{"type": "FILE_EXISTS", "params": {"filename": "sort.py"}}`，又写 expectation `"实现了排序算法"`。
+| verdict | 结果 | 过程 | 含义 |
+|---|---|---|---|
+| TRUSTED 可信 | 对 | 对 | 未发现过程问题 |
+| HIGH_SCORE_SUSPECT 高分存疑 | 对 | 错 | 输出对了但过程违反硬性规则（列 hard_violations evidence） |
+| FIXABLE 可修复 | 错 | 对 | 输出未达标，过程无明显违规 |
+| SKILL_FAILED 技能失效 | 错 | 错 | 输出未达标且过程违反硬性规则 |
+| PROCESS_UNKNOWN 过程未知 | — | 无可对账 | compliance 缺失或无可判定项（如纯推理题） |
 
-> 注：不双判时 calibration 显式标 `agreement_rate: null` 并在 recommendations 提示“无双判数据”，不会假报“0% 一致”。
+`calibration.json` 字段：`verdict` / `result_pass` / `process_status`（ok/violated/unknown）/ `hard_violations`（每条 category+instruction_text+evidence）/ `soft_notes`（step/conditional FAIL 计数）/ `scoring_rate` / `compliance_rate`。
 
-除 `grade`/`agreement_rate` 外，calibration.json 还携带三层诊断，报告直接渲染：`confidence_signals`（影响置信度的信号，如“6/6 项为单一来源评测 impact -0.1”，常驻有值，解释 `overall_confidence` 怎么来的）、`disagreements`（双判项里程序化与 LLM 打架的 expectation + 裁决策略 + 证据分析，仅双判时非空）、双判计数（`both_evaluated`/`programmatic_only_count`/`llm_only_count`，解释 `agreement_rate` 为何为 null）。
+> 设计取舍：verdict 只押在实测高精度的 prohibition/output 硬类违规上（"高分存疑"= 值得一看的分诊，非定罪）。gate 不读 calibration（纯显示层），仅 with_skill 产。旧版的 confidence/grade/agreement/dual-judgment 机制已移除——eval 设计**不再需要**为校准刻意"同一项同时写 assertion + expectation"。
 
 ---
 
@@ -650,7 +654,7 @@ skill-eval batch-report batch-workspace/ --open
 | `vet-report.json` | run 末尾自动产（原生安全扫描；也可 `vet -o` 单独产） |
 | `with_skill/eval-<id>/run-1/grading.json` | expectations + assertions 的 pass/fail（双率） |
 | `with_skill/eval-<id>/run-1/compliance.json` | SKILL.md 指令遵循性（AuditReport：summary 计数 + findings 四态；遵循度 = pass/(pass+fail)，排除 N/A + UNCLEAR） |
-| `with_skill/eval-<id>/run-1/calibration.json` | 评分可信度校准 |
+| `with_skill/eval-<id>/run-1/calibration.json` | 结果×过程 coherence 判决（5 态 verdict；仅 with_skill 产） |
 | `with_skill/eval-<id>/run-1/run_debug.json` | 完整回复 + tool_calls + timing |
 | `with_skill/eval-<id>/run-1/timing.json` | 执行耗时和 token 统计 |
 

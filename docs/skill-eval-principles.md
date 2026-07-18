@@ -57,7 +57,7 @@ skill-vetter 的扫描逻辑以原生 Python 重新实现：secrets-scan + struc
 - **结构化输出**：要求 LLM 返回 JSON 数组，可机械解析
 - **Evidence 强制**：每条判定必须附带证据引用
 
-skill-eval 在此基础上新增了批量评估、双通道交叉校准、盲比较和深度分析。
+skill-eval 在此基础上新增了批量评估、结果×过程 coherence 校准、盲比较和深度分析。
 
 ---
 
@@ -77,13 +77,13 @@ skill-eval 在此基础上新增了批量评估、双通道交叉校准、盲比
 
 **实现**：从 SKILL.md body 自动提取 6 类可检查指令（HEADING_STEP、TOOL_REQUIREMENT、CONSTRAINT、ANTI_FABRICATION、OUTPUT_FORMAT、REFERENCE_USAGE），按检查方式分为程序化（TOOL_CALL_CHECK）和 LLM 语义评判（LLM_JUDGE）。
 
-### 5.3 评分校准（Calibration）
+### 5.3 校准（Calibration）—— 结果×过程 coherence
 
-**来源**：原创。skill-creator 的评分没有评估"这个分数本身可不可信"。
+**来源**：原创。skill-creator 的评分没有评估"这次执行的输出与过程协不协调"。
 
-**理论**：评分者间信度（Inter-Rater Reliability）[Cohen's Kappa, 1960]。两个独立评估者（程序化通道 vs LLM 语义通道）对同一 expectation 给出冲突判定时，分析分歧原因，输出可信度等级。
+**理论**：跨层一致性（triangulation）。结果面（scoring，查输出）与过程面（compliance，查是否按 SKILL.md 执行）是同一技能的两个独立视角；二者矛盾（输出对了但过程违反硬性规则）→ 高分存疑。verdict 只押在实测高精度的 prohibition/output 硬类违规上，避免把有 LLM 方差的 step 判决塞进判决。
 
-可信度等级作为**独立信号**输出——与评分、遵循性并列，三层不合成单一总分。消费者据此判断该轮分数的权重；UNRELIABLE 提示评分本身不可信、不宜作强依据（而非自动折扣某个总分）。
+5 态 verdict（可信/高分存疑/可修复/技能失效/过程未知）作为**独立信号**输出——与评分、遵循性并列，三层不合成单一总分。gate 不读它（纯显示层，辅助人判断，不自动折扣某个总分）。
 
 ### 5.4 批量评测
 
@@ -103,7 +103,7 @@ skill-eval 在此基础上新增了批量评估、双通道交叉校准、盲比
 |------|----------|-----------|
 | **A/B 对照实验** | skill-creator 的 with/without 对照 | 将模型自身能力误归因于 Skill |
 | **双通道评分** | skill-creator grader.md + Anthropic evals | LLM 单一评分偏差 |
-| **评分校准** | skill-eval 原创，Cohen's Kappa | 评分者不一致时盲目信任 |
+| **校准** | skill-eval 原创，跨层一致性 triangulation | 只看输出对就信、忽略过程违规 |
 | **过程遵循** | skill-eval 原创，IFEval + ISO 19011 | 输出正确的假阳性 |
 | **盲比较与深度分析** | skill-creator comparator.md + analyzer.md | 单一评分维度 |
 | **配置驱动** | 12-Factor App | 硬编码领域知识 |
@@ -114,7 +114,6 @@ skill-eval 在此基础上新增了批量评估、双通道交叉校准、盲比
 
 - Zheng, L. et al. "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena" (2023)
 - Zhou, J. et al. "Instruction-Following Evaluation for Large Language Models" (2023)
-- Cohen, J. "A Coefficient of Agreement for Nominal Scales" (1960)
 - Dijkstra, E.W. "On the Role of Scientific Thought" (1974)
 - Wiggins, A. *The Twelve-Factor App* (2011), Factor III: Config
 - Anthropic: [Evals Best Practices](https://docs.anthropic.com/en/docs/build-with-claude/evaluations)
