@@ -325,7 +325,9 @@ class ABTestRunner:
                             compliance_report.model_dump_json(indent=2), encoding="utf-8"
                         )
 
-                if not self.config.skip_calibration:
+                # without_skill 无 compliance(谈不上遵循 skill)→ calibration 恒是过程未知噪音。
+                # compliance_report is None(默认 with→有、without→无;v1/v2 两边都跑)时不产 calibration。
+                if not self.config.skip_calibration and compliance_report is not None:
                     from skill_eval.calibration.calibrator import CalibrationChecker
                     calibrator = CalibrationChecker()
                     calibration_report = calibrator.calibrate(overall_grading, compliance=compliance_report)
