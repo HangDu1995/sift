@@ -10,19 +10,17 @@ from skill_eval.models.analysis_models import AnalysisResult
 from skill_eval.models.comparison_models import ComparisonResult
 from skill_eval.models.enums import (
     CheckMethod,
-    ConfidenceGrade,
+    CalibrationVerdict,
     InstructionPriority,
     InstructionSource,
-    ResolutionStrategy,
+    ProcessStatus,
     SecuritySeverity,
     SecurityVerdict,
     ScannerStatus,
-    SignalType,
 )
 from skill_eval.models.eval_models import Assertion
 from skill_eval.models.benchmark_models import (
     AnomalyReport,
-    CalibrationSummary,
     ComplianceSummary,
     RunResultEntry,
     StatsValue,
@@ -104,32 +102,24 @@ class InstructionCheck(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
-class DisagreementRecord(BaseModel):
-    expectation_text: str
-    programmatic_verdict: bool | None = None
-    llm_verdict: bool | None = None
-    resolution: ResolutionStrategy
-    evidence_analysis: str
-
-
-class ConfidenceSignal(BaseModel):
-    signal_type: SignalType
-    description: str
-    impact: float
+class HardViolation(BaseModel):
+    """硬类(prohibition/output)违规明细,供人秒辨真伪。"""
+    category: str          # AuditCategory 值:"prohibition" | "output"
+    instruction_text: str
+    evidence: str          # AuditFinding.evidence(为何 FAIL,中文)
 
 
 class CalibrationReport(BaseModel):
-    total_expectations: int
-    programmatic_only_count: int
-    llm_only_count: int
-    both_evaluated: int
-    agreement_count: int
-    agreement_rate: float | None  # None = 无 prog/llm 双判数据(P2-3),非"0% 一致"
-    disagreements: list[DisagreementRecord] = Field(default_factory=list)
-    confidence_signals: list[ConfidenceSignal] = Field(default_factory=list)
-    overall_confidence: float
-    grade: ConfidenceGrade
-    recommendations: list[str] = Field(default_factory=list)
+    """单次 with_skill 执行的过程 x 结果 coherence 判决。
+    gate 不读本结构(只 viewer 显示用)。verdict 由结果(pass_rate>=0.8) x 过程(硬类违规)矩阵决定。
+    """
+    verdict: CalibrationVerdict
+    result_pass: bool
+    process_status: ProcessStatus
+    hard_violations: list[HardViolation] = Field(default_factory=list)
+    soft_notes: dict[str, int] = Field(default_factory=dict)  # {"step": N, "conditional": N} = FAIL 计数
+    scoring_rate: float | None     # = grading.summary.pass_rate(显示用)
+    compliance_rate: float | None  # = pass/(pass+fail)(显示用);过程未知时 None
 
 
 class SkillEntry(BaseModel):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from skill_eval.models.enums import ConfidenceGrade, SkillCategory
+from skill_eval.models.enums import SkillCategory
 from skill_eval.models.execution_models import CheckResult
 from skill_eval.models.grading_models import ExpectationResult
 
@@ -42,13 +42,6 @@ class ComplianceSummary(BaseModel):
     required_total: int
 
 
-class CalibrationSummary(BaseModel):
-    grade: ConfidenceGrade
-    overall_confidence: float
-    agreement_rate: float | None  # None = 无 prog/llm 双判数据(P2-3);死字段(当前无构造点),随 CalibrationReport 同步
-    disagreement_count: int
-
-
 class RunResultEntry(BaseModel):
     eval_id: int
     eval_name: str = ""
@@ -57,7 +50,6 @@ class RunResultEntry(BaseModel):
     result: RunResultMetrics
     expectations: list[ExpectationResult] = Field(default_factory=list)
     compliance: ComplianceSummary | None = None
-    calibration: CalibrationSummary | None = None
     notes: list[str] = Field(default_factory=list)
     is_anomaly: bool = False
     anomaly_reason: str = ""

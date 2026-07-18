@@ -1,202 +1,85 @@
-"""Calibration checker — meta-evaluation of scoring trustworthiness."""
+"""Calibration checker — 单次执行的过程 x 结果 coherence 判决。
+
+verdict 由结果(pass_rate>=0.8) x 过程(遵循性)矩阵决定,只押在 prohibition/output
+硬类违规(高精度)上;step/conditional 的 FAIL 只记 soft_notes,不驱动 verdict(避免
+LLM 方差污染判决)。gate 不读本结构,仅 viewer 显示用。
+"""
 
 from __future__ import annotations
 
 from skill_eval.models import (
+    AuditCategory,
     AuditReport,
+    AuditVerdict,
     CalibrationReport,
-    ConfidenceGrade,
-    ConfidenceSignal,
-    DisagreementRecord,
-    ExpectationResult,
+    CalibrationVerdict,
     GradingResult,
-    ResolutionStrategy,
-    SignalType,
+    HardViolation,
+    ProcessStatus,
 )
+
+# 结果判定阈值:与 viewer 打分 badge 绿档同值(pass_rate >= 此值 = 结果对)。
+RESULT_PASS_THRESHOLD = 0.8
+# 硬类:实测高精度(主动查违规 / section 限定后),驱动 verdict;软类有 LLM 方差,只记 soft_notes。
+HARD_CATEGORIES = (AuditCategory.PROHIBITION, AuditCategory.OUTPUT)
+SOFT_CATEGORIES = (AuditCategory.STEP, AuditCategory.CONDITIONAL)
 
 
 class CalibrationChecker:
-    def __init__(self, trust_llm_on_conflict: bool = True):
-        self.trust_llm_on_conflict = trust_llm_on_conflict
-
     def calibrate(
         self,
         grading: GradingResult,
         compliance: AuditReport | None = None,
     ) -> CalibrationReport:
-        expectations = grading.expectations
+        scoring_rate = grading.summary.pass_rate
+        result_pass = scoring_rate >= RESULT_PASS_THRESHOLD
 
-        prog_results = [e for e in expectations if e.source in ("programmatic", "merged")]
-        llm_results = [e for e in expectations if e.source in ("llm", "llm_batch", "merged")]
+        # ---- 过程判定:只看 PASS/FAIL(排除 N/A 不适用、UNCLEAR 判不准)----
+        hard_violations: list[HardViolation] = []
+        soft_notes: dict[str, int] = {}
+        compliance_rate: float | None = None
 
-        prog_texts = {e.text for e in prog_results}
-        llm_texts = {e.text for e in llm_results}
-        both_texts = prog_texts & llm_texts
-
-        programmatic_only = len(prog_texts - llm_texts)
-        llm_only = len(llm_texts - prog_texts)
-        both_evaluated = len(both_texts)
-
-        disagreements = self._find_disagreements(expectations)
-        agreement_count = both_evaluated - len(disagreements)
-        agreement_rate = agreement_count / both_evaluated if both_evaluated > 0 else None
-
-        signals = self._detect_signals(
-            agreement_rate=agreement_rate,
-            both_evaluated=both_evaluated,
-            total=len(expectations),
-            programmatic_only=programmatic_only,
-            llm_only=llm_only,
-            compliance=compliance,
-            expectations=expectations,
+        judged = (
+            [f for f in compliance.findings
+             if f.verdict in (AuditVerdict.PASS, AuditVerdict.FAIL)]
+            if compliance and compliance.findings else []
         )
 
-        confidence = self._compute_confidence(signals)
-        grade = self._grade(confidence)
-        recommendations = self._generate_recommendations(signals, disagreements, both_evaluated)
+        if not judged:
+            process_status = ProcessStatus.UNKNOWN
+        else:
+            passed = sum(1 for f in judged if f.verdict == AuditVerdict.PASS)
+            compliance_rate = round(passed / len(judged), 4)
+            for f in judged:
+                if f.verdict != AuditVerdict.FAIL:
+                    continue
+                if f.category in HARD_CATEGORIES:
+                    hard_violations.append(HardViolation(
+                        category=f.category.value,
+                        instruction_text=f.instruction_text,
+                        evidence=f.evidence,
+                    ))
+                elif f.category in SOFT_CATEGORIES:
+                    soft_notes[f.category.value] = soft_notes.get(f.category.value, 0) + 1
+            process_status = ProcessStatus.VIOLATED if hard_violations else ProcessStatus.OK
+
+        # ---- 矩阵 ----
+        if process_status == ProcessStatus.UNKNOWN:
+            verdict = CalibrationVerdict.PROCESS_UNKNOWN
+        elif process_status == ProcessStatus.OK:
+            verdict = CalibrationVerdict.TRUSTED if result_pass else CalibrationVerdict.FIXABLE
+        else:  # VIOLATED
+            verdict = (
+                CalibrationVerdict.HIGH_SCORE_SUSPECT
+                if result_pass else CalibrationVerdict.SKILL_FAILED
+            )
 
         return CalibrationReport(
-            total_expectations=len(expectations),
-            programmatic_only_count=programmatic_only,
-            llm_only_count=llm_only,
-            both_evaluated=both_evaluated,
-            agreement_count=agreement_count,
-            agreement_rate=round(agreement_rate, 4) if agreement_rate is not None else None,
-            disagreements=disagreements,
-            confidence_signals=signals,
-            overall_confidence=round(confidence, 4),
-            grade=grade,
-            recommendations=recommendations,
+            verdict=verdict,
+            result_pass=result_pass,
+            process_status=process_status,
+            hard_violations=hard_violations,
+            soft_notes=soft_notes,
+            scoring_rate=round(scoring_rate, 4),
+            compliance_rate=compliance_rate,
         )
-
-    def _find_disagreements(self, expectations: list[ExpectationResult]) -> list[DisagreementRecord]:
-        by_text: dict[str, list[ExpectationResult]] = {}
-        for e in expectations:
-            by_text.setdefault(e.text, []).append(e)
-
-        disagreements: list[DisagreementRecord] = []
-        for text, results in by_text.items():
-            sources = {r.source for r in results}
-            if "merged" in sources or len(sources) < 2:
-                continue
-            verdicts = {r.source: r.passed for r in results}
-            prog = verdicts.get("programmatic")
-            llm = verdicts.get("llm") if "llm" in verdicts else verdicts.get("llm_batch")
-            if prog is not None and llm is not None and prog != llm:
-                if self.trust_llm_on_conflict:
-                    resolution = ResolutionStrategy.LLM_CORRECT if llm else ResolutionStrategy.PROGRAMMATIC_CORRECT
-                else:
-                    resolution = ResolutionStrategy.PROGRAMMATIC_CORRECT if prog else ResolutionStrategy.LLM_CORRECT
-                disagreements.append(DisagreementRecord(
-                    expectation_text=text,
-                    programmatic_verdict=prog,
-                    llm_verdict=llm,
-                    resolution=resolution,
-                    evidence_analysis=f"prog={prog} vs llm={llm}",
-                ))
-        return disagreements
-
-    def _detect_signals(
-        self,
-        agreement_rate: float | None,
-        both_evaluated: int,
-        total: int,
-        programmatic_only: int,
-        llm_only: int,
-        compliance: AuditReport | None,
-        expectations: list[ExpectationResult],
-    ) -> list[ConfidenceSignal]:
-        signals: list[ConfidenceSignal] = []
-
-        if agreement_rate is not None and agreement_rate >= 0.9:
-            signals.append(ConfidenceSignal(
-                signal_type=SignalType.HIGH_AGREEMENT_RATE,
-                description=f"一致性比率 {agreement_rate:.0%}",
-                impact=0.1,
-            ))
-        elif agreement_rate is not None and agreement_rate < 0.6:
-            signals.append(ConfidenceSignal(
-                signal_type=SignalType.LOW_AGREEMENT_RATE,
-                description=f"一致性比率偏低 {agreement_rate:.0%}",
-                impact=-0.2,
-            ))
-
-        if compliance:
-            # 遵循性是 AuditReport:rate 从 summary 算 = pass/(pass+fail),
-            # 排除 na(不适用)+ unclear(判不准),与 audit 自身 fail_rate 口径一致。
-            # pass+fail==0(无可判定)→ rate None,不发 COMPLIANCE 信号。
-            s = compliance.summary or {}
-            judged = (s.get("pass", 0) + s.get("fail", 0))
-            rate = (s.get("pass", 0) / judged) if judged > 0 else None
-            if rate is not None:
-                if rate >= 0.8:
-                    signals.append(ConfidenceSignal(
-                        signal_type=SignalType.COMPLIANCE_BACKS_SCORING,
-                        description=f"遵循性比率 {rate:.0%}",
-                        impact=0.1,
-                    ))
-                elif rate < 0.5:
-                    signals.append(ConfidenceSignal(
-                        signal_type=SignalType.COMPLIANCE_CONTRADICTS_SCORING,
-                        description=f"遵循性偏低 {rate:.0%}",
-                        impact=-0.3,
-                    ))
-
-        weak = sum(1 for e in expectations if len(e.evidence) < 20)
-        if weak > total * 0.5:
-            signals.append(ConfidenceSignal(
-                signal_type=SignalType.WEAK_EVIDENCE,
-                description=f"{weak}/{total} 项期望的证据不足",
-                impact=-0.1,
-            ))
-
-        single_source = programmatic_only + llm_only
-        if single_source > total * 0.5:
-            signals.append(ConfidenceSignal(
-                signal_type=SignalType.GRADER_SKIPPED_CHECKS,
-                description=f"{single_source}/{total} 项为单一来源评测",
-                impact=-0.1,
-            ))
-
-        return signals
-
-    def _compute_confidence(self, signals: list[ConfidenceSignal]) -> float:
-        base = 0.7
-        total = base + sum(s.impact for s in signals)
-        return max(0.0, min(1.0, total))
-
-    def _grade(self, confidence: float) -> ConfidenceGrade:
-        if confidence >= 0.8:
-            return ConfidenceGrade.HIGH
-        if confidence >= 0.6:
-            return ConfidenceGrade.MEDIUM
-        if confidence >= 0.4:
-            return ConfidenceGrade.LOW
-        return ConfidenceGrade.UNRELIABLE
-
-    def _generate_recommendations(
-        self, signals: list[ConfidenceSignal], disagreements: list[DisagreementRecord],
-        both_evaluated: int = 0,
-    ) -> list[str]:
-        recs: list[str] = []
-        signal_types = {s.signal_type for s in signals}
-
-        if both_evaluated == 0:
-            recs.append("无程序化+LLM 双判数据——agreement_rate 不可用,confidence 主要靠其他信号;建议 eval 设计让 assertions(程序化)与 expectations(LLM)评同项,校准才有双判依据")
-
-        if SignalType.LOW_AGREEMENT_RATE in signal_types:
-            recs.append("一致性比率偏低——建议增加 runs_per_config 以提高统计稳定性")
-
-        if SignalType.COMPLIANCE_CONTRADICTS_SCORING in signal_types:
-            recs.append("遵循性与评分矛盾——输出正确性可能并非由 Skill 导致")
-
-        if SignalType.WEAK_EVIDENCE in signal_types:
-            recs.append("评分证据不足——建议添加更具体的期望条件")
-
-        if SignalType.GRADER_SKIPPED_CHECKS in signal_types:
-            recs.append("多项为单一来源评测——建议同时启用程序化评分和 LLM 评分")
-
-        for d in disagreements[:3]:
-            recs.append(f"对 '{d.expectation_text[:50]}...' 存在分歧：已判定为 {d.resolution.value}")
-
-        return recs

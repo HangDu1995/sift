@@ -8,13 +8,17 @@ from skill_eval.compliance.extractor import InstructionExtractor
 from skill_eval.audit.tool_match import extract_first_balanced, match_tool_call, _extract_first_balanced
 from skill_eval.calibration.calibrator import CalibrationChecker
 from skill_eval.models import (
+    AuditCategory,
+    AuditFinding,
     AuditReport,
+    AuditVerdict,
+    CalibrationVerdict,
     CheckMethod,
     ExpectationResult,
     GradingResult,
     GradingSummary,
     InstructionSource,
-    ConfidenceGrade,
+    ProcessStatus,
     ToolCallRecord,
 )
 
@@ -274,139 +278,150 @@ class TestInstructionExtractorChinese:
         assert "ing" not in names
 
 
-class TestCalibrationChecker:
+def _finding(category, verdict, text="x", evidence="e", confidence=0.9):
+    return AuditFinding(
+        instruction_text=text,
+        source="CONSTRAINT",
+        verdict=verdict,
+        category=category,
+        evidence=evidence,
+        confidence=confidence,
+        transcript="t.jsonl",
+    )
 
 
-    def test_high_confidence(self):
-        cal = CalibrationChecker()
-        grading = GradingResult(
-            expectations=[
-                ExpectationResult(text="e1", passed=True, evidence="Strong evidence from transcript", source="programmatic"),
-                ExpectationResult(text="e1", passed=True, evidence="Strong evidence from analysis", source="llm"),
-                ExpectationResult(text="e2", passed=True, evidence="Verified in output file", source="programmatic"),
-                ExpectationResult(text="e2", passed=True, evidence="Output matches expected format", source="llm"),
-            ],
-            summary=GradingSummary(passed=4, failed=0, total=4, pass_rate=1.0),
-        )
-        report = cal.calibrate(grading)
-        assert report.grade in (ConfidenceGrade.HIGH, ConfidenceGrade.MEDIUM)
-        assert report.agreement_rate == 1.0
+def _grading(pass_rate):
+    return GradingResult(
+        expectations=[],
+        summary=GradingSummary(passed=0, failed=0, total=0, pass_rate=pass_rate),
+    )
 
-    def test_low_agreement(self):
-        cal = CalibrationChecker()
-        grading = GradingResult(
-            expectations=[
-                ExpectationResult(text="e1", passed=True, evidence="Found in output", source="programmatic"),
-                ExpectationResult(text="e1", passed=False, evidence="Not semantically correct", source="llm"),
-            ],
-            summary=GradingSummary(passed=1, failed=1, total=2, pass_rate=0.5),
-        )
-        report = cal.calibrate(grading)
-        assert len(report.disagreements) == 1
-        assert report.agreement_rate == 0.0
 
-    def test_no_dual_evaluation_agreement_rate_is_none(self):
-        """P2-3: 无 prog/llm 双判时 agreement_rate=None(非假 0.0),且给无双判提示。"""
-        cal = CalibrationChecker()
-        grading = GradingResult(
-            expectations=[
-                ExpectationResult(text="e1", passed=True, evidence="OK output", source="programmatic"),
-            ],
-            summary=GradingSummary(passed=1, failed=0, total=1, pass_rate=1.0),
-        )
-        report = cal.calibrate(grading)
-        assert report.agreement_rate is None, "无双判时 agreement_rate 应为 None,不是 0.0"
-        assert report.both_evaluated == 0
-        assert any("双判" in r for r in report.recommendations), "应给无双判提示"
+class TestCalibrationVerdict:
+    """结果(pass_rate>=0.8) x 过程(硬类违规) -> 5 态 verdict 矩阵。"""
 
-    def test_with_compliance(self):
-        cal = CalibrationChecker()
-        grading = GradingResult(
-            expectations=[
-                ExpectationResult(text="e1", passed=True, evidence="OK", source="programmatic"),
-            ],
-            summary=GradingSummary(passed=1, failed=0, total=1, pass_rate=1.0),
+    def test_trusted_result_pass_process_ok(self):
+        g = _grading(0.9)
+        c = AuditReport(
+            skill_name="s", transcripts=["t"],
+            summary={"total": 2, "pass": 2, "fail": 0, "na": 0, "unclear": 0},
+            findings=[_finding(AuditCategory.PROHIBITION, AuditVerdict.PASS),
+                      _finding(AuditCategory.STEP, AuditVerdict.PASS)],
         )
-        # 遵循性现在是 AuditReport;rate 从 summary 算 = pass/(pass+fail) = 1/4 = 0.25 → CONTRADICTS
-        compliance = AuditReport(
-            skill_name="test",
-            transcripts=[],
-            summary={"total": 4, "pass": 1, "fail": 3, "na": 0, "unclear": 0},
-            findings=[],
-        )
-        report = cal.calibrate(grading, compliance)
-        assert any(s.signal_type == "COMPLIANCE_CONTRADICTS_SCORING" for s in report.confidence_signals)
+        r = CalibrationChecker().calibrate(g, c)
+        assert r.verdict == CalibrationVerdict.TRUSTED
+        assert r.result_pass is True
+        assert r.process_status == ProcessStatus.OK
+        assert r.hard_violations == []
+        assert r.compliance_rate == 1.0
 
-    def test_compliance_rate_none_skips_signal(self):
-        """无可判定项(pass+fail=0,全 na/unclear)→ rate None → 不加 COMPLIANCE 信号,也不崩。"""
-        cal = CalibrationChecker()
-        grading = GradingResult(
-            expectations=[
-                ExpectationResult(text="e1", passed=True, evidence="OK", source="programmatic"),
-            ],
-            summary=GradingSummary(passed=1, failed=0, total=1, pass_rate=1.0),
+    def test_high_score_suspect_result_pass_hard_violation(self):
+        g = _grading(0.85)
+        c = AuditReport(
+            skill_name="s", transcripts=["t"],
+            summary={"total": 2, "pass": 1, "fail": 1, "na": 0, "unclear": 0},
+            findings=[_finding(AuditCategory.PROHIBITION, AuditVerdict.FAIL,
+                               "禁止编造错误码", "E-FAKE-999 编造代号"),
+                      _finding(AuditCategory.STEP, AuditVerdict.PASS)],
         )
-        compliance = AuditReport(
-            skill_name="test",
-            transcripts=[],
-            summary={"total": 5, "pass": 0, "fail": 0, "na": 5, "unclear": 0},  # 无可判定 → rate None
-            findings=[],
-        )
-        report = cal.calibrate(grading, compliance)  # 不应 TypeError
-        assert not any(s.signal_type == "COMPLIANCE_CONTRADICTS_SCORING" for s in report.confidence_signals)
-        assert not any(s.signal_type == "COMPLIANCE_BACKS_SCORING" for s in report.confidence_signals)
+        r = CalibrationChecker().calibrate(g, c)
+        assert r.verdict == CalibrationVerdict.HIGH_SCORE_SUSPECT
+        assert r.process_status == ProcessStatus.VIOLATED
+        assert len(r.hard_violations) == 1
+        assert r.hard_violations[0].category == "prohibition"
+        assert "E-FAKE-999" in r.hard_violations[0].evidence
 
-    def test_compliance_rate_from_audit_summary(self):
-        """calibrator 从 AuditReport.summary 算 rate(pass/(pass+fail),排 na+unclear)→ 信号阈值正确。"""
-        cal = CalibrationChecker()
-        grading = GradingResult(
-            expectations=[
-                ExpectationResult(text="e1", passed=True, evidence="OK", source="programmatic"),
-            ],
-            summary=GradingSummary(passed=1, failed=0, total=1, pass_rate=1.0),
+    def test_fixable_result_fail_process_ok(self):
+        g = _grading(0.5)
+        c = AuditReport(
+            skill_name="s", transcripts=["t"],
+            summary={"total": 1, "pass": 1, "fail": 0, "na": 0, "unclear": 0},
+            findings=[_finding(AuditCategory.OUTPUT, AuditVerdict.PASS)],
         )
-        # rate = 4/(4+1) = 0.8 → BACKS(na/unclear 排除出分母)
-        backs = AuditReport(
-            skill_name="t", transcripts=[],
-            summary={"total": 6, "pass": 4, "fail": 1, "na": 1, "unclear": 0}, findings=[],
-        )
-        r1 = cal.calibrate(grading, backs)
-        assert any(s.signal_type == "COMPLIANCE_BACKS_SCORING" for s in r1.confidence_signals)
+        r = CalibrationChecker().calibrate(g, c)
+        assert r.verdict == CalibrationVerdict.FIXABLE
+        assert r.process_status == ProcessStatus.OK
 
-        # rate = 1/(1+3) = 0.25 → CONTRADICTS
-        contra = AuditReport(
-            skill_name="t", transcripts=[],
-            summary={"total": 4, "pass": 1, "fail": 3, "na": 0, "unclear": 0}, findings=[],
+    def test_skill_failed_result_fail_hard_violation(self):
+        g = _grading(0.3)
+        c = AuditReport(
+            skill_name="s", transcripts=["t"],
+            summary={"total": 1, "pass": 0, "fail": 1, "na": 0, "unclear": 0},
+            findings=[_finding(AuditCategory.OUTPUT, AuditVerdict.FAIL)],
         )
-        r2 = cal.calibrate(grading, contra)
-        assert any(s.signal_type == "COMPLIANCE_CONTRADICTS_SCORING" for s in r2.confidence_signals)
+        r = CalibrationChecker().calibrate(g, c)
+        assert r.verdict == CalibrationVerdict.SKILL_FAILED
+        assert len(r.hard_violations) == 1
+        assert r.hard_violations[0].category == "output"
 
-        # rate = 3/(3+1) = 0.75 → 既不 BACKS(≥0.8)也不 CONTRADICTS(<0.5);na+unclear 不进分母
-        mid = AuditReport(
-            skill_name="t", transcripts=[],
-            summary={"total": 6, "pass": 3, "fail": 1, "na": 1, "unclear": 1}, findings=[],
+    def test_process_unknown_when_compliance_none(self):
+        r = CalibrationChecker().calibrate(_grading(0.9), None)
+        assert r.verdict == CalibrationVerdict.PROCESS_UNKNOWN
+        assert r.process_status == ProcessStatus.UNKNOWN
+        assert r.compliance_rate is None
+
+    def test_process_unknown_when_all_na_or_unclear(self):
+        # 全 N/A/UNCLEAR(无可判定)-> 过程未知(不硬判)
+        c = AuditReport(
+            skill_name="s", transcripts=["t"],
+            summary={"total": 2, "pass": 0, "fail": 0, "na": 2, "unclear": 0},
+            findings=[_finding(AuditCategory.PROHIBITION, AuditVerdict.NA),
+                      _finding(AuditCategory.STEP, AuditVerdict.UNCLEAR)],
         )
-        r3 = cal.calibrate(grading, mid)
-        assert not any(s.signal_type == "COMPLIANCE_BACKS_SCORING" for s in r3.confidence_signals)
-        assert not any(s.signal_type == "COMPLIANCE_CONTRADICTS_SCORING" for s in r3.confidence_signals)
+        r = CalibrationChecker().calibrate(_grading(0.9), c)
+        assert r.verdict == CalibrationVerdict.PROCESS_UNKNOWN
+        assert r.process_status == ProcessStatus.UNKNOWN
 
-    def test_grade_thresholds(self):
-        cal = CalibrationChecker()
-        assert cal._grade(0.9) == ConfidenceGrade.HIGH
-        assert cal._grade(0.7) == ConfidenceGrade.MEDIUM
-        assert cal._grade(0.5) == ConfidenceGrade.LOW
-        assert cal._grade(0.3) == ConfidenceGrade.UNRELIABLE
-
-    def test_recommendations_generated(self):
-        cal = CalibrationChecker()
-        grading = GradingResult(
-            expectations=[
-                ExpectationResult(text="e1", passed=True, evidence="Short", source="programmatic"),
-            ],
-            summary=GradingSummary(passed=1, failed=0, total=1, pass_rate=1.0),
+    def test_step_fail_is_soft_note_not_hard(self):
+        # step FAIL 不翻 verdict(软注),过程仍 OK,verdict 仍 TRUSTED(结果对时)
+        c = AuditReport(
+            skill_name="s", transcripts=["t"],
+            summary={"total": 1, "pass": 0, "fail": 1, "na": 0, "unclear": 0},
+            findings=[_finding(AuditCategory.STEP, AuditVerdict.FAIL)],
         )
-        report = cal.calibrate(grading)
-        assert isinstance(report.recommendations, list)
+        r = CalibrationChecker().calibrate(_grading(0.9), c)
+        assert r.verdict == CalibrationVerdict.TRUSTED
+        assert r.process_status == ProcessStatus.OK
+        assert r.hard_violations == []
+        assert r.soft_notes.get("step") == 1
+
+    def test_conditional_fail_is_soft_note(self):
+        c = AuditReport(
+            skill_name="s", transcripts=["t"],
+            summary={"total": 1, "pass": 0, "fail": 1, "na": 0, "unclear": 0},
+            findings=[_finding(AuditCategory.CONDITIONAL, AuditVerdict.FAIL)],
+        )
+        r = CalibrationChecker().calibrate(_grading(0.9), c)
+        assert r.process_status == ProcessStatus.OK
+        assert r.soft_notes.get("conditional") == 1
+
+    def test_threshold_boundary_0_8_is_result_pass(self):
+        # pass_rate 恰好 0.8 -> 结果对(>=)
+        c = AuditReport(
+            skill_name="s", transcripts=["t"],
+            summary={"total": 1, "pass": 1, "fail": 0, "na": 0, "unclear": 0},
+            findings=[_finding(AuditCategory.PROHIBITION, AuditVerdict.PASS)],
+        )
+        r = CalibrationChecker().calibrate(_grading(0.8), c)
+        assert r.result_pass is True
+        assert r.verdict == CalibrationVerdict.TRUSTED
+
+    def test_compliance_rate_excludes_na_unclear(self):
+        # rate = pass/(pass+fail),na/unclear 不进分母:2/(2+1)=0.6667
+        c = AuditReport(
+            skill_name="s", transcripts=["t"],
+            summary={"total": 4, "pass": 2, "fail": 1, "na": 1, "unclear": 0},
+            findings=[_finding(AuditCategory.PROHIBITION, AuditVerdict.PASS),
+                      _finding(AuditCategory.PROHIBITION, AuditVerdict.PASS),
+                      _finding(AuditCategory.STEP, AuditVerdict.FAIL),
+                      _finding(AuditCategory.STEP, AuditVerdict.NA)],
+        )
+        r = CalibrationChecker().calibrate(_grading(0.9), c)
+        assert r.compliance_rate == round(2 / 3, 4)
+
+    def test_scoring_rate_echoed(self):
+        r = CalibrationChecker().calibrate(_grading(0.77), None)
+        assert r.scoring_rate == round(0.77, 4)
 
 
 class TestParseRobustness:

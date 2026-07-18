@@ -21,8 +21,6 @@ from skill_eval.models import (
     InstructionPriority,
     CheckMethod,
     CalibrationReport,
-    ConfidenceGrade,
-    SignalType,
     AnalysisReport,
     SkillCategory,
     CheckResult,
@@ -126,18 +124,24 @@ class TestBenchmarkModels:
 
 
 class TestCalibrationModels:
-    def test_calibration_report(self):
-        cr = CalibrationReport(
-            total_expectations=5,
-            programmatic_only_count=1,
-            llm_only_count=1,
-            both_evaluated=3,
-            agreement_count=3,
-            agreement_rate=1.0,
-            overall_confidence=0.8,
-            grade=ConfidenceGrade.HIGH,
+    def test_calibration_report_new_schema(self):
+        from skill_eval.models import (
+            CalibrationVerdict, HardViolation, ProcessStatus,
         )
-        assert cr.grade == ConfidenceGrade.HIGH
+        cr = CalibrationReport(
+            verdict=CalibrationVerdict.HIGH_SCORE_SUSPECT,
+            result_pass=True,
+            process_status=ProcessStatus.VIOLATED,
+            hard_violations=[HardViolation(
+                category="prohibition", instruction_text="禁止编造错误码", evidence="E-FAKE-999",
+            )],
+            soft_notes={"step": 2},
+            scoring_rate=0.85,
+            compliance_rate=0.5,
+        )
+        assert cr.verdict == CalibrationVerdict.HIGH_SCORE_SUSPECT
+        assert cr.hard_violations[0].category == "prohibition"
+        assert cr.soft_notes == {"step": 2}
 
 
 class TestAnalysisModels:
