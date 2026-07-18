@@ -1072,43 +1072,42 @@
       // ── 校准(Calibration:阅卷可信度,meta,垫底)──
       if (run.calibration) {
         const cal = run.calibration;
-        const gradeColor = cal.grade === "HIGH" ? "var(--green)" : cal.grade === "MEDIUM" ? "var(--accent)" : cal.grade === "LOW" ? "var(--text-muted)" : "var(--red)";
-        html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
-        html += '<strong>校准等级：</strong> <span style="color:' + gradeColor + ';font-weight:600;">' + (cal.grade || "—") + '</span>';
-        html += '（一致性：' + (cal.agreement_rate != null ? (cal.agreement_rate * 100).toFixed(0) + '%' : '—') + '，整体置信度：' + (cal.overall_confidence != null ? cal.overall_confidence.toFixed(2) : '—') + '）';
-        // 计数行(常显):双判/仅程序/仅LLM;agreement_rate 为 null 时正好解释为何一致性显 "—"
-        html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">双判 ' + (cal.both_evaluated != null ? cal.both_evaluated : 0) + ' · 仅程序 ' + (cal.programmatic_only_count != null ? cal.programmatic_only_count : 0) + ' · 仅LLM ' + (cal.llm_only_count != null ? cal.llm_only_count : 0) + '</div>';
-        // confidence_signals(非空时显):只 description + impact 色片,不显 signal_type 枚举码
-        if (cal.confidence_signals && cal.confidence_signals.length) {
-          html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
-          for (const s of cal.confidence_signals) {
-            let impactColor = "var(--text-muted)";
-            if (s.impact != null) {
-              if (s.impact < 0) impactColor = s.impact <= -0.15 ? "var(--red)" : "var(--accent)";
-              else if (s.impact > 0) impactColor = "var(--green)";
+        // 旧 schema(无 verdict)→ 降级提示,不崩
+        if (!cal.verdict) {
+          html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);font-size:0.75rem;color:var(--text-muted);">校准数据为旧格式,重跑 run 生成新判决。</div>';
+        } else {
+          const V = {
+            TRUSTED:            {icon: "✅", color: "var(--green)",   label: "可信",     reason: "未发现过程问题"},
+            HIGH_SCORE_SUSPECT: {icon: "⚠️", color: "var(--accent)",  label: "高分存疑", reason: "输出对了但过程违反了硬性规则,建议核对"},
+            FIXABLE:            {icon: "🔧", color: "var(--accent)",  label: "可修复",   reason: "输出未达标,过程无明显违规"},
+            SKILL_FAILED:       {icon: "❌", color: "var(--red)",     label: "技能失效", reason: "输出未达标且过程违反硬性规则"},
+            PROCESS_UNKNOWN:    {icon: "—",  color: "var(--text-muted)", label: "过程未知", reason: "无可对账的过程信号"},
+          };
+          const v = V[cal.verdict] || V.PROCESS_UNKNOWN;
+          html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
+          html += '<strong>校准：</strong> <span style="color:' + v.color + ';font-weight:600;">' + v.icon + ' ' + escapeHtml(v.label) + '</span>';
+          html += '<span style="color:var(--text-muted);margin-left:0.5rem;">' + escapeHtml(v.reason) + '</span>';
+          // 两个真率
+          const sr = (cal.scoring_rate != null) ? (cal.scoring_rate * 100).toFixed(0) + '%' : '—';
+          const cr = (cal.compliance_rate != null) ? (cal.compliance_rate * 100).toFixed(0) + '%' : '—';
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">打分率 ' + sr + ' · 遵循性率 ' + cr + '</div>';
+          // 硬违规明细(仅 HIGH_SCORE_SUSPECT / SKILL_FAILED 有数据时)
+          if (cal.hard_violations && cal.hard_violations.length) {
+            html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
+            for (const hv of cal.hard_violations) {
+              html += '<li><strong>[' + escapeHtml(hv.category || '') + ']</strong> ' + escapeHtml(hv.instruction_text || '')
+                    + (hv.evidence ? '<div style="color:var(--text-muted);margin-top:0.15rem;">' + escapeHtml(hv.evidence) + '</div>' : '') + '</li>';
             }
-            const impactTag = (s.impact != null) ? '<span style="color:' + impactColor + ';margin-left:0.25rem;">(' + (s.impact > 0 ? '+' : '') + s.impact.toFixed(2) + ')</span>' : '';
-            html += '<li>' + escapeHtml(s.description || '') + impactTag + '</li>';
+            html += '</ul>';
           }
-          html += '</ul>';
-        }
-        // disagreements(仅非空时显;空时完全不渲染,计数行已解释无双判)
-        if (cal.disagreements && cal.disagreements.length) {
-          const fmtVerdict = (v) => v === true ? '通过' : (v === false ? '失败' : '—');
-          html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
-          for (const d of cal.disagreements) {
-            html += '<li>' + escapeHtml(d.expectation_text || '') + '<span style="color:var(--text-muted);margin-left:0.25rem;">（程序判 ' + fmtVerdict(d.programmatic_verdict) + ' / LLM判 ' + fmtVerdict(d.llm_verdict) + (d.resolution ? ' · ' + escapeHtml(d.resolution) : '') + '）</span>';
-            if (d.evidence_analysis) html += '<div style="color:var(--text-muted);margin-top:0.15rem;">' + escapeHtml(d.evidence_analysis) + '</div>';
-            html += '</li>';
+          // 软注(step/conditional FAIL 计数,未翻判决)
+          const soft = cal.soft_notes || {};
+          const softParts = Object.keys(soft).map(k => k + ' ' + soft[k]);
+          if (softParts.length) {
+            html += '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;">软注(未翻判决):' + escapeHtml(softParts.join(' · ')) + '</div>';
           }
-          html += '</ul>';
+          html += '</div>';
         }
-        if (cal.recommendations && cal.recommendations.length) {
-          html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
-          for (const r of cal.recommendations) html += '<li>' + escapeHtml(r) + '</li>';
-          html += '</ul>';
-        }
-        html += '</div>';
       }
 
       html += '</div>';

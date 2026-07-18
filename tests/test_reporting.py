@@ -206,44 +206,43 @@ class TestReportGeneratorStatic:
         # 数据流断言(文档性):verdict 真嵌入了 EMBEDDED_DATA
         assert '"verdict": "UNEVAL"' in html
 
-    def test_generate_html_calibration_diagnostics(self, tmp_path):
-        """calibration 块补 confidence_signals / disagreements / 双判计数展示。
+    def test_generate_html_calibration_block_new_schema(self, tmp_path):
+        """校准块改成 verdict 判决;旧 confidence_signals/disagreements/等级 字段移除。
 
-        RED 驱动:renderGrades 的 calibration 块循环变量是 cal(别处没有 cal. 前缀),
-        锚定 cal.confidence_signals / cal.disagreements 避免撞别处字面量(改前 grep=0)。
+        RED 驱动:锚定 V[cal.verdict](新模板独有查表渲染),且旧 cal.confidence_signals
+        不再出现在模板里。
         """
         workspace = tmp_path / "iteration-1"
         ws_dir = workspace / "with_skill" / "run-1"
         ws_dir.mkdir(parents=True)
         (ws_dir / "outputs").mkdir()
         (ws_dir / "outputs" / "out.txt").write_text("hello")
+        (ws_dir / "grading.json").write_text(json.dumps({
+            "summary": {"pass_rate": 0.85, "passed": 17, "failed": 3, "total": 20},
+            "expectations": [],
+        }))
         (ws_dir / "calibration.json").write_text(json.dumps({
-            "grade": "LOW",
-            "agreement_rate": None,
-            "overall_confidence": 0.6,
-            "recommendations": ["增加双判样本"],
-            "both_evaluated": 1,
-            "programmatic_only_count": 0,
-            "llm_only_count": 0,
-            "confidence_signals": [
-                {"signal_type": "GRADER_SKIPPED_CHECKS",
-                 "description": "测试信号", "impact": -0.1},
-            ],
-            "disagreements": [
-                {"expectation_text": "disagree one",
-                 "programmatic_verdict": False, "llm_verdict": True,
-                 "resolution": "TRUST_PROGRAMMATIC",
-                 "evidence_analysis": "程序化断言更可靠"},
-            ],
+            "verdict": "HIGH_SCORE_SUSPECT",
+            "result_pass": True,
+            "process_status": "violated",
+            "hard_violations": [{"category": "prohibition",
+                                 "instruction_text": "禁止编造错误码",
+                                 "evidence": "E-FAKE-999 编造"}],
+            "soft_notes": {"step": 2},
+            "scoring_rate": 0.85,
+            "compliance_rate": 0.5,
         }))
 
         gen = ReportGenerator()
         html = gen.generate_html(workspace, None)
-        # RED 驱动断言:calibration 块现引用 cal.confidence_signals / cal.disagreements
-        assert "cal.confidence_signals" in html
-        assert "cal.disagreements" in html
-        # 数据流断言(文档性,改前改后都通过):confidence_signals 描述真嵌入了 EMBEDDED_DATA
-        assert "测试信号" in html
+        # RED 驱动:新模板用 V[cal.verdict] 查表渲染 verdict 标签
+        assert "V[cal.verdict]" in html
+        assert "高分存疑" in html          # verdict 标签真渲染
+        assert "E-FAKE-999" in html       # 硬违规 evidence 真嵌入 EMBEDDED_DATA
+        # 旧凑数字段已从模板移除
+        assert "cal.confidence_signals" not in html
+        assert "cal.disagreements" not in html
+        assert "校准等级" not in html
 
     def test_generate_html_compliance_per_run_and_aggregate(self, tmp_path):
         """遵循性 per-run(评估详情里 cr.summary)+ 整个考试聚合(基准测试 tab)并存:
