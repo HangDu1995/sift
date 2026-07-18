@@ -1150,12 +1150,23 @@
         + '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;">客观稳 · 主观看方向</div>'
         + '</div>';
 
-      // 执行规模:runs × evals 合并一张卡(每题跑几遍 × 几道题 = 每侧总次数)
-      if (metadata.runs_per_configuration && metadata.evals_run && metadata.evals_run.length) {
-        const total = metadata.runs_per_configuration * metadata.evals_run.length;
-        html += mkCard("执行规模", metadata.runs_per_configuration + " × " + metadata.evals_run.length, "runs × evals · " + total + " 次/侧", "var(--text)");
-      } else if (metadata.runs_per_configuration) {
-        html += mkCard("每组运行次数", metadata.runs_per_configuration, Object.keys(summary).filter(k => k !== "delta").join(" / "), "var(--text)");
+      // 执行规模:总数 = 实际聚合的 run 条数(data.runs.length,A/B 两侧已计入,免疫
+      // evals_run 计数 bug);副标题分解 侧 × 题 × runs/题 解释结构。
+      {
+        const bRuns = data.runs || [];
+        const total = bRuns.length;
+        const sides = configs.length;
+        const evals = new Set(bRuns.map(r => r.eval_id)).size;
+        const rpg = metadata.runs_per_configuration || 0;
+        if (total) {
+          const parts = [];
+          if (sides) parts.push(sides + " 侧");
+          if (evals) parts.push(evals + " 题");
+          if (rpg) parts.push(rpg + " runs/题");
+          html += mkCard("执行规模", total + " 次", parts.join(" × "), "var(--text)");
+        } else if (rpg) {
+          html += mkCard("每组运行次数", rpg, configs.join(" / "), "var(--text)");
+        }
       }
       if (metadata.skill_name) {
         html += mkCard("Skill", metadata.skill_name, "", "var(--accent)");

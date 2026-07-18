@@ -586,6 +586,38 @@ class TestReportGeneratorStatic:
         # RED 锚点:模板引用 metadata.comparator_model
         assert "metadata.comparator_model" in html
 
+    def test_generate_html_execution_scale_uses_run_count(self, tmp_path):
+        """执行规模卡:总数用 data.runs.length(A/B 两侧已计入),分解 侧×题×runs/题。
+
+        回归:旧卡显 runs_per_configuration × evals_run.length = **每侧**次数,漏 A/B 另一侧;
+        叠加 evals_run 曾因 checkpoints bug 偏少(如 [1])→ 实测显 "3 × 1" 严重误导。改后显
+        真实总执行次数(data.runs.length,免疫 evals_run bug)+ 结构分解(侧×题×runs/题)。
+
+        viewer 客户端渲染,pytest 只验模板 JS 源码串(与 test_generate_html_metadata_renders_models
+        同口径;运行时正确性靠 node --check + 重生成 report.html 肉眼验证)。
+
+        RED 锚点:旧模板源码含 "次/侧"(每侧口径)、"runs × evals";新模板含 'total + " 次"'、
+        'sides + " 侧"'。
+        """
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        runs = []
+        for cfg in ("with_skill", "without_skill"):
+            for eval_id in (1, 2, 3):
+                runs.append({"eval_id": eval_id, "configuration": cfg, "run_number": 1})
+        benchmark = {
+            "metadata": {"skill_name": "x", "runs_per_configuration": 1, "evals_run": [1, 2, 3]},
+            "runs": runs,
+            "run_summary": {"with_skill": {}, "without_skill": {}},
+        }
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        assert "执行规模" in html
+        assert 'total + " 次"' in html     # 新:总数口径 = runs.length(A/B 两侧计入)
+        assert 'sides + " 侧"' in html     # 新:分解含侧
+        assert "次/侧" not in html         # 旧每侧口径已去
+        assert "runs × evals" not in html  # 旧分解式已去
+
     def test_generate_html_anomaly_header_shows_denominator(self, tmp_path):
         """anomaly 标题加分母 total_runs:"X 个异常" → "X 个异常 / 共 Y 次"(一眼判严重度)。
 

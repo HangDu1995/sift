@@ -287,7 +287,9 @@ class BenchmarkAggregator:
         run_summary = self._build_summary(configs_data)
 
         checkpoints_data = self._load_checkpoints(iteration_dir)
-        eval_ids = sorted(set(cp.get("eval_id", 0) for cp in checkpoints_data)) if checkpoints_data else sorted(set(r.eval_id for r in runs))
+        # evals_run 用 runs(authoritative):_load_checkpoints 只读**首个** checkpoints.json
+        # (单 run、只见自己 eval)→ 计数偏少(如三 eval run 显 [1])。runs 涵盖所有已聚合 eval。
+        eval_ids = sorted(set(r.eval_id for r in runs))
 
         main_benchmark = BenchmarkData(
             metadata=BenchmarkMetadata(

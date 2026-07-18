@@ -152,6 +152,32 @@ class TestBenchmarkAggregator:
             benchmark = agg.aggregate(iteration, tmp_path)
         assert benchmark.metadata.executor_model == "glm-5.2[1m]"
 
+    def test_aggregate_evals_run_from_runs_not_single_checkpoints(self, tmp_path: Path):
+        """evals_run 用 runs(所有已聚合 eval),不从单个 checkpoints.json 推。
+
+        回归:_load_checkpoints 只读**首个** checkpoints.json(单 run、只见自己 eval),
+        旧 `eval_ids = ... checkpoints_data if checkpoints_data else runs` 会短路到 checkpoints
+        → evals_run 只含那个 run 的 eval(如 [1]),漏掉其余 eval。真实多 eval run 应得完整列表。
+        """
+        iteration = tmp_path / "iteration-1"
+        iteration.mkdir(parents=True)
+        config = iteration / "with_skill"
+        for eval_id in (1, 2, 3):
+            rd = config / f"eval-{eval_id}" / "run-1"
+            rd.mkdir(parents=True)
+            (rd / "outputs").mkdir()
+            (rd / "grading.json").write_text(json.dumps({
+                "expectations": [], "summary": {"passed": 1, "failed": 0, "total": 1, "pass_rate": 1.0},
+            }), encoding="utf-8")
+        # 首个 run 落一个只含 eval_id=1 的 checkpoints.json → 触发旧 checkpoints 短路分支
+        (config / "eval-1" / "run-1" / "checkpoints.json").write_text(
+            json.dumps([{"eval_id": 1, "step": "x"}]), encoding="utf-8")
+        agg = BenchmarkAggregator()
+        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+            benchmark = agg.aggregate(iteration, tmp_path)
+        assert benchmark.metadata.evals_run == [1, 2, 3]
+
     def test_aggregate_dual_rate_delta(self, tmp_path: Path):
         """双率:grading summary 含 pass_rate_programmatic/_llm → run_summary + delta 双率。"""
         iteration = tmp_path / "iteration-1"
