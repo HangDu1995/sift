@@ -1171,11 +1171,19 @@
       if (metadata.skill_name) {
         html += mkCard("Skill", metadata.skill_name, "", "var(--accent)");
       }
-      const modelParts = [];
-      if (metadata.executor_model) modelParts.push("执行 " + metadata.executor_model);
-      if (metadata.analyzer_model) modelParts.push("分析 " + metadata.analyzer_model);
-      if (metadata.comparator_model) modelParts.push("对比 " + metadata.comparator_model);
-      if (modelParts.length) html += mkCard("模型", modelParts.join(" / "), "", "var(--text)");
+      // 模型:三角色(executor/comparator/analyzer)当前锁死同一 --model,值同 → 合一张卡标"同源"
+      // (明示同源,别假装能独立配置误导);三值不同(将来 --comparator-model 等独立 flag)才按角色展开。
+      const modelVals = [metadata.executor_model, metadata.comparator_model, metadata.analyzer_model].filter(Boolean);
+      const uniqModels = [...new Set(modelVals)];
+      if (uniqModels.length === 1) {
+        html += mkCard("模型", uniqModels[0], "执行 / 对比 / 分析 同源", "var(--text)");
+      } else if (uniqModels.length > 1) {
+        const modelParts = [];
+        if (metadata.executor_model) modelParts.push("执行 " + metadata.executor_model);
+        if (metadata.comparator_model) modelParts.push("对比 " + metadata.comparator_model);
+        if (metadata.analyzer_model) modelParts.push("分析 " + metadata.analyzer_model);
+        html += mkCard("模型", modelParts.join(" / "), "", "var(--text)");
+      }
       html += "</div>";
 
       // ── Anomaly Report ──

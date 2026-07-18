@@ -564,27 +564,32 @@ class TestReportGeneratorStatic:
         assert "exp1" in html and "exp2" in html
 
     def test_generate_html_metadata_renders_models(self, tmp_path):
-        """D: metadata 的 comparator/analyzer/executor model 字段(str,可能空)旧没显 → 显非空项。
+        """模型卡:三角色(executor/comparator/analyzer)当前锁死同一 --model,值同 → 合一张卡标"同源"。
 
-        RED 锚点:改前模板不引用 metadata.comparator_model(改前 grep=0)→
-        断言 "in" 失败 = RED;改后 GREEN。
+        旧实现无视三值是否相同、永远按角色展开三张(暗示能独立配置,实际锁死一个 --model,误导)。
+        改后:三值同 → 合一张卡 + 副标"执行 / 对比 / 分析 同源"明示同源;三值不同才展开(为将来独立 flag 留口)。
+
+        viewer 客户端渲染,pytest 只验模板 JS 源码字面(与执行规模卡测试同口径;运行时正确性靠
+        node --check + 重生成 report.html 肉眼验证)。展开路径是保留代码,靠 node --check + 真数据肉眼验。
+
+        RED 锚点:旧模板无 '执行 / 对比 / 分析 同源' 字面(改前 grep=0);改后在合卡副标里。
         """
         workspace = tmp_path / "iteration-1"
         workspace.mkdir()
         benchmark = {
             "metadata": {
                 "skill_name": "x",
-                "executor_model": "",
-                "analyzer_model": "default",
-                "comparator_model": "default",
+                "executor_model": "glm-5.2[1m]",
+                "analyzer_model": "glm-5.2[1m]",
+                "comparator_model": "glm-5.2[1m]",
             },
             "runs": [],
             "run_summary": {},
         }
         gen = ReportGenerator()
         html = gen.generate_html(workspace, benchmark)
-        # RED 锚点:模板引用 metadata.comparator_model
-        assert "metadata.comparator_model" in html
+        assert "模型" in html
+        assert "执行 / 对比 / 分析 同源" in html   # 三值同 → 合卡标同源(源码字面锚点)
 
     def test_generate_html_execution_scale_uses_run_count(self, tmp_path):
         """执行规模卡:总数用 data.runs.length(A/B 两侧已计入),分解 侧×题×runs/题。
