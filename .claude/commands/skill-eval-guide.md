@@ -375,7 +375,7 @@ skill-eval batch-report batch-workspace/ --open
 ### 关键规则
 
 1. **同一维度只用一层**：不要同时放 `NOT_CONTAINS "x"` 和 `LLM_NOT_DELEGATE`
-2. **校准无需特殊 eval 设计**：校准是结果（打分 pass_rate≥0.8）× 过程（遵循性有无 prohibition/output 硬类违规）的 coherence 判决，自动跑、给 5 态 verdict（可信/高分存疑/可修复/技能失效/过程未知），不需要为它刻意"同一项同时写 assertion + expectation"
+2. **校准无需特殊 eval 设计**：校准是结果（优先押客观 pass_rate≥0.8，无客观锚回退主观）× 过程（遵循性有无 prohibition/output 硬类违规）的 coherence 判决，自动跑、给 5 态 verdict（可信/高分存疑/可修复/技能失效/过程未知），不需要为它刻意"同一项同时写 assertion + expectation"
 3. **不为每条 expectation 自动套 CONTAINS_PATTERN**：expectation 是 LLM 语义判断，CONTAINS_PATTERN 是机器正则，量的是不同东西
 
 ---

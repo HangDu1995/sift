@@ -328,10 +328,17 @@ def _finding(category, verdict, text="x", evidence="e", confidence=0.9):
     )
 
 
-def _grading(pass_rate):
+def _grading(pass_rate, prog_rate=None, llm_rate=None):
+    """构造 GradingResult。prog_rate/llm_rate 默认 None(纯主观题无客观锚)。
+    设了 prog_rate → 结果轴押客观;不设 → 回退 mixed(pass_rate)。"""
     return GradingResult(
         expectations=[],
-        summary=GradingSummary(passed=0, failed=0, total=0, pass_rate=pass_rate),
+        summary=GradingSummary(
+            passed=0, failed=0, total=0,
+            pass_rate=pass_rate,
+            pass_rate_programmatic=prog_rate,
+            pass_rate_llm=llm_rate,
+        ),
     )
 
 
@@ -460,6 +467,42 @@ class TestCalibrationVerdict:
     def test_scoring_rate_echoed(self):
         r = CalibrationChecker().calibrate(_grading(0.77), None)
         assert r.scoring_rate == round(0.77, 4)
+
+    def test_result_axis_prefers_programmatic_when_present(self):
+        """有客观锚时结果轴押 programmatic(即使 mixed 更高也不被主观拉高)。
+        eval-3 变体:mixed 0.9 达标但客观 0.5 未达标 → 结果按客观判未达标。"""
+        g = _grading(0.9, prog_rate=0.5, llm_rate=0.9)
+        r = CalibrationChecker().calibrate(g, None)
+        assert r.result_pass is False                  # 押客观 0.5 < 0.8
+        assert r.scoring_rate == round(0.5, 4)
+        assert r.scoring_rate_basis == "programmatic"
+
+    def test_result_axis_programmatic_drives_even_if_mixed_low(self):
+        """客观达标就算混合没达标也判结果对(客观稳优先信)。mixed 0.5 但 prog 0.9 → 达标。"""
+        g = _grading(0.5, prog_rate=0.9, llm_rate=0.5)
+        r = CalibrationChecker().calibrate(g, None)
+        assert r.result_pass is True
+        assert r.scoring_rate == round(0.9, 4)
+        assert r.scoring_rate_basis == "programmatic"
+
+    def test_no_programmatic_falls_back_to_mixed(self):
+        """纯主观题(无客观锚)→ 回退 mixed(含 LLM),basis=mixed。
+        eval-1/2 场景:L1/L2 推理题无 programmatic 断言。"""
+        g = _grading(0.85, prog_rate=None, llm_rate=0.85)
+        r = CalibrationChecker().calibrate(g, None)
+        assert r.result_pass is True                  # mixed 0.85 >= 0.8
+        assert r.scoring_rate == round(0.85, 4)
+        assert r.scoring_rate_basis == "mixed"
+        assert r.scoring_rate_programmatic is None
+        assert r.scoring_rate_llm == round(0.85, 4)
+
+    def test_scoring_rate_dual_echoed(self):
+        """客观/主观双率原样回显(供 viewer 显示客观/主观分列)。"""
+        g = _grading(0.7586, prog_rate=0.7143, llm_rate=0.8)
+        r = CalibrationChecker().calibrate(g, None)
+        assert r.scoring_rate == round(0.7143, 4)      # 押客观
+        assert r.scoring_rate_programmatic == round(0.7143, 4)
+        assert r.scoring_rate_llm == round(0.8, 4)
 
 
 class TestParseRobustness:

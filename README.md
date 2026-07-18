@@ -247,7 +247,7 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 
 ### 校准引擎
 
-单次 with_skill 执行的**结果×过程 coherence 判决**——打分（结果面）与遵循性（过程面）协不协调。结果轴：打分 `pass_rate ≥ 0.8` 为结果对；过程轴：遵循性里有无 prohibition/output **硬类**违规（step/conditional 的 FAIL 只记软注、不翻判决，避免 LLM 方差污染）。两轴组合出 5 态：
+单次 with_skill 执行的**结果×过程 coherence 判决**——打分（结果面）与遵循性（过程面）协不协调。结果轴：优先押**客观** `pass_rate_programmatic ≥ 0.8`（纯主观题无客观锚回退主观率）；过程轴：遵循性里有无 prohibition/output **硬类**违规（step/conditional 的 FAIL 只记软注、不翻判决，避免 LLM 方差污染）。两轴组合出 5 态：
 
 | verdict | 结果 | 过程 | 含义 |
 |---------|------|------|------|
@@ -257,7 +257,7 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 | 技能失效 SKILL_FAILED | 错 | 错 | 输出未达标且过程违反硬性规则 |
 | 过程未知 PROCESS_UNKNOWN | — | 无可对账 | compliance 缺失或无可判定（如纯推理题） |
 
-`calibration.json` 字段：`verdict` / `result_pass` / `process_status` / `hard_violations`（category+instruction+evidence）/ `soft_notes`（step/conditional FAIL 计数）/ `scoring_rate` / `compliance_rate`。gate 不读 calibration（纯显示层）；仅 with_skill 产（without 无 compliance → 不产）。
+`calibration.json` 字段：`verdict` / `result_pass` / `process_status` / `hard_violations`（category+instruction+evidence）/ `soft_notes`（step/conditional FAIL 计数）/ `scoring_rate` / `scoring_rate_basis`（programmatic 押客观 | mixed 无客观锚回退主观）/ `scoring_rate_programmatic` / `scoring_rate_llm` / `compliance_rate`。gate 不读 calibration（纯显示层）；仅 with_skill 产（without 无 compliance → 不产）。
 
 ---
 

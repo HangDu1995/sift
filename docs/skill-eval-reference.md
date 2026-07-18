@@ -500,7 +500,7 @@ skill-eval batch-report batch-workspace/ --open
 
 `calibration.json` 是单次 with_skill 执行的**结果×过程 coherence 判决**——打分（结果面）与遵循性（过程面）协不协调，产出一个 5 态 `verdict`，不是凑出来的置信度数。
 
-- **结果轴**：打分 `pass_rate ≥ 0.8` → 结果对，否则结果错。
+- **结果轴**：优先押**客观** `pass_rate_programmatic ≥ 0.8` → 结果对；纯主观题无客观锚时回退主观率（`scoring_rate_basis=mixed`，显示标注「基于主观判分」）。
 - **过程轴**：遵循性（audit）里有无 prohibition/output **硬类**违规。有 → 过程错；无 → 过程对；compliance 缺失/无可判定 → 过程未知。step/conditional 的 FAIL 只记 `soft_notes`、不翻判决（避免 LLM 方差污染 verdict）。
 
 | verdict | 结果 | 过程 | 含义 |
@@ -511,7 +511,7 @@ skill-eval batch-report batch-workspace/ --open
 | SKILL_FAILED 技能失效 | 错 | 错 | 输出未达标且过程违反硬性规则 |
 | PROCESS_UNKNOWN 过程未知 | — | 无可对账 | compliance 缺失或无可判定项（如纯推理题） |
 
-`calibration.json` 字段：`verdict` / `result_pass` / `process_status`（ok/violated/unknown）/ `hard_violations`（每条 category+instruction_text+evidence）/ `soft_notes`（step/conditional FAIL 计数）/ `scoring_rate` / `compliance_rate`。
+`calibration.json` 字段：`verdict` / `result_pass` / `process_status`（ok/violated/unknown）/ `hard_violations`（每条 category+instruction_text+evidence）/ `soft_notes`（step/conditional FAIL 计数）/ `scoring_rate` / `scoring_rate_basis`（programmatic|mixed）/ `scoring_rate_programmatic` / `scoring_rate_llm` / `compliance_rate`。
 
 > 设计取舍：verdict 只押在实测高精度的 prohibition/output 硬类违规上（"高分存疑"= 值得一看的分诊，非定罪）。gate 不读 calibration（纯显示层），仅 with_skill 产。旧版的 confidence/grade/agreement/dual-judgment 机制已移除——eval 设计**不再需要**为校准刻意"同一项同时写 assertion + expectation"。
 

@@ -161,7 +161,7 @@ output/iteration-1/
 
 #### calibration.json —— 结果×过程 coherence 判决
 
-单次执行的两轴判决：结果（打分 `pass_rate≥0.8`）× 过程（遵循性有无 prohibition/output 硬类违规），组合出 5 态 verdict：
+单次执行的两轴判决：结果（优先押客观 `pass_rate_programmatic≥0.8`，无客观锚回退主观）× 过程（遵循性有无 prohibition/output 硬类违规），组合出 5 态 verdict：
 
 | verdict | 含义 |
 |---------|------|

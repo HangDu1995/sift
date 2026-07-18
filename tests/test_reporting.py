@@ -230,6 +230,9 @@ class TestReportGeneratorStatic:
                                  "evidence": "E-FAKE-999 编造"}],
             "soft_notes": {"step": 2},
             "scoring_rate": 0.85,
+            "scoring_rate_basis": "programmatic",
+            "scoring_rate_programmatic": 0.85,
+            "scoring_rate_llm": 0.9,
             "compliance_rate": 0.5,
         }))
 
@@ -241,6 +244,8 @@ class TestReportGeneratorStatic:
         assert "E-FAKE-999" in html       # 硬违规 evidence 真嵌入 EMBEDDED_DATA
         # 结果/过程两轴依据显式列出(此例:结果达标 + 过程有硬类违规)
         assert "达标" in html             # 结果轴(result_pass=true)
+        assert "客观" in html             # 结果轴押客观分列(basis=programmatic)
+        assert "主观" in html and "参考" in html  # 主观率作参考显示
         assert "有硬性违规" in html       # 过程轴(process_status=violated)
         assert "硬类违规" in html         # 过程轴计数(模板字面量;具体数 runtime 拼)
         # 旧凑数字段已从模板移除
@@ -249,8 +254,8 @@ class TestReportGeneratorStatic:
         assert "校准等级" not in html
 
     def test_generate_html_calibration_result_fail_shows_threshold(self, tmp_path):
-        """结果未达标(FIXABLE)时显 '< 80% 阈值' + 未达标;过程干净显 硬类违规 0。
-        锁住结果轴的阈值推理可见(eval-3 真实场景:打分率<阈值 + 过程干净)。"""
+        """结果未达标(FIXABLE)时显阈值 + 未达标,并显客观/主观分列;过程干净显 硬类违规 0。
+        eval-3 真实场景:押客观 71% 未达 80% 阈值(主观 80% 作参考)+ 过程干净。"""
         workspace = tmp_path / "iteration-1"
         ws_dir = workspace / "with_skill" / "run-1"
         ws_dir.mkdir(parents=True)
@@ -266,7 +271,10 @@ class TestReportGeneratorStatic:
             "process_status": "ok",
             "hard_violations": [],
             "soft_notes": {},
-            "scoring_rate": 0.7586,
+            "scoring_rate": 0.7143,
+            "scoring_rate_basis": "programmatic",
+            "scoring_rate_programmatic": 0.7143,
+            "scoring_rate_llm": 0.8,
             "compliance_rate": 1.0,
         }))
 
@@ -274,7 +282,40 @@ class TestReportGeneratorStatic:
         html = gen.generate_html(workspace, None)
         assert "未达标" in html            # 结果轴(result_pass=false)
         assert "未达 80% 阈值" in html    # 阈值推理显式
+        assert "客观" in html             # 结果轴押客观分列(basis=programmatic)
+        assert "主观" in html and "参考" in html  # 主观 80% 作参考显示
         assert "硬类违规 0" in html       # 过程轴(process_status=ok,字面量 0)
+
+    def test_generate_html_calibration_mixed_basis_subjective_note(self, tmp_path):
+        """纯主观题(basis=mixed,无客观锚)→ 结果行显「基于主观判分,该题无客观断言」标注。
+        eval-1/2 场景:L1/L2 推理题无 programmatic 断言,结果轴回退主观率并透明标注。"""
+        workspace = tmp_path / "iteration-1"
+        ws_dir = workspace / "with_skill" / "run-1"
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "outputs").mkdir()
+        (ws_dir / "outputs" / "out.txt").write_text("hello")
+        (ws_dir / "grading.json").write_text(json.dumps({
+            "summary": {"pass_rate": 0.85, "passed": 17, "failed": 3, "total": 20},
+            "expectations": [],
+        }))
+        (ws_dir / "calibration.json").write_text(json.dumps({
+            "verdict": "PROCESS_UNKNOWN",
+            "result_pass": True,
+            "process_status": "unknown",
+            "hard_violations": [],
+            "soft_notes": {},
+            "scoring_rate": 0.85,
+            "scoring_rate_basis": "mixed",
+            "scoring_rate_programmatic": None,
+            "scoring_rate_llm": 0.85,
+            "compliance_rate": None,
+        }))
+
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, None)
+        assert "基于主观判分" in html     # 无客观锚的透明标注
+        assert "该题无客观断言" in html
+        assert "主观" in html
 
     def test_generate_html_compliance_per_run_and_aggregate(self, tmp_path):
         """遵循性 per-run(评估详情里 cr.summary)+ 整个考试聚合(基准测试 tab)并存:

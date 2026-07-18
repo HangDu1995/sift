@@ -81,7 +81,7 @@ skill-eval 在此基础上新增了批量评估、结果×过程 coherence 校�
 
 **来源**：原创。skill-creator 的评分没有评估"这次执行的输出与过程协不协调"。
 
-**理论**：跨层一致性（triangulation）。结果面（scoring，查输出）与过程面（compliance，查是否按 SKILL.md 执行）是同一技能的两个独立视角；二者矛盾（输出对了但过程违反硬性规则）→ 高分存疑。verdict 只押在实测高精度的 prohibition/output 硬类违规上，避免把有 LLM 方差的 step 判决塞进判决。
+**理论**：跨层一致性（triangulation）。结果面（scoring，查输出）与过程面（compliance，查是否按 SKILL.md 执行）是同一技能的两个独立视角；二者矛盾（输出对了但过程违反硬性规则）→ 高分存疑。两轴都避 LLM 方差：过程轴只押 prohibition/output 硬类违规（不把有方差的 step 判决塞进判决），结果轴优先押客观 programmatic 双率（纯主观题无客观锚才回退主观率并透明标注）。
 
 5 态 verdict（可信/高分存疑/可修复/技能失效/过程未知）作为**独立信号**输出——与评分、遵循性并列，三层不合成单一总分。gate 不读它（纯显示层，辅助人判断，不自动折扣某个总分）。
 

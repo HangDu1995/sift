@@ -111,15 +111,18 @@ class HardViolation(BaseModel):
 
 class CalibrationReport(BaseModel):
     """单次 with_skill 执行的过程 x 结果 coherence 判决。
-    gate 不读本结构(只 viewer 显示用)。verdict 由结果(pass_rate>=0.8) x 过程(硬类违规)矩阵决定。
-    """
+    gate 不读本结构(只 viewer 显示用)。verdict 由结果(客观 pass_rate>=0.8 优先,无客观锚回退 mixed)
+    x 过程(硬类违规)矩阵决定。"""
     verdict: CalibrationVerdict
     result_pass: bool
     process_status: ProcessStatus
     hard_violations: list[HardViolation] = Field(default_factory=list)
     soft_notes: dict[str, int] = Field(default_factory=dict)  # {"step": N, "conditional": N} = FAIL 计数
-    scoring_rate: float | None     # = grading.summary.pass_rate(显示用)
-    compliance_rate: float | None  # = pass/(pass+fail)(显示用);过程未知时 None
+    scoring_rate: float | None      # 驱动判决的率:客观优先,无客观锚回退 mixed
+    scoring_rate_basis: str         # "programmatic"(押客观)| "mixed"(无客观锚,含主观)
+    scoring_rate_programmatic: float | None  # 客观通过率(参考;None=该 run 无客观断言)
+    scoring_rate_llm: float | None           # 主观通过率(参考)
+    compliance_rate: float | None   # = pass/(pass+fail)(显示用);过程未知时 None
 
 
 class SkillEntry(BaseModel):

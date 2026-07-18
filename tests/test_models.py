@@ -137,11 +137,16 @@ class TestCalibrationModels:
             )],
             soft_notes={"step": 2},
             scoring_rate=0.85,
+            scoring_rate_basis="programmatic",
+            scoring_rate_programmatic=0.85,
+            scoring_rate_llm=0.9,
             compliance_rate=0.5,
         )
         assert cr.verdict == CalibrationVerdict.HIGH_SCORE_SUSPECT
         assert cr.hard_violations[0].category == "prohibition"
         assert cr.soft_notes == {"step": 2}
+        assert cr.scoring_rate_basis == "programmatic"
+        assert cr.scoring_rate_programmatic == 0.85
 
 
 class TestAnalysisModels:
