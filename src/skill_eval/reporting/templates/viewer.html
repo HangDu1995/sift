@@ -1077,22 +1077,37 @@
           html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);font-size:0.75rem;color:var(--text-muted);">校准数据为旧格式,重跑 run 生成新判决。</div>';
         } else {
           const V = {
-            TRUSTED:            {icon: "✅", color: "var(--green)",   label: "可信",     reason: "未发现过程问题"},
-            HIGH_SCORE_SUSPECT: {icon: "⚠️", color: "var(--accent)",  label: "高分存疑", reason: "输出对了但过程违反了硬性规则,建议核对"},
-            FIXABLE:            {icon: "🔧", color: "var(--accent)",  label: "可修复",   reason: "输出未达标,过程无明显违规"},
-            SKILL_FAILED:       {icon: "❌", color: "var(--red)",     label: "技能失效", reason: "输出未达标且过程违反硬性规则"},
-            PROCESS_UNKNOWN:    {icon: "—",  color: "var(--text-muted)", label: "过程未知", reason: "无可对账的过程信号"},
+            TRUSTED:            {icon: "✅", color: "var(--green)",   label: "可信"},
+            HIGH_SCORE_SUSPECT: {icon: "⚠️", color: "var(--accent)",  label: "高分存疑"},
+            FIXABLE:            {icon: "🔧", color: "var(--accent)",  label: "可修复"},
+            SKILL_FAILED:       {icon: "❌", color: "var(--red)",     label: "技能失效"},
+            PROCESS_UNKNOWN:    {icon: "—",  color: "var(--text-muted)", label: "过程未知"},
           };
           const v = V[cal.verdict] || V.PROCESS_UNKNOWN;
-          html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
-          html += '<strong>校准：</strong> <span style="color:' + v.color + ';font-weight:600;">' + v.icon + ' ' + escapeHtml(v.label) + '</span>';
-          html += '<span style="color:var(--text-muted);margin-left:0.5rem;">' + escapeHtml(v.reason) + '</span>';
-          // 两个真率
           const sr = (cal.scoring_rate != null) ? (cal.scoring_rate * 100).toFixed(0) + '%' : '—';
           const cr = (cal.compliance_rate != null) ? (cal.compliance_rate * 100).toFixed(0) + '%' : '—';
-          html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">打分率 ' + sr + ' · 遵循性率 ' + cr + '</div>';
+          const hardN = (cal.hard_violations && cal.hard_violations.length) ? cal.hard_violations.length : 0;
+          // 结果轴:result_pass=true 达标 / false 未达标(带阈值)
+          const resultLine = (cal.result_pass === true)
+            ? '<span style="color:var(--green);font-weight:600;">✓ 达标</span>　打分率 ' + sr
+            : '<span style="color:var(--red);font-weight:600;">✗ 未达标</span>　打分率 ' + sr + '(未达 80% 阈值)';
+          // 过程轴:violated 有硬性违规 / ok 无明显违规 / unknown 无可对账
+          let procLine;
+          if (cal.process_status === "violated") {
+            procLine = '<span style="color:var(--red);font-weight:600;">✗ 有硬性违规</span>　遵循性 ' + cr + ' · 硬类违规 ' + hardN;
+          } else if (cal.process_status === "ok") {
+            procLine = '<span style="color:var(--green);font-weight:600;">✓ 无明显违规</span>　遵循性 ' + cr + ' · 硬类违规 0';
+          } else {
+            procLine = '<span style="color:var(--text-muted);font-weight:600;">— 无可对账</span>　遵循性 ' + cr + '(compliance 缺失或无可判定项)';
+          }
+          html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
+          html += '<strong>校准：</strong> <span style="color:' + v.color + ';font-weight:600;">' + v.icon + ' ' + escapeHtml(v.label) + '</span>';
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.3rem;">'
+                + '<div style="margin:0.1rem 0;">结果 ' + resultLine + '</div>'
+                + '<div style="margin:0.1rem 0;">过程 ' + procLine + '</div>'
+                + '</div>';
           // 硬违规明细(仅 HIGH_SCORE_SUSPECT / SKILL_FAILED 有数据时)
-          if (cal.hard_violations && cal.hard_violations.length) {
+          if (hardN) {
             html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
             for (const hv of cal.hard_violations) {
               html += '<li><strong>[' + escapeHtml(hv.category || '') + ']</strong> ' + escapeHtml(hv.instruction_text || '')

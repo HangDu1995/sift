@@ -239,10 +239,42 @@ class TestReportGeneratorStatic:
         assert "V[cal.verdict]" in html
         assert "高分存疑" in html          # verdict 标签真渲染
         assert "E-FAKE-999" in html       # 硬违规 evidence 真嵌入 EMBEDDED_DATA
+        # 结果/过程两轴依据显式列出(此例:结果达标 + 过程有硬类违规)
+        assert "达标" in html             # 结果轴(result_pass=true)
+        assert "有硬性违规" in html       # 过程轴(process_status=violated)
+        assert "硬类违规" in html         # 过程轴计数(模板字面量;具体数 runtime 拼)
         # 旧凑数字段已从模板移除
         assert "cal.confidence_signals" not in html
         assert "cal.disagreements" not in html
         assert "校准等级" not in html
+
+    def test_generate_html_calibration_result_fail_shows_threshold(self, tmp_path):
+        """结果未达标(FIXABLE)时显 '< 80% 阈值' + 未达标;过程干净显 硬类违规 0。
+        锁住结果轴的阈值推理可见(eval-3 真实场景:打分率<阈值 + 过程干净)。"""
+        workspace = tmp_path / "iteration-1"
+        ws_dir = workspace / "with_skill" / "run-1"
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "outputs").mkdir()
+        (ws_dir / "outputs" / "out.txt").write_text("hello")
+        (ws_dir / "grading.json").write_text(json.dumps({
+            "summary": {"pass_rate": 0.7586, "passed": 22, "failed": 7, "total": 29},
+            "expectations": [],
+        }))
+        (ws_dir / "calibration.json").write_text(json.dumps({
+            "verdict": "FIXABLE",
+            "result_pass": False,
+            "process_status": "ok",
+            "hard_violations": [],
+            "soft_notes": {},
+            "scoring_rate": 0.7586,
+            "compliance_rate": 1.0,
+        }))
+
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, None)
+        assert "未达标" in html            # 结果轴(result_pass=false)
+        assert "未达 80% 阈值" in html    # 阈值推理显式
+        assert "硬类违规 0" in html       # 过程轴(process_status=ok,字面量 0)
 
     def test_generate_html_compliance_per_run_and_aggregate(self, tmp_path):
         """遵循性 per-run(评估详情里 cr.summary)+ 整个考试聚合(基准测试 tab)并存:
