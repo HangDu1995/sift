@@ -90,6 +90,7 @@ class TestComparisonResultModel:
         r = ComparisonResult(winner="TIE", reasoning="Equal outputs")
         assert r.winner == "TIE"
         assert r.rubric == {}
+        assert r.pos_a_label == ""   # 未揭盲(没过 _translate)→ 空,viewer 不显标注
 
     def test_default_scores(self):
         r = ComparisonRubricScores()
@@ -178,6 +179,8 @@ class TestBlindComparator:
         assert out.rubric["without"].overall_score == 5.4
         assert out.output_quality["with"].score == 9
         assert out.output_quality["without"].score == 5
+        assert out.pos_a_label == "with"       # 揭盲:LLM position A = with
+        assert out.pos_b_label == "without"
 
     def test_translate_with_is_a_false(self):
         c = BlindComparator()
@@ -187,6 +190,23 @@ class TestBlindComparator:
         assert out.winner == "without"
         assert out.rubric["without"].overall_score == 9.0
         assert out.rubric["with"].overall_score == 5.4
+        assert out.pos_a_label == "without"   # 揭盲:side0 在 B 位 → LLM position A = without
+        assert out.pos_b_label == "with"
+
+    def test_translate_v1v2_labels_carried_through(self):
+        """v1/v2 双 skill 模式:label_a/b 传 v1/v2(非默认 with/without),揭盲映射也得是 v1/v2、
+        不能写死 with/without。pos_a_label/pos_b_label 跟随实际传入的 label。"""
+        c = BlindComparator()
+        raw = ComparisonResult.model_validate(json.loads(VALID_COMPARISON_JSON))  # winner A
+        out = c._translate(raw, side0_is_posA=True, label_a="v1", label_b="v2")
+        assert out.winner == "v1"
+        assert out.pos_a_label == "v1"        # v1 在 A 位 → 揭盲 A=v1
+        assert out.pos_b_label == "v2"
+        # side0 在 B 位 → A 位是 side1=v2
+        out2 = c._translate(raw, side0_is_posA=False, label_a="v1", label_b="v2")
+        assert out2.winner == "v2"
+        assert out2.pos_a_label == "v2"
+        assert out2.pos_b_label == "v1"
 
     def test_translate_tie_and_expectation_remap(self):
         c = BlindComparator()
@@ -207,6 +227,8 @@ class TestBlindComparator:
         # LLM 判 position A 胜;with 在 A → 胜者翻成 with
         assert result.winner == "with"
         assert result.rubric["with"].overall_score == 9.0
+        assert result.pos_a_label == "with"    # 揭盲标注随结果存下,供 viewer 标 A/B 映射
+        assert result.pos_b_label == "without"
         mock_claude.assert_called_once()
 
     @patch("skill_eval.scoring.comparator.call_claude", return_value=VALID_COMPARISON_JSON)

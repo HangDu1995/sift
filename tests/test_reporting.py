@@ -178,6 +178,27 @@ class TestReportGeneratorStatic:
         assert "test-skill" in html
         assert "benchmark" in html.lower()
 
+    def test_generate_html_comparison_blind_position_map(self, tmp_path: Path):
+        """盲评卡揭盲标注:comparator 存 pos_a_label/pos_b_label(当次 A/B 各是哪个语义侧),
+        viewer 在 reasoning 上方标「Output A = with · Output B = without」——否则 reasoning 里的
+        A/B 与「胜者:with」对不上(reader 不知 A=谁)。RED:JS 源引用 pos_a_label。
+        (真实验证靠 node --check 语法 + 重生成 report 肉眼;pytest render-smoke 只验模板字符串。)"""
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir(parents=True)
+        benchmark = {
+            "metadata": {"skill_name": "s"},
+            "runs": [],
+            "comparisons": [{"winner": "with", "reasoning": "Output A 完整", "failed": False,
+                             "pos_a_label": "with", "pos_b_label": "without"}],
+            "comparison_summary": {"total": 1, "a_wins": 1, "b_wins": 0, "ties": 0,
+                                   "failed": 0, "valid": 1, "win_rate": 1.0,
+                                   "label_a": "with", "label_b": "without"},
+        }
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        # 断言 JS 源里属性访问 comp.pos_a_label(JSON 数据里只会是 "pos_a_label":,不会是 comp. 前缀)
+        assert "comp.pos_a_label" in html   # 揭盲标注 JS 入口已接
+
     def test_generate_html_grading_verdict_aware(self, tmp_path):
         """grading 主列表 verdict 感知:UNEVAL/TIMEOUT/ERROR 不再被混成红 ✗(与 checkpoints 对齐)。
 

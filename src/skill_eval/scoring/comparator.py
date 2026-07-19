@@ -134,4 +134,6 @@ class BlindComparator:
             "rubric": _remap(raw.rubric),
             "output_quality": _remap(raw.output_quality),
             "expectation_results": _remap(raw.expectation_results),
+            "pos_a_label": a_key,   # 揭盲:LLM position A/B 各自对应的语义 label,供 viewer 标注
+            "pos_b_label": b_key,
         })

@@ -52,3 +52,8 @@ class ComparisonResult(BaseModel):
     # failed=True 表示这次比较本身失败(调用失败/解析失败),winner 降级 tie。
     # 供 _compare_with_retry 识别并重试(否则失败被吞成静默 tie,重试循环成死代码)。
     failed: bool = False
+    # 揭盲位置映射:comparator 随机打乱哪侧放 LLM position A/B,_translate 后记下 A/B 各自
+    # 对应的语义 label(如 pos_a_label="with")。viewer 在 reasoning 旁标注,否则 reasoning
+    # 里的 A/B 与去匿名化的 winner(如 "with")对不上。未过 _translate(直接构造/解析失败)→ 空。
+    pos_a_label: str = ""
+    pos_b_label: str = ""

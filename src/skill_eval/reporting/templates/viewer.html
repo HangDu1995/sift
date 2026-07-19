@@ -1407,6 +1407,10 @@
           const wBadge = comp.winner === la ? la : comp.winner === lb ? lb : "平局";
           const wColor = comp.winner === la ? "var(--green)" : comp.winner === lb ? "var(--red)" : "var(--text-muted)";
           html += '<div style="margin-bottom:0.75rem;"><strong>胜者：</strong> <span style="color:' + wColor + ';font-weight:600;">' + wBadge + '</span></div>';
+          if (comp.pos_a_label) {
+            // 揭盲:reasoning 用盲评位置 A/B 写,标出当次 A/B 各是哪个语义侧,否则与"胜者:with"对不上
+            html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">揭盲位置:Output A = ' + escapeHtml(comp.pos_a_label) + ' · Output B = ' + escapeHtml(comp.pos_b_label || "") + '</div>';
+          }
           html += '<div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:0.75rem;">' + escapeHtml(comp.reasoning || "") + '</div>';
 
           // Rubric scores
