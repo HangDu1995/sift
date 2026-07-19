@@ -71,10 +71,10 @@ skill-eval run path/to/skill/ --runs 3
 skill-eval run v2/ --skill-b v1/ --evals baseline.json   # 回归对照：候选 v2 vs 基线 v1
 
 # 4. 看报告
-skill-eval report output/iteration-1/ --open
+skill-eval report output/ --open
 
 # 5. （CI）对结果出门禁判决
-skill-eval gate output/iteration-1/benchmark.json --min-win-rate 0.5
+skill-eval gate output/benchmark.json --min-win-rate 0.5
 echo $?    # 0=PASS / 1=FAIL / 2=N/A
 ```
 
@@ -167,8 +167,8 @@ skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo   # 路径 1
 对已有 benchmark.json 出 PASS/FAIL/N/A 判决。post-hoc 纯函数（毫秒级，改阈值不重跑 claude）。
 
 ```bash
-skill-eval gate output/iteration-1/benchmark.json                     # 仅客观回归守卫
-skill-eval gate output/iteration-1/benchmark.json --min-win-rate 0.5  # 加主观盲评阈值
+skill-eval gate output/benchmark.json                     # 仅客观回归守卫
+skill-eval gate output/benchmark.json --min-win-rate 0.5  # 加主观盲评阈值
 ```
 
 两轴：客观侧 programmatic 回归守卫（默认常开）+ 主观侧盲比较胜率（`--min-win-rate` opt-in）。判决写 gate.json，exit `0=PASS / 1=FAIL / 2=N/A`。
@@ -184,7 +184,7 @@ skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl
 ### `report` — HTML 报告
 
 ```bash
-skill-eval report output/iteration-1/ --open
+skill-eval report output/ --open
 ```
 
 读 `gate.json`（若存在）在标题旁渲染门禁徽章。
@@ -264,10 +264,11 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 ## 评测产物
 
 ```
-output/iteration-1/
+output/
 ├── benchmark.json          # 聚合:双率 delta + comparisons + comparison_summary + analysis
 ├── report.html             # 自包含 HTML 报告(读 gate.json 显门禁徽章;run 末尾自动产)
 ├── gate.json               # gate 命令产出(判决 + 两轴明细;非 run 产出)
+├── previous/               # △ 重跑归档:fresh 重跑时上次 run 树整体移入(单槽),供 report「vs 上次」纵向 delta;仅 fresh 产生,详见 reference「重跑归档」
 ├── with_skill/             # v1/v2 模式下换成各自标签名
 │   └── eval-<id>/run-<n>/
 │       ├── outputs/        # Claude 产生的文件(skill references 已自动拷入)
@@ -294,7 +295,7 @@ skill-eval freeze path/to/evals.json --name baseline
 skill-eval run v2/ --skill-b v1/ --evals baseline.json --runs 3 -o out/
 
 # 4. 出判决 → exit code 驱动 CI check
-skill-eval gate out/iteration-1/benchmark.json --min-win-rate 0.5
+skill-eval gate out/benchmark.json --min-win-rate 0.5
 ```
 
 Exit code（各命令语义不同）：
