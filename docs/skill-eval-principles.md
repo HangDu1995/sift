@@ -117,3 +117,4 @@ skill-eval 在此基础上新增了批量评估、结果×过程 coherence 校�
 - Dijkstra, E.W. "On the Role of Scientific Thought" (1974)
 - Wiggins, A. *The Twelve-Factor App* (2011), Factor III: Config
 - Anthropic: [Evals Best Practices](https://docs.anthropic.com/en/docs/build-with-claude/evaluations)
+- Anthropic: [skill-creator skill](https://github.com/anthropic/skills/tree/main/skills/skill-creator) — 盲比较 comparator / rubric 评分设计来源（`agents/comparator.md`）

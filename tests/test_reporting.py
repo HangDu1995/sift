@@ -199,6 +199,25 @@ class TestReportGeneratorStatic:
         # 断言 JS 源里属性访问 comp.pos_a_label(JSON 数据里只会是 "pos_a_label":,不会是 comp. 前缀)
         assert "comp.pos_a_label" in html   # 揭盲标注 JS 入口已接
 
+    def test_generate_html_comparison_failed_card_distinct(self, tmp_path: Path):
+        """失败的盲评卡(failed=True)不能再伪装成"胜者:平局"——应显醒目失败标、走失败分支。
+        RED:JS 源引用 comp.failed。真平局(winner=tie 但 failed=false)仍走平局显示。
+        (render-smoke 只验模板字符串;node --check + 肉眼验渲染。)"""
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir(parents=True)
+        benchmark = {
+            "metadata": {"skill_name": "s"},
+            "runs": [],
+            "comparisons": [{"winner": "tie", "reasoning": "comparison failed after retries",
+                             "failed": True, "rubric": {}, "output_quality": {}}],
+            "comparison_summary": {"total": 1, "a_wins": 0, "b_wins": 0, "ties": 0,
+                                   "failed": 1, "valid": 0, "win_rate": None,
+                                   "label_a": "with", "label_b": "without"},
+        }
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        assert "comp.failed" in html   # 失败分支 JS 入口已接(不再混进 tie)
+
     def test_generate_html_grading_verdict_aware(self, tmp_path):
         """grading 主列表 verdict 感知:UNEVAL/TIMEOUT/ERROR 不再被混成红 ✗(与 checkpoints 对齐)。
 

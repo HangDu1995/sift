@@ -53,11 +53,6 @@
       font-size: 1.25rem;
       font-weight: 600;
     }
-    .header .instructions {
-      font-size: 0.8rem;
-      opacity: 0.7;
-      margin-top: 0.25rem;
-    }
     .header .progress {
       font-size: 0.875rem;
       opacity: 0.8;
@@ -446,7 +441,6 @@
     <div class="header">
       <div>
         <h1>评测回顾：<span id="skill-name"></span><span id="gate-badge" style="display:none; font-weight:bold; margin-left:12px; padding:2px 10px; border-radius:4px;"></span></h1>
-        <div class="instructions">查看每条输出并在下方留下反馈。使用方向键或按钮导航。完成后，复制反馈并粘贴到 Claude Code。</div>
       </div>
       <div class="header-right">
         <select id="run-jump" class="run-jump" style="display:none;" aria-label="跳转到指定执行"></select>
@@ -1406,12 +1400,19 @@
 
           const wBadge = comp.winner === la ? la : comp.winner === lb ? lb : "平局";
           const wColor = comp.winner === la ? "var(--green)" : comp.winner === lb ? "var(--red)" : "var(--text-muted)";
-          html += '<div style="margin-bottom:0.75rem;"><strong>胜者：</strong> <span style="color:' + wColor + ';font-weight:600;">' + wBadge + '</span></div>';
-          if (comp.pos_a_label) {
-            // 揭盲:reasoning 用盲评位置 A/B 写,标出当次 A/B 各是哪个语义侧,否则与"胜者:with"对不上
-            html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">揭盲位置:Output A = ' + escapeHtml(comp.pos_a_label) + ' · Output B = ' + escapeHtml(comp.pos_b_label || "") + '</div>';
+          if (comp.failed) {
+            // 比较本身失败(调用/解析失败,重试耗尽)——winner="tie" 是兜底标签,不是真平局。
+            // 醒目区分,不混进 tie 显示,否则读着像"两边一样"。
+            html += '<div style="margin-bottom:0.5rem;"><span style="color:var(--red);font-weight:700;">⚠ 比较失败(重试耗尽,未判定)</span></div>';
+            html += '<div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:0.75rem;">这条未计入胜率分母(failed ≠ 平局)。原始原因:' + escapeHtml(comp.reasoning || "") + '</div>';
+          } else {
+            html += '<div style="margin-bottom:0.75rem;"><strong>胜者：</strong> <span style="color:' + wColor + ';font-weight:600;">' + wBadge + '</span></div>';
+            if (comp.pos_a_label) {
+              // 揭盲:reasoning 用盲评位置 A/B 写,标出当次 A/B 各是哪个语义侧,否则与"胜者:with"对不上
+              html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">揭盲位置:Output A = ' + escapeHtml(comp.pos_a_label) + ' · Output B = ' + escapeHtml(comp.pos_b_label || "") + '</div>';
+            }
+            html += '<div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:0.75rem;">' + escapeHtml(comp.reasoning || "") + '</div>';
           }
-          html += '<div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:0.75rem;">' + escapeHtml(comp.reasoning || "") + '</div>';
 
           // Rubric scores
           if (comp.rubric && (comp.rubric[la] || comp.rubric[lb])) {
