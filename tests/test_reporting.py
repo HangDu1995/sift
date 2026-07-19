@@ -218,6 +218,49 @@ class TestReportGeneratorStatic:
         html = gen.generate_html(workspace, benchmark)
         assert "comp.failed" in html   # 失败分支 JS 入口已接(不再混进 tie)
 
+    def test_generate_html_normalizes_expectation_counts(self, tmp_path):
+        """已存 benchmark.json 里 LLM 声明的 expectation_results 计数常与逐条 details 不一致
+        (一次性产 JSON,数不对自己的列表)。viewer 原样嵌入会让顶部 passed/total 与逐条 ✓/✗
+        对不上——generate_html 须按 details 重算后再嵌入。解析 EMBEDDED_DATA 做语义断言
+        (避免「假绿」:字符串包含会被嵌入的数据本身满足)。"""
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir(parents=True)
+        # 声明 9/11,但 details 实际 7 ✓ + 4 ✗
+        details = ([{"text": f"e{i}", "passed": True} for i in range(7)]
+                   + [{"text": f"e{i}", "passed": False} for i in range(4)])
+        benchmark = {
+            "metadata": {"skill_name": "s"},
+            "runs": [],
+            "comparisons": [{
+                "winner": "with", "reasoning": "x", "failed": False,
+                "expectation_results": {
+                    "with":    {"passed": 9, "total": 11, "pass_rate": 0.82, "details": details},
+                    "without": {"passed": 5, "total": 11, "pass_rate": 0.45, "details": details},
+                },
+            }],
+            "comparison_summary": {"total": 1, "a_wins": 1, "b_wins": 0, "ties": 0,
+                                   "failed": 0, "valid": 1, "win_rate": 1.0,
+                                   "label_a": "with", "label_b": "without"},
+        }
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        # 用括号配平提取 EMBEDDED_DATA(JSON 串值里可能含 ;/},不能用简单正则)。
+        start = html.index("{", html.index("const EMBEDDED_DATA = "))
+        depth, end = 0, start
+        for j in range(start, len(html)):
+            depth += (html[j] == "{") - (html[j] == "}")
+            if depth == 0:
+                end = j + 1
+                break
+        data = json.loads(html[start:end])
+        er = data["benchmark"]["comparisons"][0]["expectation_results"]
+        assert er["with"]["passed"] == 7          # 不是声明的 9
+        assert er["with"]["total"] == 11
+        assert er["with"]["pass_rate"] == 7 / 11
+        assert er["without"]["passed"] == 7       # 不是声明的 5
+        # 调用方原 dict 不被就地改
+        assert benchmark["comparisons"][0]["expectation_results"]["with"]["passed"] == 9
+
     def test_generate_html_grading_verdict_aware(self, tmp_path):
         """grading 主列表 verdict 感知:UNEVAL/TIMEOUT/ERROR 不再被混成红 ✗(与 checkpoints 对齐)。
 

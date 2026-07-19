@@ -6,8 +6,34 @@ import json
 import random
 from pathlib import Path
 
-from skill_eval.models import ComparisonResult
+from skill_eval.models import ComparisonExpectationResults, ComparisonResult
 from skill_eval.utils import call_claude
+
+
+def _recompute_expectation_counts(
+    er: dict[str, ComparisonExpectationResults] | None,
+) -> dict[str, ComparisonExpectationResults] | None:
+    """expectation_results 的 passed/total/pass_rate 常与它逐条 details 不一致——comparator
+    LLM 一次性把汇总数和逐条列表都吐在同一份 JSON 里,数不对自己的列表(同 rubric 4/5/4→4.67
+    那类自报不精确)。details 是逐条 ground truth:有它就据此重算汇总数,覆盖 LLM 声明值,使
+    viewer 顶部计数永远跟下方逐条列表对得上;无 details(可选字段没给)仍信任声明值。
+    """
+    if not er:
+        return er
+    out: dict[str, ComparisonExpectationResults] = {}
+    for side, results in er.items():
+        details = results.details or []
+        if details:
+            passed = sum(1 for d in details if d.passed)
+            total = len(details)
+            out[side] = results.model_copy(update={
+                "passed": passed,
+                "total": total,
+                "pass_rate": passed / total if total else 0.0,
+            })
+        else:
+            out[side] = results
+    return out
 
 
 class BlindComparator:
@@ -133,7 +159,7 @@ class BlindComparator:
             "winner": winner,
             "rubric": _remap(raw.rubric),
             "output_quality": _remap(raw.output_quality),
-            "expectation_results": _remap(raw.expectation_results),
+            "expectation_results": _recompute_expectation_counts(_remap(raw.expectation_results)),
             "pos_a_label": a_key,   # 揭盲:LLM position A/B 各自对应的语义 label,供 viewer 标注
             "pos_b_label": b_key,
         })

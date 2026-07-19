@@ -51,8 +51,20 @@ VALID_COMPARISON_WITH_EXPECTATIONS = json.dumps({
     "rubric": {},
     "output_quality": {},
     "expectation_results": {
-        "A": {"passed": 4, "total": 5, "pass_rate": 0.8, "details": [{"text": "has name", "passed": True}]},
-        "B": {"passed": 3, "total": 5, "pass_rate": 0.6, "details": [{"text": "has name", "passed": True}]},
+        "A": {"passed": 4, "total": 5, "pass_rate": 0.8, "details": [
+            {"text": "has name", "passed": True},
+            {"text": "has steps", "passed": True},
+            {"text": "has examples", "passed": True},
+            {"text": "has anti-fabrication", "passed": True},
+            {"text": "has references", "passed": False},
+        ]},
+        "B": {"passed": 3, "total": 5, "pass_rate": 0.6, "details": [
+            {"text": "has name", "passed": True},
+            {"text": "has steps", "passed": True},
+            {"text": "has examples", "passed": True},
+            {"text": "has anti-fabrication", "passed": False},
+            {"text": "has references", "passed": False},
+        ]},
     },
 })
 
@@ -219,6 +231,41 @@ class TestBlindComparator:
         raw_tie = ComparisonResult(winner="TIE", reasoning="eq")
         assert c._translate(raw_tie, side0_is_posA=True).winner == "tie"
         assert c._translate(raw_tie, side0_is_posA=False).winner == "tie"
+
+    def test_translate_recomputes_expectation_counts_from_details(self):
+        """LLM 声明的 passed/total 常数不对自己的 details 列表(一次性产 JSON,同 rubric
+        4/5/4→4.67 那类自报不精确)。details 是逐条 ground truth——_translate 据此重算汇总数
+        覆盖声明值,否则 viewer 顶部计数与下方逐条 ✓/✗ 对不上。"""
+        c = BlindComparator()
+        details = ([{"text": f"exp-{i}", "passed": True} for i in range(7)]
+                   + [{"text": f"exp-{i}", "passed": False} for i in range(4)])  # 7 ✓ + 4 ✗
+        raw = ComparisonResult.model_validate({
+            "winner": "A", "reasoning": "A better", "rubric": {}, "output_quality": {},
+            "expectation_results": {
+                "A": {"passed": 9, "total": 11, "pass_rate": 0.82, "details": details},
+                "B": {"passed": 5, "total": 11, "pass_rate": 0.45, "details": details},
+            },
+        })
+        out = c._translate(raw, side0_is_posA=True)
+        er_a = out.expectation_results["with"]
+        assert er_a.passed == 7          # 不是 LLM 声明的 9
+        assert er_a.total == 11
+        assert er_a.pass_rate == 7 / 11
+        er_b = out.expectation_results["without"]
+        assert er_b.passed == 7          # B 套同一 details 也重算成 7(非声明的 5)
+
+    def test_translate_keeps_declared_when_no_details(self):
+        """无 details(可选字段没给)→ 无法重算,信任 LLM 声明值原样保留。"""
+        c = BlindComparator()
+        raw = ComparisonResult.model_validate({
+            "winner": "A", "reasoning": "x", "rubric": {}, "output_quality": {},
+            "expectation_results": {"A": {"passed": 9, "total": 11, "pass_rate": 0.82}},
+        })
+        out = c._translate(raw, side0_is_posA=True)
+        er = out.expectation_results["with"]
+        assert er.passed == 9
+        assert er.total == 11
+        assert er.pass_rate == 0.82
 
     @patch("skill_eval.scoring.comparator.call_claude", return_value=VALID_COMPARISON_JSON)
     def test_compare_end_to_end(self, mock_claude):

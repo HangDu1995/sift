@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import mimetypes
 import os
@@ -358,6 +359,34 @@ def _compute_previous_delta(current: dict | None, previous: dict | None) -> dict
     }
 
 
+def _normalize_benchmark_expectations(bench: dict | None) -> dict | None:
+    """viewer 读的是已存的 benchmark.json:comparator 历史版本(或当次 LLM)声明的
+    expectation_results 计数可能与它逐条 details 不一致(一次性产 JSON,数不对自己的列表),
+    原样透传会让顶部 passed/total 与下方逐条 ✓/✗ 对不上。生成 report 前按 details 重算,
+    与 comparator._recompute_expectation_counts 同一规则,覆盖 benchmark + previous 的所有
+    comparisons,使显示永远自洽。返回 deepcopy,不动调用方的 dict。
+    """
+    if not bench or not isinstance(bench, dict):
+        return bench
+    bench = copy.deepcopy(bench)
+    for comp in bench.get("comparisons") or []:
+        er = comp.get("expectation_results") if isinstance(comp, dict) else None
+        if not isinstance(er, dict):
+            continue
+        for v in er.values():
+            if not isinstance(v, dict):
+                continue
+            details = v.get("details") or []
+            if not details:
+                continue
+            passed = sum(1 for d in details if isinstance(d, dict) and d.get("passed"))
+            total = len(details)
+            v["passed"] = passed
+            v["total"] = total
+            v["pass_rate"] = passed / total if total else 0.0
+    return bench
+
+
 class ReportGenerator:
     def __init__(self):
         self.template_dir = Path(__file__).parent / "templates"
@@ -383,8 +412,13 @@ class ReportGenerator:
             if meta.get("skill_name"):
                 skill_name = meta["skill_name"]
 
+        # viewer 原样嵌入 benchmark/previous 的 comparisons.expectation_results;早期数据里
+        # LLM 声明的 passed/total 与逐条 details 不一致,这里按 details 重算(与 comparator 同规则)。
+        benchmark = _normalize_benchmark_expectations(benchmark)
+
         if previous is None:
             previous = load_previous_iteration(workspace)
+        previous = _normalize_benchmark_expectations(previous)
 
         prev_outputs: dict = {}
         if previous:
