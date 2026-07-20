@@ -108,6 +108,16 @@ audit 这个真实 transcript:**total=10, pass=10, fail=0, na=0**——全 PASS,
 
 scoring 层印证:with_skill 83% vs without_skill 54%(盲比较 with_skill 胜)——example skill 真实有用。
 
+## scoring 层额外发现:total_errors 定义歧义(非植入)
+
+这 skill 的植入缺陷是 **compliance 类**(过程违规,给 audit 抓,见「合成验证结论」)。scoring 层在 eval-1(log 含 2 个真码 + 1 行无码)上还顺手暴露一个**非植入**的输出问题,演示了双通道评分的价值:
+
+- `SKILL.md` 只说「`total_errors` 整数」「错误总数」,**没钉死 total_errors 数什么**(只数 errors?还是 errors+unclassified?)。
+- with_skill 据此自由发挥,产出 `total_errors=3`(= errors 2 + unclassified 1);eval 的程序化检查 `total_errors=2` 判 **FAIL**(三 run 全 FAIL)。
+- 同一条「total_errors 应为 2」走双通道**结果打架**:客观(programmatic 正则)**FAIL**(3≠2,抓对),主观(LLM 语义)**PASS**(LLM grader 对精确数值不较真,假放行)。
+
+不是 skill 坏了、也不是刻意埋的雷——是 skill 指令本身的含糊。留着它反而演示了 scoring 双通道的意义:**LLM 单判会假绿,程序化锚点兜住真值**,两通道之差(`pass_rate_programmatic` vs `pass_rate_llm`)就是信号。真要把它当「干净范本」用,应在 SKILL.md 把 total_errors 钉死成 `= len(errors)`(不含 unclassified)。
+
 ## code-review-auditor:路径1 真任务模式验证
 
 `code-review-auditor` 是专为**路径1**设计的 example skill——审 Python 代码找 bug/坏味道,任务天然对口真代码库(不像 log-error-analyzer 审日志)。用它验证 `run --task/--cwd` 真任务模式端到端。
