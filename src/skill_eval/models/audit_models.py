@@ -2,22 +2,58 @@
 
 audit(transcript 对账)把若干 transcript 的实测行为与 skill 声明的指令逐条对照,
 产出 AuditReport(若干 AuditFinding)。供后续 auditor 使用。
+
+判定模型(2026-07-20 重构):每条 finding 有两个**正交**维度——
+
+- **verdict(结果)**:五态。
+  - ``PASS`` / ``FAIL``:已判明通过 / 违规。
+  - ``NA``:不适用——规则存在但本次 transcript 场景不触发(已解决)。
+  - ``UNRESOLVED``:没判成——LLM 调用 / 解析失败 / 未提及 / 畸形值,操作性失败,
+    **可重跑**救回。
+  - ``INDETERMINATE``:判不准——LLM 看了证据但真模糊(证据相互矛盾 / 关键缺失),
+    给不出 pass/fail/na,**重跑无益**(附 indeterminate_reason)。
+  没判成 vs 判不准:前者是"没拿到判定"(operational,建议重跑),后者是"拿到了判定、
+  判定本身是'模糊'"(semantic,只能人工复核)。
+
+- **method(来源/方法)**:两态—— ``PROGRAMMATIC``(程序对账:tool_trace 命中 / 子串匹配,
+  不调 LLM)/ ``LLM``(LLM 给出结论,含 UNRESOLVED / INDETERMINATE:LLM 路径尝试过)。
+  ``method`` 只回答"怎么查的",与"结果"正交:PASS/FAIL 既可程序判也可 LLM 判,
+  没判成 / 判不准的 method 都是 LLM(那条路径产出的)。
+
+旧版用单一 ``confidence`` 浮点(1.0/0.8/0.3)把"方法 + 是否判不准"揉成一个假浮点,
+既不可叠加又难解释,已废弃。
 """
 
 from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class AuditVerdict(str, Enum):
-    """单条指令的对账结论。"""
+    """单条指令的对账结论(五态)。
+
+    PASS / FAIL / NA 是已解决结论;UNRESOLVED / INDETERMINATE 是未解决(本次结果
+    不完整),audit() 据二者汇总不同警告。
+    """
 
     PASS = "PASS"
     FAIL = "FAIL"
-    NA = "N/A"  # 不适用:规则存在但本次 transcript 场景不触发(applicable=false / STEP-LLM-"na"),已解决的结论(0.8)
-    UNCLEAR = "UNCLEAR"  # 判不准:LLM 失败/解析失败/未提及,没判成(_make_unverifiable_na_finding,0.3),结果不完整→汇总警告提示重跑
+    NA = "N/A"  # 不适用:规则存在但本次 transcript 场景不触发(applicable=false / STEP-"na"),已解决
+    UNRESOLVED = "UNRESOLVED"  # 没判成:LLM 调用/解析失败/未提及/畸形值,操作性失败,可重跑
+    INDETERMINATE = "INDETERMINATE"  # 判不准:LLM 看了证据但真模糊,给不出结论,重跑无益(附 reason)
+
+
+class AuditMethod(str, Enum):
+    """判定方法(怎么查的)——与 verdict(结果)正交。
+
+    PROGRAMMATIC:程序对账(tool_trace 命中 / 输出子串匹配),确定性、不调 LLM。
+    LLM:LLM 给出结论(含没判成 / 判不准:LLM 路径尝试过但未出明确 pass/fail/na)。
+    """
+
+    PROGRAMMATIC = "PROGRAMMATIC"
+    LLM = "LLM"
 
 
 class AuditCategory(str, Enum):
@@ -38,22 +74,51 @@ class AuditCategory(str, Enum):
 class AuditFinding(BaseModel):
     """单条指令的对账结果。
 
-    source 用 str 解耦,不直接依赖 batch_models 的 InstructionSource 枚举——
-    这样 audit 模型即便 InstructionSource 扩展也无需改动。
+    ``source`` 用 str 解耦,不直接依赖 batch_models 的 InstructionSource 枚举——
+    这样 audit 模型即便 InstructionSource 扩展也无需改动。注意 ``source`` 是**指令
+    的规则类型**(CONSTRAINT / STEP …),与 ``method``(判定方法)是两个不同维度。
+
+    向后兼容:旧 JSON 用 ``verdict="UNCLEAR"`` + ``confidence`` 浮点(假浮点已废)。
+    ``_legacy_normalize`` 在 validate 前把旧 ``UNCLEAR`` 折成 ``UNRESOLVED``,
+    并据旧 ``confidence`` 推断 ``method``(>=1.0 → PROGRAMMATIC,否则 LLM),
+    使旧 run 产物仍可加载。
     """
 
     instruction_text: str
-    source: str  # InstructionSource 的值(如 "CONSTRAINT")
+    source: str  # InstructionSource 的值(如 "CONSTRAINT")——指令的规则类型
     verdict: AuditVerdict
+    method: AuditMethod  # 判定方法(PROGRAMMATIC / LLM)——怎么查的
     category: AuditCategory
-    evidence: str  # 中文,为何这个 verdict
-    confidence: float
+    evidence: str  # 中文,为何这个 verdict(INDETERMINATE 时此即 indeterminate_reason)
     transcript: str  # 该 finding 对应的 transcript 文件名
     derived_from_transcript: bool = False  # 反推声明来的指令标 True
     # findings 后处理(audit.dedup.post_process_findings)填:
     seq: int = 0  # #1..#N:去重后编排的序号(供 related 引用 + 报告里 #N 可读定位)
     sources: list[str] = Field(default_factory=list)  # 同文去重后合并的所有来源;单条=[source]
     related: list[str] = Field(default_factory=list)  # 同行为跨类(Case B)关联的其它 finding 序号,如 ["#9"]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_normalize(cls, data: object) -> object:
+        """旧 JSON 兼容:UNCLEAR→UNRESOLVED,confidence→method。
+
+        旧版 verdict ``UNCLEAR`` 现拆成 ``UNRESOLVED``(没判成)/ ``INDETERMINATE``(判不准)。
+        旧 ``UNCLEAR`` 实际只装"没判成"(LLM 失败/解析失败/未提及),故折成 ``UNRESOLVED``。
+        旧 ``confidence`` 浮点(假浮点)废:>=1.0 是程序判 → PROGRAMMATIC,其余 LLM。
+        新数据有 ``method`` 则不动。纯加载侧兼容,不影响新产出。**拷贝后改**,不动调用方 dict。
+        """
+        if isinstance(data, dict):
+            data = dict(data)
+            if data.get("verdict") == "UNCLEAR":
+                data["verdict"] = "UNRESOLVED"
+            if "method" not in data and "confidence" in data:
+                try:
+                    data["method"] = (
+                        AuditMethod.PROGRAMMATIC if float(data["confidence"]) >= 1.0 else AuditMethod.LLM
+                    )
+                except (TypeError, ValueError):
+                    data["method"] = AuditMethod.LLM
+        return data
 
 
 class InstructionAggregate(BaseModel):
@@ -65,7 +130,8 @@ class InstructionAggregate(BaseModel):
     pass_count: int
     fail_count: int
     na_count: int  # 不适用(applicable=false / STEP-"na")
-    unclear_count: int = 0  # 判不准(LLM 没判成)
+    unresolved_count: int = 0  # 没判成(LLM 调用/解析失败/未提及),操作性失败、可重跑
+    indeterminate_count: int = 0  # 判不准(LLM 看了证据但真模糊),semantic、重跑无益
     total: int
     fail_rate: float  # fail_count / total(total=0 时 0.0)
     fail_in_transcripts: list[str]  # 哪些 transcript 里判 FAIL(定位用)
@@ -79,7 +145,7 @@ class AuditReport(BaseModel):
 
     skill_name: str
     transcripts: list[str]
-    summary: dict  # {"total": N, "pass": X, "fail": Y, "na": Z(不适用), "unclear": W(判不准)}
+    summary: dict  # {"total": N, "pass": X, "fail": Y, "na": Z(不适用), "unresolved": U(没判成), "indeterminate": I(判不准)}
     findings: list[AuditFinding]
     # 多 transcript 对账的指令级聚合(按 fail_rate 降序);单 transcript 也有(每指令 1 verdict)。
     by_instruction: list[InstructionAggregate] = Field(default_factory=list)

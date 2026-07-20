@@ -1,5 +1,5 @@
 from skill_eval.models.audit_models import (
-    AuditReport, AuditFinding, AuditVerdict, AuditCategory, InstructionAggregate,
+    AuditReport, AuditFinding, AuditMethod, AuditVerdict, AuditCategory, InstructionAggregate,
 )
 from skill_eval.reporting.audit_viewer import AuditReportGenerator
 
@@ -24,32 +24,32 @@ def test_audit_html_renders_warnings_and_findings_full_set():
     report = AuditReport(
         skill_name="s",
         transcripts=["t1.jsonl"],
-        summary={"total": 4, "pass": 1, "fail": 1, "na": 1, "unclear": 1},
+        summary={"total": 4, "pass": 1, "fail": 1, "na": 1, "unresolved": 1},
         findings=[
             AuditFinding(
                 instruction_text="必须引用行号", source="CONSTRAINT",
                 verdict=AuditVerdict.FAIL, category=AuditCategory.PROHIBITION,
-                evidence="证据-FAIL-未见行号引用", confidence=0.9, transcript="t1.jsonl",
+                evidence="证据-FAIL-未见行号引用", method=AuditMethod.LLM, transcript="t1.jsonl",
             ),
             AuditFinding(
                 instruction_text="反推的指令", source="REQUIRED_READS",
                 verdict=AuditVerdict.NA, category=AuditCategory.CONDITIONAL,
-                evidence="证据-NA-场景不适用", confidence=0.8, transcript="t1.jsonl",
+                evidence="证据-NA-场景不适用", method=AuditMethod.LLM, transcript="t1.jsonl",
                 derived_from_transcript=True,
             ),
             AuditFinding(
-                instruction_text="判不准的指令", source="CONSTRAINT",
-                verdict=AuditVerdict.UNCLEAR, category=AuditCategory.PROHIBITION,
-                evidence="证据-UNCLEAR-LLM 没判成", confidence=0.3, transcript="t1.jsonl",
+                instruction_text="没判成的指令", source="CONSTRAINT",
+                verdict=AuditVerdict.UNRESOLVED, category=AuditCategory.PROHIBITION,
+                evidence="证据-UNRESOLVED-LLM 没判成", method=AuditMethod.LLM, transcript="t1.jsonl",
             ),
             AuditFinding(
                 instruction_text="读 app.log", source="REQUIRED_READS",
                 verdict=AuditVerdict.PASS, category=AuditCategory.CONDITIONAL,
-                evidence="证据-PASS-命中 Read app.log", confidence=1.0, transcript="t1.jsonl",
+                evidence="证据-PASS-命中 Read app.log", method=AuditMethod.PROGRAMMATIC, transcript="t1.jsonl",
             ),
         ],
         by_instruction=[],
-        warnings=["1 条指令因 LLM 判定失败标为判不准(UNCLEAR)(本次结果可能不完整,建议重跑)"],
+        warnings=["1 条指令没判成(UNRESOLVED:LLM 调用/解析失败/未提及)(本次结果可能不完整,建议重跑)"],
     )
     html = AuditReportGenerator().generate_html(report)
     # 防假绿:evidence/warnings 文本作为 JSON 嵌入一定在 html 里,断言它们只能证明"数据注入了",
@@ -57,8 +57,8 @@ def test_audit_html_renders_warnings_and_findings_full_set():
     assert 'id="audit-warnings"' in html
     assert 'id="audit-findings"' in html
     # 数据存在性(辅助,非渲染验证):
-    assert "1 条指令因 LLM 判定失败标为判不准(UNCLEAR)" in html
-    assert "证据-UNCLEAR-LLM 没判成" in html  # UNCLEAR(判不准)第 4 态也要覆盖
+    assert "1 条指令没判成(UNRESOLVED" in html
+    assert "证据-UNRESOLVED-LLM 没判成" in html  # UNRESOLVED(没判成)态也要覆盖
     assert "证据-PASS-命中 Read app.log" in html  # PASS 也要(全集,§50 核心)
 
 
@@ -71,17 +71,17 @@ def test_audit_html_renders_by_instruction_and_groups_findings_multi_transcript(
             AuditFinding(
                 instruction_text="NEVER 编造", source="CONSTRAINT",
                 verdict=AuditVerdict.FAIL, category=AuditCategory.PROHIBITION,
-                evidence="t1 未见核实", confidence=0.9, transcript="t1.jsonl",
+                evidence="t1 未见核实", method=AuditMethod.LLM, transcript="t1.jsonl",
             ),
             AuditFinding(
                 instruction_text="NEVER 编造", source="CONSTRAINT",
                 verdict=AuditVerdict.FAIL, category=AuditCategory.PROHIBITION,
-                evidence="t2 未见核实", confidence=0.9, transcript="t2.jsonl",
+                evidence="t2 未见核实", method=AuditMethod.LLM, transcript="t2.jsonl",
             ),
             AuditFinding(
                 instruction_text="NEVER 编造", source="CONSTRAINT",
                 verdict=AuditVerdict.PASS, category=AuditCategory.PROHIBITION,
-                evidence="t3 有核实", confidence=1.0, transcript="t3.jsonl",
+                evidence="t3 有核实", method=AuditMethod.PROGRAMMATIC, transcript="t3.jsonl",
             ),
         ],
         by_instruction=[

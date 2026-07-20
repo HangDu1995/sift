@@ -56,7 +56,8 @@ def aggregate_by_instruction(
                 "pass": 0,
                 "fail": 0,
                 "na": 0,
-                "unclear": 0,
+                "unresolved": 0,
+                "indeterminate": 0,
                 "fail_in_transcripts": [],
                 "na_in_transcripts": [],
                 "fail_seqs": [],
@@ -69,8 +70,10 @@ def aggregate_by_instruction(
             g["fail"] += 1
             g["fail_in_transcripts"].append(f.transcript)
             g["fail_seqs"].append(f.seq)
-        elif f.verdict == AuditVerdict.UNCLEAR:
-            g["unclear"] += 1
+        elif f.verdict == AuditVerdict.UNRESOLVED:
+            g["unresolved"] += 1
+        elif f.verdict == AuditVerdict.INDETERMINATE:
+            g["indeterminate"] += 1
         else:  # AuditVerdict.NA(不适用)
             g["na"] += 1
             g["na_in_transcripts"].append(f.transcript)
@@ -78,7 +81,7 @@ def aggregate_by_instruction(
 
     rows: list[InstructionAggregate] = []
     for g in groups.values():
-        total = g["pass"] + g["fail"] + g["na"] + g["unclear"]
+        total = g["pass"] + g["fail"] + g["na"] + g["unresolved"] + g["indeterminate"]
         rows.append(
             InstructionAggregate(
                 instruction_text=g["instruction_text"],
@@ -87,7 +90,8 @@ def aggregate_by_instruction(
                 pass_count=g["pass"],
                 fail_count=g["fail"],
                 na_count=g["na"],
-                unclear_count=g["unclear"],
+                unresolved_count=g["unresolved"],
+                indeterminate_count=g["indeterminate"],
                 total=total,
                 fail_rate=g["fail"] / total if total else 0.0,
                 fail_in_transcripts=g["fail_in_transcripts"],

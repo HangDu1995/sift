@@ -261,7 +261,7 @@ def _aggregate_compliance(runs: list[dict]) -> list[dict]:
     """
     from collections import defaultdict
     from skill_eval.audit.aggregate import aggregate_by_instruction
-    from skill_eval.models import AuditFinding
+    from skill_eval.models import AuditFinding, AuditVerdict
 
     by_side: dict[str, list[dict]] = defaultdict(list)   # side -> findings(dict)
     side_runs: dict[str, int] = defaultdict(int)        # side -> 贡献了非空 findings 的 run 数
@@ -279,15 +279,19 @@ def _aggregate_compliance(runs: list[dict]) -> list[dict]:
     for side, findings in by_side.items():
         if not findings:
             continue  # 该 side 全空 digest → 跳过(不产空聚合)
-        ai = aggregate_by_instruction([AuditFinding.model_validate(f) for f in findings])
+        # 用 validated model 计数:旧 compliance.json 的 verdict "UNCLEAR" 经 AuditFinding
+        # legacy validator 折成 UNRESOLVED,与新数据统一(summary 与 by_instruction 同源)。
+        validated = [AuditFinding.model_validate(f) for f in findings]
+        ai = aggregate_by_instruction(validated)
         out.append({
             "side": side,
             "summary": {
-                "total": len(findings),
-                "pass": sum(1 for f in findings if f.get("verdict") == "PASS"),
-                "fail": sum(1 for f in findings if f.get("verdict") == "FAIL"),
-                "na": sum(1 for f in findings if f.get("verdict") == "N/A"),
-                "unclear": sum(1 for f in findings if f.get("verdict") == "UNCLEAR"),
+                "total": len(validated),
+                "pass": sum(1 for f in validated if f.verdict == AuditVerdict.PASS),
+                "fail": sum(1 for f in validated if f.verdict == AuditVerdict.FAIL),
+                "na": sum(1 for f in validated if f.verdict == AuditVerdict.NA),
+                "unresolved": sum(1 for f in validated if f.verdict == AuditVerdict.UNRESOLVED),
+                "indeterminate": sum(1 for f in validated if f.verdict == AuditVerdict.INDETERMINATE),
             },
             "by_instruction": [a.model_dump(mode="json") for a in ai],
             "runs_contributed": side_runs[side],

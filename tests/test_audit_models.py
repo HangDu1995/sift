@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from skill_eval.models import (
     AuditCategory,
     AuditFinding,
+    AuditMethod,
     AuditReport,
     AuditVerdict,
 )
@@ -20,6 +21,12 @@ class TestAuditEnums:
         assert AuditVerdict.PASS.value == "PASS"
         assert AuditVerdict.FAIL.value == "FAIL"
         assert AuditVerdict.NA.value == "N/A"
+        assert AuditVerdict.UNRESOLVED.value == "UNRESOLVED"  # 没判成
+        assert AuditVerdict.INDETERMINATE.value == "INDETERMINATE"  # 判不准
+
+    def test_method_values(self) -> None:
+        assert AuditMethod.PROGRAMMATIC.value == "PROGRAMMATIC"
+        assert AuditMethod.LLM.value == "LLM"
 
     def test_verdict_is_str_enum(self) -> None:
         # str, Enum -> 直接当字符串用
@@ -45,9 +52,9 @@ class TestAuditFinding:
             "instruction_text": "禁止使用 constraint X",
             "source": "CONSTRAINT",
             "verdict": AuditVerdict.FAIL,
+            "method": AuditMethod.LLM,
             "category": AuditCategory.PROHIBITION,
             "evidence": "transcript 中出现了被禁止的调用",
-            "confidence": 0.8,
             "transcript": "run-1.jsonl",
         }
         base.update(overrides)
@@ -59,7 +66,7 @@ class TestAuditFinding:
         assert f.source == "CONSTRAINT"
         assert f.verdict is AuditVerdict.FAIL
         assert f.category is AuditCategory.PROHIBITION
-        assert f.confidence == pytest.approx(0.8)
+        assert f.method is AuditMethod.LLM
         assert f.transcript == "run-1.jsonl"
 
     def test_derived_from_transcript_defaults_false(self) -> None:
@@ -92,9 +99,9 @@ class TestAuditReport:
             "instruction_text": "必须调用 Read",
             "source": "TOOL_REQUIREMENT",
             "verdict": AuditVerdict.PASS,
+            "method": AuditMethod.PROGRAMMATIC,
             "category": AuditCategory.CONDITIONAL,
             "evidence": "transcript 中存在 Read 调用",
-            "confidence": 0.9,
             "transcript": "run-1.jsonl",
         }
         base.update(overrides)
@@ -136,9 +143,9 @@ class TestAuditReport:
                 instruction_text="不许编造",
                 source="ANTI_FABRICATION",
                 verdict=AuditVerdict.NA,
+                method=AuditMethod.LLM,
                 category=AuditCategory.PROHIBITION,
                 evidence="无法判定",
-                confidence=0.3,
                 transcript="run-2.jsonl",
                 derived_from_transcript=True,
             ),
@@ -163,13 +170,32 @@ class TestAuditReport:
         f0, f1 = restored.findings
         assert f0.verdict is AuditVerdict.PASS
         assert f0.category is AuditCategory.CONDITIONAL
+        assert f0.method is AuditMethod.PROGRAMMATIC
         assert f0.derived_from_transcript is False
 
         assert f1.verdict is AuditVerdict.NA
         assert f1.category is AuditCategory.PROHIBITION
         assert f1.source == "ANTI_FABRICATION"
-        assert f1.confidence == pytest.approx(0.3)
+        assert f1.method is AuditMethod.LLM
         assert f1.derived_from_transcript is True
+
+    def test_legacy_unclear_folds_to_unresolved(self) -> None:
+        """旧 JSON(verdict=UNCLEAR + confidence 浮点)经 legacy validator:
+        UNCLEAR → UNRESOLVED(旧 UNCLEAR 实际只装"没判成");confidence → method(>=1.0 程序,否则 LLM)。
+        使旧 run 产物仍可加载,不崩。"""
+        legacy = {
+            "instruction_text": "x", "source": "CONSTRAINT",
+            "verdict": "UNCLEAR", "category": "prohibition",
+            "evidence": "e", "confidence": 0.3, "transcript": "t.jsonl",
+        }
+        f = AuditFinding.model_validate(legacy)
+        assert f.verdict is AuditVerdict.UNRESOLVED
+        assert f.method is AuditMethod.LLM  # confidence 0.3 < 1.0 → LLM
+
+        # confidence 1.0(旧程序判定)→ PROGRAMMATIC
+        prog = {**legacy, "verdict": "PASS", "confidence": 1.0}
+        f2 = AuditFinding.model_validate(prog)
+        assert f2.method is AuditMethod.PROGRAMMATIC
 
     def test_roundtrip_na_enum_value(self) -> None:
         # N/A 这个值含斜杠,确保 JSON 往返不丢

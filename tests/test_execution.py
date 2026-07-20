@@ -791,7 +791,7 @@ class TestABTestRunnerComplianceIsAudit:
         canned = AuditReport(
             skill_name="myskill",
             transcripts=["transcript.jsonl"],
-            summary={"total": 2, "pass": 1, "fail": 1, "na": 0, "unclear": 0},
+            summary={"total": 2, "pass": 1, "fail": 1, "na": 0, "unresolved": 0, "indeterminate": 0},
             findings=[],
         )
 
@@ -820,7 +820,7 @@ class TestABTestRunnerComplianceIsAudit:
         data = json.loads(with_comp.read_text(encoding="utf-8"))
         assert "summary" in data and "findings" in data, "compliance.json 应是 AuditReport 形(summary/findings)"
         assert "compliance_rate" not in data, "不再是旧 ComplianceReport 形(无 compliance_rate 顶层字段)"
-        assert data["summary"] == {"total": 2, "pass": 1, "fail": 1, "na": 0, "unclear": 0}
+        assert data["summary"] == {"total": 2, "pass": 1, "fail": 1, "na": 0, "unresolved": 0, "indeterminate": 0}
 
         # audit 被喂的是落盘的 transcript.jsonl
         called = MockAuditor.return_value.audit.call_args

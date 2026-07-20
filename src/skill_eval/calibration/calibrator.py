@@ -41,7 +41,7 @@ class CalibrationChecker:
             scoring_rate, basis = summary.pass_rate, "mixed"
         result_pass = scoring_rate >= RESULT_PASS_THRESHOLD
 
-        # ---- 过程判定:只看 PASS/FAIL(排除 N/A 不适用、UNCLEAR 判不准)----
+        # ---- 过程判定:只看 PASS/FAIL(排除 N/A 不适用、UNRESOLVED 没判成、INDETERMINATE 判不准)----
         hard_violations: list[HardViolation] = []
         soft_notes: dict[str, int] = {}
         compliance_rate: float | None = None

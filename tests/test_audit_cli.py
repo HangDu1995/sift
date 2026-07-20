@@ -18,6 +18,7 @@ from skill_eval.cli.main import app
 from skill_eval.models.audit_models import (
     AuditCategory,
     AuditFinding,
+    AuditMethod,
     AuditReport,
     AuditVerdict,
 )
@@ -53,7 +54,7 @@ def _fake_report() -> AuditReport:
                 verdict=AuditVerdict.PASS,
                 category=AuditCategory.PROHIBITION,
                 evidence="未违反",
-                confidence=0.8,
+                method=AuditMethod.LLM,
                 transcript="t.jsonl",
             ),
             AuditFinding(
@@ -62,7 +63,7 @@ def _fake_report() -> AuditReport:
                 verdict=AuditVerdict.FAIL,
                 category=AuditCategory.PROHIBITION,
                 evidence="执行中编造了数据",
-                confidence=0.8,
+                method=AuditMethod.LLM,
                 transcript="t.jsonl",
             ),
             AuditFinding(
@@ -71,7 +72,7 @@ def _fake_report() -> AuditReport:
                 verdict=AuditVerdict.NA,
                 category=AuditCategory.STEP,
                 evidence="场景不涉及该步",
-                confidence=0.8,
+                method=AuditMethod.LLM,
                 transcript="t.jsonl",
             ),
         ],

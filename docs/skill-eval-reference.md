@@ -310,28 +310,35 @@ skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
 
 > **`--by-skill`：多 skill transcript 只对账一个 skill**。transcript 里调了多个 skill 时，默认会把整段当一个袋子判（其他 skill 的行为会混进报告）。加 `--by-skill` 后，按 transcript 里的 `Skill` 工具调用切成若干单 skill 子 transcript，只对账 `<skill_path>` 这个 skill 被调用期间的段。归段 **scope-aware**：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent（Agent 工具）是独立作用域，其记录带 `parent_tool_use_id`，子 agent 里用的 skill 切到 Agent 返回、**不污染主 agent 归属**；target 调多次 → 多段 → 多 transcript 聚合。**两条限制**：① skill 没有"返回"信号，所以"调 A → 调 B → 不重调 A 接着干 A"那段会归给 B（不可检测，解法是 agent 显式重调 A）；② 把委派子 skill 的段折进主 skill 审计（inclusive）需用户声明，暂不支持。该 skill 没在 transcript 里被调过 → 报错退出（exit 2），不静默跑空。
 
-判定分四类——每条指令按 SKILL.md 声明来源路由到一类，各按不同判法出 verdict：
+判定分四类——每条指令按 SKILL.md 声明来源路由到一类，各按不同判法出 verdict。每条 finding 有两个**正交**维度：**verdict（结果，五态）** + **method（怎么查的，程序 `PROGRAMMATIC` / LLM `LLM`）**。
+
+- **PASS / FAIL**：已判明通过 / 违规。
+- **N/A（不适用）**：规则存在但本次 transcript 场景不触发——已解决的有效结论。
+- **UNRESOLVED（没判成）**：LLM 调用 / 解析失败 / 未提及 / 畸形值——操作性失败，**可重跑救回**。
+- **INDETERMINATE（判不准）**：LLM 看了证据但真模糊（证据相互矛盾 / 关键缺失），给不出 pass/fail/na——**重跑无益**（只能人工复核），强制带 `indeterminate_reason`（evidence 字段）。
 
 | 类别 | 来自哪些指令 | 怎么判 | 结论 |
 |------|------------|--------|------|
-| 条件性 CONDITIONAL | TOOL_REQUIREMENT / REFERENCE_USAGE（该用 X 工具、读 X 参考） | 命中 tool_trace → PASS（**不调 LLM**）；未命中 → LLM 判该场景该不该触发 | 遵循 / 违反 / N/A（不适用） |
-| 禁令 PROHIBITION | CONSTRAINT / ANTI_FABRICATION（不许做 X） | LLM **主动检测这次有没有违规**（不是判“遵守没”） | 未违反→PASS / 违反→FAIL / 判不准→UNCLEAR |
-| 步骤 STEP | HEADING_STEP（应走第 N 步） | LLM 判走过 / 该走没走 / 不涉及 | pass / fail / na（不适用） |
-| 输出格式 OUTPUT | OUTPUT_FORMAT（产物应含某格式） | **确定性子串匹配，不调 LLM** | 命中→PASS / 未命中→FAIL（无 N/A） |
+| 条件性 CONDITIONAL | TOOL_REQUIREMENT / REFERENCE_USAGE（该用 X 工具、读 X 参考） | 命中 tool_trace → PASS（**程序判定，不调 LLM**）；未命中 → LLM 判该场景该不该触发 | 遵循 / 违反 / N/A / 没判成 / 判不准 |
+| 禁令 PROHIBITION | CONSTRAINT / ANTI_FABRICATION（不许做 X） | LLM **主动检测这次有没有违规**（不是判“遵守没”） | 未违反→PASS / 违反→FAIL / 没判成 / 判不准 |
+| 步骤 STEP | HEADING_STEP（应走第 N 步） | LLM 判走过 / 该走没走 / 不涉及 | pass / fail / na / 没判成 / 判不准 |
+| 输出格式 OUTPUT | OUTPUT_FORMAT（产物应含某格式） | **确定性子串匹配，程序判定，不调 LLM** | 命中→PASS / 未命中→FAIL（无 N/A / 没判成 / 判不准） |
 
 > **禁令判的角度反着来**：其它三类问“该不该做 / 做没做”（正面遵循），禁令问“这次执行里有没有发生**违反**这条禁令的行为”——主动找违规。例：`NEVER delete production data`、`不得编造不存在的错误码`（模型 hallucinate 一个码 → `violated=true` → FAIL）。
 
-> **判不准不乱报**：三类 LLM 判定（条件性 / 禁令 / 步骤）在 LLM 失败 / 解析失败 / 未提及时一律报 **UNCLEAR（判不准）**，**不保守 FAIL**——FAIL 只留给 LLM 明确判“违反 / 该做没做”。
+> **没判成不乱报**：三类 LLM 判定（条件性 / 禁令 / 步骤）在 LLM 失败 / 解析失败 / 未提及时一律报 **UNRESOLVED（没判成）**，**不保守 FAIL**——FAIL 只留给 LLM 明确判“违反 / 该做没做”。
 >
-> **N/A 与判不准（UNCLEAR）是两码事，别混**：① **UNCLEAR（判不准）** = LLM 没给明确结论（失败 / 解析失败 / 未提及）→ 低置信（0.3）、结果不完整、汇总进警告提示重跑；② **N/A（不适用）** = 规则存在但本次 transcript 场景不触发——条件性类 LLM 明确判“不涉及”（`applicable=false`）、步骤类 LLM 返回“na”（场景不涉及该步）→ 置信 0.8、是**已解决的有效结论**、不进警告、不用重跑。后者为什么会有：提取是**对 SKILL 静态全抽**（skill 写了“读 references/foo.md”就抽一条），但“该读 foo.md”有触发条件——audit 一个根本不涉及该条件的 transcript 时，agent 没读是对的，不能 FAIL 也不能 PASS（规则没被触发），故 N/A（不适用）。
+> **N/A、没判成、判不准 是三码事，别混**：① **UNRESOLVED（没判成）** = LLM 没出判定（调用 / 解析失败 / 未提及 / 畸形值）→ 操作性失败、**可重跑**、汇总进“建议重跑”警告；② **INDETERMINATE（判不准）** = LLM 出了判定、判定本身是“证据真模糊判不了”→ semantic、**重跑无益**，须带具体 reason（写明矛盾/缺失的证据，空 reason 降级回 UNRESOLVED）；③ **N/A（不适用）** = 规则存在但本次场景不触发——条件性类 LLM 明确判“不涉及”（`applicable=false`）、步骤类 LLM 返回“na”→ 已解决的有效结论、不进警告、不用重跑。N/A 为什么会有：提取是**对 SKILL 静态全抽**（skill 写了“读 references/foo.md”就抽一条），但“该读 foo.md”有触发条件——audit 一个根本不涉及该条件的 transcript 时，agent 没读是对的，不能 FAIL 也不能 PASS（规则没被触发），故 N/A。
 >
-> **何时提示“建议重跑”**：`⚠ 判不准`（UNCLEAR）条数 > 0 时，audit 在报告顶部出警告（`X 条指令因 LLM 判定失败标为判不准(UNCLEAR)，本次结果可能不完整，建议重跑`）。**重跑 = 重跑同一条 `audit` 命令**（纯对账、无副作用，不 re-run）；这些失败多为瞬态（LLM 后端失败 / 限流 / 输出截断，retry 没救回才落到这），重跑常能救回。不重跑则那些条没判成、可能漏掉真违规，故 **“0 FAIL ≠ 全过”**——看警告里判不准（UNCLEAR）是不是 0、findings 里有没有 `⚠ 判不准` 标签。
+> **判不准三道滥用闸**（INDETERMINATE 是 LLM 逃逸口，需防滥用）：① **强制 reason**——parser 见 indeterminate 必须带具体矛盾/缺失证据，空则降级 UNRESOLVED（不许空口“判不准”）；② **占比告警**——audit 统计 indeterminate 占比，超 20% 且总条数 ≥5 → 报告顶部告警提示人工复核是否 LLM 滥用；③ **prompt 纪律**——三个判官 prompt 都写明“优先明确结论，indeterminate 须写具体矛盾证据，不许偷懒”。
+>
+> **何时提示“建议重跑”**：`○ 没判成`（UNRESOLVED）条数 > 0 时，audit 在报告顶部出警告（`X 条指令没判成(UNRESOLVED:LLM 调用/解析失败/未提及)，本次结果可能不完整，建议重跑`）。**重跑 = 重跑同一条 `audit` 命令**（纯对账、无副作用，不 re-run）；这些失败多为瞬态（LLM 后端失败 / 限流 / 输出截断，retry 没救回才落到这），重跑常能救回。INDETERMINATE（判不准）**不**提示重跑（重跑无益）。不重跑则那些条没判成、可能漏掉真违规，故 **“0 FAIL ≠ 全过”**——看警告里 UNRESOLVED 是不是 0。
 
-产出 `<out>/audit-report.json`（机器读）+ `<out>/audit-report.html`（人读，**always 写**，与 JSON 并列，对齐 scoring report 视觉）。HTML 自上而下：① 头部（skill / summary 计数徽章 / 反推指令数）② 警告框（可信度，判不准 UNCLEAR 等）③ 系统性聚合表（**仅多 transcript**，跨会话 fail% + fail in transcripts）④ findings 全集（**含 PASS**，每条带 evidence / confidence / verdict 徽章 / category / source；多 transcript 按指令分组可折叠，FAIL/UNCLEAR/N/A 默认展开）。
+产出 `<out>/audit-report.json`（机器读）+ `<out>/audit-report.html`（人读，**always 写**，与 JSON 并列，对齐 scoring report 视觉）。HTML 自上而下：① 头部（skill / summary 计数徽章：✓通过 / ✗失败 / ⊘不适用 / ○没判成（>0 时）/ ?判不准（>0 时）/ 反推指令数）② 警告框（没判成建议重跑、判不准占比偏高告警）③ 系统性聚合表（**仅多 transcript**，跨会话 fail% + fail in transcripts）④ findings 全集（**含 PASS**，每条带 verdict 徽章 + method 标签（程序/LLM）+ evidence + category + source；多 transcript 按指令分组可折叠，FAIL/UNRESOLVED/INDETERMINATE/N/A 默认展开）。
 
 > **「X 条由 transcript 反推」是什么**：findings 里 `derived_from_transcript: true` 的不是 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（只增不减）。v1 只补一类：transcript 里 agent 真实 Read 过的输入/参考文件（`digest.input_files`）→ 各补一条「读取 \<path\>」（REFERENCE_USAGE）。例：SKILL.md 只写"读用户指定的日志文件"不点名，transcript 实际读了 `app.log` → 反推一条「读取 app.log」并确认命中。这类由 Read 行为反推的 read 检查构造上即 PASS（不膨胀 fail），作用是把 agent 真碰过的输入文件记进报告。`required_tools`（Bash 命令分不清业务/通用）、`required_outputs`（历史 trace 产物未必还在盘）不反推。
 
-> **怎么看结果（别只数 fail）**：每条 finding 带 **#N 序号**。① **同文重复已去重**——同句被抽成 `CONSTRAINT` + `ANTI_FABRICATION` 的合并成一条、来源徽章显 `CONSTRAINT + ANTI_FABRICATION`（不再虚增 fail）。② **同行为跨类已关联**——同一行为（如没读某 reference）同时违反 条件性 + 步骤 两条**不同**规则的，仍是两条（确是两条规则），但互标 `↔ 同源违规 #N`（可点跳）；故 fail 条数仍可能 > 真实问题数，**逐条看 evidence 对照"哪个行为"**，别数条数。③ **判不准（UNCLEAR）多 ≠ 全过**——LLM 没判成的一律 UNCLEAR（见上），汇总成警告提示重跑；N/A（不适用）是已解决结论、不进警告。④ **对照预期**：自带 3 个 audit 示例的预期违规已逐条列明（见 [example-skills/README.md](../fixtures/example-skills/README.md)），跑完比对该抓的违规是否都出现在 FAIL、evidence 是否点中。⑤ **置信度标签**（每条右侧，悬停看原值+由来）：`✓ 确定`=程序对账（tool_trace 命中 / 子串匹配，不调 LLM，最硬）、`LLM 判定`=LLM 明确结论、`⚠ 判不准`=没判成（UNCLEAR、结果不完整，汇总进警告）。
+> **怎么看结果（别只数 fail）**：每条 finding 带 **#N 序号**。① **同文重复已去重**——同句被抽成 `CONSTRAINT` + `ANTI_FABRICATION` 的合并成一条、来源徽章显 `CONSTRAINT + ANTI_FABRICATION`（不再虚增 fail）。② **同行为跨类已关联**——同一行为（如没读某 reference）同时违反 条件性 + 步骤 两条**不同**规则的，仍是两条（确是两条规则），但互标 `↔ 同源违规 #N`（可点跳）；故 fail 条数仍可能 > 真实问题数，**逐条看 evidence 对照"哪个行为"**，别数条数。③ **没判成（UNRESOLVED）多 ≠ 全过**——LLM 没判成的一律 UNRESOLVED（见上），汇总成警告提示重跑；N/A（不适用）是已解决结论、不进警告。④ **对照预期**：自带 3 个 audit 示例的预期违规已逐条列明（见 [example-skills/README.md](../fixtures/example-skills/README.md)），跑完比对该抓的违规是否都出现在 FAIL、evidence 是否点中。⑤ **verdict 徽章 + method 标签**（每条）：左侧 verdict 五态图标（✓通过 / ✗失败 / ⊘不适用（场景不触发）/ ○没判成（可重跑）/ ?判不准（重跑无益）），右侧 method 标签「程序」（tool_trace 命中 / 子串匹配，不调 LLM）或「LLM」。
 
 ### `report` — HTML 报告
 
@@ -436,7 +443,7 @@ skill-eval batch-report batch-workspace/ --open
 | `pass_rate_llm` | LLM 语义判定 | 抖（阅卷噪声） | 看方向 |
 | `pass_rate`（总率） | 全部混算 | 历史兼容 | 粗略 |
 
-> **遵循性不分 source 双率**：`compliance.json` 现是 **AuditReport**（遵循性引擎已统一到 audit），按语义 category 四类（condition/prohibition/step/output）判，产 `summary{total,pass,fail,na,unclear}`。遵循度 = `pass/(pass+fail)`，排除 **N/A**（不适用，场景不触发）+ **UNCLEAR**（判不准，LLM 没判成）——两者都不进分母，与 audit 命令的 `audit-report.json` 同 schema。
+> **遵循性不分 source 双率**：`compliance.json` 现是 **AuditReport**（遵循性引擎已统一到 audit），按语义 category 四类（condition/prohibition/step/output）判，产 `summary{total,pass,fail,na,unresolved,indeterminate}`（没判成/判不准）。遵循度 = `pass/(pass+fail)`，排除 **N/A**（不适用）+ **UNRESOLVED**（没判成）+ **INDETERMINATE**（判不准）——三者都不进分母，与 audit 命令的 `audit-report.json` 同 schema。
 
 **双主位分工**（fixture-eval 下）：
 - **客观侧主位** = `delta.pass_rate_programmatic`（候选 - 基线）——A/B 噪声抵消到 0，最稳。
@@ -654,7 +661,7 @@ skill-eval batch-report batch-workspace/ --open
 | `scorecard.json` | run 末尾自动产（静态评分卡；也可 `analyze -o` 单独产） |
 | `vet-report.json` | run 末尾自动产（原生安全扫描；也可 `vet -o` 单独产） |
 | `with_skill/eval-<id>/run-1/grading.json` | expectations + assertions 的 pass/fail（双率） |
-| `with_skill/eval-<id>/run-1/compliance.json` | SKILL.md 指令遵循性（AuditReport：summary 计数 + findings 四态；遵循度 = pass/(pass+fail)，排除 N/A + UNCLEAR） |
+| `with_skill/eval-<id>/run-1/compliance.json` | SKILL.md 指令遵循性（AuditReport：summary 计数 + findings 五态 PASS/FAIL/N-A/UNRESOLVED/INDETERMINATE；遵循度 = pass/(pass+fail)，排除 N/A + UNRESOLVED + INDETERMINATE） |
 | `with_skill/eval-<id>/run-1/calibration.json` | 结果×过程 coherence 判决（5 态 verdict；仅 with_skill 产） |
 | `with_skill/eval-<id>/run-1/run_debug.json` | 完整回复 + tool_calls + timing |
 | `with_skill/eval-<id>/run-1/timing.json` | 执行耗时和 token 统计 |

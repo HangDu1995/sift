@@ -281,8 +281,9 @@
     }
     .assertion-status.pass { color: var(--green); }
     .assertion-status.fail { color: var(--red); }
-    .assertion-status.na { color: var(--text-muted); }      /* N/A 不适用(场景不触发) */
-    .assertion-status.unclear { color: var(--text-muted); }  /* UNCLEAR 判不准(LLM 没判成) */
+    .assertion-status.na { color: var(--text-muted); }           /* N/A 不适用(场景不触发) */
+    .assertion-status.unresolved { color: var(--text-muted); }   /* UNRESOLVED 没判成(可重跑) */
+    .assertion-status.indeterminate { color: var(--red); }       /* INDETERMINATE 判不准(重跑无益) */
     .assertion-evidence {
       color: var(--text-muted);
       font-size: 0.75rem;
@@ -819,8 +820,9 @@
           html += '<strong>遵循性：</strong> <span style="color:var(--text-muted);font-weight:600;">无可对账内容</span>';
           html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">此 run 无工具调用 / 文件产出(cc 纯推理作答,常见于理解类题)。遵循性审的是流程执行 —— 无流程可审,非失败。</div>';
         } else {
-          const passN = s.pass || 0, failN = s.fail || 0, naN = s.na || 0, unclearN = s.unclear || 0;
-          // 遵循度 = pass/(pass+fail),排除 na(不适用)+ unclear(判不准);全无可判定 → null
+          const passN = s.pass || 0, failN = s.fail || 0, naN = s.na || 0,
+                unresolvedN = s.unresolved || 0, indeterminateN = s.indeterminate || 0;
+          // 遵循度 = pass/(pass+fail),排除 na(不适用)/ unresolved(没判成)/ indeterminate(判不准);全无可判定 → null
           const judged = passN + failN;
           const rate = judged > 0 ? passN / judged : null;
           const target = 0.8;
@@ -830,29 +832,39 @@
           const fmtPct = v => (v != null ? (v * 100).toFixed(0) + '%' : '—');
           html += '<strong>遵循度：</strong> <span style="color:' + rateColor + ';font-weight:600;">' + fmtPct(rate) + '</span>';
           html += ' <span style="font-size:0.75rem;color:var(--text-muted);">（目标 ≥ ' + (target * 100).toFixed(0) + '%' + (met ? ' ✓' : '') + '）</span>';
-          html += ' <span style="font-size:0.75rem;color:var(--text-muted);">PASS ' + passN + ' / FAIL ' + failN + (naN ? ' / 不适用 ' + naN : '') + (unclearN ? ' / 判不准 ' + unclearN : '') + '</span>';
-          // per-instruction 明细(audit findings,四态 PASS/FAIL/N/A/UNCLEAR)
+          html += ' <span style="font-size:0.75rem;color:var(--text-muted);">PASS ' + passN + ' / FAIL ' + failN
+            + (naN ? ' / 不适用 ' + naN : '')
+            + (unresolvedN ? ' / 没判成 ' + unresolvedN : '')
+            + (indeterminateN ? ' / 判不准 ' + indeterminateN : '') + '</span>';
+          // per-instruction 明细(audit findings,五态 PASS/FAIL/N/A/UNRESOLVED/INDETERMINATE)
+          const VERDICT_META = {
+            PASS: 'pass', FAIL: 'fail', 'N/A': 'na',
+            UNRESOLVED: 'unresolved', INDETERMINATE: 'indeterminate',
+            UNCLEAR: 'unresolved',  // legacy 旧数据 → 没判成
+          };
+          const VERDICT_ICON = { PASS: '✓', FAIL: '✗', 'N/A': '—', UNRESOLVED: '○', INDETERMINATE: '?', UNCLEAR: '○' };
           const findings = cr.findings || [];
           if (findings.length) {
             html += '<ul class="assertion-list" style="margin-top:0.5rem;">';
             for (const f of findings) {
-              const verdict = f.verdict || "UNCLEAR";
-              const statusClass = verdict === "PASS" ? "pass" : verdict === "FAIL" ? "fail" : verdict === "N/A" ? "na" : "unclear";
-              const statusIcon = verdict === "PASS" ? "✓" : verdict === "FAIL" ? "✗" : verdict === "N/A" ? "—" : "○";
+              const verdict = f.verdict || "UNRESOLVED";
+              const statusClass = VERDICT_META[verdict] || 'unresolved';
+              const statusIcon = VERDICT_ICON[verdict] != null ? VERDICT_ICON[verdict] : '○';
               const instrText = f.instruction_text || '(未命名)';
               const catTag = f.category ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">' + escapeHtml(f.category) + '</span>' : '';
               const derivTag = f.derived_from_transcript ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:0.25rem;">反推</span>' : '';
-              // confidence → 分类标签(口径同 audit-report.html confTag,但确定项 1.0 不打标签:
-              // verdict 图标已表达通过/失败,「确定」冗余)。0.8=LLM 判 / <0.8=判不准;数字只进 title
-              const confTag = (() => {
-                const c = f.confidence;
-                if (typeof c !== "number" || c >= 1.0) return "";
-                if (c >= 0.8) return '<span style="font-size:0.7rem;color:var(--text-muted);margin-left:0.25rem;" title="confidence ' + c.toFixed(2) + ' · LLM 给出明确结论">LLM 判定</span>';
-                return '<span style="font-size:0.7rem;color:var(--red);font-weight:600;margin-left:0.25rem;" title="confidence ' + c.toFixed(2) + ' · 判定失败/未提及,本条不完整建议重跑">⚠ 判不准</span>';
+              // method(判定方法)→ 程序 / LLM 标签(口径同 audit-report.html)。旧数据无 method
+              // 字段时,据旧 confidence 推导(>=1.0 程序,否则 LLM);无 confidence 则不显。
+              const methodTag = (() => {
+                let m = f.method;
+                if (!m && typeof f.confidence === 'number') m = f.confidence >= 1.0 ? 'PROGRAMMATIC' : 'LLM';
+                if (m === 'PROGRAMMATIC') return '<span style="font-size:0.7rem;color:var(--green);margin-left:0.25rem;" title="程序对账(tool_trace 命中 / 子串匹配),不调 LLM">程序</span>';
+                if (m === 'LLM') return '<span style="font-size:0.7rem;color:var(--text-muted);margin-left:0.25rem;" title="LLM 给出结论">LLM</span>';
+                return '';
               })();
               html += '<li class="assertion-item">';
               html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
-              html += '<span>' + escapeHtml(instrText) + catTag + derivTag + confTag + '</span>';
+              html += '<span>' + escapeHtml(instrText) + catTag + derivTag + methodTag + '</span>';
               if (f.evidence) {
                 html += '<div class="assertion-evidence">' + escapeHtml(f.evidence) + '</div>';
               }
@@ -1077,20 +1089,35 @@
       html += '<div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.75rem;">遵循性以 SKILL 为出题依据,跨所有注入侧 run 聚合(等同把 N 个 transcript 一次性喂给 audit 多会话审计)。理解类题(无工具/文件活动)不产判定,不计入。</div>';
       for (const agg of aggs) {
         const s = agg.summary || {};
-        const passN = s.pass || 0, failN = s.fail || 0, naN = s.na || 0, unclearN = s.unclear || 0;
+        const passN = s.pass || 0, failN = s.fail || 0, naN = s.na || 0,
+              unresolvedN = s.unresolved || 0, indeterminateN = s.indeterminate || 0;
         const judged = passN + failN;
         const rate = judged > 0 ? passN / judged : null;
         const rateColor = rate == null ? "var(--text-muted)" : rate >= 0.8 ? "var(--green)" : rate >= 0.5 ? "var(--accent)" : "var(--red)";
         html += '<div style="margin-bottom:0.75rem;padding-bottom:0.75rem;border-bottom:1px solid var(--border);">';
         html += '<div style="font-weight:600;margin-bottom:0.25rem;">' + escapeHtml(agg.side || '') + ' 侧 · 遵循度 <span style="color:' + rateColor + ';font-weight:600;">' + fmtPct(rate) + '</span></div>';
-        html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">PASS ' + passN + ' / FAIL ' + failN + (naN ? ' / 不适用 ' + naN : '') + (unclearN ? ' / 判不准 ' + unclearN : '') + ' · 聚合自 ' + (agg.runs_contributed || 0) + ' 个有判定的 run</div>';
+        html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">PASS ' + passN + ' / FAIL ' + failN
+          + (naN ? ' / 不适用 ' + naN : '')
+          + (unresolvedN ? ' / 没判成 ' + unresolvedN : '')
+          + (indeterminateN ? ' / 判不准 ' + indeterminateN : '')
+          + ' · 聚合自 ' + (agg.runs_contributed || 0) + ' 个有判定的 run</div>';
         const bi = agg.by_instruction || [];
         if (bi.length) {
-          html += '<table class="benchmark-table"><thead><tr><th style="text-align:left;">指令</th><th>通过</th><th>失败</th><th>不适用</th><th style="text-align:left;">失败出现在</th></tr></thead><tbody>';
+          html += '<table class="benchmark-table"><thead><tr>'
+            + '<th style="text-align:left;">指令</th><th>通过</th><th>失败</th><th>不适用</th>'
+            + '<th title="LLM 调用/解析失败/未提及,可重跑">没判成</th>'
+            + '<th title="LLM 看了证据但真模糊,重跑无益">判不准</th>'
+            + '<th style="text-align:left;">失败出现在</th>'
+            + '</tr></thead><tbody>';
           for (const inst of bi) {
             const failIn = (inst.fail_in_transcripts || []).join(', ') || '—';
             const failCell = inst.fail_count ? '<span style="color:var(--red);font-weight:600;">' + inst.fail_count + '</span>' : String(inst.fail_count || 0);
-            html += '<tr><td style="text-align:left;">' + escapeHtml(inst.instruction_text || '(未命名)') + '</td><td>' + (inst.pass_count || 0) + '</td><td>' + failCell + '</td><td>' + (inst.na_count || 0) + '</td><td style="text-align:left;font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(failIn) + '</td></tr>';
+            html += '<tr>'
+              + '<td style="text-align:left;">' + escapeHtml(inst.instruction_text || '(未命名)') + '</td>'
+              + '<td>' + (inst.pass_count || 0) + '</td><td>' + failCell + '</td><td>' + (inst.na_count || 0) + '</td>'
+              + '<td>' + (inst.unresolved_count || 0) + '</td><td>' + (inst.indeterminate_count || 0) + '</td>'
+              + '<td style="text-align:left;font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(failIn) + '</td>'
+              + '</tr>';
           }
           html += '</tbody></table>';
         }

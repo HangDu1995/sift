@@ -10,6 +10,7 @@ from skill_eval.calibration.calibrator import CalibrationChecker
 from skill_eval.models import (
     AuditCategory,
     AuditFinding,
+    AuditMethod,
     AuditReport,
     AuditVerdict,
     CalibrationVerdict,
@@ -316,14 +317,14 @@ class TestInstructionExtractorChinese:
         assert "ing" not in names
 
 
-def _finding(category, verdict, text="x", evidence="e", confidence=0.9):
+def _finding(category, verdict, text="x", evidence="e", method=AuditMethod.LLM):
     return AuditFinding(
         instruction_text=text,
         source="CONSTRAINT",
         verdict=verdict,
+        method=method,
         category=category,
         evidence=evidence,
-        confidence=confidence,
         transcript="t.jsonl",
     )
 
@@ -349,7 +350,7 @@ class TestCalibrationVerdict:
         g = _grading(0.9)
         c = AuditReport(
             skill_name="s", transcripts=["t"],
-            summary={"total": 2, "pass": 2, "fail": 0, "na": 0, "unclear": 0},
+            summary={"total": 2, "pass": 2, "fail": 0, "na": 0, "unresolved": 0, "indeterminate": 0},
             findings=[_finding(AuditCategory.PROHIBITION, AuditVerdict.PASS),
                       _finding(AuditCategory.STEP, AuditVerdict.PASS)],
         )
@@ -364,7 +365,7 @@ class TestCalibrationVerdict:
         g = _grading(0.85)
         c = AuditReport(
             skill_name="s", transcripts=["t"],
-            summary={"total": 2, "pass": 1, "fail": 1, "na": 0, "unclear": 0},
+            summary={"total": 2, "pass": 1, "fail": 1, "na": 0, "unresolved": 0, "indeterminate": 0},
             findings=[_finding(AuditCategory.PROHIBITION, AuditVerdict.FAIL,
                                "禁止编造错误码", "E-FAKE-999 编造代号"),
                       _finding(AuditCategory.STEP, AuditVerdict.PASS)],
@@ -380,7 +381,7 @@ class TestCalibrationVerdict:
         g = _grading(0.5)
         c = AuditReport(
             skill_name="s", transcripts=["t"],
-            summary={"total": 1, "pass": 1, "fail": 0, "na": 0, "unclear": 0},
+            summary={"total": 1, "pass": 1, "fail": 0, "na": 0, "unresolved": 0, "indeterminate": 0},
             findings=[_finding(AuditCategory.OUTPUT, AuditVerdict.PASS)],
         )
         r = CalibrationChecker().calibrate(g, c)
@@ -391,7 +392,7 @@ class TestCalibrationVerdict:
         g = _grading(0.3)
         c = AuditReport(
             skill_name="s", transcripts=["t"],
-            summary={"total": 1, "pass": 0, "fail": 1, "na": 0, "unclear": 0},
+            summary={"total": 1, "pass": 0, "fail": 1, "na": 0, "unresolved": 0, "indeterminate": 0},
             findings=[_finding(AuditCategory.OUTPUT, AuditVerdict.FAIL)],
         )
         r = CalibrationChecker().calibrate(g, c)
@@ -405,13 +406,13 @@ class TestCalibrationVerdict:
         assert r.process_status == ProcessStatus.UNKNOWN
         assert r.compliance_rate is None
 
-    def test_process_unknown_when_all_na_or_unclear(self):
-        # 全 N/A/UNCLEAR(无可判定)-> 过程未知(不硬判)
+    def test_process_unknown_when_all_na_or_unresolved(self):
+        # 全 N/A/UNRESOLVED(无可判定)-> 过程未知(不硬判)
         c = AuditReport(
             skill_name="s", transcripts=["t"],
-            summary={"total": 2, "pass": 0, "fail": 0, "na": 2, "unclear": 0},
+            summary={"total": 2, "pass": 0, "fail": 0, "na": 2, "unresolved": 0, "indeterminate": 0},
             findings=[_finding(AuditCategory.PROHIBITION, AuditVerdict.NA),
-                      _finding(AuditCategory.STEP, AuditVerdict.UNCLEAR)],
+                      _finding(AuditCategory.STEP, AuditVerdict.UNRESOLVED)],
         )
         r = CalibrationChecker().calibrate(_grading(0.9), c)
         assert r.verdict == CalibrationVerdict.PROCESS_UNKNOWN
@@ -421,7 +422,7 @@ class TestCalibrationVerdict:
         # step FAIL 不翻 verdict(软注),过程仍 OK,verdict 仍 TRUSTED(结果对时)
         c = AuditReport(
             skill_name="s", transcripts=["t"],
-            summary={"total": 1, "pass": 0, "fail": 1, "na": 0, "unclear": 0},
+            summary={"total": 1, "pass": 0, "fail": 1, "na": 0, "unresolved": 0, "indeterminate": 0},
             findings=[_finding(AuditCategory.STEP, AuditVerdict.FAIL)],
         )
         r = CalibrationChecker().calibrate(_grading(0.9), c)
@@ -433,7 +434,7 @@ class TestCalibrationVerdict:
     def test_conditional_fail_is_soft_note(self):
         c = AuditReport(
             skill_name="s", transcripts=["t"],
-            summary={"total": 1, "pass": 0, "fail": 1, "na": 0, "unclear": 0},
+            summary={"total": 1, "pass": 0, "fail": 1, "na": 0, "unresolved": 0, "indeterminate": 0},
             findings=[_finding(AuditCategory.CONDITIONAL, AuditVerdict.FAIL)],
         )
         r = CalibrationChecker().calibrate(_grading(0.9), c)
@@ -444,18 +445,18 @@ class TestCalibrationVerdict:
         # pass_rate 恰好 0.8 -> 结果对(>=)
         c = AuditReport(
             skill_name="s", transcripts=["t"],
-            summary={"total": 1, "pass": 1, "fail": 0, "na": 0, "unclear": 0},
+            summary={"total": 1, "pass": 1, "fail": 0, "na": 0, "unresolved": 0, "indeterminate": 0},
             findings=[_finding(AuditCategory.PROHIBITION, AuditVerdict.PASS)],
         )
         r = CalibrationChecker().calibrate(_grading(0.8), c)
         assert r.result_pass is True
         assert r.verdict == CalibrationVerdict.TRUSTED
 
-    def test_compliance_rate_excludes_na_unclear(self):
-        # rate = pass/(pass+fail),na/unclear 不进分母:2/(2+1)=0.6667
+    def test_compliance_rate_excludes_na_unresolved(self):
+        # rate = pass/(pass+fail),na/unresolved/indeterminate 不进分母:2/(2+1)=0.6667
         c = AuditReport(
             skill_name="s", transcripts=["t"],
-            summary={"total": 4, "pass": 2, "fail": 1, "na": 1, "unclear": 0},
+            summary={"total": 4, "pass": 2, "fail": 1, "na": 1, "unresolved": 0, "indeterminate": 0},
             findings=[_finding(AuditCategory.PROHIBITION, AuditVerdict.PASS),
                       _finding(AuditCategory.PROHIBITION, AuditVerdict.PASS),
                       _finding(AuditCategory.STEP, AuditVerdict.FAIL),

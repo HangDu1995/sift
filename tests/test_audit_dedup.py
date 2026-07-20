@@ -20,7 +20,7 @@ from skill_eval.audit.dedup import (
     link_related,
     post_process_findings,
 )
-from skill_eval.models.audit_models import AuditCategory, AuditFinding, AuditVerdict
+from skill_eval.models.audit_models import AuditCategory, AuditFinding, AuditMethod, AuditVerdict
 
 
 def _f(
@@ -29,13 +29,13 @@ def _f(
     verdict: AuditVerdict = AuditVerdict.PASS,
     category: AuditCategory = AuditCategory.CONDITIONAL,
     transcript: str = "t.jsonl",
-    confidence: float = 1.0,
+    method: AuditMethod = AuditMethod.PROGRAMMATIC,
     evidence: str = "e",
     derived: bool = False,
 ) -> AuditFinding:
     return AuditFinding(
         instruction_text=text, source=source, verdict=verdict, category=category,
-        evidence=evidence, confidence=confidence, transcript=transcript,
+        evidence=evidence, method=method, transcript=transcript,
         derived_from_transcript=derived,
     )
 

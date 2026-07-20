@@ -3,6 +3,7 @@
 from skill_eval.models.audit_models import (
     AuditCategory,
     AuditFinding,
+    AuditMethod,
     AuditReport,
     AuditVerdict,
 )
@@ -87,6 +88,7 @@ __all__ = [
     # Audit models
     "AuditCategory",
     "AuditFinding",
+    "AuditMethod",
     "AuditReport",
     "AuditVerdict",
     # Enums

@@ -12,6 +12,7 @@ from skill_eval.audit.aggregate import aggregate_by_instruction
 from skill_eval.models.audit_models import (
     AuditCategory,
     AuditFinding,
+    AuditMethod,
     AuditVerdict,
 )
 
@@ -28,9 +29,9 @@ def _f(
         instruction_text=text,
         source=source,
         verdict=verdict,
+        method=AuditMethod.PROGRAMMATIC,
         category=category,
         evidence="e",
-        confidence=1.0,
         transcript=transcript,
         seq=seq,
     )
@@ -124,3 +125,23 @@ class TestAggregateByInstruction:
         assert ec.na_count == 1
         assert set(ec.na_in_transcripts) == {"span2"}
         assert set(ec.na_seqs) == {5}
+
+    def test_unresolved_and_indeterminate_buckets_split(self):
+        """没判成(UNRESOLVED)与判不准(INDETERMINATE)分桶计:同指令跨 4 段各一态,
+        聚合后 unresolved_count=1 / indeterminate_count=1,且都计入 total(稀释 fail_rate)。
+
+        回归重构:旧 unclear 单桶现拆二;total = pass+fail+na+unresolved+indeterminate。"""
+        findings = [
+            _f("X", AuditVerdict.PASS, "s1"),
+            _f("X", AuditVerdict.FAIL, "s2"),
+            _f("X", AuditVerdict.UNRESOLVED, "s3"),
+            _f("X", AuditVerdict.INDETERMINATE, "s4"),
+        ]
+        rows = aggregate_by_instruction(findings)
+        assert len(rows) == 1
+        r = rows[0]
+        assert r.pass_count == 1 and r.fail_count == 1
+        assert r.unresolved_count == 1 and r.indeterminate_count == 1
+        assert r.na_count == 0
+        assert r.total == 4  # 全 4 态计入 total
+        assert r.fail_rate == 0.25  # 1/4(unresolved/indeterminate 稀释 fail_rate,同旧 unclear 行为)

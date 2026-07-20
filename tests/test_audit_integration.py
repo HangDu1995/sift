@@ -15,7 +15,7 @@
 - ``HEADING_STEP``    "1. Analyze the input format ..."  → STEP 桶
                      (mock verdict="pass" → PASS)
 - ``OUTPUT_FORMAT``   代码块 ``EXPECTED_TOKEN``           → OUTPUT 桶
-                     (确定性子串命中 transcript_text → PASS,confidence==1.0)
+                     (确定性子串命中 transcript_text → PASS,method=PROGRAMMATIC)
 - transcript 另 Read ``notes.md``(不在 skill_body)      → ``derive_declarations`` 反推
                      "读取 notes.md"(``REFERENCE_USAGE``),命中 Read → PASS,
                      标 ``derived_from_transcript=True``
@@ -33,7 +33,7 @@ from pathlib import Path
 import pytest
 
 from skill_eval.audit.auditor import TranscriptAuditor
-from skill_eval.models.audit_models import AuditCategory, AuditReport, AuditVerdict
+from skill_eval.models.audit_models import AuditCategory, AuditMethod, AuditReport, AuditVerdict
 
 
 @pytest.fixture(autouse=True)
@@ -165,13 +165,13 @@ class TestAuditEndToEnd:
             AuditCategory.OUTPUT,
         }
 
-        # CONDITIONAL:命中 tool_trace → PASS,确定性(不调 LLM),confidence==1.0
+        # CONDITIONAL:命中 tool_trace → PASS,确定性(不调 LLM),method=PROGRAMMATIC
         cond_pass = [
             f for f in report.findings
             if f.category == AuditCategory.CONDITIONAL and f.verdict == AuditVerdict.PASS
         ]
         assert cond_pass, "应至少一条 CONDITIONAL PASS(命中 tool_trace)"
-        assert all(f.confidence == 1.0 for f in cond_pass)
+        assert all(f.method == AuditMethod.PROGRAMMATIC for f in cond_pass)
 
         # 其中 "use Bash" 来自 skill_body 静态指令(非反推),evidence 提及 Bash
         bash_f = next(f for f in cond_pass if "use Bash" in f.instruction_text)
@@ -190,11 +190,11 @@ class TestAuditEndToEnd:
         assert len(step) == 1
         assert step[0].verdict == AuditVerdict.PASS
 
-        # OUTPUT:确定性子串(EXPECTED_TOKEN 在 transcript_text)→ PASS,confidence==1.0
+        # OUTPUT:确定性子串(EXPECTED_TOKEN 在 transcript_text)→ PASS,method=PROGRAMMATIC
         out = [f for f in report.findings if f.category == AuditCategory.OUTPUT]
         assert len(out) == 1
         assert out[0].verdict == AuditVerdict.PASS
-        assert out[0].confidence == 1.0
+        assert out[0].method == AuditMethod.PROGRAMMATIC
 
         # ---- 反推声明:Read notes.md 不在 skill_body → derive_declarations 反推
         # "读取 notes.md"(REFERENCE_USAGE),命中 Read → PASS,标 derived=True
@@ -210,12 +210,13 @@ class TestAuditEndToEnd:
             "pass": sum(1 for f in report.findings if f.verdict == AuditVerdict.PASS),
             "fail": sum(1 for f in report.findings if f.verdict == AuditVerdict.FAIL),
             "na": sum(1 for f in report.findings if f.verdict == AuditVerdict.NA),
-            "unclear": sum(1 for f in report.findings if f.verdict == AuditVerdict.UNCLEAR),
+            "unresolved": sum(1 for f in report.findings if f.verdict == AuditVerdict.UNRESOLVED),
+            "indeterminate": sum(1 for f in report.findings if f.verdict == AuditVerdict.INDETERMINATE),
         }
         assert report.summary == expected
         # 明确数值:5 = 2 CONDITIONAL(Bash 命中 + 反推 notes.md 命中)
         #              + 1 PROHIBITION(violated) + 1 STEP(pass) + 1 OUTPUT(子串命中)
-        assert report.summary == {"total": 5, "pass": 4, "fail": 1, "na": 0, "unclear": 0}
+        assert report.summary == {"total": 5, "pass": 4, "fail": 1, "na": 0, "unresolved": 0, "indeterminate": 0}
 
         # ---- LLM 边界:条件性两条全命中(不调 LLM),只有禁令 + 步骤各调一次 = 2 次
         assert calls["n"] == 2
@@ -250,7 +251,7 @@ class TestConditionalNaPath:
         assert f.source == "TOOL_REQUIREMENT"
         assert "场景不涉及" in f.evidence
         # summary 的 na 计数与 findings 一致
-        assert report.summary == {"total": 1, "pass": 0, "fail": 0, "na": 1, "unclear": 0}
+        assert report.summary == {"total": 1, "pass": 0, "fail": 0, "na": 1, "unresolved": 0, "indeterminate": 0}
         # 未命中 → N/A 来自 LLM 判定(非命中短路),即 applicable 路径确实被走过。
         # (auditor 对空桶也调一次 call_claude、不在空 batch 短路,故实际调用 ≥1;
         #  这里只断言"走过 LLM"这一事实,不绑定空桶调用次数以免耦合实现细节。)
@@ -290,11 +291,11 @@ class TestUnverifiableNoFalseFail:
         # 关键:LLM 全挂 → 0 假 FAIL(旧保守 FAIL 会产出 N 条 FAIL = 乱报)
         assert report.summary["fail"] == 0
         assert report.summary["pass"] == 0
-        # 三条指令(条件性未命中 + 禁令 + 步骤)全标 UNCLEAR(判不准)
-        assert report.summary["unclear"] == 3
+        # 三条指令(条件性未命中 + 禁令 + 步骤)全标 UNRESOLVED(没判成)
+        assert report.summary["unresolved"] == 3
         assert report.summary["na"] == 0
         # 全是低置信度兜底 N/A(非 LLM 明确判的 resolved N/A=0.8)
-        assert all(f.confidence <= 0.3 for f in report.findings)
+        assert all(f.verdict == AuditVerdict.UNRESOLVED for f in report.findings)
         # 低置信度 N/A 汇总成警告:提示结果不完整、建议重跑
         assert len(report.warnings) == 1
         assert "3 条" in report.warnings[0]

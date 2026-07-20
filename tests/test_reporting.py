@@ -411,11 +411,11 @@ class TestReportGeneratorStatic:
         (ws_dir / "compliance.json").write_text(json.dumps({
             "skill_name": "myskill",
             "transcripts": ["transcript.jsonl"],
-            "summary": {"total": 1, "pass": 1, "fail": 0, "na": 0, "unclear": 0},
+            "summary": {"total": 1, "pass": 1, "fail": 0, "na": 0, "unresolved": 0, "indeterminate": 0},
             "findings": [
                 {"instruction_text": "禁止编造错误码", "source": "CONSTRAINT",
                  "verdict": "PASS", "category": "prohibition", "evidence": "未发现编造",
-                 "confidence": 0.9, "transcript": "transcript.jsonl"},
+                 "method": "LLM", "transcript": "transcript.jsonl"},
             ],
         }))
 
@@ -471,9 +471,9 @@ class TestReportGeneratorStatic:
         assert "summary.passed_programmatic" in html   # 打分块引用 per-source 字段
         assert "summary.total_llm" in html
 
-    def test_generate_html_compliance_confidence_label_not_number(self, tmp_path):
-        """遵循性块 confidence 显分类标签(LLM 判定/判不准),不显裸数字——对齐
-        audit-report.html confTag(数字只进 title)。RED:'LLM 判定' 在、'置信 ' 不在。"""
+    def test_generate_html_compliance_method_label_not_confidence(self, tmp_path):
+        """遵循性块显判定方法标签(程序/LLM,methodTag),非旧 confidence 假浮点——对齐
+        audit-report.html。RED:methodTag 的 title(程序对账 / LLM 给出结论)在模板里。"""
         workspace = tmp_path / "iteration-1"
         ws_dir = workspace / "with_skill" / "run-1"
         ws_dir.mkdir(parents=True)
@@ -485,8 +485,9 @@ class TestReportGeneratorStatic:
         }))
         gen = ReportGenerator()
         html = gen.generate_html(workspace, None)
-        assert "LLM 判定" in html        # 分类标签口径同 audit-report.html
-        assert "置信 " not in html       # 旧「置信 0.80」裸数字已去
+        assert "程序对账" in html        # method-prog 标签 title(口径同 audit-report.html)
+        assert "LLM 给出结论" in html    # method-llm 标签 title
+        assert "LLM 判定" not in html    # 旧 confTag 文案已去
 
     def test_generate_html_renders_comparison_labels(self, tmp_path):
         """comparison_summary 的 label_a/b 驱动盲评头条显示(块 B v1/v2 真标签)。"""
@@ -879,7 +880,7 @@ class TestComplianceAggregate:
     @staticmethod
     def _finding(text: str, verdict: str, transcript: str) -> dict:
         return {"instruction_text": text, "source": "CONSTRAINT", "verdict": verdict,
-                "category": "prohibition", "evidence": "e", "confidence": 0.9, "transcript": transcript}
+                "category": "prohibition", "evidence": "e", "method": "LLM", "transcript": transcript}
 
     def test_groups_by_side_same_instruction_across_runs(self):
         from skill_eval.reporting.viewer import _aggregate_compliance

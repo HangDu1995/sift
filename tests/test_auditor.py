@@ -24,7 +24,7 @@ import pytest
 
 from skill_eval.audit.auditor import _MAX_LLM_IN_BATCH, _LLM_RETRY_MAX, TranscriptAuditor
 from skill_eval.models import InstructionCheck
-from skill_eval.models.audit_models import AuditCategory, AuditReport, AuditVerdict
+from skill_eval.models.audit_models import AuditCategory, AuditMethod, AuditReport, AuditVerdict
 from skill_eval.models.enums import (
     CheckMethod,
     InstructionPriority,
@@ -108,7 +108,7 @@ def _output_inst(text: str = "输出代码块", sample: str = "```python\nprint(
 
 class TestMatchedNoLlm:
     def test_tool_match_pass_and_no_call(self, monkeypatch) -> None:
-        """命中 tool_name → PASS,evidence 中文,confidence=1.0,call_claude 未被调用。"""
+        """命中 tool_name → PASS,evidence 中文,method=PROGRAMMATIC,call_claude 未被调用。"""
         calls = {"n": 0}
 
         def fake(*a, **k):
@@ -127,7 +127,7 @@ class TestMatchedNoLlm:
         f = findings[0]
         assert f.verdict == AuditVerdict.PASS
         assert f.category == AuditCategory.CONDITIONAL
-        assert f.confidence == 1.0
+        assert f.method == AuditMethod.PROGRAMMATIC
         assert f.transcript == "t1.jsonl"
         assert f.evidence == "trace 中调用了 Bash"
         assert f.source == "TOOL_REQUIREMENT"
@@ -152,7 +152,7 @@ class TestMatchedNoLlm:
 
 class TestUnmatchedLlm:
     def test_applicable_true_is_fail(self, monkeypatch) -> None:
-        """未命中 + LLM applicable=true → FAIL(该做没做),confidence≈0.8。"""
+        """未命中 + LLM applicable=true → FAIL(该做没做),method=LLM。"""
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "applicable": true}]',
@@ -165,12 +165,12 @@ class TestUnmatchedLlm:
         assert f.verdict == AuditVerdict.FAIL
         assert f.category == AuditCategory.CONDITIONAL
         assert f.transcript == "t.jsonl"
-        assert abs(f.confidence - 0.8) < 1e-9
+        assert f.method == AuditMethod.LLM
         assert f.evidence.startswith("场景应触发")
         assert "Bash" in f.evidence
 
     def test_applicable_false_is_na(self, monkeypatch) -> None:
-        """未命中 + LLM applicable=false → N/A(场景不涉及),confidence≈0.8。"""
+        """未命中 + LLM applicable=false → N/A(场景不涉及),method=LLM。"""
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "applicable": false}]',
@@ -182,7 +182,7 @@ class TestUnmatchedLlm:
         f = findings[0]
         assert f.verdict == AuditVerdict.NA
         assert f.category == AuditCategory.CONDITIONAL
-        assert abs(f.confidence - 0.8) < 1e-9
+        assert f.method == AuditMethod.LLM
         assert "场景不涉及" in f.evidence
 
     def test_runtime_error_unverifiable_na(self, monkeypatch) -> None:
@@ -199,9 +199,9 @@ class TestUnmatchedLlm:
         findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.UNCLEAR  # 不报 FAIL,标 UNCLEAR(判不准)
+        assert f.verdict == AuditVerdict.UNRESOLVED  # 不报 FAIL,标 UNRESOLVED(没判成)
         assert f.category == AuditCategory.CONDITIONAL
-        assert f.confidence <= 0.5  # 低置信度(判不准兜底,非 LLM 明确判 N/A)
+        assert f.method == AuditMethod.LLM  # 低置信度(判不准兜底,非 LLM 明确判 N/A)
         assert "无法确证" in f.evidence
         # 重试耗尽:1 次首发 + _LLM_RETRY_MAX 次重试,全失败才兜底
         assert calls["n"] == 1 + _LLM_RETRY_MAX
@@ -216,9 +216,9 @@ class TestUnmatchedLlm:
         findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.UNCLEAR
+        assert f.verdict == AuditVerdict.UNRESOLVED
         assert "无法确证" in f.evidence
-        assert f.confidence <= 0.5
+        assert f.method == AuditMethod.LLM
 
     def test_missing_applicable_key_is_unverifiable_na(self, monkeypatch) -> None:
         """条目有 index 但缺 applicable 键 → 标 N/A(宁少报不乱报)。
@@ -236,8 +236,8 @@ class TestUnmatchedLlm:
         findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR,不报 FAIL
-        assert f.confidence <= 0.5  # 低置信度(判不准兜底)
+        assert f.verdict == AuditVerdict.UNRESOLVED  # 没判成 → UNRESOLVED,不报 FAIL
+        assert f.method == AuditMethod.LLM  # 低置信度(判不准兜底)
         assert "无法确证" in f.evidence
 
     def test_string_applicable_value_is_unverifiable_na(self, monkeypatch) -> None:
@@ -255,8 +255,8 @@ class TestUnmatchedLlm:
         findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR,不报 FAIL
-        assert f.confidence <= 0.5
+        assert f.verdict == AuditVerdict.UNRESOLVED  # 没判成 → UNRESOLVED,不报 FAIL
+        assert f.method == AuditMethod.LLM
         assert "无法确证" in f.evidence
 
 
@@ -285,7 +285,7 @@ class TestRetryRecovery:
         f = findings[0]
         assert f.verdict == AuditVerdict.NA  # applicable=false → N/A
         # 关键:resolved(0.8)而非兜底(0.3)→ 重试成功救回,真判了
-        assert f.confidence >= 0.7
+        assert f.method == AuditMethod.LLM
         assert "场景不涉及" in f.evidence  # LLM 给的 evidence,非"无法确证"兜底
         assert calls["n"] == 1 + _LLM_RETRY_MAX  # 重试 _LLM_RETRY_MAX 次后第 3 次成功
 
@@ -390,7 +390,7 @@ class TestClassify:
 
 class TestJudgeProhibition:
     def test_violated_true_is_fail(self, monkeypatch) -> None:
-        """violated=true → FAIL(违规了),evidence 取 LLM 返回,confidence≈0.8。"""
+        """violated=true → FAIL(违规了),evidence 取 LLM 返回,method=LLM。"""
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "violated": true, "evidence": "执行中编造了测试数据"}]',
@@ -407,7 +407,7 @@ class TestJudgeProhibition:
         assert f.category == AuditCategory.PROHIBITION
         assert f.transcript == "p.jsonl"
         assert f.evidence == "执行中编造了测试数据"
-        assert abs(f.confidence - 0.8) < 1e-9
+        assert f.method == AuditMethod.LLM
         assert f.source == "CONSTRAINT"
 
     def test_violated_false_is_pass(self, monkeypatch) -> None:
@@ -426,7 +426,7 @@ class TestJudgeProhibition:
         assert f.verdict == AuditVerdict.PASS
         assert f.category == AuditCategory.PROHIBITION
         assert f.evidence == "未发现编造行为"
-        assert abs(f.confidence - 0.8) < 1e-9
+        assert f.method == AuditMethod.LLM
 
     def test_runtime_error_unverifiable_na(self, monkeypatch) -> None:
         """call_claude 抛 RuntimeError → 标 N/A(宁少报不乱报:禁令也不在无确证时报 FAIL)。"""
@@ -441,9 +441,9 @@ class TestJudgeProhibition:
         )
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR,不报假 FAIL
+        assert f.verdict == AuditVerdict.UNRESOLVED  # 没判成 → UNRESOLVED,不报假 FAIL
         assert f.category == AuditCategory.PROHIBITION
-        assert f.confidence <= 0.5
+        assert f.method == AuditMethod.LLM
         assert "无法确证" in f.evidence
 
     def test_parse_failure_unverifiable_na(self, monkeypatch) -> None:
@@ -458,8 +458,8 @@ class TestJudgeProhibition:
         )
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.UNCLEAR
-        assert f.confidence <= 0.5
+        assert f.verdict == AuditVerdict.UNRESOLVED
+        assert f.method == AuditMethod.LLM
         assert "无法确证" in f.evidence
 
     def test_missing_violated_key_is_unverifiable_na(self, monkeypatch) -> None:
@@ -475,8 +475,8 @@ class TestJudgeProhibition:
         )
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR,既不当 PASS 也不报 FAIL
-        assert f.confidence <= 0.5
+        assert f.verdict == AuditVerdict.UNRESOLVED  # 没判成 → UNRESOLVED,既不当 PASS 也不报 FAIL
+        assert f.method == AuditMethod.LLM
         assert "无法确证" in f.evidence
 
     def test_nonbool_violated_is_unverifiable_na(self, monkeypatch) -> None:
@@ -497,8 +497,8 @@ class TestJudgeProhibition:
         )
 
         f = findings[0]
-        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR
-        assert f.confidence <= 0.5
+        assert f.verdict == AuditVerdict.UNRESOLVED  # 没判成 → UNRESOLVED
+        assert f.method == AuditMethod.LLM
         assert "无法确证" in f.evidence
 
     def test_anti_fabrication_source(self, monkeypatch) -> None:
@@ -591,7 +591,7 @@ class TestJudgeStep:
         assert f.category == AuditCategory.STEP
         assert f.transcript == "s.jsonl"
         assert f.evidence == "走过该步"
-        assert abs(f.confidence - 0.8) < 1e-9
+        assert f.method == AuditMethod.LLM
 
     def test_verdict_fail(self, monkeypatch) -> None:
         monkeypatch.setattr(
@@ -672,9 +672,9 @@ class TestJudgeStep:
         auditor = TranscriptAuditor()
 
         f = auditor._judge_step([_step_inst()], "某执行记录", "s.jsonl")[0]
-        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR,不报 FAIL
+        assert f.verdict == AuditVerdict.UNRESOLVED  # 没判成 → UNRESOLVED,不报 FAIL
         assert f.category == AuditCategory.STEP
-        assert f.confidence <= 0.5
+        assert f.method == AuditMethod.LLM
         assert "无法确证" in f.evidence
 
     def test_runtime_error_unverifiable_na(self, monkeypatch) -> None:
@@ -685,8 +685,8 @@ class TestJudgeStep:
         auditor = TranscriptAuditor()
 
         f = auditor._judge_step([_step_inst()], "某执行记录", "s.jsonl")[0]
-        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR
-        assert f.confidence <= 0.5
+        assert f.verdict == AuditVerdict.UNRESOLVED  # 没判成 → UNRESOLVED
+        assert f.method == AuditMethod.LLM
         assert "无法确证" in f.evidence
 
     def test_missing_verdict_key_unverifiable_na(self, monkeypatch) -> None:
@@ -697,8 +697,8 @@ class TestJudgeStep:
         auditor = TranscriptAuditor()
 
         f = auditor._judge_step([_step_inst()], "某执行记录", "s.jsonl")[0]
-        assert f.verdict == AuditVerdict.UNCLEAR  # 判不准 → UNCLEAR
-        assert f.confidence <= 0.5
+        assert f.verdict == AuditVerdict.UNRESOLVED  # 没判成 → UNRESOLVED
+        assert f.method == AuditMethod.LLM
         assert "无法确证" in f.evidence
 
     def test_empty_instructions_no_llm(self, monkeypatch) -> None:
@@ -773,7 +773,7 @@ class TestJudgeOutput:
         auditor._judge_output([_output_inst()], "任意文本", "o.jsonl")
 
     def test_sample_substring_match_is_pass(self) -> None:
-        """sample 某行(strip 后)作为子串出现在 transcript_text → PASS,confidence=1.0。"""
+        """sample 某行(strip 后)作为子串出现在 transcript_text → PASS,method=PROGRAMMATIC。"""
         auditor = TranscriptAuditor()
         # sample 含 "print('hi')" 这一行;transcript 里出现该子串 → PASS
         findings = auditor._judge_output(
@@ -785,13 +785,13 @@ class TestJudgeOutput:
         f = findings[0]
         assert f.verdict == AuditVerdict.PASS
         assert f.category == AuditCategory.OUTPUT
-        assert f.confidence == 1.0
+        assert f.method == AuditMethod.PROGRAMMATIC
         assert f.transcript == "o.jsonl"
         assert f.source == "OUTPUT_FORMAT"
         assert "期望格式" in f.evidence
 
     def test_sample_no_match_is_fail(self) -> None:
-        """sample 行都不在 transcript_text → FAIL,confidence=1.0。"""
+        """sample 行都不在 transcript_text → FAIL,method=PROGRAMMATIC。"""
         auditor = TranscriptAuditor()
         findings = auditor._judge_output(
             [_output_inst(sample="```python\nprint('hi')\n```")],
@@ -802,7 +802,7 @@ class TestJudgeOutput:
         f = findings[0]
         assert f.verdict == AuditVerdict.FAIL
         assert f.category == AuditCategory.OUTPUT
-        assert f.confidence == 1.0
+        assert f.method == AuditMethod.PROGRAMMATIC
         assert "未找到期望格式" in f.evidence
 
     def test_multiline_any_line_matches(self) -> None:
@@ -830,7 +830,7 @@ class TestJudgeOutput:
         f = findings[0]
         assert f.verdict == AuditVerdict.FAIL
         assert f.category == AuditCategory.OUTPUT
-        assert f.confidence == 1.0
+        assert f.method == AuditMethod.PROGRAMMATIC
 
     def test_multiple_instructions_order_preserved(self) -> None:
         """多条 OUTPUT_FORMAT 指令:顺序与输入一致,各自判定。"""
@@ -847,6 +847,105 @@ class TestJudgeOutput:
         for f in findings:
             assert f.category == AuditCategory.OUTPUT
             assert f.transcript == "o.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# INDETERMINATE(判不准):LLM 看了证据真模糊 → 独立于 UNRESOLVED(没判成)。
+# 三判官各支持 indeterminate 出口;滥用闸 ① 空 reason/evidence → 降级 UNRESOLVED;
+# 滥用闸 ② audit() 统计 indeterminate 占比超阈值 → 告警。
+# ---------------------------------------------------------------------------
+
+
+class TestIndeterminate:
+    def test_conditional_indeterminate_with_reason(self, monkeypatch) -> None:
+        """条件性 LLM 返回 indeterminate=true + reason → INDETERMINATE(method=LLM,evidence=reason)。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: '[{"index": 0, "indeterminate": true, "reason": "场景是否涉及该工具语焉不详"}]',
+        )
+        auditor = TranscriptAuditor()
+        f = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")[0]
+        assert f.verdict == AuditVerdict.INDETERMINATE
+        assert f.method == AuditMethod.LLM
+        assert f.evidence == "场景是否涉及该工具语焉不详"
+
+    def test_conditional_indeterminate_without_reason_downgrades(self, monkeypatch) -> None:
+        """滥用闸 ①:indeterminate=true 但 reason 空 → 降级 UNRESOLVED(不许空口判不准)。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: '[{"index": 0, "indeterminate": true}]',
+        )
+        auditor = TranscriptAuditor()
+        f = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")[0]
+        assert f.verdict == AuditVerdict.UNRESOLVED  # 空 reason → 降级没判成
+        assert f.method == AuditMethod.LLM
+
+    def test_prohibition_indeterminate_with_reason(self, monkeypatch) -> None:
+        """禁令 LLM 返回 indeterminate=true + evidence → INDETERMINATE。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: '[{"index": 0, "indeterminate": true, "evidence": "执行记录相互矛盾无法判定"}]',
+        )
+        auditor = TranscriptAuditor()
+        f = auditor._judge_prohibition([_prohibition_inst()], "某执行记录", "p.jsonl")[0]
+        assert f.verdict == AuditVerdict.INDETERMINATE
+        assert f.method == AuditMethod.LLM
+        assert f.evidence == "执行记录相互矛盾无法判定"
+
+    def test_step_indeterminate_with_reason(self, monkeypatch) -> None:
+        """步骤 LLM 返回 verdict=indeterminate + evidence → INDETERMINATE。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: '[{"index": 0, "verdict": "indeterminate", "evidence": "看不出走没走这一步"}]',
+        )
+        auditor = TranscriptAuditor()
+        f = auditor._judge_step([_step_inst()], "某执行记录", "s.jsonl")[0]
+        assert f.verdict == AuditVerdict.INDETERMINATE
+        assert f.method == AuditMethod.LLM
+        assert f.evidence == "看不出走没走这一步"
+
+    def test_step_indeterminate_without_evidence_downgrades(self, monkeypatch) -> None:
+        """滥用闸 ①:步骤 verdict=indeterminate 但 evidence 空 → 降级 UNRESOLVED。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: '[{"index": 0, "verdict": "indeterminate"}]',
+        )
+        auditor = TranscriptAuditor()
+        f = auditor._judge_step([_step_inst()], "某执行记录", "s.jsonl")[0]
+        assert f.verdict == AuditVerdict.UNRESOLVED
+
+    def test_abuse_gate_warns_high_indeterminate_rate(self, tmp_path, monkeypatch) -> None:
+        """滥用闸 ②:5 条禁令全判不准(100% > 20%、total>=5)→ audit() 产滥用告警。
+
+        判不准是 LLM 逃逸口(看不懂就说"判不准"蒙混),占比偏高需告警让人工复核。
+        阈值 _INDETERMINATE_ABUSE_RATE=0.20 + 最小样本 5。
+        """
+        # fake:按 prompt 里的"待判禁令 (N 条)"返回 N 条 indeterminate+evidence
+        def fake(prompt, *a, **k):
+            m = re.search(r"待判禁令 \((\d+) 条\)", prompt)
+            bn = int(m.group(1)) if m else 0
+            return json.dumps([
+                {"index": i, "indeterminate": True, "evidence": "证据矛盾"}
+                for i in range(bn)
+            ])
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+
+        body = "\n\n".join([
+            "NEVER fabricate data",
+            "NEVER skip the test step",
+            "NEVER delete production data",
+            "NEVER ignore validation errors",
+            "NEVER hardcode secrets",
+        ])
+        tp = _write_jsonl(
+            tmp_path / "only_user.jsonl",
+            [{"message": {"role": "user", "content": "hello"}}],
+        )
+        report = TranscriptAuditor().audit("s", body, [tp])
+
+        # 5 条禁令全 INDETERMINATE,占比 100% > 20% → 滥用告警
+        assert report.summary["indeterminate"] >= 5
+        assert any("判不准" in w and "占比偏高" in w for w in report.warnings), report.warnings
 
 
 # ---------------------------------------------------------------------------
@@ -961,7 +1060,7 @@ class TestAuditAggregate:
         assert sorted(f.transcript for f in report.findings) == ["t1.jsonl", "t1.jsonl", "t2.jsonl", "t2.jsonl"]
 
         # summary 精确:每 transcript (1 N/A [Bash 未调] + 1 PASS [读取 foo.md 命中])
-        assert report.summary == {"total": 4, "pass": 2, "fail": 0, "na": 2, "unclear": 0}
+        assert report.summary == {"total": 4, "pass": 2, "fail": 0, "na": 2, "unresolved": 0, "indeterminate": 0}
 
         # derived 标记:2 个 PASS finding(读取 foo.md)标 derived_from_transcript=True,
         # 2 个 N/A finding(use Bash,来自 skill_body 静态指令)保持 False
@@ -1008,7 +1107,7 @@ class TestAuditAggregate:
         assert report.findings == []
         assert report.transcripts == []
         assert report.warnings == []
-        assert report.summary == {"total": 0, "pass": 0, "fail": 0, "na": 0, "unclear": 0}
+        assert report.summary == {"total": 0, "pass": 0, "fail": 0, "na": 0, "unresolved": 0, "indeterminate": 0}
 
     def test_routes_each_category(self, tmp_path, monkeypatch) -> None:
         """skill_body 含四类指令 + REFERENCES → 各自路由到正确 category 判定(覆盖四桶)。
@@ -1183,8 +1282,8 @@ class TestProgressCallback:
         flat = " ".join(msgs)
         assert "失败" in flat
         assert "Reached max turns" in flat  # 原因带出来了,不只'兜底 N/A'
-        # 判定本身仍兜底为 UNCLEAR(判不准,失败不报假 FAIL)
-        assert findings[0].verdict == AuditVerdict.UNCLEAR
+        # 判定本身仍兜底为 UNRESOLVED(没判成,失败不报假 FAIL)
+        assert findings[0].verdict == AuditVerdict.UNRESOLVED
 
     def test_zero_parsed_batch_emits_warning_prohibition(self, monkeypatch) -> None:
         """调用成功但整批 0 条解析成功(LLM 输出畸形/空)→ 打可见警告,不只静默 N/A。
@@ -1204,7 +1303,7 @@ class TestProgressCallback:
         flat = " ".join(msgs)
         assert "完成" in flat  # 调用确实成功了(不是 RuntimeError)
         assert "0 条解析成功" in flat  # ⚠ 但解析为空,可见警告
-        assert all(f.verdict == AuditVerdict.UNCLEAR for f in findings)  # 仍兜底 UNCLEAR(判不准)
+        assert all(f.verdict == AuditVerdict.UNRESOLVED for f in findings)  # 仍兜底 UNRESOLVED(没判成)
 
     def test_zero_parsed_batch_emits_warning_conditional(self, monkeypatch) -> None:
         """条件性批(标量 mask 形状)同样:0 条解析成功 → ⚠ 警告。"""
@@ -1218,7 +1317,7 @@ class TestProgressCallback:
         )
         flat = " ".join(msgs)
         assert "0 条解析成功" in flat
-        assert all(f.verdict == AuditVerdict.UNCLEAR for f in findings)
+        assert all(f.verdict == AuditVerdict.UNRESOLVED for f in findings)
 
     def test_zero_parsed_triggers_retry_and_recovers(self, monkeypatch) -> None:
         """0 解析成功 → 自动重试,重试拿到能解析的输出 → 真 verdict(非兜底 N/A)。
@@ -1244,4 +1343,4 @@ class TestProgressCallback:
         assert "重试" in flat  # 触发了重试
         assert calls["n"] == 2  # 第一次 0 解析 + 重试一次成功
         assert findings[0].verdict == AuditVerdict.PASS  # violated=false → PASS(resolved)
-        assert findings[0].confidence >= 0.7  # resolved(0.8),非 0.3 兜底
+        assert findings[0].method == AuditMethod.LLM  # resolved LLM,非兜底
