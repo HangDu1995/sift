@@ -75,7 +75,7 @@ skill-eval 在此基础上新增了批量评估、结果×过程 coherence 校�
 
 **理论**：Instruction Following 是 LLM 评估的独立维度 [Zhou et al., IFEval 2023]。输出正确但过程违规意味着结果不可归因于 Skill。
 
-**实现**：从 SKILL.md body 自动提取 6 类可检查指令（HEADING_STEP、TOOL_REQUIREMENT、CONSTRAINT、ANTI_FABRICATION、OUTPUT_FORMAT、REFERENCE_USAGE），按检查方式分为程序化（TOOL_CALL_CHECK）和 LLM 语义评判（LLM_JUDGE）。
+**实现**：从 SKILL.md body 自动提取 6 类可检查指令（HEADING_STEP、TOOL_REQUIREMENT、CONSTRAINT、ANTI_FABRICATION、OUTPUT_FORMAT、REFERENCE_USAGE），按语义归 4 类（条件性 / 禁令 / 步骤 / 输出格式）各配方向正确的判法——每条出五态 verdict（`PASS` / `FAIL` / `N/A` 不适用 / `UNRESOLVED` 没判成 / `INDETERMINATE` 判不准）+ `method` 标（`PROGRAMMATIC` 程序对账 / `LLM` 语义判定）两个正交维度。程序化（tool_trace 命中 / 输出子串匹配）是确定性判定、不调 LLM；LLM 类承担语义判定（禁令主动查违规、步骤/条件性判走过或该走没走）。
 
 ### 5.3 校准（Calibration）—— 结果×过程 coherence
 

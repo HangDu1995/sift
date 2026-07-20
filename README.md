@@ -214,7 +214,7 @@ skill-eval batch-report batch-workspace/ --open
 
 ### 双率与双主位
 
-每条 expectation/assertion 带 `source`，评分与遵循性都按 source 拆**双率**：
+每条 expectation/assertion 带 `source`，评分按 source 拆**双率**（遵循性不分双率，见下遵循性引擎）：
 
 - `*_programmatic`（客观，程序判定）——稳，强信
 - `*_llm`（主观，LLM 判定）——抖，看方向
@@ -234,16 +234,18 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 
 ### 遵循性引擎
 
-从 SKILL.md 自动提取 6 类指令，程序化 + LLM 双模检查（也拆双率：`compliance_rate_programmatic` / `compliance_rate_llm`）：
+从 SKILL.md 自动提取 6 类指令，按语义归 4 类（条件性 / 禁令 / 步骤 / 输出格式）各配方向正确的判法，每条出**五态 verdict** + **method** 标（`PROGRAMMATIC` 程序对账 / `LLM` 语义判定）两个正交维度：
 
-| 指令类型 | 检查方式 | 示例 |
+| 指令类型 | 判定方式 | 示例 |
 |---------|---------|------|
-| HEADING_STEP | LLM_JUDGE | "Step 1: Read input data" |
-| TOOL_REQUIREMENT | TOOL_CALL_CHECK | "run scripts/validate.py" |
-| CONSTRAINT | LLM_JUDGE | "NEVER fabricate data" |
-| ANTI_FABRICATION | LLM_JUDGE | 防捏造规则 |
-| OUTPUT_FORMAT | PATTERN_MATCH | 输出格式模板 |
-| REFERENCE_USAGE | TOOL_CALL_CHECK | "see references/schema.md" |
+| HEADING_STEP | LLM 判（步骤类） | "Step 1: Read input data" |
+| TOOL_REQUIREMENT | tool_trace 命中→程序 / 未命中→LLM（条件性） | "run scripts/validate.py" |
+| CONSTRAINT | LLM 主动查违规（禁令） | "NEVER fabricate data" |
+| ANTI_FABRICATION | LLM 主动查违规（禁令） | 防捏造规则 |
+| OUTPUT_FORMAT | 子串匹配（程序判定，不调 LLM） | 输出格式模板 |
+| REFERENCE_USAGE | tool_trace 命中→程序 / 未命中→LLM（条件性） | "see references/schema.md" |
+
+五态：`PASS` / `FAIL` / `N/A`（不适用，场景不触发）/ `UNRESOLVED`（没判成，LLM 失败/解析失败/未提及，可重跑）/ `INDETERMINATE`（判不准，证据真模糊，重跑无益）。遵循度 = `pass/(pass+fail)`，排除 N/A + UNRESOLVED + INDETERMINATE（遵循性不分双率，双率是评分侧概念）。
 
 ### 校准引擎
 
@@ -273,7 +275,7 @@ output/
 │   └── eval-<id>/run-<n>/
 │       ├── outputs/        # Claude 产生的文件(skill references 已自动拷入)
 │       ├── grading.json    # 评分(expectations + assertions pass/fail,双率)
-│       ├── compliance.json # 遵循性检查(双率;仅 with_skill)
+│       ├── compliance.json # 遵循性检查(五态 verdict + method;仅 with_skill)
 │       └── calibration.json # 结果×过程 coherence 判决(仅 with_skill)
 └── without_skill/
     └── eval-<id>/run-<n>/  # 同上(无 compliance / 无校准)

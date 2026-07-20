@@ -104,7 +104,7 @@ python3 --version || python --version  # 必须：>= 3.10
 
 ### 双率 + 双主位
 
-每条 expectation/assertion 带 `source`，评分与遵循性都按 source 拆**双率**：
+每条 expectation/assertion 带 `source`，评分按 source 拆**双率**（遵循性不分双率，见下 audit 段）：
 
 - `*_programmatic`（客观，程序判定）——稳，强信
 - `*_llm`（主观，LLM 判定）——抖，看方向
@@ -275,7 +275,7 @@ skill-eval gate out/iteration-1/benchmark.json --no-programmatic-guard --min-win
 
 把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。**不 re-run**，直接对账历史执行。
 
-> 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行——`[条件性/禁令/步骤] 判定 N 条…` → `[条件性/禁令/步骤] 完成 ⏱ Xs`（类别名打头；>10 条分批才显 `批 k/总`）。两种失败（调用失败 / 0 条解析成功）都先自动重试最多 2 次再兜底 UNCLEAR（判不准），重试打 `重试 n/2…`、耗尽打 `重试耗尽`。三个 LLM 类别判定器并发跑（max_workers=3），约 2× 提速，进度行交错但每行 `[类别]` 打头、一眼分清。看到 `[条件性/禁令/步骤] …` 滚动就是在跑。
+> 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行——`[条件性/禁令/步骤] 判定 N 条…` → `[条件性/禁令/步骤] 完成 ⏱ Xs`（类别名打头；>10 条分批才显 `批 k/总`）。两种失败（调用失败 / 0 条解析成功）都先自动重试最多 2 次再兜底 UNRESOLVED（没判成），重试打 `重试 n/2…`、耗尽打 `重试耗尽`。三个 LLM 类别判定器并发跑（max_workers=3），约 2× 提速，进度行交错但每行 `[类别]` 打头、一眼分清。看到 `[条件性/禁令/步骤] …` 滚动就是在跑。
 
 ```bash
 skill-eval audit /path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out/
@@ -295,7 +295,7 @@ skill-eval audit /path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
 
 > **`--by-skill` 归段 scope-aware**：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent（Agent 工具）是独立作用域（记录带 `parent_tool_use_id`），子 agent 里用的 skill 切到 Agent 返回、不污染主 agent。target 调多次 → 多段 → 多 transcript 聚合。**两限制**：① skill 无"返回"信号，"调 A→B→不重调 A 接着干 A"那段归 B（不可测）；② 委派子 skill 折进主 skill（inclusive）需声明、暂不支持。该 skill 没在 transcript 里被调过 → exit 2。
 
-判定四类（条件性 / 禁令 / 步骤 / 输出格式）：前三类各走 PASS/FAIL/N/A（不适用），LLM 没判成的另报 UNCLEAR（判不准）；输出格式确定性二值（不调 LLM）。**禁令判的角度反着来**——主动找违规、不判“遵守没”（如 `NEVER ...` / `不得编造`）。判不准报 UNCLEAR + 警告，不保守 FAIL（各类判法详表见 reference 的 audit 段）。产出 `audit-report.json` + `audit-report.html`（HTML always 写）。
+判定四类（条件性 / 禁令 / 步骤 / 输出格式），每条出**五态 verdict** + **method** 标（`PROGRAMMATIC` 程序对账 / `LLM` 语义判定）：`PASS` / `FAIL` / `N/A`（不适用，场景不触发）/ `UNRESOLVED`（没判成，LLM 失败/解析失败/未提及，可重跑）/ `INDETERMINATE`（判不准，证据真模糊，重跑无益）；输出格式是确定性子串匹配（`PROGRAMMATIC`，不调 LLM，只 PASS/FAIL）。**禁令判的角度反着来**——主动找违规、不判“遵守没”（如 `NEVER ...` / `不得编造`）。没判成报 UNRESOLVED + “建议重跑”警告、判不准报 INDETERMINATE + 占比告警，都不保守 FAIL（各类判法详表见 reference 的 audit 段）。产出 `audit-report.json` + `audit-report.html`（HTML always 写）。
 
 ### `report` — HTML 报告
 
@@ -457,7 +457,7 @@ output/iteration-1/
     └── eval-<id>/run-<n>/
         ├── outputs/        # Claude 产生的文件（skill references 已自动拷入）
         ├── grading.json    # 评分（expectations + assertions pass/fail，双率）
-        ├── compliance.json # 遵循性检查（双率；仅 with_skill）
+        ├── compliance.json # 遵循性检查（五态 verdict + method；仅 with_skill）
         ├── calibration.json
         ├── run_debug.json  # 完整回复 + tool_calls + timing
         └── timing.json

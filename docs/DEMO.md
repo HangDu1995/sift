@@ -157,7 +157,7 @@ output/
 | `OUTPUT_FORMAT` | 输出格式要求 | "Write to validation-report.json" |
 | `REFERENCE_USAGE` | 参考文档引用 | "See references/schema-rules.md" |
 
-每条检查结果为 `followed: true/false`，汇总为 `compliance_rate`。
+每条结果是一个 `AuditFinding`，带两个正交维度——**verdict**（五态：`PASS` / `FAIL` / `N/A` 不适用 / `UNRESOLVED` 没判成 / `INDETERMINATE` 判不准）+ **method**（`PROGRAMMATIC` 程序对账 / `LLM` 语义判定）。汇总 `summary{total,pass,fail,na,unresolved,indeterminate}`，遵循度 = `pass/(pass+fail)`（排除 N/A + UNRESOLVED + INDETERMINATE）。
 
 #### calibration.json —— 结果×过程 coherence 判决
 
@@ -246,7 +246,7 @@ skill-eval report output/ --open
 |------|------|------|-----|------|-----|
 | **delta** | benchmark.json | with − without | > +0.3 | -0.1~+0.1 | < -0.1 |
 | **pass_rate** | grading.json | passed / total | > 0.8 | 0.5~0.8 | < 0.5 |
-| **compliance_rate** | compliance.json | followed / total | > 0.7 | 0.5~0.7 | < 0.5 |
+| **compliance_rate** | compliance.json | pass / (pass+fail) | > 0.7 | 0.5~0.7 | < 0.5 |
 | **calibration verdict** | calibration.json | 结果×过程 coherence | 可信/高分存疑 | 可修复 | 技能失效/过程未知 |
 | **static score** | analyze | 0-11 checks | 8+ | 5-7 | < 5 |
 
