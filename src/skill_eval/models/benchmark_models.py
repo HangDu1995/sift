@@ -32,6 +32,10 @@ class RunResultMetrics(BaseModel):
     tokens: int = 0
     tool_calls: int = 0
     errors: int = 0
+    # 双率(与 grading summary 同源):per-(eval,run) 的程序/LLM 分项通过率,透到 viewer
+    # 做检查点总览 + 逐项表的 3-dim 列。None = 该 run 无该类 expectation(诚实缺值)。
+    pass_rate_programmatic: float | None = None
+    pass_rate_llm: float | None = None
 
 
 class ComplianceSummary(BaseModel):

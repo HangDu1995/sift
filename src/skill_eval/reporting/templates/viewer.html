@@ -1144,6 +1144,15 @@
 
       let html = "";
 
+      // 3-dim 通过率格式化(程序/LLM/混合 共用):None → —(诚实缺值,不伪造 0)
+      const fmtDim = v => (v == null ? "—" : (v * 100).toFixed(0) + "%");
+      const dimCls = v => (v == null ? "" : v >= 0.8 ? "benchmark-delta-positive" : v < 0.5 ? "benchmark-delta-negative" : "");
+      // 某字段跨 runs 取均值(忽略 null/缺值);全 null → null
+      const meanField = (runsArr, field) => {
+        const vals = runsArr.map(r => (r.result || {})[field]).filter(v => v != null);
+        return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+      };
+
       // ── Dashboard header ──
       html += "<div style='display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.5rem;'>";
       const configs = Object.keys(summary).filter(k => k !== "delta");
@@ -1546,48 +1555,34 @@
         html += '</div>';
       }
 
-      // ── Checkpoint breakdowns (dict notes) ──
-      const checkpoints = notes.filter(n => typeof n === 'object' && n !== null);
-      if (checkpoints.length > 0) {
+      // ── 检查点总览(per-eval 一行,3-dim mean across runs)──
+      // 多 eval 的一览索引层:逐项明细前面给一个「哪道题弱、弱在哪维」的扫描表。
+      // 点行跳到该 eval 的逐项明细(anchor #eval-{id})。程序/LLM 缺该类 expectation 显 —。
+      // 不设派生「状态」列:三率各自按本轴着色,避免用一个混合派生判决误导(混合含 LLM 噪声)。
+      // (原区块名实不符:只读首个 checkpoints.json → 只显 eval-1;且逐条 ✓/✗ 明细
+      //  已在下方检查项矩阵覆盖全 eval。此处改成聚合总览,不重复明细。)
+      const overviewRuns = data.runs || [];
+      if (overviewRuns.length > 0) {
+        const ovEvalIds = [...new Set(overviewRuns.map(r => r.eval_id))].sort((a, b) => a - b);
         html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
-        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">检查点明细</div>';
-        for (const cp of checkpoints) {
-          const cpRate = cp.pass_rate || 0;
-          const cpColor = cpRate >= 0.8 ? "var(--green)" : cpRate >= 0.5 ? "var(--accent)" : "var(--red)";
-          const cpStatus = cpRate >= 0.8 ? "PASS" : cpRate >= 0.5 ? "PARTIAL" : "FAIL";
-          html += '<div style="margin-bottom:0.75rem;">';
-          html += '<span style="color:' + cpColor + ';font-weight:600;">' + cpStatus + '</span> ';
-          html += '<strong>' + escapeHtml(cp.eval_name || "Checkpoint") + '</strong>';
-          html += ' — ' + (cp.passed || 0) + '/' + (cp.total || 0) + ' (' + (cpRate * 100).toFixed(0) + '%)';
-          html += '</div>';
-
-          if (cp.expectations && cp.expectations.length) {
-            html += '<ul style="font-size:0.75rem;margin:0 0 0.5rem 1.25rem;">';
-            for (const e of cp.expectations) {
-              let icon = e.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
-              if (e.verdict === "UNEVAL") {
-                icon = '<span style="color:var(--accent);" title="无法评估">?</span>';
-              }
-              html += '<li>' + icon + ' ' + escapeHtml(e.text || "") + '</li>';
-            }
-            html += '</ul>';
-          }
-          if (cp.assertions && cp.assertions.length) {
-            html += '<ul style="font-size:0.75rem;margin:0 0 0.5rem 1.25rem;">';
-            for (const a of cp.assertions) {
-              let icon = a.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
-              if (a.verdict === "UNEVAL") {
-                icon = '<span style="color:var(--accent);" title="无法评估">?</span>';
-              } else if (a.verdict === "TIMEOUT") {
-                icon = '<span style="color:var(--accent);" title="超时">⏱</span>';
-              } else if (a.verdict === "ERROR") {
-                icon = '<span style="color:var(--red);" title="错误">!</span>';
-              }
-              html += '<li style="color:var(--text-muted);">' + icon + ' ' + escapeHtml(a.text || "") + '</li>';
-            }
-            html += '</ul>';
-          }
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">检查点总览</div>';
+        html += '<table class="benchmark-table checkpoint-overview"><thead><tr><th>题号</th><th style="text-align:left;">题名</th><th>程序</th><th>LLM</th><th>混合</th></tr></thead><tbody>';
+        for (const evalId of ovEvalIds) {
+          const evalRuns = overviewRuns.filter(r => r.eval_id === evalId);
+          const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : ("Eval " + evalId);
+          const mProg = meanField(evalRuns, "pass_rate_programmatic");
+          const mLlm = meanField(evalRuns, "pass_rate_llm");
+          const mMix = meanField(evalRuns, "pass_rate");
+          html += '<tr style="cursor:pointer;" onclick="document.getElementById(\'eval-' + evalId + '\').scrollIntoView({block:\'start\'});">';
+          html += '<td>' + evalId + '</td>';
+          html += '<td style="text-align:left;">' + escapeHtml(evalName) + '</td>';
+          html += '<td class="' + dimCls(mProg) + '">' + fmtDim(mProg) + '</td>';
+          html += '<td class="' + dimCls(mLlm) + '">' + fmtDim(mLlm) + '</td>';
+          html += '<td class="' + dimCls(mMix) + '">' + fmtDim(mMix) + '</td>';
+          html += '</tr>';
         }
+        html += '</tbody></table>';
+        html += '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.5rem;">每 eval 跨所有 run/config 取均值;点行跳到该题逐项明细。程序/LLM 缺该类 expectation 显 —。</div>';
         html += '</div>';
       }
 
@@ -1601,8 +1596,8 @@
         for (const evalId of evalIds) {
           const evalRuns = runs.filter(r => r.eval_id === evalId);
           const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : "Eval " + evalId;
-          html += '<h4 style="font-family:Poppins,sans-serif;margin:1rem 0 0.5rem;">' + escapeHtml(evalName) + '</h4>';
-          html += '<table class="benchmark-table"><thead><tr><th>配置</th><th>运行</th><th>通过率</th>';
+          html += '<h4 id="eval-' + evalId + '" style="font-family:Poppins,sans-serif;margin:1rem 0 0.5rem;">' + escapeHtml(evalName) + '</h4>';
+          html += '<table class="benchmark-table"><thead><tr><th>配置</th><th>运行</th><th>程序</th><th>LLM</th><th>混合</th>';
           if (hasTime) html += '<th>耗时 (秒)</th>';
           html += '</tr></thead><tbody>';
 
@@ -1620,6 +1615,8 @@
               const anomalyTag = run.is_anomaly ? ' <span style="background:#ffc107;color:#333;padding:0 4px;border-radius:3px;font-size:0.65rem;font-family:Poppins,sans-serif;" title="' + escapeHtml(run.anomaly_reason || '异常值') + '">异常</span>' : "";
               const retryTag = run.retry_count ? ' <span style="background:#e0e0e0;color:#666;padding:0 4px;border-radius:3px;font-size:0.65rem;font-family:Poppins,sans-serif;" title="重试 ' + run.retry_count + ' 次">R' + run.retry_count + '</span>' : "";
               html += '<tr class="' + rowClass + '"><td>' + configLabel + '</td><td>' + run.run_number + anomalyTag + retryTag + '</td>';
+              html += '<td class="' + dimCls(r.pass_rate_programmatic) + '">' + fmtDim(r.pass_rate_programmatic) + '</td>';
+              html += '<td class="' + dimCls(r.pass_rate_llm) + '">' + fmtDim(r.pass_rate_llm) + '</td>';
               html += '<td class="' + prClass + '">' + ((r.pass_rate || 0) * 100).toFixed(0) + '% (' + (r.passed || 0) + '/' + (r.total || 0) + ')</td>';
               if (hasTime) {
                 const timeDisplay = r.time_seconds != null ? r.time_seconds.toFixed(1) : "—";
@@ -1631,8 +1628,12 @@
 
             const rates = configRuns.map(r => (r.result || {}).pass_rate || 0);
             const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+            const avgProg = meanField(configRuns, "pass_rate_programmatic");
+            const avgLlm = meanField(configRuns, "pass_rate_llm");
             const avgPrClass = avgRate >= 0.8 ? "benchmark-delta-positive" : avgRate < 0.5 ? "benchmark-delta-negative" : "";
             html += '<tr class="benchmark-row-avg ' + rowClass + '"><td>' + configLabel + '</td><td>平均</td>';
+            html += '<td class="' + dimCls(avgProg) + '">' + fmtDim(avgProg) + '</td>';
+            html += '<td class="' + dimCls(avgLlm) + '">' + fmtDim(avgLlm) + '</td>';
             html += '<td class="' + avgPrClass + '">' + (avgRate * 100).toFixed(0) + '%</td>';
             if (hasTime) {
               const times = configRuns.map(r => (r.result || {}).time_seconds).filter(t => t != null);

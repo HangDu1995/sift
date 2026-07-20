@@ -122,6 +122,18 @@ class TestBenchmarkModels:
         assert restored.metadata.skill_name == "test-skill"
         assert restored.runs[0].configuration == "with_skill"
 
+    def test_run_result_metrics_carries_dual_rate(self):
+        """RunResultMetrics 带 pass_rate_programmatic/llm:per-(eval,run) 双率要透到 viewer
+        (检查点总览 3-dim + 逐项表 3-dim 列),不再只埋在 Δ 卡聚合层。
+        缺省 None = 该 run 无该类 expectation(诚实缺值,不伪造 0)。"""
+        m = RunResultMetrics(pass_rate=0.8, passed=4, failed=1, total=5,
+                             pass_rate_programmatic=1.0, pass_rate_llm=0.5)
+        assert m.pass_rate_programmatic == 1.0
+        assert m.pass_rate_llm == 0.5
+        m2 = RunResultMetrics(pass_rate=0.8, passed=4, failed=1, total=5)
+        assert m2.pass_rate_programmatic is None
+        assert m2.pass_rate_llm is None
+
 
 class TestCalibrationModels:
     def test_calibration_report_new_schema(self):

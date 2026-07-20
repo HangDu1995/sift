@@ -208,6 +208,32 @@ class TestBenchmarkAggregator:
         assert d["pass_rate_programmatic"] == "+0.50"  # with 1.0 - without 0.5
         assert d["pass_rate_llm"] == "+0.50"  # with 0.5 - without 0.0
 
+    def test_aggregate_runs_carry_dual_rate_per_run(self, tmp_path: Path):
+        """per-(eval,run) 双率透到 runs[].result(不只 run_summary 聚合):
+        检查点总览 + 逐项表的 3-dim 列要 per-eval per-run 可见。
+        RED:旧 runs[].result 只有 overall pass_rate;split 只进 entry_data→configs_data(Δ 卡)。"""
+        iteration = tmp_path
+        config_dir = iteration / "with_skill" / "eval-1" / "run-1"
+        config_dir.mkdir(parents=True)
+        (config_dir / "outputs").mkdir()
+        (config_dir / "grading.json").write_text(json.dumps({
+            "expectations": [{"text": "t", "passed": True, "evidence": "e"}],
+            "summary": {"passed": 2, "failed": 1, "total": 3, "pass_rate": 2 / 3,
+                        "pass_rate_programmatic": 1.0, "pass_rate_llm": 0.5},
+        }), encoding="utf-8")
+        (config_dir / "timing.json").write_text(json.dumps({
+            "total_tokens": 100, "duration_ms": 5000, "total_duration_seconds": 5.0,
+        }), encoding="utf-8")
+
+        agg = BenchmarkAggregator()
+        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+            benchmark = agg.aggregate(iteration, tmp_path)
+
+        r = benchmark.runs[0].result
+        assert abs(r.pass_rate_programmatic - 1.0) < 1e-9
+        assert abs(r.pass_rate_llm - 0.5) < 1e-9
+
     def test_aggregate_dual_rate_null_when_class_missing(self, tmp_path: Path):
         """某类 expectation 全无(pass_rate_xx 缺)→ 该双率 stats None、delta 该项 None。"""
         iteration = tmp_path  # iteration-1 死层已删:run 树根即 output_dir,config 目录直接落其下

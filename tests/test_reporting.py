@@ -695,6 +695,34 @@ class TestReportGeneratorStatic:
         assert "程序化(客观)" in html   # 新 chart dataset label(旧 chart 无)
         assert "LLM(主观)" in html      # 新 chart dataset label(旧 chart 无)
 
+    def test_generate_html_has_checkpoint_overview_section(self, tmp_path):
+        """检查点明细(名实不符:只显 eval-1)→ 检查点总览(per-eval 一行,3-dim mean)。
+        多 eval 时给逐项明细前面一个一览索引层(summary→drill-down 缺失的中间层)。
+        不设派生状态列(三率各自按本轴着色,避免混合派生判决误导)。
+        viewer 客户端渲染,pytest 验模板字面(运行时是否显由 runs 数据决定)。
+        RED 锚点:旧模板 header 是「检查点明细」(1553),无「检查点总览」/ checkpoint-overview。"""
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        benchmark = {"metadata": {"skill_name": "x"}, "runs": [], "run_summary": {}}
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        assert "检查点总览" in html
+        assert "检查点明细" not in html
+        assert "checkpoint-overview" in html   # 总览表 class 锚
+
+    def test_generate_html_per_run_table_has_dual_rate_columns(self, tmp_path):
+        """逐项评测明细 per-run 表加 程序/LLM 列(原只单一「通过率」):三维度 per-eval per-run 可见,
+        与检查点总览(聚合 3-dim)+ expectation ✓/✗ 矩阵(逐条)互补。
+        viewer 客户端渲染,pytest 验模板字面(用 <th>标签锚避开 Δ 表/图表的「程序化」撞名)。
+        RED 锚点:旧 per-run 表头只有 <th>通过率</th>(1605),无 <th>程序</th>/<th>LLM</th>。"""
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        benchmark = {"metadata": {"skill_name": "x"}, "runs": [], "run_summary": {}}
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        assert "<th>程序</th>" in html
+        assert "<th>LLM</th>" in html
+
     def test_generate_html_dashboard_has_blind_winrate_card(self, tmp_path):
         """顶部仪表盘加「盲评胜率」卡(主观主指标 win-rate),与 Δ 卡(客观 delta)并列 = §45 汇总层落地。
 

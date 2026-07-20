@@ -176,6 +176,9 @@ class BenchmarkAggregator:
                         tokens=tokens,
                         tool_calls=tool_calls,
                         errors=metrics.get("errors_encountered", 0),
+                        # 双率透到 per-(eval,run):检查点总览 + 逐项表 3-dim 列用(与 entry_data 同源)
+                        pass_rate_programmatic=summary.get("pass_rate_programmatic"),
+                        pass_rate_llm=summary.get("pass_rate_llm"),
                     ),
                     expectations=raw_expectations,
                     notes=notes,
