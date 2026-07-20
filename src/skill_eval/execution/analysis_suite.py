@@ -50,10 +50,13 @@ def run_comparison_analysis(aggregator, iteration_dir: Path, benchmark: Benchmar
     ws_transcript = _load_transcript(ws_runs[0])
     wos_transcript = _load_transcript(wos_runs[0])
 
-    if winner_label == "A":
+    # winner 是语义侧:position 随机化 + _translate 后 comparator 存 "with"/"without"/"tie"
+    # (老数据可能是匿名 A/B)。只对清晰赢家(with/without 侧)做分析;tie/空 → 没赢家,返 None。
+    # 旧代码只判 ==A/==B,语义时代永不命中 → 恒 None → 深度分析从未显示(stale-code bug)。
+    if winner_label in ("A", "with", "with_skill"):
         winner_skill, loser_skill = skill_content, "(no skill)"
         winner_trans, loser_trans = ws_transcript, wos_transcript
-    elif winner_label == "B":
+    elif winner_label in ("B", "without", "without_skill"):
         winner_skill, loser_skill = "(no skill)", skill_content
         winner_trans, loser_trans = wos_transcript, ws_transcript
     else:

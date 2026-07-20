@@ -281,6 +281,61 @@ class TestBenchmarkAggregator:
 
         assert benchmark.runs[0].eval_name == ""
 
+    def test_run_comparison_analysis_handles_semantic_winner(self, tmp_path: Path):
+        """run_comparison_analysis 认语义 winner(with/without),不只老 A/B。
+        RED:comparator 存语义 winner(position 随机化 + _translate 后),旧代码只判 ==A/==B
+        → 恒 None → 深度分析永远不显示。改后 winner='with' 正常往下走到 analyze_comparison。"""
+        from skill_eval.execution.analysis_suite import run_comparison_analysis
+        from skill_eval.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
+
+        skill_dir = tmp_path / "skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# body\n", encoding="utf-8")
+        ws = tmp_path / "with_skill" / "run-1"; ws.mkdir(parents=True)
+        (ws / "transcript.md").write_text("ws", encoding="utf-8")
+        wos = tmp_path / "without_skill" / "run-1"; wos.mkdir(parents=True)
+        (wos / "transcript.md").write_text("wos", encoding="utf-8")
+
+        benchmark = BenchmarkData(
+            metadata=BenchmarkMetadata(skill_name="s", skill_path=str(skill_dir)),
+            comparisons=[ComparisonResult(winner="with", reasoning="r")],
+        )
+        sentinel = object()
+        analyzer = type("A", (), {"analyze_comparison": lambda self, **kw: sentinel})()
+
+        result = run_comparison_analysis(None, tmp_path, benchmark, analyzer)
+        assert result is sentinel   # 旧代码这里 None(winner 'with' 不是 A/B)
+
+    def test_run_comparison_analysis_semantic_winner_mapping(self, tmp_path: Path):
+        """语义 winner 正确映射 winner/loser transcript:with→ws 赢、without→wos 赢。"""
+        from skill_eval.execution.analysis_suite import run_comparison_analysis
+        from skill_eval.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
+
+        skill_dir = tmp_path / "skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n", encoding="utf-8")
+        (tmp_path / "with_skill" / "run-1").mkdir(parents=True)
+        (tmp_path / "with_skill" / "run-1" / "transcript.md").write_text("WS", encoding="utf-8")
+        (tmp_path / "without_skill" / "run-1").mkdir(parents=True)
+        (tmp_path / "without_skill" / "run-1" / "transcript.md").write_text("WOS", encoding="utf-8")
+
+        captured: dict = {}
+        def fake(**kw):
+            captured.update(kw)
+            return "OK"
+        analyzer = type("A", (), {"analyze_comparison": lambda self, **kw: fake(**kw)})()
+
+        bd = BenchmarkData(metadata=BenchmarkMetadata(skill_name="s", skill_path=str(skill_dir)),
+                           comparisons=[ComparisonResult(winner="with", reasoning="r")])
+        run_comparison_analysis(None, tmp_path, bd, analyzer)
+        assert captured["winner_transcript"] == "WS"   # with 赢 → winner 是 ws
+
+        captured.clear()
+        bd2 = BenchmarkData(metadata=BenchmarkMetadata(skill_name="s", skill_path=str(skill_dir)),
+                            comparisons=[ComparisonResult(winner="without", reasoning="r")])
+        run_comparison_analysis(None, tmp_path, bd2, analyzer)
+        assert captured["winner_transcript"] == "WOS"  # without 赢 → winner 是 wos
+
     def test_aggregate_dual_rate_null_when_class_missing(self, tmp_path: Path):
         """某类 expectation 全无(pass_rate_xx 缺)→ 该双率 stats None、delta 该项 None。"""
         iteration = tmp_path  # iteration-1 死层已删:run 树根即 output_dir,config 目录直接落其下
