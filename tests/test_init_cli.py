@@ -169,6 +169,42 @@ def test_init_no_warning_on_single_skill(monkeypatch, tmp_path):
     assert not any("涉及" in p and "skill" in p for p in printed), printed
 
 
+def test_init_notes_same_prompt_group(monkeypatch, tmp_path):
+    """生成出同 prompt 多 scenario 题(带 split flag)→ init 打 ℹ 提示「非重复」。
+    防读者把同 prompt 多道误读成 bug(复现 log-error-analyzer-zh 那次误读场景)。
+    断言用「同 prompt」+「非重复」整串——distinctive,避开 tmp_path 假绿陷阱。"""
+    evalset = EvalSet(skill_name="s", evals=[
+        EvalCase(id=i, name=f"scenario-{i}", prompt="分析 logs/app.log 里的错误",
+                 flags=["split:3-evals-conflict"])
+        for i in (1, 2, 3)
+    ])
+    printed = []
+    monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
+                        lambda *a, **k: printed.append(str(a)))
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp: evalset)
+    sp = _skill_dir(tmp_path)
+    r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert any("同 prompt" in p and "非重复" in p for p in printed), printed
+
+
+def test_init_no_note_when_prompts_unique(monkeypatch, tmp_path):
+    """每道 prompt 都不同 → 不打同 prompt 提示(免噪音)。"""
+    evalset = EvalSet(skill_name="s", evals=[
+        EvalCase(id=1, name="a", prompt="题一"), EvalCase(id=2, name="b", prompt="题二")
+    ])
+    printed = []
+    monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
+                        lambda *a, **k: printed.append(str(a)))
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp: evalset)
+    sp = _skill_dir(tmp_path)
+    r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert not any("同 prompt" in p for p in printed), printed
+
+
 def test_init_lists_programmatic_count_per_eval(monkeypatch, tmp_path):
     """init 逐条输出须显示客观题(assertions)数量,不只主观 expectations。
     曾只印 expectations+fixtures、漏 assertions(客观题是确定性最强的部分)。

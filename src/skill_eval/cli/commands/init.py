@@ -8,6 +8,7 @@ import typer
 
 from skill_eval.cli.main import app, console
 from skill_eval.errors import SkillEvalError
+from skill_eval.evals.inspect import same_prompt_groups
 from skill_eval.parser import resolve_skill_dir
 
 
@@ -92,6 +93,13 @@ def init(
             console.print(f"  [{level}] {e.name}: {len(e.assertions)} assertions, "
                           f"{len(e.expectations)} expectations"
                           + (f", {len(e.fixtures)} fixtures" if e.fixtures else ""))
+        for g in same_prompt_groups(eval_set):
+            prompt_short = g["prompt"][:60] + ("…" if len(g["prompt"]) > 60 else "")
+            flag_note = ",带 split flag" if g["split_flag"] else ""
+            console.print(
+                f"[cyan]ℹ[/cyan] 含同 prompt 题组:「{prompt_short}」× {g['count']} 道"
+                f"(不同 scenario{flag_note},非重复)"
+            )
         console.print(f"Written to {output}")
     except SkillEvalError as exc:
         console.print(f"[red]Error:[/red] {exc}")

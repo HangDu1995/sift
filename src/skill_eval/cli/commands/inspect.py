@@ -58,3 +58,23 @@ def inspect(
             console.print(f"     - {f}")
     else:
         console.print("  [green]✓ 无问题 flag[/green]")
+
+    groups = result.get("same_prompt_groups") or []
+    if groups:
+        console.print(f"  [cyan]ℹ 同 prompt 题组:[/cyan] {len(groups)} 组(不同 scenario,非重复)")
+        for g in groups:
+            prompt_short = g["prompt"][:60] + ("…" if len(g["prompt"]) > 60 else "")
+            line = f"     · 「{prompt_short}」× {g['count']} 道 · {_fmt_ids(g['ids'])}"
+            if g["split_flag"]:
+                line += f"\n       带 {g['split_flag']} → fixture 冲突,生成器有意不合并"
+            console.print(line)
+
+
+def _fmt_ids(ids: list[int]) -> str:
+    """id 列表紧凑显示:连续段用 a–b(如 [1,2,3]→"id 1–3"),否则逗号([1,3,5]→"id 1,3,5")。"""
+    if not ids:
+        return "id —"
+    s = sorted(ids)
+    if len(s) > 1 and s == list(range(s[0], s[0] + len(s))):
+        return f"id {s[0]}–{s[-1]}"
+    return "id " + ",".join(str(i) for i in s)

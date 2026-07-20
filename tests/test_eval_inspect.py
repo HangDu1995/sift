@@ -56,3 +56,34 @@ def test_empty_set():
     assert r["completeness"]["evals"] == 0
     assert r["stability"]["programmatic_ratio"] is None
     assert r["problems"] == {"degraded": [], "zero_validation": [], "zero_programmatic": []}
+
+
+def test_same_prompt_groups_detected():
+    """同 prompt 多道 → same_prompt_groups 列出组(count/ids/split_flag)。
+    防读者把同 prompt 多 scenario 误读成重复 bug(复现 log-error-analyzer-zh 那次误读)。"""
+    a = EvalCase(id=1, name="happy", prompt="分析 logs/app.log", flags=["split:3-evals-conflict"])
+    b = EvalCase(id=2, name="empty", prompt="分析 logs/app.log", flags=["split:3-evals-conflict"])
+    c = EvalCase(id=3, name="injection", prompt="分析 logs/app.log", flags=["split:3-evals-conflict"])
+    d = EvalCase(id=4, name="other", prompt="另一道独立题")
+    r = inspect_evals(_set([a, b, c, d]))
+    assert len(r["same_prompt_groups"]) == 1
+    g = r["same_prompt_groups"][0]
+    assert g["prompt"] == "分析 logs/app.log"
+    assert g["count"] == 3
+    assert g["ids"] == [1, 2, 3]
+    assert g["split_flag"] == "split:3-evals-conflict"
+
+
+def test_same_prompt_groups_empty_when_all_unique():
+    r = inspect_evals(_set([EvalCase(id=1, prompt="p1"), EvalCase(id=2, prompt="p2")]))
+    assert r["same_prompt_groups"] == []
+
+
+def test_same_prompt_groups_split_flag_none_when_absent():
+    """同 prompt 但无 split flag(手写 / 未过合并门)→ split_flag=None,组仍列出。"""
+    a = EvalCase(id=1, prompt="p")
+    b = EvalCase(id=2, prompt="p")
+    r = inspect_evals(_set([a, b]))
+    g = r["same_prompt_groups"][0]
+    assert g["count"] == 2
+    assert g["split_flag"] is None
