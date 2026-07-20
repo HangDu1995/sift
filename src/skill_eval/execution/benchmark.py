@@ -162,9 +162,20 @@ class BenchmarkAggregator:
                     "tokens": tokens,
                 }
 
+                # eval 名从 run_debug.json 取真名(如 happy_path_basic_categorization);
+                # 缺失则空,viewer fallback "Eval {id}"。旧用 skill 名(name)→ 全 eval 同名,
+                # 检查点总览 / 逐项表只能显 "Eval N"。
+                eval_name = ""
+                debug_path = run_dir / "run_debug.json"
+                if debug_path.exists():
+                    try:
+                        eval_name = json.loads(debug_path.read_text(encoding="utf-8")).get("eval_name") or ""
+                    except (json.JSONDecodeError, OSError):
+                        pass
+
                 entry = RunResultEntry(
                     eval_id=eval_id,
-                    eval_name=name,
+                    eval_name=eval_name,
                     configuration=config_name,
                     run_number=run_number,
                     result=RunResultMetrics(
@@ -267,7 +278,7 @@ class BenchmarkAggregator:
                             run_number = int(run_dir.name.split("-")[1])
                             anomalies.append(RunAnomaly(
                                 eval_id=eval_id,
-                                eval_name=name,
+                                eval_name=debug.get("eval_name") or name,
                                 configuration=config_name,
                                 run_number=run_number,
                                 anomaly_type="timeout",

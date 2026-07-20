@@ -234,6 +234,53 @@ class TestBenchmarkAggregator:
         assert abs(r.pass_rate_programmatic - 1.0) < 1e-9
         assert abs(r.pass_rate_llm - 0.5) < 1e-9
 
+    def test_aggregate_eval_name_from_run_debug(self, tmp_path: Path):
+        """eval_name 从 run_debug.json 取真名(如 happy_path_basic_categorization),
+        不再用 skill 名。检查点总览 + 逐项表靠它显题名,否则全显 "Eval N"。
+        RED:旧代码 eval_name=name(skill 名,parse_skill_md 来),run_debug 没读。"""
+        iteration = tmp_path
+        run_dir = iteration / "with_skill" / "eval-1" / "run-1"
+        run_dir.mkdir(parents=True)
+        (run_dir / "outputs").mkdir()
+        (run_dir / "grading.json").write_text(json.dumps({
+            "expectations": [{"text": "t", "passed": True, "evidence": "e"}],
+            "summary": {"passed": 1, "failed": 0, "total": 1, "pass_rate": 1.0},
+        }), encoding="utf-8")
+        (run_dir / "timing.json").write_text(json.dumps({
+            "total_tokens": 100, "duration_ms": 5000, "total_duration_seconds": 5.0,
+        }), encoding="utf-8")
+        (run_dir / "run_debug.json").write_text(json.dumps({
+            "eval_name": "happy_path_basic_categorization", "eval_id": 1,
+        }), encoding="utf-8")
+
+        agg = BenchmarkAggregator()
+        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+            benchmark = agg.aggregate(iteration, tmp_path)
+
+        assert benchmark.runs[0].eval_name == "happy_path_basic_categorization"
+
+    def test_aggregate_eval_name_empty_when_no_run_debug(self, tmp_path: Path):
+        """无 run_debug.json → eval_name 空(viewer fallback "Eval {id}"),不用 skill 名顶替。"""
+        iteration = tmp_path
+        run_dir = iteration / "with_skill" / "eval-1" / "run-1"
+        run_dir.mkdir(parents=True)
+        (run_dir / "outputs").mkdir()
+        (run_dir / "grading.json").write_text(json.dumps({
+            "expectations": [],
+            "summary": {"passed": 1, "failed": 0, "total": 1, "pass_rate": 1.0},
+        }), encoding="utf-8")
+        (run_dir / "timing.json").write_text(json.dumps({
+            "total_tokens": 100, "duration_ms": 5000, "total_duration_seconds": 5.0,
+        }), encoding="utf-8")
+
+        agg = BenchmarkAggregator()
+        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+            benchmark = agg.aggregate(iteration, tmp_path)
+
+        assert benchmark.runs[0].eval_name == ""
+
     def test_aggregate_dual_rate_null_when_class_missing(self, tmp_path: Path):
         """某类 expectation 全无(pass_rate_xx 缺)→ 该双率 stats None、delta 该项 None。"""
         iteration = tmp_path  # iteration-1 死层已删:run 树根即 output_dir,config 目录直接落其下
