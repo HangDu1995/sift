@@ -65,6 +65,32 @@ def _eval_comparison(benchmark: dict, min_win_rate: float | None, min_valid: int
                        reason=f"主观胜率 {wr:.2f} >= {min_win_rate:.2f}({decisive} 决定性)", **common)
 
 
+def _eval_calibration(benchmark: dict, candidate: str, warnings: list[str]) -> dict | None:
+    """分诊两侧 HIGH_SCORE_SUSPECT(soft warning)。不进 axes、不改 decision。
+    with/without:without 侧 None(无 compliance);v1/v2 两侧都有。candidate 侧 warning 排前。"""
+    cs = benchmark.get("calibration_summary")
+    if not cs or not cs.get("sides"):
+        return None
+    out: dict[str, dict] = {}
+    # candidate 侧排前(顺序)
+    side_items = sorted(cs["sides"].items(), key=lambda kv: 0 if kv[0] == candidate else 1)
+    for side, per in side_items:
+        if not per:
+            out[side] = {"triggered": False, "count": 0, "total": 0, "evidence": []}
+            continue
+        suspects = per.get("high_score_suspects") or []
+        triggered = len(suspects) > 0
+        out[side] = {"triggered": triggered, "count": len(suspects),
+                     "total": per.get("total", 0), "evidence": suspects}
+        if triggered:
+            tag = f"[candidate {side}]" if side == candidate else f"[{side}]"
+            warnings.append(
+                f"⚠️ {tag} 高分低遵循 {len(suspects)} 个 HIGH_SCORE_SUSPECT"
+                f"(结果对但过程硬违规,evidence 见 calibration.sides.{side}.evidence)"
+            )
+    return {"sides": out}
+
+
 def evaluate_gate(
     benchmark: dict,
     *,
@@ -93,10 +119,11 @@ def evaluate_gate(
     reason = "; ".join(v.reason for v in engaged) if engaged else "无适用轴可判"
 
     cand, base = _resolve_sides(benchmark, candidate)
+    calibration = _eval_calibration(benchmark, cand, warnings)
     return GateResult(
         decision=decision, exit_code=exit_code, reason=reason,
         candidate=cand, baseline=base,
         thresholds={"min_win_rate": min_win_rate, "min_valid": min_valid,
                     "programmatic_guard": programmatic_guard},
-        axes=axes, warnings=warnings,
+        axes=axes, warnings=warnings, calibration=calibration,
     )

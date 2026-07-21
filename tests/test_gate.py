@@ -149,3 +149,50 @@ def test_candidate_resolution_from_side_keys():
 def test_thresholds_recorded():
     r = evaluate_gate(_bench("+0.27", _cs(6, 2)), min_win_rate=0.6, min_valid=5)
     assert r.thresholds == {"min_win_rate": 0.6, "min_valid": 5, "programmatic_guard": True}
+
+
+# ---- _eval_calibration:HIGH_SCORE_SUSPECT soft warning ----
+
+def _bench_with_cal(suspects_with):
+    """造 benchmark dict:客观轴 PASS(delta=0)+ calibration_summary(with 侧 suspects)。"""
+    return {
+        "run_summary": {"delta": {"pass_rate_programmatic": 0.0}, "with_skill": {}, "without_skill": {}},
+        "comparison_summary": {"label_a": "with_skill", "label_b": "without_skill"},
+        "calibration_summary": {"sides": {
+            "with_skill": {"total": 2, "verdict_counts": {"HIGH_SCORE_SUSPECT": len(suspects_with)},
+                           "high_score_suspects": suspects_with},
+            "without_skill": None,
+        }},
+    }
+
+
+def test_calibration_warning_triggered_for_high_score_suspect():
+    suspects = [{"eval": 1, "run": 2, "category": "prohibition",
+                 "instruction_text": "引用日志原文行", "evidence": "未引用", "compliance_rate": 0.875}]
+    res = evaluate_gate(_bench_with_cal(suspects), programmatic_guard=True)
+    assert res.decision == "PASS"           # 不改 decision
+    assert res.exit_code == 0
+    assert res.calibration is not None
+    assert res.calibration["sides"]["with_skill"]["triggered"] is True
+    assert res.calibration["sides"]["with_skill"]["count"] == 1
+    assert any("HIGH_SCORE_SUSPECT" in w or "高分低遵循" in w for w in res.warnings)
+    assert any("[candidate" in w for w in res.warnings)  # candidate 侧(with_skill==cand)标记排前
+
+
+def test_calibration_warning_not_triggered_when_clean():
+    res = evaluate_gate(_bench_with_cal([]), programmatic_guard=True)
+    assert res.calibration["sides"]["with_skill"]["triggered"] is False
+    assert not any("高分低遵循" in w for w in res.warnings)
+
+
+def test_calibration_missing_summary_is_none():
+    bench = {"run_summary": {"delta": {"pass_rate_programmatic": 0.0}, "with_skill": {}}}
+    res = evaluate_gate(bench, programmatic_guard=True)
+    assert res.calibration is None   # 旧 benchmark 无 calibration_summary → 降级 None
+
+
+def test_calibration_without_skill_side_is_none():
+    """with/without 模式:without 侧 None(无 compliance)。"""
+    res = evaluate_gate(_bench_with_cal([]), programmatic_guard=True)
+    assert res.calibration["sides"]["without_skill"]["triggered"] is False
+    assert res.calibration["sides"]["without_skill"]["count"] == 0
