@@ -1127,6 +1127,84 @@
       return html;
     }
 
+    // ---- Calibration summary(per-side HIGH_SCORE_SUSPECT 聚合,gate 客观侧盲区警告)----
+    // benchmark.calibration_summary 对称 comparison_summary:per-side 聚合。with/without 模式
+    // without 侧 None(无 compliance);v1/v2 两侧都有。HIGH_SCORE_SUSPECT = 结果达标(≥80%)但
+    // 过程有硬类违规(prohibition/output)—— gate 客观侧(pass_rate)盲区,viewer 显警告补盲。
+    // candidate 侧(compSummary.label_a,与 verdict.py _resolve_sides 同口径)排前;
+    // 触发 count>0 显 ⚠️;全 TRUSTED 弱化显示(灰字、无 ⚠️)。
+    function renderCalibrationSummary() {
+      const bench = EMBEDDED_DATA.benchmark || {};
+      const cs = bench.calibration_summary;
+      if (!cs || !cs.sides) return "";
+      const compSummary = bench.comparison_summary || {};
+      const candidate = compSummary.label_a || "";
+      // candidate 侧排前(与 gating/verdict.py _eval_calibration 同口径)
+      const sideItems = Object.entries(cs.sides)
+        .filter(([_side, per]) => per != null)
+        .sort((a, b) => {
+          if (a[0] === candidate && b[0] !== candidate) return -1;
+          if (b[0] === candidate && a[0] !== candidate) return 1;
+          return 0;
+        });
+      if (!sideItems.length) return "";
+
+      const fmtPct = v => (v != null ? (v * 100).toFixed(0) + '%' : '—');
+
+      let html = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+      html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">校准摘要 · 高分低遵循警告(HIGH_SCORE_SUSPECT)</div>';
+      html += '<div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.75rem;">结果达标(≥80%)但过程有硬类违规(prohibition/output)的 run。gate 客观侧只看通过率,此为盲区补警告。</div>';
+
+      for (const [side, per] of sideItems) {
+        const total = per.total || 0;
+        const vc = per.verdict_counts || {};
+        const suspects = per.high_score_suspects || [];
+        const suspectN = suspects.length;
+        const tag = side === candidate
+          ? ' <span style="font-size:0.7rem;color:var(--text-muted);">(候选侧)</span>' : '';
+
+        html += '<div style="margin-bottom:0.75rem;padding-bottom:0.75rem;border-bottom:1px solid var(--border);">';
+
+        if (suspectN > 0) {
+          // 触发:醒目 ⚠️ + evidence 列表
+          html += '<div style="font-weight:600;margin-bottom:0.3rem;color:var(--accent);">⚠️ '
+                + escapeHtml(side) + tag + ' · ' + suspectN + '/' + total + ' 个高分低遵循</div>';
+          html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
+          for (const s of suspects) {
+            const catTag = s.category ? '<strong>[' + escapeHtml(s.category) + ']</strong> ' : '';
+            const instr = escapeHtml(s.instruction_text || '(未命名)');
+            const runLoc = 'eval ' + (s.eval != null ? s.eval : '?')
+                         + ' / run ' + (s.run != null ? s.run : '?');
+            const rate = '遵循 ' + fmtPct(s.compliance_rate);
+            html += '<li>' + catTag + instr
+                  + ' <span style="color:var(--text-muted);">(' + runLoc + ', ' + rate + ')</span></li>';
+          }
+          html += '</ul>';
+        } else {
+          // 弱化:全 TRUSTED 或无 HIGH_SCORE_SUSPECT(灰字、不显 ⚠️)
+          const trustedN = vc.TRUSTED || 0;
+          const note = trustedN
+            ? '(TRUSTED ' + trustedN + '/' + total + ',无高分低遵循)'
+            : '(无高分低遵循)';
+          html += '<div style="font-weight:600;color:var(--text-muted);">'
+                + escapeHtml(side) + tag + ' ' + note + '</div>';
+        }
+
+        // verdict_counts 小字明细(>1 种 verdict 才显,单值时 header 已含避免冗余)
+        const vcEntries = Object.entries(vc);
+        if (vcEntries.length > 1) {
+          const parts = vcEntries.map(([k, v]) => k + ' ' + v);
+          html += '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;">'
+                + escapeHtml(parts.join(' · ')) + '</div>';
+        }
+
+        html += '</div>';
+      }
+
+      html += '</div>';
+      return html;
+    }
+
     // ---- Benchmark rendering ----
     function renderBenchmark() {
       const data = EMBEDDED_DATA.benchmark;
@@ -1398,6 +1476,9 @@
 
       // ── Compliance aggregate(过程层,插盲评前:客观结果 → 过程 → 主观结果)──
       html += renderComplianceAggregate();
+
+      // ── Calibration summary(过程层补盲:per-side HIGH_SCORE_SUSPECT 聚合,gate 客观侧盲区)──
+      html += renderCalibrationSummary();
 
       // ── Blind Comparison section ──
       if (comparisons.length > 0) {

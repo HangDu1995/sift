@@ -389,6 +389,49 @@ class TestReportGeneratorStatic:
         assert "主观" in html and "参考" in html  # 主观 80% 作参考显示
         assert "硬类违规 0" in html       # 过程轴(process_status=ok,字面量 0)
 
+    def test_generate_html_renders_calibration_summary_block(self, tmp_path):
+        """Task 6:整体汇总 tab 显 benchmark.calibration_summary 的 HIGH_SCORE_SUSPECT 警告。
+
+        per-side 聚合(对称 comparison_summary):candidate 侧(compSummary.label_a)排前,
+        触发 count>0 显 ⚠️ + evidence 列表([category] instruction_text + eval/run/compliance_rate);
+        全 TRUSTED 弱化显示(灰字、无 ⚠️)。
+
+        viewer 客户端渲染,pytest 只验模板 JS 源码字面 + 数据流(运行时正确性靠 node --check
+        + 重生成 report 肉眼)。RED:旧模板无 renderCalibrationSummary / calibration_summary 引用。
+        """
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        benchmark = {
+            "metadata": {"skill_name": "x"},
+            "runs": [],
+            "run_summary": {},
+            "comparison_summary": {"label_a": "with_skill", "label_b": "without_skill"},
+            "calibration_summary": {"sides": {
+                "with_skill": {
+                    "total": 21,
+                    "verdict_counts": {"TRUSTED": 18, "HIGH_SCORE_SUSPECT": 3},
+                    "high_score_suspects": [
+                        {"eval": 1, "run": 2, "category": "prohibition",
+                         "instruction_text": "必须为报告的每个错误引用对应的日志原文行。",
+                         "evidence": "未引用原文", "compliance_rate": 0.875},
+                    ],
+                },
+                "without_skill": None,
+            }},
+        }
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, benchmark)
+        # 模板 JS 入口存在
+        assert "renderCalibrationSummary" in html
+        assert "calibration_summary" in html
+        # 渲染字面量(header + 警告语义)
+        assert "高分低遵循" in html
+        assert "HIGH_SCORE_SUSPECT" in html
+        # candidate 侧排前判定(与 verdict.py _eval_calibration 同口径)
+        assert "compSummary.label_a" in html
+        # 数据流:evidence instruction_text 真嵌入 EMBEDDED_DATA(JSON 字面)
+        assert "必须为报告的每个错误引用对应的日志原文行。" in html
+
     def test_generate_html_calibration_mixed_basis_subjective_note(self, tmp_path):
         """纯主观题(basis=mixed,无客观锚)→ 结果行显「基于主观判分,该题无客观断言」标注。
         eval-1/2 场景:L1/L2 推理题无 programmatic 断言,结果轴回退主观率并透明标注。"""
@@ -816,6 +859,37 @@ class TestReportGeneratorStatic:
         assert 'sides + " 侧"' in html     # 新:分解含侧
         assert "次/侧" not in html         # 旧每侧口径已去
         assert "runs × evals" not in html  # 旧分解式已去
+
+    def test_generate_html_viewer_script_passes_node_check(self, tmp_path):
+        """viewer.html 的 <script> JS 抽出来跑 node --check 验语法(硬门槛)。
+
+        memory `skill-eval-viewer-js-needs-node-check`:pytest render-smoke 只验模板字符串,
+        不执行 JS,抓不到括号失衡等语法错(曾 fmtVerdict 漏 `)` 这么漏过、被 node --check 抓到)。
+        与 test_audit_cli.test_audit_writes_html_alongside_json 同款保护,扩到 viewer.html。
+        无 node 的环境(CI 缺 node)→ skip,不强失败(本地开发环境都有)。
+        """
+        import re
+        import shutil
+        import subprocess
+
+        if not shutil.which("node"):
+            pytest.skip("node 不在 PATH,跳过 JS 语法检查")
+
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, {"metadata": {"skill_name": "x"}, "runs": [], "run_summary": {}})
+
+        # 抽所有 <script>...</script>(不含外部 src 的引入,那些是 CDN 无需 syntax check)
+        inline_blocks = re.findall(r"<script[^>]*>(.*?)</script>", html, re.DOTALL)
+        # 过滤掉仅含外部 src 引入的空块(<script src="..."></script> 抓到的 "")
+        js = "\n".join(b for b in inline_blocks if b.strip())
+        assert js, "未抽到 inline <script> 内容(模板结构变了?)"
+
+        jsfile = tmp_path / "viewer_check.js"
+        jsfile.write_text(js, encoding="utf-8")
+        result = subprocess.run(["node", "--check", str(jsfile)], capture_output=True, text=True)
+        assert result.returncode == 0, f"node --check 失败:\n{result.stderr}"
 
     def test_generate_html_anomaly_header_shows_denominator(self, tmp_path):
         """anomaly 标题加分母 total_runs:"X 个异常" → "X 个异常 / 共 Y 次"(一眼判严重度)。
