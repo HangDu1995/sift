@@ -860,6 +860,202 @@ class TestComparisonSummary:
         assert ComparisonSummary.from_comparisons([]) is None
 
 
+class TestCalibrationAggregatorPlumbing:
+    """Task 3:aggregator 把 per-run calibration.json 聚合成顶层 calibration_summary。
+    聚焦 plumbing——直接测 _collect_per_side_calibration + CalibrationSummary.from_per_side,
+    不端到端调完整 aggregate(避开 run_comparisons/run_analysis mock 噪音)。
+
+    sides 真实结构:(config_name, inject_skill_path_or_None, label)——见 build_sides。
+    config 目录 = iteration_dir / config_name(不在 tuple 里)。
+    """
+
+    @staticmethod
+    def _calibration_json(verdict, hard_violations=None, compliance_rate=1.0) -> str:
+        """造一份 calibration.json 内容,匹配 calibrator.py 的输出 schema。"""
+        from skill_eval.models import CalibrationReport
+        from skill_eval.models.enums import CalibrationVerdict, ProcessStatus
+        result_pass = verdict in (CalibrationVerdict.TRUSTED, CalibrationVerdict.HIGH_SCORE_SUSPECT)
+        process_status = ProcessStatus.OK if verdict == CalibrationVerdict.TRUSTED else ProcessStatus.VIOLATED
+        rep = CalibrationReport(
+            verdict=verdict,
+            result_pass=result_pass,
+            process_status=process_status,
+            hard_violations=hard_violations or [],
+            soft_notes={},
+            scoring_rate=0.9,
+            scoring_rate_basis="programmatic",
+            scoring_rate_programmatic=0.9,
+            scoring_rate_llm=None,
+            compliance_rate=compliance_rate,
+        )
+        return rep.model_dump_json(indent=2)
+
+    def test_collect_per_side_and_aggregate(self, tmp_path: Path):
+        """with_skill: eval-1/run-1 TRUSTED + eval-1/run-2 HIGH_SCORE_SUSPECT(带 hard_violations);
+        without_skill: 空目录(无 calibration.json)。
+        断言:with_skill.total==2、high_score_suspects 长度 1、without_skill is None。"""
+        from skill_eval.execution.benchmark import _collect_per_side_calibration
+        from skill_eval.models import CalibrationSummary, HardViolation
+        from skill_eval.models.enums import CalibrationVerdict
+
+        hv = HardViolation(
+            category="prohibition", instruction_text="禁止编造错误码", evidence="E-FAKE-999",
+        )
+        # with_skill: 两份 calibration.json(一 TRUSTED、一 HIGH_SCORE_SUSPECT 带 hv)
+        ws1 = tmp_path / "with_skill" / "eval-1" / "run-1"
+        ws1.mkdir(parents=True)
+        (ws1 / "calibration.json").write_text(
+            self._calibration_json(CalibrationVerdict.TRUSTED), encoding="utf-8")
+        ws2 = tmp_path / "with_skill" / "eval-1" / "run-2"
+        ws2.mkdir(parents=True)
+        (ws2 / "calibration.json").write_text(
+            self._calibration_json(
+                CalibrationVerdict.HIGH_SCORE_SUSPECT,
+                hard_violations=[hv], compliance_rate=0.5,
+            ), encoding="utf-8")
+        # without_skill: 空目录(无 calibration.json)
+        (tmp_path / "without_skill").mkdir(parents=True)
+
+        # sides 真实结构:(config_name, inject_skill, label)
+        sides = [
+            ("with_skill", None, "with_skill"),
+            ("without_skill", None, "without_skill"),
+        ]
+        per_side = _collect_per_side_calibration(tmp_path, sides)
+
+        # 直接断言 per_side 结构(plumbing 契约)
+        assert per_side["without_skill"] is None
+        ws_reports = per_side["with_skill"]
+        assert ws_reports is not None and len(ws_reports) == 2
+        # (eval_id, run_n, CalibrationReport) 三元
+        eval_run_pairs = sorted((eid, rn) for eid, rn, _ in ws_reports)
+        assert eval_run_pairs == [(1, 1), (1, 2)]
+
+        summary = CalibrationSummary.from_per_side(per_side)
+        ws = summary.sides["with_skill"]
+        assert ws.total == 2
+        assert ws.verdict_counts == {"TRUSTED": 1, "HIGH_SCORE_SUSPECT": 1}
+        assert len(ws.high_score_suspects) == 1
+        sus = ws.high_score_suspects[0]
+        assert (sus["eval"], sus["run"]) == (1, 2)
+        assert sus["category"] == "prohibition"
+        assert sus["instruction_text"] == "禁止编造错误码"
+        assert sus["evidence"] == "E-FAKE-999"
+        assert sus["compliance_rate"] == 0.5
+        assert summary.sides["without_skill"] is None
+
+    def test_collect_per_side_takes_final_retry(self, tmp_path: Path):
+        """retry-glob bug 类回归:index_runs 取最终 retry 去重,base+retry 只算 retry。
+        被 retry 取代的失败 base 不当独立 run 计入(与 aggregate / run_comparisons 同源)。"""
+        from skill_eval.execution.benchmark import _collect_per_side_calibration
+        from skill_eval.models.enums import CalibrationVerdict
+
+        # eval-1 有 run-1(base TRUSTED)+ run-1-retry-1(最终 HIGH_SCORE_SUSPECT)
+        base = tmp_path / "with_skill" / "eval-1" / "run-1"
+        base.mkdir(parents=True)
+        (base / "calibration.json").write_text(
+            self._calibration_json(CalibrationVerdict.TRUSTED), encoding="utf-8")
+        retry = tmp_path / "with_skill" / "eval-1" / "run-1-retry-1"
+        retry.mkdir(parents=True)
+        (retry / "calibration.json").write_text(
+            self._calibration_json(CalibrationVerdict.HIGH_SCORE_SUSPECT,
+                                   hard_violations=[{"category": "prohibition",
+                                                     "instruction_text": "x", "evidence": "y"}]),
+            encoding="utf-8")
+
+        sides = [("with_skill", None, "with")]
+        per_side = _collect_per_side_calibration(tmp_path, sides)
+        ws = per_side["with"]
+        assert ws is not None and len(ws) == 1, \
+            "base+retry 只算最终 retry 一条,不当两条独立 run"
+        # 取的是 retry-1(HIGH_SCORE_SUSPECT),不是 base(TRUSTED)
+        _eid, _rn, rep = ws[0]
+        assert rep.verdict == CalibrationVerdict.HIGH_SCORE_SUSPECT
+
+    def test_collect_per_side_skips_corrupt_json(self, tmp_path: Path):
+        """calibration.json 损坏(非合法 JSON / schema 不符)→ 静默跳过,不抛。
+        与 aggregate 主循环同款防御(grading.json 解析失败也跳过)。"""
+        from skill_eval.execution.benchmark import _collect_per_side_calibration
+
+        good = tmp_path / "with_skill" / "eval-1" / "run-1"
+        good.mkdir(parents=True)
+        (good / "calibration.json").write_text(
+            self._calibration_json(__import__("skill_eval.models.enums", fromlist=["CalibrationVerdict"]).CalibrationVerdict.TRUSTED),
+            encoding="utf-8")
+        bad = tmp_path / "with_skill" / "eval-1" / "run-2"
+        bad.mkdir(parents=True)
+        (bad / "calibration.json").write_text("NOT JSON {{{", encoding="utf-8")
+
+        per_side = _collect_per_side_calibration(tmp_path, [("with_skill", None, "with")])
+        ws = per_side["with"]
+        assert ws is not None and len(ws) == 1, "corrupt 那条跳过,只留 good 一条"
+
+    def test_aggregate_sets_calibration_summary(self, tmp_path: Path):
+        """端到端 sanity:aggregate() 把 calibration_summary 钉到 BenchmarkData。
+        与 comparison_summary 对称(顶层 summary 字段)。"""
+        from skill_eval.models import CalibrationSummary
+        from skill_eval.models.enums import CalibrationVerdict
+
+        # 造最小 run 树(让 aggregate 不崩)+ calibration.json
+        ws = tmp_path / "with_skill" / "eval-1" / "run-1"
+        ws.mkdir(parents=True)
+        (ws / "outputs").mkdir()
+        (ws / "grading.json").write_text(json.dumps({
+            "expectations": [{"text": "t", "passed": True, "evidence": "e"}],
+            "summary": {"passed": 1, "failed": 0, "total": 1, "pass_rate": 1.0},
+        }), encoding="utf-8")
+        (ws / "calibration.json").write_text(
+            self._calibration_json(CalibrationVerdict.TRUSTED), encoding="utf-8")
+        wos = tmp_path / "without_skill" / "eval-1" / "run-1"
+        wos.mkdir(parents=True)
+        (wos / "outputs").mkdir()
+        (wos / "grading.json").write_text(json.dumps({
+            "expectations": [{"text": "t", "passed": False, "evidence": "e"}],
+            "summary": {"passed": 0, "failed": 1, "total": 1, "pass_rate": 0.0},
+        }), encoding="utf-8")
+
+        agg = BenchmarkAggregator()
+        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+            benchmark = agg.aggregate(tmp_path, tmp_path)
+
+        assert benchmark.calibration_summary is not None
+        assert isinstance(benchmark.calibration_summary, CalibrationSummary)
+        ws_side = benchmark.calibration_summary.sides.get("with")
+        assert ws_side is not None and ws_side.total == 1
+        assert ws_side.verdict_counts == {"TRUSTED": 1}
+        # without_skill 侧无 calibration.json → None
+        assert benchmark.calibration_summary.sides.get("without") is None
+
+    def test_aggregate_survives_calibration_failure(self, tmp_path: Path):
+        """calibration 收集抛异常 → 不崩 aggregate,calibration_summary 留 None,
+        其他字段(comparisons / runs)照常(对称 comparison 失败降级模式)。"""
+        ws = tmp_path / "with_skill" / "eval-1" / "run-1"
+        ws.mkdir(parents=True)
+        (ws / "outputs").mkdir()
+        (ws / "grading.json").write_text(json.dumps({
+            "expectations": [{"text": "t", "passed": True, "evidence": "e"}],
+            "summary": {"passed": 1, "failed": 0, "total": 1, "pass_rate": 1.0},
+        }), encoding="utf-8")
+        wos = tmp_path / "without_skill" / "eval-1" / "run-1"
+        wos.mkdir(parents=True)
+        (wos / "outputs").mkdir()
+        (wos / "grading.json").write_text(json.dumps({
+            "expectations": [{"text": "t", "passed": False, "evidence": "e"}],
+            "summary": {"passed": 0, "failed": 1, "total": 1, "pass_rate": 0.0},
+        }), encoding="utf-8")
+
+        agg = BenchmarkAggregator()
+        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)), \
+             patch("skill_eval.execution.benchmark._collect_per_side_calibration",
+                   side_effect=RuntimeError("calibration explode")):
+            benchmark = agg.aggregate(tmp_path, tmp_path)
+
+        assert benchmark.calibration_summary is None  # 降级,不崩
+        assert len(benchmark.runs) == 2  # 其他字段照常
+
+
 class TestCopySkillReferences:
     """_copy_skill_references:把 skill 的 references/ 拷进考场(P0-2 核心逻辑)."""
 

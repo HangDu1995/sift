@@ -11,6 +11,8 @@ from skill_eval.models import (
     AnomalyReport,
     BenchmarkData,
     BenchmarkMetadata,
+    CalibrationReport,
+    CalibrationSummary,
     ComparisonSummary,
     RunAnomaly,
     RunResultEntry,
@@ -61,6 +63,42 @@ def _real_model_from_transcript(run_dir: Path) -> str:
     except Exception:
         pass
     return ""
+
+
+def _collect_per_side_calibration(iteration_dir: Path, sides: list | None) -> dict:
+    """按 side 读 per-run calibration.json,聚合返回 `{label: [(eval_id, run_n, CalibrationReport), ...] | None}`。
+
+    sides 真实结构(见 runner.build_sides):`[(config_name, inject_skill_path_or_None, label), ...]`。
+    config 目录 = `iteration_dir / config_name`(tuple 里**不存**目录,只存 config_name)。
+    label 作 dict key(gate 消费侧认 label:"with"/"without" 或 "v1"/"v2")。
+
+    index_runs 取最终 retry 去重(防 retry-glob bug 类:base+retry 只算最终 retry)。
+    缺 calibration.json / 解析失败 → 该 run 跳过(不抛);整侧无报告 → 该 side None。
+    sides=None → 落默认 [("with_skill", None, "with"), ("without_skill", None, "without")]。
+    """
+    if not sides:
+        sides = [("with_skill", None, "with"), ("without_skill", None, "without")]
+    per_side: dict[str, list[tuple[int, int, CalibrationReport]] | None] = {}
+    for config_name, _inject_skill, label in sides:
+        cfg_dir = iteration_dir / config_name
+        if not cfg_dir.is_dir():
+            per_side[label] = None
+            continue
+        run_map = index_runs(cfg_dir, is_nested(cfg_dir))
+        reports: list[tuple[int, int, CalibrationReport]] = []
+        for (eval_name, run_n), run_dir in run_map.items():
+            cal_path = run_dir / "calibration.json"
+            if not cal_path.exists():
+                continue
+            try:
+                rep = CalibrationReport.model_validate_json(cal_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            # eval_name 形如 "eval-1"(nested)或 None(flat 单桶);→ 数字 eval_id
+            eval_id = int(str(eval_name).split("-")[-1]) if eval_name else 0
+            reports.append((eval_id, run_n, rep))
+        per_side[label] = reports or None
+    return per_side
 
 
 class BenchmarkAggregator:
@@ -337,6 +375,16 @@ class BenchmarkAggregator:
                 )
         except Exception as exc:
             print(f"Warning: comparison step failed ({exc}), skipping", file=__import__("sys").stderr)
+
+        try:
+            per_side_cal = _collect_per_side_calibration(iteration_dir, sides)
+            # 与 comparison_summary 对称:至少一侧有报告才钉 summary,否则留 None
+            # (无 calibration 数据 vs calibration 数据为空,前者更准确)
+            if any(per_side_cal.values()):
+                cal_summary = CalibrationSummary.from_per_side(per_side_cal)
+                main_benchmark = main_benchmark.model_copy(update={"calibration_summary": cal_summary})
+        except Exception as exc:
+            print(f"Warning: calibration summary failed ({exc}), skipping", file=__import__("sys").stderr)
 
         try:
             analysis_notes, analysis_result = run_analysis(self, iteration_dir, main_benchmark)
