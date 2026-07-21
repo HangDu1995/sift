@@ -12,7 +12,7 @@
 - **post-hoc 门禁** — `gate` 命令对 benchmark 出 PASS/FAIL 判决，exit code 直接驱动 CI
 - **CI 就绪** — `--format json` + exit code，合入 CI pipeline
 
-> 完整命令参数、字段定义、JSON schema 见 [参考手册](docs/skill-eval-reference.md)。
+> 第一次接触想系统了解每个功能的设计与用法，读 [使用手册](docs/skill-eval-handbook.md)（深入浅出，概念优先）；完整命令参数、字段定义、JSON schema 查 [参考手册](docs/skill-eval-reference.md)；方法论依据见 [方法论溯源](docs/skill-eval-principles.md)。
 
 ---
 
@@ -179,6 +179,7 @@ skill-eval gate output/benchmark.json --min-win-rate 0.5  # 加主观盲评阈�
 
 ```bash
 skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl
+skill-eval audit path/to/skill/ --transcript t.jsonl --refine-instructions  # 教程型 skill：砍 extractor 误抽的示例/占位伪指令
 ```
 
 ### `report` — HTML 报告
@@ -246,6 +247,8 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 | REFERENCE_USAGE | tool_trace 命中→程序 / 未命中→LLM（条件性） | "see references/schema.md" |
 
 五态：`PASS` / `FAIL` / `N/A`（不适用，场景不触发）/ `UNRESOLVED`（没判成，LLM 失败/解析失败/未提及，可重跑）/ `INDETERMINATE`（判不准，证据真模糊，重跑无益）。遵循度 = `pass/(pass+fail)`，排除 N/A + UNRESOLVED + INDETERMINATE（遵循性不分双率，双率是评分侧概念）。
+
+> extractor 纯正则静态全抽；教程型 skill 的示例文字/模板占位会被误抽成指令（→ 多 N/A）。`audit` / `run` 加 `--refine-instructions` 可在判定前 LLM 精筛砍掉这类伪指令（opt-in，精度 > 召回，详见 [参考手册](docs/skill-eval-reference.md) `audit` 段）。
 
 ### 校准引擎
 

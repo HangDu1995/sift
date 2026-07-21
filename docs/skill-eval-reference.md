@@ -209,6 +209,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 | `--max-retries` | 2 | 每 eval 在 UNEVAL/出错时的最大重试（每次重跑 claude+scoring+compliance，重 skill 可设 0-1 省 token） |
 | `--scoring` | hybrid | 评分模式：hybrid / programmatic / llm |
 | `--no-compliance` / `--compliance` | 自动 | 跳过/强制遵循性检查（默认自动：`--runs<3` 时开） |
+| `--refine-instructions` | 关闭 | 遵循性判定前 LLM 精筛：砍掉 extractor 误抽的示例/占位伪指令（提精度，见 `audit`） |
 | `--no-calibration` | 关闭 | 跳过校准（结果×过程 coherence 判决） |
 | `--security-gate` | 关闭 | 安全审查返回 BLOCKED / REVIEW_NEEDED 时判失败 |
 | `--no-static` | 关闭 | 跳过末尾自动产静态评分卡（默认产，写进 output 目录根，供 report 评分卡面板） |
@@ -303,12 +304,15 @@ skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
 |------|--------|------|
 | `--transcript` | **必填** | 真实会话 transcript jsonl（**可重复**，多 transcript 聚合） |
 | `--by-skill` | 关闭 | transcript 里调了多个 skill 时，只对账本 skill 被调用的段（按 `Skill` 工具调用切分，见下） |
+| `--refine-instructions` | 关闭 | 判定前 LLM 精筛：砍掉 extractor 误抽的示例/占位伪指令（精度>召回，见下） |
 | `--output` / `-o` | ./output | 输出目录 |
 | `--model` | 默认 | 语义判定 LLM |
 | `--format` | table | table / json |
 | `--open` | 关闭 | 生成后浏览器打开 `audit-report.html` |
 
 > **`--by-skill`：多 skill transcript 只对账一个 skill**。transcript 里调了多个 skill 时，默认会把整段当一个袋子判（其他 skill 的行为会混进报告）。加 `--by-skill` 后，按 transcript 里的 `Skill` 工具调用切成若干单 skill 子 transcript，只对账 `<skill_path>` 这个 skill 被调用期间的段。归段 **scope-aware**：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent（Agent 工具）是独立作用域，其记录带 `parent_tool_use_id`，子 agent 里用的 skill 切到 Agent 返回、**不污染主 agent 归属**；target 调多次 → 多段 → 多 transcript 聚合。**两条限制**：① skill 没有"返回"信号，所以"调 A → 调 B → 不重调 A 接着干 A"那段会归给 B（不可检测，解法是 agent 显式重调 A）；② 把委派子 skill 的段折进主 skill 审计（inclusive）需用户声明，暂不支持。该 skill 没在 transcript 里被调过 → 报错退出（exit 2），不静默跑空。
+
+> **`--refine-instructions`：判定前精筛伪指令**。extractor 是纯正则（静态全抽 SKILL.md），会把教程型 skill 里的**示例文字 / 模板占位 / 描述性句子**误抽成"指令"——这些伪指令喂给判官只能出 N/A（无法对账）或偶发假 FAIL。加 `--refine-instructions` 后，audit 在 extract 后、判定前用 LLM 逐条分类"真实可检查指令 vs 示例/占位"，**只砍明确判为伪指令的**（精度 > 召回：判不准 / 没判成 / 调用失败一律保留，宁可留伪指令判 N/A，也不砍真指令）。per-skill 只精筛一次（多 transcript 共享），砍掉的条数和来源写进 report 顶部 warnings。OUTPUT_FORMAT（纯程序子串匹配，精筛无收益）不精筛。`run` 也支持（经 RunConfig 传给内部 audit）。opt-in，验证稳定后考虑默认开。
 
 判定分四类——每条指令按 SKILL.md 声明来源路由到一类，各按不同判法出 verdict。每条 finding 有两个**正交**维度：**verdict（结果，五态）** + **method（怎么查的，程序 `PROGRAMMATIC` / LLM `LLM`）**。
 
