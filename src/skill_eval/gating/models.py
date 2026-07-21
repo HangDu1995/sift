@@ -27,3 +27,4 @@ class GateResult(BaseModel):
     thresholds: dict[str, Any] = Field(default_factory=dict)
     axes: dict[str, AxisVerdict] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
+    calibration: dict[str, Any] | None = None   # soft warning 容器(分诊两侧 HIGH_SCORE_SUSPECT,不进 decision)

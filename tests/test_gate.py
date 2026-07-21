@@ -18,6 +18,13 @@ def test_parse_delta():
     assert parse_delta("not-a-number") is None
 
 
+def test_gate_result_calibration_defaults_none():
+    """GateResult.calibration 默认 None(soft warning 容器,无 calibration_summary 时)。"""
+    from skill_eval.gating.models import GateResult
+    gr = GateResult(decision="PASS", exit_code=0, reason="ok")
+    assert gr.calibration is None
+
+
 def test_programmatic_pass_no_regression():
     r = evaluate_gate(_bench("+0.27"))
     assert r.decision == "PASS"
