@@ -1271,8 +1271,11 @@
       // vs 上次(纵向 delta,Task 3):仅当 previous/benchmark.json 存在(run 端 fresh 重跑 MOVE 进去)
       // 才显示。与上面 A/B Δ 卡区分:那是同次 run 两 side 之差(横向),这是同 side 上次 vs 本次(纵向)。
       // 客观稳 / 主观漂同款哲学;样本数不同时显式标出(3 vs 6 runs)提醒可比性。
-      if (data.previous_delta) {
-        const pd = data.previous_delta;
+      // ⚠ previous_delta 是 viewer 层衍生的顶层 EMBEDDED_DATA 字段(viewer.py _compute_previous_delta
+      //   产出,非 run 时 benchmark.json 的子键)。必须读 EMBEDDED_DATA.previous_delta,不是 data
+      //   (data=EMBEDDED_DATA.benchmark,其 .previous_delta 恒 undefined)。29e5fa44 起误读 data → 卡从不渲染。
+      if (EMBEDDED_DATA.previous_delta) {
+        const pd = EMBEDDED_DATA.previous_delta;
         const dClr = d => d == null ? "var(--text-muted)" : d > 0 ? "var(--green)" : d < 0 ? "var(--red)" : "var(--text-muted)";
         const line = (cur, prev, d) => {
           if (cur == null && prev == null) return null;

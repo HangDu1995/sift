@@ -818,15 +818,65 @@ class TestReportGeneratorStatic:
         """Task 3:顶部仪表盘加「vs 上次」纵向 delta 卡(跨 run 同 side 对比,与 A/B Δ 横向并列)。
 
         viewer 客户端渲染,pytest 验模板 JS 源码字面(运行时是否显由 previous_delta 数据决定)。
-        RED 锚点:旧模板无 data.previous_delta / vs 上次 卡渲染代码。
+        RED 锚点:旧模板无 EMBEDDED_DATA.previous_delta / vs 上次 卡渲染代码。
+
+        注:previous_delta 是 viewer 层衍生的顶层 EMBEDDED_DATA 字段(非 benchmark 子键),
+        模板必须读 EMBEDDED_DATA.previous_delta。曾误读 data.previous_delta(data=benchmark)
+        致卡从不渲染(29e5fa44 引入,2026-07-21 修);路径一致性另见
+        test_generate_html_previous_delta_path_top_level。
         """
         workspace = tmp_path / "iteration-1"
         workspace.mkdir()
         benchmark = {"metadata": {"skill_name": "x"}, "runs": [], "run_summary": {}}
         gen = ReportGenerator()
         html = gen.generate_html(workspace, benchmark)
-        assert "data.previous_delta" in html       # 数据流接入 + 卡片条件
+        assert "EMBEDDED_DATA.previous_delta" in html       # 读顶层衍生字段(非 benchmark 子键)
         assert ">vs 上次</div>" in html             # 卡片标题渲染代码(模板字面)
+
+    def test_generate_html_previous_delta_path_top_level(self, tmp_path):
+        """回归 previous_delta 路径错配(29e5fa44 引入,2026-07-21 修):
+
+        previous_delta 是 viewer 层衍生的顶层 EMBEDDED_DATA 字段(viewer.py _compute_previous_delta
+        产出,非 run 时 benchmark.json 的子键)。renderBenchmark 的 data=EMBEDDED_DATA.benchmark,
+        故读 data.previous_delta 恒 undefined → 卡从不渲染。本测 parse 真生成的 EMBEDDED_DATA,
+        锁死路径:顶层有值、benchmark 里无此键、模板读 EMBEDDED_DATA.previous_delta。
+
+        抓路径错配(模板字面测抓不到:data.previous_delta 字符串在模板里也绿,但运行时取空)。
+        """
+        import json as _json, re as _re
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        (workspace / "previous").mkdir()
+        (workspace / "previous" / "benchmark.json").write_text(_json.dumps({
+            "metadata": {"runs_per_configuration": 3},
+            "run_summary": {
+                "with_skill": {"pass_rate_programmatic": {"mean": 0.86}, "pass_rate_llm": {"mean": 0.90}},
+                "without_skill": {"pass_rate_programmatic": {"mean": 0.70}, "pass_rate_llm": {"mean": 0.57}},
+            },
+            "comparison_summary": {"win_rate": 0.667},
+        }), encoding="utf-8")
+        benchmark = {
+            "metadata": {"skill_name": "x", "runs_per_configuration": 3},
+            "runs": [],
+            "run_summary": {
+                "with_skill": {"pass_rate_programmatic": {"mean": 0.90}, "pass_rate_llm": {"mean": 1.0}},
+                "without_skill": {"pass_rate_programmatic": {"mean": 0.70}, "pass_rate_llm": {"mean": 0.59}},
+                "delta": {},
+            },
+            "comparison_summary": {"win_rate": 0.81},
+        }
+        html = ReportGenerator().generate_html(workspace, benchmark)
+        m = _re.search(r"const EMBEDDED_DATA\s*=\s*\{", html)
+        assert m, "EMBEDDED_DATA 未嵌入"
+        data, _ = _json.JSONDecoder().raw_decode(html[m.end() - 1:])
+        # 顶层 previous_delta 有值(viewer 算出 delta)
+        assert data.get("previous_delta") is not None
+        assert data["previous_delta"]["sides"], "previous_delta.sides 应非空"
+        # benchmark 里没有 previous_delta 键(顶层衍生,防塞错路径)
+        assert "previous_delta" not in (data.get("benchmark") or {})
+        # 模板读 EMBEDDED_DATA.previous_delta(顶层);旧错路径 data.previous_delta 不得残留
+        assert "EMBEDDED_DATA.previous_delta" in html
+        assert "if (data.previous_delta)" not in html
 
     def test_generate_html_execution_scale_uses_run_count(self, tmp_path):
         """执行规模卡:总数用 data.runs.length(A/B 两侧已计入),分解 侧×题×runs/题。
