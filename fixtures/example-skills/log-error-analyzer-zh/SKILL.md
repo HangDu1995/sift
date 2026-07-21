@@ -11,7 +11,7 @@ description: 分析应用日志文件,根据已知错误码参考分类错误行
 
 1. 读取输入日志 — 调用 Read 工具读取用户指定的日志文件。
 2. 分类每个错误 — 读取 references/error-codes.md,把每个错误行映射到已知码。匹配不到已知码的,标为未分类。
-3. 写报告 — 写出 error-report.json,含错误总数和每个错误。
+3. 写报告 — 写出 error-report.json,含错误总数(= errors 列表长度,不含未分类行)和每个错误。
 
 ## 规则
 
@@ -21,7 +21,7 @@ description: 分析应用日志文件,根据已知错误码参考分类错误行
 
 ## 输出
 
-error-report.json 包含 total_errors 整数、errors 列表(每项含 code、message、line_number)、unclassified 列表。
+error-report.json 包含 total_errors 整数(= errors 列表长度,不含 unclassified 行)、errors 列表(每项含 code、message、line_number)、unclassified 列表。
 
 ## 参考资料
 
