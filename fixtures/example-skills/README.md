@@ -7,7 +7,7 @@
 | skill | 领域 / 语言 | 路径3 `run`(evals.json) | 路径2 `audit`(transcript) | 路径1 `--task`(真任务) | analyze / vet |
 |---|---|---|---|---|---|
 | [log-error-analyzer/](log-error-analyzer/) | 日志分诊 / 英 | ✅ 自带 evals.json | ✅ 自带 transcript | — | ✅ |
-| [log-error-analyzer-zh/](log-error-analyzer-zh/) | 日志分诊 / 中 | 需先 `init` | ✅ 自带 transcript | — | ✅ |
+| [log-error-analyzer-zh/](log-error-analyzer-zh/) | 日志分诊 / 中 | ✅ 自带 evals.json | ✅ 自带 transcript | — | ✅ |
 | [code-review-auditor/](code-review-auditor/) | 代码 review / 英 | 需先 `init` | — | ✅ 专为真任务设计 | ✅ |
 | [release-checklist-zh/](release-checklist-zh/) | 发布自检 / 中 | 需先 `init` | ✅ 自带 transcript | — | ✅ |
 
@@ -54,20 +54,22 @@ skill-eval audit fixtures/example-skills/log-error-analyzer/ \
 >
 > 实测对照(en/zh 一致):两者都挖出核心客观断言(`FILE_EXISTS error-report.json` + schema 字段 + 真实码);**手构**干净聚焦(同任务多条合并成 1 题),**真跑**更丰富(6-7 题,还多捕获 `security` 字段——真 cc 主动多读了 `security-policy.md`)。手构=确定可控,真跑=反映真实 cc 行为(含小怪癖),正是两者并存对照的意义。
 
-### log-error-analyzer-zh(中文 audit 示例)
+### log-error-analyzer-zh(中文示例)
 
-自带 transcript(中文对账),无 evals.json——走 audit;要 run 得先 `init` 生成中文 evals.json:
+自带 transcript(中文对账)+ evals.json(路径3 也能直接 run):
 
 ```bash
 skill-eval analyze fixtures/example-skills/log-error-analyzer-zh/
+skill-eval run fixtures/example-skills/log-error-analyzer-zh/ --runs 3                               # 路径3:跑自带的 evals.json
 skill-eval audit fixtures/example-skills/log-error-analyzer-zh/ \
-  --transcript fixtures/example-skills/log-error-analyzer-zh/transcripts/synthetic-violation.jsonl
-# 想跑路径3 run,先 init 生成考卷 evals.json(两种方式):
-skill-eval init fixtures/example-skills/log-error-analyzer-zh/          # 方式1:从 SKILL.md 直接生成(L1 测例)
+  --transcript fixtures/example-skills/log-error-analyzer-zh/transcripts/synthetic-violation.jsonl   # 路径2
+# 想重新生成考卷(会覆盖自带版,两种方式):
+skill-eval init fixtures/example-skills/log-error-analyzer-zh/                                       # 方式1:从 SKILL.md 直接生成
 skill-eval init fixtures/example-skills/log-error-analyzer-zh/ \
-  --from-transcript fixtures/example-skills/log-error-analyzer-zh/transcripts/synthetic-clean.jsonl      # 方式2:从 clean transcript 挖(正源;violation 是边缘案例)
-#   也可换 real-clean.jsonl(真跑版)对照手构 vs 真跑
+  --from-transcript fixtures/example-skills/log-error-analyzer-zh/transcripts/synthetic-clean.jsonl  # 方式2:从 clean transcript 挖(自带版即此方式产出)
 ```
+
+> **这份 `evals.json` 是 `init --from-transcript` 从 `synthetic-clean.jsonl` 产的(7 题),不是手写**——对比:英文版 log-error-analyzer 的 evals.json 是 2 题手写金标准(见上)。注意 `--from-transcript` **非纯挖**:7 道里**只有 eval-1(`happy_path`)的 fixture 逐字节来自 transcript**(agent 真实 Read 的 app.log),**其余 6 道是 LLM 综合 SKILL 规则 + transcript 任务生成的压测场景**(空日志 / 全未知码 / 相似码陷阱 / 注入陷阱 等),**fixture 不在 transcript 里**——它们不是 transcript 场景的变体,而是围绕 skill 规则编的独立测试场景(generator 的 prompt 同时喂 LLM 「SKILL 定义 + transcript digest」,要求生成 5-8 道,单 transcript 只够 1 个真实场景,其余必由 skill 规则衍生)。故这份考卷需复核(不像手写是人工金标准);跑 `init` 会**覆盖**自带版。
 
 > **预期 audit 结果**:与上面英文版**完全一致**(同 3 步骤 / 同 reference / 全中文)——3 个植入违规都 **FAIL**(没读 error-codes.md、编造 E-FAKE-999、没写 error-report.json),外加"没引日志原文行"通常也 FAIL;读日志步骤 **PASS**,安全策略 **N/A**。计数与去重/关联拆解同英文版(pass≈3 / fail≈5 / na≈1,4 个行为);LLM 对中文判定不退化(中英对照已验),同样别钉精确条数。
 
