@@ -477,6 +477,7 @@ class ABTestRunner:
                             transcripts=[transcript_path],
                             model=self.config.model,
                             timeout=self.scoring_config.llm_timeout,
+                            refine_instructions=self.config.refine_instructions,
                         )
                         (config_dir / "compliance.json").write_text(
                             compliance_report.model_dump_json(indent=2), encoding="utf-8"

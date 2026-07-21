@@ -47,6 +47,7 @@ def audit(
         None, "--output", "-o", help="输出目录(默认 ./output)"
     ),
     model: Optional[str] = typer.Option(None, "--model", help="语义判定 LLM"),
+    refine_instructions: bool = typer.Option(False, "--refine-instructions", help="精筛:LLM 砍掉 extractor 误抽的示例/占位伪指令(audit 提精度,精度>召回)"),
     by_skill: bool = typer.Option(
         False,
         "--by-skill",
@@ -97,7 +98,9 @@ def audit(
         # on_progress:audit 每批 LLM 判定 40-257s,边跑边报进度(transcript 头 + 每批 [k/总] + 耗时),
         # 否则全程静默、用户不知是否在跑。console.print 即时 flush,长跑也实时可见。
         report = TranscriptAuditor().audit(
-            name, body, transcript, model=model, on_progress=lambda msg: console.print(msg),
+            name, body, transcript, model=model,
+            refine_instructions=refine_instructions,
+            on_progress=lambda msg: console.print(msg),
         )
     except SkillEvalError as exc:
         console.print(f"[red]Error:[/red] {exc}")

@@ -1344,3 +1344,129 @@ class TestProgressCallback:
         assert calls["n"] == 2  # 第一次 0 解析 + 重试一次成功
         assert findings[0].verdict == AuditVerdict.PASS  # violated=false → PASS(resolved)
         assert findings[0].method == AuditMethod.LLM  # resolved LLM,非兜底
+
+
+# ---------------------------------------------------------------------------
+# LLM 精筛伪指令(_refine_pseudo_instructions):extract 后、判定前用 LLM 砍掉
+# extractor 误抽的示例/占位文字。精度>召回:只砍明确 is_real=False,失败/模糊全保留。
+# 全程 mock call_claude;_refine 单元测 + audit() 端到端(opt-in、per-skill 只一次)。
+# 端到端用 mock InstructionExtractor 避开 extract 正则的脆弱性,让候选数可控。
+# ---------------------------------------------------------------------------
+
+
+class _FakeExtractor:
+    """替身:跳过 extract 正则,直接返回造好的指令(audit() 内 ``InstructionExtractor().extract``)。"""
+
+    def __init__(self, insts):
+        self._insts = insts
+
+    def extract(self, body):
+        return list(self._insts)
+
+
+class TestRefineInstructions:
+    """精筛伪指令:extractor 误抽的示例文字 → LLM 判 is_real=False → 砍。"""
+
+    def test_drops_pseudo_keeps_real(self, monkeypatch) -> None:
+        """is_real=False 的砍、True 的留;warnings 报滤除数。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: json.dumps([
+                {"index": 0, "is_real": True},
+                {"index": 1, "is_real": False},
+            ]),
+        )
+        insts = [_step_inst("Step 1: 真步骤"), _step_inst("示例:3 agents 并行")]
+        refined, warns = TranscriptAuditor()._refine_pseudo_instructions(
+            insts, model=None, timeout=600, on_progress=None
+        )
+        assert len(refined) == 1
+        assert refined[0].instruction_text == "Step 1: 真步骤"
+        assert any("refine:" in w and "1 条" in w for w in warns)
+
+    def test_output_format_skipped_not_sent_to_llm(self, monkeypatch) -> None:
+        """OUTPUT_FORMAT(PATTERN_MATCH,纯程序判定)不进精筛候选 → 直接保留、不发给 LLM。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: json.dumps([
+                {"index": 0, "is_real": True},
+                {"index": 1, "is_real": False},
+            ]),
+        )
+        insts = [_output_inst(), _step_inst("真"), _step_inst("伪")]
+        refined, _ = TranscriptAuditor()._refine_pseudo_instructions(
+            insts, model=None, timeout=600, on_progress=None
+        )
+        # output 保留(没进 LLM)+ 真保留;伪砍 → 共 2 条
+        assert len(refined) == 2
+        assert any(r.source == InstructionSource.OUTPUT_FORMAT for r in refined)
+        assert any(r.instruction_text == "真" for r in refined)
+        assert not any(r.instruction_text == "伪" for r in refined)
+
+    def test_fallback_keeps_all_on_call_failure(self, monkeypatch) -> None:
+        """call_claude 整批失败(重试耗尽)→ 全保留(精度>召回,宁留伪指令判 N/A 也不砍真)。"""
+        def boom(*a, **k):
+            raise RuntimeError("timeout")
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        insts = [_step_inst("a"), _step_inst("b"), _output_inst()]
+        refined, warns = TranscriptAuditor()._refine_pseudo_instructions(
+            insts, model=None, timeout=600, on_progress=None
+        )
+        assert len(refined) == 3  # 全保留
+        assert not any("refine:" in w for w in warns)  # 没砍 → 不报
+
+    def test_fallback_keeps_all_on_indeterminate(self, monkeypatch) -> None:
+        """全 indeterminate(分不清真假)→ 全保留(不砍)。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: json.dumps([
+                {"index": 0, "indeterminate": True, "reason": "模糊"},
+                {"index": 1, "indeterminate": True, "reason": "模糊"},
+            ]),
+        )
+        insts = [_step_inst("a"), _step_inst("b")]
+        refined, _ = TranscriptAuditor()._refine_pseudo_instructions(
+            insts, model=None, timeout=600, on_progress=None
+        )
+        assert len(refined) == 2  # indeterminate → 保留
+
+    def test_refine_runs_once_per_skill_not_per_transcript(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """精筛在 per-transcript 循环外 → 多 transcript 只精筛一次(per-skill 共享)。"""
+        refine_calls = {"n": 0}
+
+        def fake(prompt, *a, **k):
+            if "真实可检查的指令" in prompt:
+                refine_calls["n"] += 1
+                return json.dumps([{"index": 0, "is_real": True}])
+            return _pass_fake()(prompt, *a, **k)
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.InstructionExtractor",
+            lambda: _FakeExtractor([_step_inst("Step 1: 真步骤")]),
+        )
+        t1 = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records("a.md"))
+        t2 = _write_jsonl(tmp_path / "t2.jsonl", _read_file_records("a.md"))
+        TranscriptAuditor().audit("s", "body", [t1, t2], refine_instructions=True)
+        assert refine_calls["n"] == 1  # 2 transcript,精筛仍只 1 次
+
+    def test_refine_off_by_default(self, tmp_path, monkeypatch) -> None:
+        """audit() 默认 refine_instructions=False → 不精筛、不报 refine warning。"""
+        refine_calls = {"n": 0}
+
+        def fake(prompt, *a, **k):
+            if "真实可检查的指令" in prompt:
+                refine_calls["n"] += 1
+            return _pass_fake()(prompt, *a, **k)
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.InstructionExtractor",
+            lambda: _FakeExtractor([_step_inst("Step 1: 真步骤")]),
+        )
+        t1 = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records("a.md"))
+        report = TranscriptAuditor().audit("s", "body", [t1])  # 默认关
+        assert refine_calls["n"] == 0
+        assert not any("refine:" in w for w in report.warnings)

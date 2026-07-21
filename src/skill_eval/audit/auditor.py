@@ -195,6 +195,7 @@ class TranscriptAuditor:
         model: str | None = None,
         timeout: int = 600,
         on_progress: ProgressFn | None = None,
+        refine_instructions: bool = False,
     ) -> AuditReport:
         """聚合主入口:把 skill 声明的指令 + transcript 反推声明逐条对账若干 transcript。
 
@@ -224,6 +225,11 @@ class TranscriptAuditor:
         """
         instructions = InstructionExtractor().extract(skill_body)
         warnings: list[str] = []
+        if refine_instructions:
+            instructions, refine_warns = self._refine_pseudo_instructions(
+                instructions, model=model, timeout=timeout, on_progress=on_progress
+            )
+            warnings.extend(refine_warns)
         all_findings: list[AuditFinding] = []
         transcript_names: list[str] = []
 
@@ -815,6 +821,136 @@ class TranscriptAuditor:
                 elif val is False:
                     mask[idx] = (AuditVerdict.NA, "")
                 # else: 缺 applicable / None / 非布尔 → 保持 (None,"") = 没判成
+        return mask
+
+    # ---- LLM 精筛伪指令(extract 后、判定前)-------------------------------
+
+    def _refine_pseudo_instructions(
+        self,
+        instructions: list[InstructionCheck],
+        model: str | None,
+        timeout: int,
+        on_progress: ProgressFn | None = None,
+    ) -> tuple[list[InstructionCheck], list[str]]:
+        """LLM 精筛:砍掉 extractor 误抽的示例/占位文字(非真实可检查指令)。
+
+        正则粗召回保召回,这里提精度:对每条候选(除 OUTPUT_FORMAT——它是纯程序
+        子串匹配,精筛无收益)问 LLM「真实可检查的指令 vs 示例/占位」,只砍明确
+        ``is_real=False`` 的。**精度 > 召回**:True/None(没判成/判不准/整批失败)
+        全保留——宁可留伪指令让下游判 N/A,也别砍真指令。
+
+        返回 ``(精筛后指令列表, warnings)``:warnings 报滤除数(按 source 分),
+        无砍则空。per-skill 调一次(audit() 在 per-transcript 循环外调它)。
+        """
+        # 候选 = 除 OUTPUT_FORMAT(PATTERN_MATCH 程序判定)外的全部
+        cand_idx = [
+            i for i, inst in enumerate(instructions)
+            if inst.source != InstructionSource.OUTPUT_FORMAT
+        ]
+        candidates = [instructions[i] for i in cand_idx]
+        if not candidates:
+            return instructions, []  # 无候选,不调 LLM
+        mask = self._llm_classify_real(candidates, model, timeout, on_progress)
+        keep = [True] * len(instructions)  # 默认全保留(精度>召回)
+        dropped_src: list[str] = []
+        for k, verdict in enumerate(mask):
+            if verdict is False:  # 只砍明确 is_real=False
+                keep[cand_idx[k]] = False
+                dropped_src.append(candidates[k].source.value)
+        refined = [inst for inst, k in zip(instructions, keep) if k]
+        warns: list[str] = []
+        if dropped_src:
+            from collections import Counter
+            parts = ", ".join(f"{src} {n}" for src, n in Counter(dropped_src).items())
+            warns.append(f"refine: 滤除 {len(dropped_src)} 条疑似示例/占位伪指令({parts})")
+        return refined, warns
+
+    def _llm_classify_real(
+        self,
+        candidates: list[InstructionCheck],
+        model: str | None,
+        timeout: int,
+        on_progress: ProgressFn | None = None,
+    ) -> list[bool | None]:
+        """分批 call_claude 判每条候选「真实可检查指令 vs 示例/占位」(每批 _MAX_LLM_IN_BATCH 条)。
+
+        返回与 candidates 等长,每元素:True=真指令(留)/ False=示例占位(砍)/
+        None=没判成(调用/解析失败/indeterminate 判不准)→ 调用方保守保留。
+        镜像 ``_llm_judge_applicable`` 的分批循环 + ``_judge_batch_with_retry`` + ``mask[start+j]``。
+        """
+        n = len(candidates)
+        mask: list[bool | None] = [None] * n
+        total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
+        for start in range(0, n, _MAX_LLM_IN_BATCH):
+            batch = candidates[start:start + _MAX_LLM_IN_BATCH]
+            bn = len(batch)
+            k = start // _MAX_LLM_IN_BATCH + 1
+            instruction_list = "".join(
+                f"[{i}] (来源 {inst.source.value} / 标题:\"{inst.section}\") {inst.instruction_text}\n"
+                for i, inst in enumerate(batch)
+            )
+            prompt = (
+                "判断以下每条从 SKILL.md 抽出的候选文本:它是**真实可检查的指令**"
+                "(要求执行者做/不做某件可在执行记录里对账的事),"
+                "还是**示例/演示结果/占位/描述性文字**?\n\n"
+                "## 判定标准(优先给出明确结论;只有真的分不清时才用 indeterminate)\n"
+                "- ✅ is_real=true(真指令):祈使句/约束/要求,可判做了没做"
+                "(如\"Step 1: 读取 X\"、\"NEVER 编造数据\"、\"运行 validate.py\")。\n"
+                "- ❌ is_real=false(非指令):教程示例文字、示例输出结果、说明性描述、"
+                "占位文本(如\"3 agents dispatched in parallel\"是演示结果、"
+                "\"6 failures across 3 files\"是例句)。\n"
+                "- ⚠ indeterminate(分不清):只在真的无法判断时用,**必须**在 reason 写明;"
+                "不要用 indeterminate 偷懒回避。\n\n"
+                f"## 待判候选 ({bn} 条)\n{instruction_list}\n"
+                "## 输出格式\n"
+                '只返回 JSON 数组,每元素:'
+                '{"index": 0, "is_real": true/false, '
+                '"indeterminate": true(仅分不清时), "reason": "indeterminate 时必填"}\n'
+            )
+            parsed = _judge_batch_with_retry(
+                prompt, model, timeout, self._parse_real, bn,
+                on_progress=on_progress, label="精筛", k=k, total=total,
+                is_unparsed=lambda v: v is None,
+            )
+            if parsed is _RETRY_EXHAUSTED:
+                continue  # 重试耗尽 → 保留 mask 预置的全 None(调用方全保留)
+            for j, val in enumerate(parsed):
+                mask[start + j] = val
+        return mask
+
+    @staticmethod
+    def _parse_real(text: str, n: int) -> list[bool | None]:
+        """解析 LLM 真伪指令判定 → ``bool | None``;默认 ``None`` = 没判成(调用方保留)。
+
+        - is_real=true  → True(真指令)
+        - is_real=false → False(示例/占位 → 砍)
+        - indeterminate=true → None(分不清 → 保守保留,不砍)
+        - 其余(缺键/None/非布尔/未提及)→ None(没判成 → 保留)
+        严格 ``is True/is False`` 判断(畸形值如字符串 "false" 不洗成明确结论)。
+        """
+        mask: list[bool | None] = [None] * n
+        arr_str = extract_first_balanced(text)
+        if arr_str is None:
+            return mask
+        try:
+            items = json.loads(arr_str)
+        except json.JSONDecodeError:
+            return mask
+        if not isinstance(items, list):
+            return mask
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            idx = item.get("index")
+            if isinstance(idx, int) and 0 <= idx < n:
+                if item.get("indeterminate") is True:
+                    continue  # 分不清 → 保持 None(保留)
+                val = item.get("is_real")
+                if val is True:
+                    mask[idx] = True
+                elif val is False:
+                    mask[idx] = False
+                # else: 缺 is_real / None / 非布尔 → 保持 None(保留)
         return mask
 
     # ---- 禁令类 LLM 违规检测 -------------------------------------------------
