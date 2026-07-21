@@ -1630,3 +1630,51 @@ class TestArchivePrevious:
         (tmp_path / "previous").mkdir()  # 只剩 previous/(无他物)
         assert archive_previous(tmp_path) is None
         assert (tmp_path / "previous").exists()
+
+    def test_preserves_non_run_artifacts(self, tmp_path: Path):
+        """fresh 归档只 move run 自己的产物,不卷走同目录其他命令(audit/gate/report)的产物——
+        它们与本次 run 无绑定,误伤会丢用户数据。"""
+        from skill_eval.execution.runner import archive_previous
+        # run 自己的产物
+        (tmp_path / "without_skill" / "eval-1" / "run-1").mkdir(parents=True)
+        (tmp_path / "without_skill" / "eval-1" / "run-1" / "grading.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "benchmark.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "scorecard.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "vet-report.json").write_text("{}", encoding="utf-8")
+        # 其他命令落在同目录的产物(不该被卷)
+        (tmp_path / "audit-report.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "audit-report.html").write_text("<html></html>", encoding="utf-8")
+        (tmp_path / "slices").mkdir()
+        (tmp_path / "slices" / "slice-0.jsonl").write_text("{}", encoding="utf-8")
+        (tmp_path / "gate.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "report.html").write_text("<html></html>", encoding="utf-8")
+
+        archive_previous(tmp_path)
+
+        prev = tmp_path / "previous"
+        # run 产物进了 previous/
+        assert (prev / "benchmark.json").exists()
+        assert (prev / "scorecard.json").exists()
+        assert (prev / "vet-report.json").exists()
+        assert (prev / "without_skill" / "eval-1" / "run-1" / "grading.json").exists()
+        # 其他命令产物原地不动(没被卷进 previous/)
+        assert (tmp_path / "audit-report.json").exists()
+        assert (tmp_path / "audit-report.html").exists()
+        assert (tmp_path / "slices" / "slice-0.jsonl").exists()
+        assert (tmp_path / "gate.json").exists()
+        assert (tmp_path / "report.html").exists()
+        assert not (prev / "audit-report.json").exists()
+        assert not (prev / "slices").exists()
+        assert not (prev / "gate.json").exists()
+        assert not (prev / "report.html").exists()
+
+    def test_only_non_run_artifacts_returns_none(self, tmp_path: Path):
+        """output 里只有别命令产物(无 run 产物)→ 无可归档,返回 None,
+        且不建 previous/、不动那些产物。"""
+        from skill_eval.execution.runner import archive_previous
+        (tmp_path / "audit-report.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "gate.json").write_text("{}", encoding="utf-8")
+        assert archive_previous(tmp_path) is None
+        assert (tmp_path / "audit-report.json").exists()
+        assert (tmp_path / "gate.json").exists()
+        assert not (tmp_path / "previous").exists()

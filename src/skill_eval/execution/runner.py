@@ -247,13 +247,44 @@ def classify_rerun(
     return "fresh"
 
 
-def archive_previous(iteration_dir: Path) -> Path | None:
-    """把当前 run 树整体 MOVE 到 previous/(单槽:已存在则先清空再移)。fresh 重跑前调用。
+# run 往 iteration_dir 顶层写的产物文件名(fresh 归档白名单:只 move run 自己的产物,
+# 不卷走同目录下其他命令 audit/gate/report 的产物)。
+_RUN_TOPLEVEL_ARTIFACTS = frozenset({
+    "benchmark.json",
+    "scorecard.json",
+    "vet-report.json",
+    "analysis-notes.json",
+    "analysis-result.json",
+})
 
-    顶层所有内容(config 目录 + benchmark/scorecard/gate/vet-report/report.html)一并进 previous/,
-    output 顶层被清空(只剩 previous/),供本次 fresh 重跑重建。返回 previous/ 路径;output 无可移(空/只剩 previous/)→ None。"""
+_RUN_DIR_RE = re.compile(r"^run-(\d+)(?:-retry-(\d+))?$")
+
+
+def _is_run_config_tree(d: Path) -> bool:
+    """顶层目录是否为 run 的 config 产物树(with_skill/without_skill/v1/v2…)。
+
+    判据:含 ``eval-*/`` (nested) 或直接 ``run-N[-retry-K]/`` (non-nested) 子目录。
+    用于把 run 的 config 目录与其他命令的目录(如 audit 的 ``slices/``)区分开。"""
+    if not d.is_dir():
+        return False
+    if any(d.glob("eval-*")):
+        return True
+    return any(_RUN_DIR_RE.match(p.name) for p in d.iterdir() if p.is_dir())
+
+
+def archive_previous(iteration_dir: Path) -> Path | None:
+    """把上次 run 的产物 MOVE 到 previous/(单槽:已存在则先清空再移)。fresh 重跑前调用。
+
+    **只 move run 自己的产物**(config 目录 + benchmark/scorecard/vet-report/analysis-*),
+    不卷走同目录下其他命令的产物(audit-report.json/.html、slices/、gate.json、report.html 等)
+    ——它们与本次 run 无绑定,归档会误伤用户数据。output 顶层只清 run 产物,其余原地不动。
+    返回 previous/ 路径;无 run 产物可移(空 / 只剩 previous/ / 只剩别命令产物)→ None。"""
     previous = iteration_dir / "previous"
-    to_move = [p for p in iteration_dir.iterdir() if p.name != "previous"]
+    to_move = [
+        p for p in iteration_dir.iterdir()
+        if p.name != "previous"
+        and (p.name in _RUN_TOPLEVEL_ARTIFACTS or _is_run_config_tree(p))
+    ]
     if not to_move:
         return None
     if previous.exists():

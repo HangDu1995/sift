@@ -860,6 +860,8 @@ UNEVAL / 出错时自动重试（`--max-retries`，默认 2），每次重跑完
 
 重跑要看的就是**方差**——Claude 非确定性，主观侧有真方差（约 23%，客观侧 programmatic 稳）。如果 copy 旧树（`grading.json` 还在原位），cache 会全 skip 出"和上次逐字相同"的结果，`previous/` 和 current 一模一样——归档了个寂寞。MOVE 清空原位 → 所有槽 cache miss → 必然 fresh 重跑，`previous/` 里才有真东西可比。accumulate 的"复用旧"靠 cache_key 匹配自然达成（不 MOVE → grading.json 在位 → skip），它和 fresh 的分界就是 inputs 变没变。
 
+**归档范围：只 move run 自己的产物，不卷其他命令的。** output 目录里常不只有 run 的东西——同目录可能还跑过 `audit`（产 `audit-report.json`/`.html` + `slices/`）、`gate`（`gate.json`）、`report`（`report.html`）。fresh 归档只 move run 的产物：config 目录（`with_skill/`…含 `eval-*/run-*`）+ `benchmark.json`/`scorecard.json`/`vet-report.json`/`analysis-*.json`；其他命令的产物**原地不动**，不会被卷进 `previous/`。归档的语义是"归档上次 run 的结果"，不是"清空目录"——audit 审的是独立 transcript、gate/report 是 run 之后才出的判决/报告，都不属于"这次 run 的产物"，卷走会丢你的数据。
+
 ### 10.3 几个诚实的设计取舍（价值）
 
 - **样本数不同就标出来**：fresh 重跑若 runs 变了（previous 3 vs current 6），delta 卡显式提醒。均值仍可比，但别对一个小 delta 过度解读。
