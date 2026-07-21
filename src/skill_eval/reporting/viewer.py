@@ -75,7 +75,11 @@ def _find_runs_recursive(root: Path, current: Path, runs: list[dict]) -> None:
         if run:
             runs.append(run)
         return
-    skip = {"node_modules", ".git", "__pycache__", "skill", "inputs"}
+    # previous/ 是 fresh 重跑归档的上次 run 树,其 run 不属于"本次单次执行"——
+    # 误收会把它当独立 run 渲染,且解析错乱(路径 4 段:config="previous"、eval_id 塌成 0),
+    # 用户看到的就是"eval 0 的 run 1/2/3 previous"幽灵页面。previous 的对照走 per-run
+    # 「上次输出」栏(_build_run 内直接拼 root/previous/...)+ 聚合「vs 上次」卡,不在此列。
+    skip = {"node_modules", ".git", "__pycache__", "skill", "inputs", "previous"}
     for child in sorted(current.iterdir()):
         if child.name.startswith(".") or child.name in skip:
             continue

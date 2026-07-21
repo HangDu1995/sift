@@ -131,6 +131,26 @@ class TestFindRuns:
         runs = find_runs(tmp_path)
         assert len(runs) == 2
 
+    def test_skips_previous_dir(self, tmp_path: Path):
+        """previous/ 是 fresh 重跑归档的上次 run 树,其 run 不属于"本次单次执行"——
+        误收会把它们当独立 run 渲染,且路径 4 段解析错乱(config="previous"、eval_id 塌成 0),
+        用户看到的就是"eval 0 的 run 1/2/3 previous"幽灵页面。"""
+        # 本次 current run
+        d = tmp_path / "with_skill/eval-1/run-1"
+        d.mkdir(parents=True)
+        (d / "outputs").mkdir()
+        (d / "outputs/file.txt").write_text("data")
+        # previous/ 里归档的上次 run(不该被收进单次执行)
+        prev = tmp_path / "previous/with_skill/eval-1/run-1"
+        prev.mkdir(parents=True)
+        (prev / "outputs").mkdir()
+        (prev / "outputs/old.txt").write_text("old")
+
+        runs = find_runs(tmp_path)
+        assert len(runs) == 1  # 只 current,不收 previous
+        assert runs[0]["id"] == "with_skill/eval-1/run-1"
+        assert all("previous" not in r["id"] for r in runs)
+
 
 class TestReportGeneratorStatic:
     def test_generate_html_writes_static(self, tmp_path: Path):
