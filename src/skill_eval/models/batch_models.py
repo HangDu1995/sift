@@ -91,6 +91,7 @@ class BenchmarkData(BaseModel):
     comparison_summary: ComparisonSummary | None = None
     analysis: AnalysisResult | None = None
     anomaly_report: AnomalyReport | None = None
+    calibration_summary: CalibrationSummary | None = None
 
 
 class InstructionCheck(BaseModel):
@@ -123,6 +124,50 @@ class CalibrationReport(BaseModel):
     scoring_rate_programmatic: float | None  # 客观通过率(参考;None=该 run 无客观断言)
     scoring_rate_llm: float | None           # 主观通过率(参考)
     compliance_rate: float | None   # = pass/(pass+fail)(显示用);过程未知时 None
+
+
+class PerSideCalibration(BaseModel):
+    """单 side 的 calibration 聚合。high_score_suspects 只收 HIGH_SCORE_SUSPECT(gate 盲区);
+    SKILL_FAILED / FIXABLE 结果错归客观轴,不收。"""
+    total: int = 0
+    verdict_counts: dict[str, int] = Field(default_factory=dict)
+    high_score_suspects: list[dict[str, Any]] = Field(default_factory=list)
+    # 每项 {eval, run, category, instruction_text, evidence, compliance_rate}
+
+
+class CalibrationSummary(BaseModel):
+    """per-side calibration 聚合(对称 ComparisonSummary)。
+    with/without:without_skill 侧 None(无 compliance);v1/v2 两侧都有。"""
+    sides: dict[str, PerSideCalibration | None] = Field(default_factory=dict)
+
+    @classmethod
+    def from_per_side(
+        cls,
+        per_side: dict[str, list[tuple[int, int, "CalibrationReport"]] | None],
+    ) -> "CalibrationSummary":
+        out: dict[str, PerSideCalibration | None] = {}
+        for side, reports in per_side.items():
+            if not reports:
+                out[side] = None
+                continue
+            counts: dict[str, int] = {}
+            suspects: list[dict[str, Any]] = []
+            for eval_id, run_num, rep in reports:
+                v = rep.verdict.value if hasattr(rep.verdict, "value") else str(rep.verdict)
+                counts[v] = counts.get(v, 0) + 1
+                if v == "HIGH_SCORE_SUSPECT":
+                    for hv in rep.hard_violations:
+                        suspects.append({
+                            "eval": eval_id, "run": run_num,
+                            "category": hv.category,
+                            "instruction_text": hv.instruction_text,
+                            "evidence": hv.evidence,
+                            "compliance_rate": rep.compliance_rate,
+                        })
+            out[side] = PerSideCalibration(
+                total=len(reports), verdict_counts=counts, high_score_suspects=suspects,
+            )
+        return cls(sides=out)
 
 
 class SkillEntry(BaseModel):

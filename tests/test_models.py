@@ -175,3 +175,62 @@ class TestAnalysisModels:
         )
         data = ar.model_dump(mode="json")
         assert data["category"] == "CAPABILITY_UPLIFT"
+
+
+class TestCalibrationSummary:
+    """PerSideCalibration / CalibrationSummary 聚合:per-side 收 HIGH_SCORE_SUSPECT
+    (gate 盲区) 的 hard_violations 明细;None side 保留(无 compliance)。"""
+
+    def _rep(self, verdict, **kw):
+        from skill_eval.models.batch_models import CalibrationReport
+        from skill_eval.models.enums import ProcessStatus
+        return CalibrationReport(
+            verdict=verdict, result_pass=kw.get("result_pass", True),
+            process_status=kw.get("process_status", ProcessStatus.OK),
+            hard_violations=kw.get("hard_violations", []),
+            soft_notes=kw.get("soft_notes", {}),
+            scoring_rate=kw.get("scoring_rate", 1.0), scoring_rate_basis="programmatic",
+            scoring_rate_programmatic=kw.get("scoring_rate_programmatic", 1.0),
+            scoring_rate_llm=kw.get("scoring_rate_llm", 1.0),
+            compliance_rate=kw.get("compliance_rate", 1.0),
+        )
+
+    def _hv(self):
+        from skill_eval.models.batch_models import HardViolation
+        return HardViolation(category="prohibition", instruction_text="引用日志原文行", evidence="未引用")
+
+    def test_calibration_summary_with_without_mode(self):
+        from skill_eval.models.batch_models import CalibrationSummary
+        from skill_eval.models.enums import CalibrationVerdict
+        per_side = {
+            "with_skill": [
+                (1, 1, self._rep(CalibrationVerdict.TRUSTED)),
+                (1, 2, self._rep(CalibrationVerdict.HIGH_SCORE_SUSPECT, hard_violations=[self._hv()])),
+            ],
+            "without_skill": None,
+        }
+        s = CalibrationSummary.from_per_side(per_side)
+        assert s.sides["without_skill"] is None
+        ws = s.sides["with_skill"]
+        assert ws.total == 2
+        assert ws.verdict_counts == {"TRUSTED": 1, "HIGH_SCORE_SUSPECT": 1}
+        assert len(ws.high_score_suspects) == 1
+        sus = ws.high_score_suspects[0]
+        assert (sus["eval"], sus["run"]) == (1, 2)
+        assert sus["category"] == "prohibition"
+
+    def test_calibration_summary_v1v2_both_sides(self):
+        from skill_eval.models.batch_models import CalibrationSummary
+        from skill_eval.models.enums import CalibrationVerdict
+        per_side = {
+            "v1": [(1, 1, self._rep(CalibrationVerdict.TRUSTED))],
+            "v2": [(1, 1, self._rep(CalibrationVerdict.HIGH_SCORE_SUSPECT, hard_violations=[self._hv()]))],
+        }
+        s = CalibrationSummary.from_per_side(per_side)
+        assert s.sides["v1"].total == 1 and len(s.sides["v1"].high_score_suspects) == 0
+        assert len(s.sides["v2"].high_score_suspects) == 1
+
+    def test_calibration_summary_empty_side_is_none(self):
+        from skill_eval.models.batch_models import CalibrationSummary
+        s = CalibrationSummary.from_per_side({"with_skill": None, "without_skill": None})
+        assert s.sides["with_skill"] is None
