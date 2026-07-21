@@ -31,8 +31,17 @@ def run_comparison_analysis(aggregator, iteration_dir: Path, benchmark: Benchmar
     if not benchmark.comparisons:
         return None
 
-    first_comp = benchmark.comparisons[0]
-    winner_label = first_comp.winner
+    # winner 取**整体多数票**(排除 failed/tie),不再用 comparisons[0]——它只是 (eval_name,
+    # run_n) 字典序第一对,不代表整体(实证:整体 with 67% 胜,comparisons[0] 却可能是 with 输)。
+    # 平局 / 无有效胜负 → 没代表性强弱,不分析。
+    valid_winners = [c.winner for c in benchmark.comparisons if not c.failed]
+    with_cnt = sum(1 for w in valid_winners if w in ("with", "A", "with_skill"))
+    without_cnt = sum(1 for w in valid_winners if w in ("without", "B", "without_skill"))
+    if with_cnt == 0 and without_cnt == 0:
+        return None  # 无有效胜负(全 tie/failed)
+    if with_cnt == without_cnt:
+        return None  # 平局
+    winner_label = "with" if with_cnt > without_cnt else "without"
 
     with_skill_dir = iteration_dir / "with_skill"
     without_skill_dir = iteration_dir / "without_skill"
@@ -62,11 +71,28 @@ def run_comparison_analysis(aggregator, iteration_dir: Path, benchmark: Benchmar
     else:
         return None
 
+    # 代表判词取**整体胜者侧赢**的一个比较(和 winner 一致),不再用 comparisons[0].reasoning
+    # (可能和整体 winner 反)。ComparisonResult 无 eval/run 回指,无法把代表 comparison 映射到
+    # 对应 transcript——transcript 仍取 config 第一个 run(上方 ws_runs[0]/wos_runs[0]),这是
+    # 诚实局限;整体上下文靠下面的摘要 + 代表判词喂给 LLM。
+    winner_keys = ("with", "A", "with_skill") if winner_label == "with" else ("without", "B", "without_skill")
+    representative = next((c for c in benchmark.comparisons if not c.failed and c.winner in winner_keys), None)
+    rep_reasoning = representative.reasoning if representative else ""
+    loser_label = "without" if winner_label == "with" else "with"
+    winner_cnt, loser_cnt = (with_cnt, without_cnt) if winner_label == "with" else (without_cnt, with_cnt)
+    tie_cnt = len(valid_winners) - with_cnt - without_cnt
+    comparison_reasoning = (
+        f"[整体分布] 共 {len(valid_winners)} 次有效比较,"
+        f"{winner_label} 侧胜 {winner_cnt} 次、{loser_label} 侧胜 {loser_cnt} 次"
+        f"(另有 tie/failed {tie_cnt} 次)。"
+        f"以下为 {winner_label} 侧赢的一个代表性比较判词:\n{rep_reasoning}"
+    )
+
     return analyzer.analyze_comparison(
         winner=winner_label,
         winner_skill=winner_skill,
         loser_skill=loser_skill,
-        comparison_reasoning=first_comp.reasoning,
+        comparison_reasoning=comparison_reasoning,
         winner_transcript=winner_trans,
         loser_transcript=loser_trans,
     )

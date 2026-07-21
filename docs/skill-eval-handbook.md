@@ -1024,6 +1024,8 @@ benchmark.json 的 `analysis` 字段来自两个 LLM 分析步骤：
 - **analyze_benchmark** → `analysis-notes.json`（整体分析备注）。
 - **analyze_comparison** → 深度分析栏（赢家侧的 strengths / improvement_suggestions，只在有清晰赢家时产）。
 
+**赢家怎么定**：winner 取**整体多数票**（所有有效比较里哪侧赢得多，排除 tie/failed；平局或无有效胜负 → 没清晰赢家 → 不产深度分析），代表判词也取整体胜者侧赢的一个比较——不用可能反整体的 `comparisons[0]`（它只是 `(eval_name, run_n)` 字典序第一对，不代表整体）。所以深度分析反映**整体趋势**，不是某一道题。（局限：比较结果不带 eval/run 回指，代表比较的精确 transcript 取不到，分析用的是 config 第一个 run 的 transcript。）
+
 深度分析栏只在 `analysis && (winner_strengths || improvement_suggestions)` 时渲染——所以它出现需要两个条件：① 盲比较有清晰赢家（tie/空不算）；② 那次 analyze_comparison LLM 调用成功。没出现不一定是 bug，可能是 tie 或 LLM 步骤没成功。
 
 ---
