@@ -253,7 +253,7 @@ output/
 
 ### `gate` — 通过/失败判决
 
-对已有 benchmark.json 出通过/失败判决。**post-hoc 纯函数**——不重跑 claude、毫秒级、可反复改阈值重判（与 report/audit 同为 artifact 消费家族）。
+对已有 benchmark.json 出通过/失败判决。**post-hoc 纯函数**——不重跑 claude、毫秒级、可反复改阈值重判（与 report/audit 一样，只读 run 的产物做后处理，不重新跑题）。
 
 ```bash
 skill-eval gate output/benchmark.json                        # 仅客观回归守卫
