@@ -262,7 +262,7 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 | 技能失效 SKILL_FAILED | 错 | 错 | 输出未达标且过程违反硬性规则 |
 | 过程未知 PROCESS_UNKNOWN | — | 无可对账 | compliance 缺失或无可判定（如纯推理题） |
 
-`calibration.json` 字段：`verdict` / `result_pass` / `process_status` / `hard_violations`（category+instruction+evidence）/ `soft_notes`（step/conditional FAIL 计数）/ `scoring_rate` / `scoring_rate_basis`（programmatic 押客观 | mixed 无客观锚回退主观）/ `scoring_rate_programmatic` / `scoring_rate_llm` / `compliance_rate`。gate 不读 calibration（纯显示层）；仅 with_skill 产（without 无 compliance → 不产）。
+`calibration.json` 字段：`verdict` / `result_pass` / `process_status` / `hard_violations`（category+instruction+evidence）/ `soft_notes`（step/conditional FAIL 计数）/ `scoring_rate` / `scoring_rate_basis`（programmatic 押客观 | mixed 无客观锚回退主观）/ `scoring_rate_programmatic` / `scoring_rate_llm` / `compliance_rate`。gate 读 calibration_summary 的 HIGH_SCORE_SUSPECT 作 soft warning（不进 decision）；仅 with_skill 产（without 无 compliance → 不产）。
 
 ---
 

@@ -69,10 +69,10 @@ skill-eval 的三层架构正是为了把这两件事分别测清楚，再由"�
            │ 客观 delta + 主观胜率（盲比较），都来自评分层
            ▼
       gate 门禁（post-hoc 判决，CI 用）
-      只读评分的两轴；不读遵循性 / 校准
+      读评分两轴定 decision；校准 HIGH_SCORE_SUSPECT 作 soft warning（不进 decision）
 ```
 
-> 盲比较是评分层的主观侧主信号（对比两侧 outputs），不是独立第四层；校准读「评分 × 遵循性」交叉；gate 只读评分的两轴（客观 delta + 主观胜率），不读遵循性 / 校准。
+> 盲比较是评分层的主观侧主信号（对比两侧 outputs），不是独立第四层；校准读「评分 × 遵循性」交叉；gate 读评分两轴（客观 delta + 主观胜率）定 decision + 校准 HIGH_SCORE_SUSPECT 作 soft warning（不进 decision）。
 
 三个关键设计原则贯穿全书，先记住：
 
@@ -665,13 +665,13 @@ audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md �
 
 `calibration.json` 字段：`verdict` / `result_pass` / `process_status`（ok/violated/unknown）/ `hard_violations`（每条 category+instruction+evidence）/ `soft_notes` / `scoring_rate` / `scoring_rate_basis` / `scoring_rate_programmatic` / `scoring_rate_llm` / `compliance_rate`。
 
-**跑出来长啥样——同题多 run，verdict 会摆。** 同一道题跑多个 run，verdict 常在两态间摆：有的 run 结果没过 0.8、过程干净 → `FIXABLE`；有的 run 同样没过 0.8，但那次 cc 碰巧犯了某条 prohibition 硬禁令（如 log-error-analyzer-zh 的「必须为报告的每个错误引用对应的日志原文行」）→ 过程 `violated` → `SKILL_FAILED`。差别**不在结果轴**（几个 run 的客观率都摆不大、都判 `result_pass=False`），**在过程轴**——硬违规在不在，verdict 就跟着翻。这就是「校准是 per-run 分诊、不是稳定 skill 判决」的活例子（详见 8.4），也是它不进 gate 的直接原因。
+**跑出来长啥样——同题多 run，verdict 会摆。** 同一道题跑多个 run，verdict 常在两态间摆：有的 run 结果没过 0.8、过程干净 → `FIXABLE`；有的 run 同样没过 0.8，但那次 cc 碰巧犯了某条 prohibition 硬禁令（如 log-error-analyzer-zh 的「必须为报告的每个错误引用对应的日志原文行」）→ 过程 `violated` → `SKILL_FAILED`。差别**不在结果轴**（几个 run 的客观率都摆不大、都判 `result_pass=False`），**在过程轴**——硬违规在不在，verdict 就跟着翻。这就是「校准是 per-run 分诊、不是稳定 skill 判决」的活例子（详见 8.4），也是它不进 gate **decision** 的直接原因（但 HIGH_SCORE_SUSPECT 会作 soft warning 显出，见 8.4）。
 
-### 8.4 为什么不进 gate
+### 8.4 为什么不进 gate 的 decision（只作 soft warning）
 
-校准是 **per-run 分诊**，不是稳定的 skill 级判决——同一道题，verdict 会跨 run 摆（结果轴相对稳，过程轴的硬违规在不在会摆，verdict 跟着摆）。所以校准**不进 gate**（门禁走稳定的 `delta.pass_rate_programmatic` + 盲评胜率），它是纯显示层，辅助人判断。只在注入了 skill 的 side 产（with/without 模式 = with_skill 侧；v1/v2 模式两边都产）。
+校准是 **per-run 分诊**，不是稳定的 skill 级判决——同一道题，verdict 会跨 run 摆（结果轴相对稳，过程轴的硬违规在不在会摆，verdict 跟着摆）。所以校准**不进 gate 的 decision**（门禁的 PASS/FAIL 走稳定的 `delta.pass_rate_programmatic` + 盲评胜率）；但它的 HIGH_SCORE_SUSPECT 会作 **soft warning** 聚合进 `calibration_summary`、显在 gate.json + viewer（分诊辅助人判断，**不改 decision/exit_code**）。只在注入了 skill 的 side 产（with/without 模式 = with_skill 侧；v1/v2 模式两边都产）。
 
-更根本的原因是**校准成立有个前提，而工具不验证它**。结果轴查的是 eval 关心的、过程轴查的是 SKILL.md 要求的——只有当 eval 测的正是 skill 该干的活，"结果对 + 过程错"才是真矛盾（该守的硬规矩没守、却侥幸输出对了 = 潜在 bug）。但工具**假设**相关、不去检查"这条硬规则和这个 eval 的成功标准相不相关"。毫不相关时（eval 测 SQL 正确性、SKILL.md 某硬规则却管"输出编码格式"），cc 输出对了 SQL 又没守格式 → 机械落 `HIGH_SCORE_SUSPECT`，但这只是两个独立事实共存、不是 coherence 矛盾，人看一眼 evidence 就能 dismiss。所以校准只能当**分诊**（让人核 evidence、判断那条硬规则和这次输出到底有没有关系），不能当**定罪**——门禁走的客观 delta + 盲评胜率都不依赖这个"相关性未验证"的弱 coherence，故校准再保守/激进都不会让 CI 误绿误红。
+更根本的原因是**校准成立有个前提，而工具不验证它**。结果轴查的是 eval 关心的、过程轴查的是 SKILL.md 要求的——只有当 eval 测的正是 skill 该干的活，"结果对 + 过程错"才是真矛盾（该守的硬规矩没守、却侥幸输出对了 = 潜在 bug）。但工具**假设**相关、不去检查"这条硬规则和这个 eval 的成功标准相不相关"。毫不相关时（eval 测 SQL 正确性、SKILL.md 某硬规则却管"输出编码格式"），cc 输出对了 SQL 又没守格式 → 机械落 `HIGH_SCORE_SUSPECT`，但这只是两个独立事实共存、不是 coherence 矛盾，人看一眼 evidence 就能 dismiss。所以校准只能当**分诊**（让人核 evidence、判断那条硬规则和这次输出到底有没有关系），不能当**定罪**——门禁走的客观 delta + 盲评胜率都不依赖这个"相关性未验证"的弱 coherence，故校准再保守/激进都不会让 CI 误绿误红（HIGH_SCORE_SUSPECT 只作 warning、不改 exit_code，CI 绿红仍由客观 delta + 盲评胜率定）。
 
 ---
 
@@ -768,7 +768,7 @@ spawn claude -p
 | `scoring_rate_llm` | 主观通过率（参考）|
 | `compliance_rate` | = `pass/(pass+fail)`（显示用）；过程未知时为 `None` |
 
-> gate 不读 calibration（纯显示层）。`hard_violations` 里列的就是值得人秒辨真伪的"高分存疑"证据。
+> gate 读 calibration_summary 的 HIGH_SCORE_SUSPECT 作 **soft warning**（不进 decision）。`hard_violations` 里列的就是值得人秒辨真伪的"高分存疑"证据。
 
 #### run_debug.json
 

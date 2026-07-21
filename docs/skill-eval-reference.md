@@ -524,7 +524,9 @@ skill-eval batch-report batch-workspace/ --open
 
 `calibration.json` 字段：`verdict` / `result_pass` / `process_status`（ok/violated/unknown）/ `hard_violations`（每条 category+instruction_text+evidence）/ `soft_notes`（step/conditional FAIL 计数）/ `scoring_rate` / `scoring_rate_basis`（programmatic|mixed）/ `scoring_rate_programmatic` / `scoring_rate_llm` / `compliance_rate`。
 
-> 设计取舍：verdict 只押在实测高精度的 prohibition/output 硬类违规上（"高分存疑"= 值得一看的分诊，非定罪）。gate 不读 calibration（纯显示层），仅 with_skill 产。旧版的 confidence/grade/agreement/dual-judgment 机制已移除——eval 设计**不再需要**为校准刻意"同一项同时写 assertion + expectation"。
+> 设计取舍：verdict 只押在实测高精度的 prohibition/output 硬类违规上（"高分存疑"= 值得一看的分诊，非定罪）。仅 with_skill 产（without 无 compliance）。旧版的 confidence/grade/agreement/dual-judgment 机制已移除——eval 设计**不再需要**为校准刻意"同一项同时写 assertion + expectation"。
+>
+> **聚合 + gate 消费**：per-run `calibration.json` 在 benchmark 聚合时聚合成顶层 `calibration_summary`（per-side：`sides: {<side>: {total, verdict_counts, high_score_suspects:[{eval,run,category,instruction_text,evidence,compliance_rate}]} | null}`；with/without 模式 without 侧 null，v1/v2 两侧都有）。gate 的 `_eval_calibration` 读它——把 HIGH_SCORE_SUSPECT 作 **soft warning**：分诊两侧、填 `GateResult.calibration` + `warnings`，**不进 axes、不改 decision/exit_code**（HIGH_SCORE_SUSPECT 是 gate 两轴的盲区：结果对→客观轴过、输出好→盲评过，但 prohibition 被违反）。SKILL_FAILED/FIXABLE 结果错归客观轴，不重复标。viewer `renderCalibrationSummary` 同源显示。
 
 ---
 
@@ -648,7 +650,15 @@ skill-eval batch-report batch-workspace/ --open
     "programmatic": {"verdict": "PASS", "delta": 0.27, "reason": "..."},
     "comparison": {"verdict": "PASS", "win_rate": 0.75, "decisive": 8, "a_wins": 6, "b_wins": 2, "ties": 1, "reason": "..."}
   },
-  "warnings": []
+  "warnings": [],
+  "calibration": {
+    "sides": {
+      "with_skill": {"triggered": true, "count": 3, "total": 21,
+                     "evidence": [{"eval": 1, "run": 2, "category": "prohibition",
+                                   "instruction_text": "引用日志原文行", "evidence": "未引用",
+                                   "compliance_rate": 0.875}]}
+    }
+  }
 }
 ```
 
@@ -658,10 +668,10 @@ skill-eval batch-report batch-workspace/ --open
 
 | 文件 | 内容 |
 |------|------|
-| `benchmark.json` | 聚合结果（双率 delta + 盲比较 comparison_summary） |
+| `benchmark.json` | 聚合结果（双率 delta + 盲比较 comparison_summary + calibration_summary per-side 高分低遵循） |
 | `report.html` | 自包含 HTML 报告（读 gate.json 显门禁徽章 + previous/benchmark.json 显「vs 上次」纵向 delta 卡）；run 末尾自动产（也可 `report` 命令重生成 / 带 `--previous` 基线对照） |
 | `previous/` | 重跑归档：fresh 重跑时把上一次完整 run 树整体 MOVE 到此（单槽覆盖）。含旧 `benchmark.json`（聚合纵向 delta 数据源）+ 旧 outputs/（report「上次输出」文件级面板）。仅 fresh 产生；accumulate/resume 不产。见下「重跑归档」 |
-| `gate.json` | `gate` 命令产出（非 run 产出）；判决 + 两轴明细 |
+| `gate.json` | `gate` 命令产出（非 run 产出）；判决 + 两轴明细 + calibration soft warning（高分低遵循 HIGH_SCORE_SUSPECT，不进 decision） |
 | `scorecard.json` | run 末尾自动产（静态评分卡；也可 `analyze -o` 单独产） |
 | `vet-report.json` | run 末尾自动产（原生安全扫描；也可 `vet -o` 单独产） |
 | `with_skill/eval-<id>/run-1/grading.json` | expectations + assertions 的 pass/fail（双率） |
