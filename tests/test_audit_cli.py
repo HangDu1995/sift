@@ -230,3 +230,70 @@ def test_audit_skill_path_missing_friendly_error(tmp_path):
     # console.print 过错误信息(证明走了友好错误路径,而非裸异常)
     assert "SKILL.md" in r.output
     assert "Error" in r.output
+
+
+class _OneReportAuditor:
+    """返回预设 report(不真跑判定),供测 transcript_sources 渲染。"""
+    def __init__(self, report):
+        self._r = report
+
+    def audit(self, *a, **k):
+        return self._r
+
+
+def _report_with_source(src: str = "opencode") -> AuditReport:
+    """带 transcript_sources + 一个 FAIL finding(FAIL 才进 findings 表,验 transcript 列标注)。"""
+    return AuditReport(
+        skill_name="myskill",
+        transcripts=["s.json"],
+        transcript_sources=[src],
+        summary={"total": 1, "pass": 0, "fail": 1, "na": 0},
+        findings=[
+            AuditFinding(
+                instruction_text="禁编造",
+                source="CONSTRAINT",
+                verdict=AuditVerdict.FAIL,
+                category=AuditCategory.PROHIBITION,
+                evidence="编了",
+                method=AuditMethod.LLM,
+                transcript="s.json",
+            ),
+        ],
+        warnings=[],
+    )
+
+
+def test_audit_summary_and_findings_annotate_transcript_source(monkeypatch, tmp_path):
+    """report.transcript_sources 非空 → 摘要行显 sources、findings 表 transcript 列标来源。"""
+    monkeypatch.setattr(
+        "skill_eval.cli.commands.audit.TranscriptAuditor",
+        lambda: _OneReportAuditor(_report_with_source("opencode")),
+    )
+    sp = _skill_dir(tmp_path)
+    tp = tmp_path / "s.json"
+    tp.write_text("{}", encoding="utf-8")
+    out = tmp_path / "out"
+
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    # 摘要行标来源(CliRunner 终端宽度可能折行,断非连续片段)
+    assert "sources:" in r.output and "opencode" in r.output
+    # findings 表 transcript 列带来源标注
+    assert "s.json" in r.output and "opencode" in r.output
+
+
+def test_audit_json_output_includes_transcript_sources(monkeypatch, tmp_path):
+    """--format json 输出含 transcript_sources 字段(JSON 消费者据此知道每条 transcript 来自哪侧)。"""
+    monkeypatch.setattr(
+        "skill_eval.cli.commands.audit.TranscriptAuditor",
+        lambda: _OneReportAuditor(_report_with_source("cc")),
+    )
+    sp = _skill_dir(tmp_path)
+    tp = tmp_path / "t.jsonl"
+    tp.write_text("{}", encoding="utf-8")
+
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "--format", "json"])
+    assert r.exit_code == 0, r.output
+    # JSON 含 transcript_sources 字段且值正确(避开多行 JSON 解析,直接断字符串)
+    assert '"transcript_sources"' in r.output
+    assert '"cc"' in r.output

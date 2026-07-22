@@ -203,6 +203,9 @@ def audit(
         if export_tmp is not None:
             export_tmp.unlink(missing_ok=True)
 
+    # transcript 名 → 来源(cc/opencode/...);摘要 + findings 表标注用。同序 zip,同名 last-wins。
+    src_of = dict(zip(report.transcripts, report.transcript_sources))
+
     out.mkdir(parents=True, exist_ok=True)
     report_path = out / "audit-report.json"
     report_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
@@ -223,12 +226,14 @@ def audit(
         console.print(f"Written to {report_path}")
         return
 
+    src_kinds = sorted(set(report.transcript_sources))
+    src_tail = f"  [dim]sources: {' · '.join(src_kinds)}[/dim]" if src_kinds else ""
     console.print(
         f"Audited {len(report.transcripts)} transcript(s) for [bold]{name}[/bold]: "
         f"total={total} "
         f"pass=[green]{n_pass}[/green] "
         f"fail=[red]{n_fail}[/red] "
-        f"na=[yellow]{n_na}[/yellow]"
+        f"na=[yellow]{n_na}[/yellow]{src_tail}"
     )
 
     if report.warnings:
@@ -301,11 +306,14 @@ def audit(
                 color = "yellow"
             else:
                 color = "dim"
+            tcol = f.transcript
+            if src_of.get(f.transcript):
+                tcol = f"{f.transcript} [dim]· {src_of[f.transcript]}[/dim]"
             table.add_row(
                 f"[{color}]{f.verdict.value}[/{color}]",
                 f.category.value,
                 _truncate(f.instruction_text),
-                f.transcript,
+                tcol,
                 _truncate(f.evidence),
             )
         console.print(table)

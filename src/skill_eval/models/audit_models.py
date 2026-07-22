@@ -145,6 +145,7 @@ class AuditReport(BaseModel):
 
     skill_name: str
     transcripts: list[str]
+    transcript_sources: list[str] = Field(default_factory=list)  # 与 transcripts 同序并行;"cc"/"opencode"/...(未来扩)。标每个 transcript 来自哪侧;旧 report 无此字段 → 空(向后兼容)
     summary: dict  # {"total": N, "pass": X, "fail": Y, "na": Z(不适用), "unresolved": U(没判成), "indeterminate": I(判不准)}
     findings: list[AuditFinding]
     # 多 transcript 对账的指令级聚合(按 fail_rate 降序);单 transcript 也有(每指令 1 verdict)。

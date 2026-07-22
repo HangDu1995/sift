@@ -1470,3 +1470,23 @@ class TestRefineInstructions:
         report = TranscriptAuditor().audit("s", "body", [t1])  # 默认关
         assert refine_calls["n"] == 0
         assert not any("refine:" in w for w in report.warnings)
+
+
+_FIXTURES = Path(__file__).parent.parent / "fixtures" / "example-skills"
+
+
+def test_audit_populates_transcript_sources_cc_and_opencode(monkeypatch) -> None:
+    """audit 把每条 transcript 来源(cc/opencode)同序填进 transcript_sources。
+
+    与 rebuild 分派同源(is_opencode_session)。transcript_sources 只取决于文件格式,
+    在 rebuild 循环里无条件累积(不依赖指令抽取/判定结果)。
+    """
+    monkeypatch.setattr(
+        "skill_eval.audit.auditor.call_claude",
+        lambda *a, **k: '[{"index":0,"violated":false,"evidence":"未违规"}]',
+    )
+    cc = _FIXTURES / "log-error-analyzer-zh" / "transcripts" / "synthetic-violation.jsonl"
+    oc = _FIXTURES / "log-error-analyzer-zh" / "opencode-sessions" / "synthetic-violation.json"
+    report = TranscriptAuditor().audit("lea", "# x\n\nNEVER fabricate data.\n", [cc, oc])
+    assert report.transcripts == [cc.name, oc.name]
+    assert report.transcript_sources == ["cc", "opencode"]

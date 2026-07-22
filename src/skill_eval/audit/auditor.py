@@ -60,6 +60,7 @@ from skill_eval.audit.aggregate import aggregate_by_instruction
 from skill_eval.audit.dedup import post_process_findings
 from skill_eval.compliance.extractor import InstructionExtractor
 from skill_eval.errors import SkillEvalError
+from skill_eval.evals.opencode import transcript_source
 from skill_eval.models import InstructionCheck, InstructionSource
 from skill_eval.models.audit_models import (
     AuditCategory,
@@ -232,6 +233,7 @@ class TranscriptAuditor:
             warnings.extend(refine_warns)
         all_findings: list[AuditFinding] = []
         transcript_names: list[str] = []
+        transcript_sources: list[str] = []  # 与 transcript_names 同序;"cc"/"opencode"/...
 
         for ti, tp in enumerate(transcripts, 1):
             _emit(on_progress, f"对账 transcript {ti}/{len(transcripts)}: {tp.name}")
@@ -289,6 +291,7 @@ class TranscriptAuditor:
 
             all_findings.extend(findings)
             transcript_names.append(tp.name)
+            transcript_sources.append(transcript_source(tp))
 
         # findings 后处理:Case A 同文去重(合并 sources)+ 编 #1..#N + Case B 跨类关联
         # (related 引 #N)。在汇总前做,使 unverified/summary/by_instruction 都基于去重后
@@ -325,6 +328,7 @@ class TranscriptAuditor:
         return AuditReport(
             skill_name=skill_name,
             transcripts=transcript_names,
+            transcript_sources=transcript_sources,
             summary=summary,
             findings=all_findings,
             by_instruction=aggregate_by_instruction(all_findings),

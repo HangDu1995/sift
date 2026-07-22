@@ -34,6 +34,15 @@ def is_opencode_session(path: Path) -> bool:
     return isinstance(data, dict) and {"info", "messages"} <= set(data)
 
 
+def transcript_source(path: Path) -> str:
+    """transcript 来源标签(与 ``is_opencode_session`` 同判据):``'opencode'`` / ``'cc'``。
+
+    供 audit 报告标注每条 transcript 来自哪侧(cc `.jsonl` / opencode export `.json`);
+    未来新增格式在此扩展。与 rebuild 的分派同源,保证标注与实际解析路径一致。
+    """
+    return "opencode" if is_opencode_session(path) else "cc"
+
+
 def load_opencode_session(path: Path) -> dict:
     """读 export JSON,返回 {info, messages}(messages 按 info.time.created 排序;export 本
     已有序,此为保险)。"""

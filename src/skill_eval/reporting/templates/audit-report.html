@@ -89,6 +89,7 @@
     .instruction { font-weight: 600; margin: 0.25rem 0; }
     .evidence { color: var(--text-muted); font-size: 0.9rem; margin: 0.25rem 0; }
     .transcript { color: var(--text-muted); font-size: 0.8rem; }
+    .src { color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; font-size: 0.7rem; text-transform: uppercase; }
     .finding-head .method-prog { color: var(--green); }
     .finding-head .method-llm { color: var(--text-muted); }
     .warnings { background: var(--red-bg); border: 1px solid var(--red); border-radius: var(--radius); padding: 0.75rem 1rem; }
@@ -167,7 +168,7 @@
           methodTag(f.method) + '</div>' +
           '<div class="instruction">' + escapeHtml(f.instruction_text || '') + '</div>' +
           '<div class="evidence">' + escapeHtml(f.evidence || '') + '</div>' +
-          '<div class="transcript">@ ' + escapeHtml(f.transcript || '') + '</div>';
+          '<div class="transcript">@ ' + escapeHtml(f.transcript || '') + srcBadge(f.transcript) + '</div>';
       }
 
       // 包一层带 verdict 边框色的 div;id=finding-<seq> 供 related 锚点跳转
@@ -183,13 +184,24 @@
       var findings = EMBEDDED_DATA.findings || [];
       var multi = (EMBEDDED_DATA.transcripts || []).length > 1;
 
+      // transcript 名 → 来源(cc/opencode/...);同序 zip EMBEDDED_DATA.transcripts / transcript_sources。
+      // srcBadge 给 transcript 名拼个来源徽章(无来源/旧 report → 空串,不显)。
+      var srcOf = {};
+      (EMBEDDED_DATA.transcripts || []).forEach(function (n, i) {
+        srcOf[n] = (EMBEDDED_DATA.transcript_sources || [])[i] || '';
+      });
+      function srcBadge(name) {
+        var s = srcOf[name];
+        return s ? ' <span class="src">' + escapeHtml(s) + '</span>' : '';
+      }
+
       // ① header(skill_name + transcripts + summary 徽章 + derived 计数)
       var derivedCount = findings.filter(function (f) { return f.derived_from_transcript; }).length;
       var s = EMBEDDED_DATA.summary || {};
       root.insertAdjacentHTML('beforeend',
         '<div class="header">' +
           '<h1>' + escapeHtml(EMBEDDED_DATA.skill_name || '') + '</h1>' +
-          '<div class="transcripts">' + (EMBEDDED_DATA.transcripts || []).map(escapeHtml).join(' · ') + '</div>' +
+          '<div class="transcripts">' + (EMBEDDED_DATA.transcripts || []).map(function (n) { return escapeHtml(n) + srcBadge(n); }).join(' · ') + '</div>' +
           '<div class="summary">' +
             '<span class="badge-pass">✓ 通过 ' + (s.pass || 0) + '</span>' +
             '<span class="badge-fail">✗ 失败 ' + (s.fail || 0) + '</span>' +
