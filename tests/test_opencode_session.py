@@ -60,3 +60,17 @@ def test_cc_and_opencode_digests_equivalent():
     assert [t.name.lower() for t in cc.tool_trace] == [t.name.lower() for t in oc.tool_trace]
     # transcript_text 都含编造码
     assert "E-FAKE-999" in cc.transcript_text and "E-FAKE-999" in oc.transcript_text
+
+
+def test_rebuild_dispatches_opencode():
+    from skill_eval.audit.rebuild import rebuild
+    tool_trace, text, digest = rebuild(_LEA_OC)
+    assert digest.skill_used == "log-error-analyzer"  # 走了 opencode 分支
+    assert any(tc.name == "read" for tc in tool_trace)
+    assert "E-FAKE-999" in text
+
+
+def test_rebuild_still_handles_cc_jsonl():
+    from skill_eval.audit.rebuild import rebuild
+    tool_trace, text, digest = rebuild(_LEA_CC)  # cc 路径不被破坏
+    assert any(tc.name.lower() == "read" for tc in tool_trace)
