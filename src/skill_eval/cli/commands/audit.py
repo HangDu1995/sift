@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +24,7 @@ from rich.table import Table
 from skill_eval.audit.auditor import TranscriptAuditor
 from skill_eval.cli.main import app, console
 from skill_eval.errors import SkillEvalError
+from skill_eval.evals.opencode_db import export_session, list_sessions, resolve_session
 from skill_eval.models.audit_models import AuditVerdict
 from skill_eval.parser import parse_skill_md, resolve_skill_dir
 
@@ -35,13 +37,56 @@ def _truncate(text: str, width: int = _TRUNCATE_WIDTH) -> str:
     return flat if len(flat) <= width else flat[: width - 1] + "…"
 
 
+def _fmt_ms(v: object) -> str:
+    """session list 的 updated/created 是 epoch ms,格式化成可读时间;非法/缺省 → '—'。"""
+    if not isinstance(v, (int, float)) or not v:
+        return "—"
+    from datetime import datetime
+    try:
+        return datetime.fromtimestamp(v / 1000).strftime("%Y-%m-%d %H:%M")
+    except (OSError, ValueError, OverflowError):
+        return str(v)
+
+
+def _audit_from_db(db: Path, session: Optional[str]) -> Path:
+    """``--db`` 解析:list/选 session → export → 写临时 json,返回其 Path(用完由 caller unlink)。
+
+    - 单 session 或 ``--session`` 命中 → 导出该 session,返回临时 json Path。
+    - 多 session 且未指定 → 打 rich 表(id/title/updated)+ exit 2(非交互,让用户带 ``--session`` 重跑)。
+    - 0 session / id 不匹配 / opencode 缺失 → ``OpencodeDbError``(被上层 except 兜成 exit 3)。
+
+    ``list_sessions`` / ``export_session`` / ``resolve_session`` 模块级 import,
+    便于测试 ``monkeypatch.setattr("skill_eval.cli.commands.audit.list_sessions", …)``。
+    """
+    sessions = list_sessions(db)
+    target = resolve_session(sessions, session)
+    if target is None:
+        t = Table(title=f"db 里有 {len(sessions)} 个 session,挑一个重跑(加 --session <id>)")
+        t.add_column("id")
+        t.add_column("title")
+        t.add_column("updated")
+        for s in sessions:
+            t.add_row(str(s.get("id", "?")), str(s.get("title", "")), _fmt_ms(s.get("updated")))
+        console.print(t)
+        console.print("[red]Error:[/red] 多个 session,请带 --session <id> 重跑(见上表)")
+        raise typer.Exit(code=2)
+    sid = target.get("id", "?")
+    console.print(f"[dim]--db: 导出 session {sid}({target.get('title', '')})…[/dim]")
+    json_str = export_session(db, sid)
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(json_str)
+    return Path(f.name)
+
+
 @app.command()
 def audit(
     skill_path: Path = typer.Argument(..., help="Path to skill directory"),
-    transcript: list[Path] = typer.Option(
-        ...,
+    transcript: Optional[list[Path]] = typer.Option(
+        None,
         "--transcript",
-        help="真实会话 transcript jsonl(可重复 --transcript a --transcript b)",
+        help="真实会话 transcript(cc .jsonl 或 opencode .json;可重复 --transcript a --transcript b)",
     ),
     output_dir: Optional[Path] = typer.Option(
         None, "--output", "-o", help="输出目录(默认 ./output)"
@@ -57,13 +102,43 @@ def audit(
     open_browser: bool = typer.Option(
         False, "--open", help="生成后用浏览器打开 audit-report.html"
     ),
+    db: Optional[Path] = typer.Option(
+        None,
+        "--db",
+        help="opencode .db 文件:自动 export 单 session 再 audit(需 opencode CLI;不带 --session 则单 session 自动选、多个列出让你挑了重跑)",
+    ),
+    session: Optional[str] = typer.Option(
+        None,
+        "--session",
+        help="--db 下指定 session id;不给则单 session 自动选、多个列出让你挑了重跑",
+    ),
 ):
     """Audit real session transcript(s) against SKILL.md(不 re-run,直接对账真实历史执行)。"""
     skill_path = resolve_skill_dir(skill_path)
+    export_tmp: Optional[Path] = None  # --db 导出的临时 json,finally 清理
     try:
         name, _desc, _content, _frontmatter, body = parse_skill_md(skill_path)
 
         out = output_dir or Path("output")
+
+        # 输入源:--db 与 --transcript 互斥;--session 仅搭 --db;都不给 → exit 2。
+        if db is not None and transcript:
+            console.print("[red]Error:[/red] --db 与 --transcript 互斥,二选一")
+            raise typer.Exit(code=2)
+        if session is not None and db is None:
+            console.print("[red]Error:[/red] --session 仅与 --db 搭配使用")
+            raise typer.Exit(code=2)
+        if db is None and not transcript:
+            console.print("[red]Error:[/red] 需要 --transcript 或 --db 之一")
+            raise typer.Exit(code=2)
+
+        transcript = transcript or []
+        if db is not None:
+            # --db 解析:list/选 session → export → 临时 json;多 session 在此 exit 2。
+            # 解析后 transcript = [临时 json],后续 by-skill/引擎照常走(opencode .json 经
+            # rebuild 的 is_opencode_session 分派 → build_digest_from_opencode)。
+            export_tmp = _audit_from_db(db, session)
+            transcript = [export_tmp]
 
         # --by-skill:transcript 含多个 skill/agent 时,切出本 skill 被调用期间的段,
         # 每段写一个子段文件(.jsonl=cc / .json=opencode),再喂给 TranscriptAuditor
@@ -123,6 +198,10 @@ def audit(
     except SkillEvalError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=exc.exit_code)
+    finally:
+        # --db 导出的临时 json:引擎读完即清(用户要留存走手工 opencode export)
+        if export_tmp is not None:
+            export_tmp.unlink(missing_ok=True)
 
     out.mkdir(parents=True, exist_ok=True)
     report_path = out / "audit-report.json"
