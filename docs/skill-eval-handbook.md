@@ -605,7 +605,7 @@ skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
 skill-eval audit path/to/skill/ --transcript opencode-session.json          # opencode session(.json)
 ```
 
-audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md 对账。`--transcript` 吃两种格式(按后缀自动分派):cc 会话 `.jsonl`(run 产的 `transcript.jsonl` 永远是这种,run 只 spawn cc)或 opencode session `.json`(`opencode export <sessionID>` 导出,顶层 `info`/`messages`、parts 嵌在 message 里;生产:`opencode session list` 找 id → `opencode export <id> > s.json`)。可重复,多条 transcript 做指令级聚合(跨会话看 fail%)。
+audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md 对账。`--transcript` 吃两种格式(按后缀自动分派):cc 会话 `.jsonl`(run 产的 `transcript.jsonl` 永远是这种,run 只 spawn cc)或 opencode session `.json`(`opencode export <sessionID>` 导出,顶层 `info`/`messages`、parts 嵌在 message 里;生产:`opencode session list` 找 id → `opencode export <id> > s.json`)。**拿到一个 .db 文件**（别处拷来的库）时,`export` 只认默认 db,设 `XDG_DATA_HOME` 隔离指向它再导出（完整三步见 reference audit 段）。可重复,多条 transcript 做指令级聚合(跨会话看 fail%)。
 
 判定要逐批调 LLM（每批约 40–257s），跑期间实时打印进度（`[条件性/禁令/步骤] 判定 N 条…`），三个 LLM 类别判定器（条件性 / 禁令 / 步骤；输出格式走程序判定不调 LLM）并发跑（约 2× 提速）。看到 `[类别] …` 滚动就是在跑，别误以为卡死。
 

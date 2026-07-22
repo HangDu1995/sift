@@ -302,6 +302,18 @@ skill-eval audit path/to/skill/ --transcript opencode-session.json
 
 > **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`(逐行 JSON 记录,含 `Skill`/`Read`/`Write`/`Bash` tool_use);opencode session `.json`(`opencode export <sessionID>` 的产出,顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`)。两者重建成同一 `SessionDigest` 再对账;`--by-skill` cc 按 `Skill` tool_use 切分、opencode 按 per-message `agent` 切分(扁平,无 cc 父子作用域)。run 产的 `transcript.jsonl` 永远是 cc 格式(run 只 spawn cc)。生产导出 opencode 会话:`opencode session list` 找 id → `opencode export <id> > session.json`(`--sanitize` 可脱敏分享)→ `skill-eval audit --transcript session.json`。
 
+> **拿到一个 opencode `.db` 文件怎么审**（别人/别处拷来的库,不是你本机默认库）：opencode 的 `export` 只认它自己配置的 db（无 `--db` 参数），但 opencode 认 `XDG_DATA_HOME` 环境变量——设它就能让 opencode 去指向那个 .db、**不碰你本机真库**（`XDG_DATA_HOME` 是 Linux「应用数据目录」规范,opencode 把 db 放在 `$XDG_DATA_HOME/opencode/opencode.db`）。三步:
+> ```bash
+> # 1. 把 .db 摆成 opencode 认的布局(<envdir>/opencode/opencode.db;库大可 ln -s 软链代替 cp)
+> mkdir -p /tmp/ocenv/opencode && cp /path/to/handed.db /tmp/ocenv/opencode/opencode.db
+> # 2. 用 XDG_DATA_HOME 指向它,列 session 找 id
+> XDG_DATA_HOME=/tmp/ocenv opencode session list
+> # 3. 导出目标 session(--sanitize 脱敏分享)→ audit
+> XDG_DATA_HOME=/tmp/ocenv opencode export ses_xxxx --sanitize > session.json
+> skill-eval audit path/to/skill/ --transcript session.json
+> ```
+> 若 .db **就是你本机 opencode 跑的**（默认位置）,跳过 XDG,直接 `opencode session list` → `opencode export <id>` → audit。
+
 **参数**：
 
 | 参数 | 默认值 | 说明 |

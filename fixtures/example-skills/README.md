@@ -20,7 +20,7 @@
 >
 > 另两个不带这种 transcript:`code-review-auditor` 走路径1 真任务(自己 run 出来再审),`multi-skill-demo` 靠 `build_multi_skill.py` 脚本生成(验的是切分纯度,不是确定性违规)。
 >
-> **opencode 格式 transcript(`opencode-sessions/`)**:audit `--transcript` 除 cc `.jsonl` 外也吃 **opencode session `.json`** —— 即真实 `opencode export <sessionID>` 的产出(顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`;与 cc fixture 用真 cc jsonl 同理,用真 opencode export 格式,非自造)。两者重建成同一 `SessionDigest`、对账等价。`log-error-analyzer-zh/opencode-sessions/synthetic-violation.json` 是 cc 同名 `.jsonl` 的 opencode 镜像(同 prompt、同 3 植入违规、同样不写报告);多 skill 版见下面 multi-skill-demo 的 `build_multi_skill_opencode.py`。生产导出真会话:`opencode session list` 找 id → `opencode export <id> > session.json` → audit。
+> **opencode 格式 transcript(`opencode-sessions/`)**:audit `--transcript` 除 cc `.jsonl` 外也吃 **opencode session `.json`** —— 即真实 `opencode export <sessionID>` 的产出(顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`;与 cc fixture 用真 cc jsonl 同理,用真 opencode export 格式,非自造)。两者重建成同一 `SessionDigest`、对账等价。`log-error-analyzer-zh/opencode-sessions/synthetic-violation.json` 是 cc 同名 `.jsonl` 的 opencode 镜像(同 prompt、同 3 植入违规、同样不写报告);多 skill 版见下面 multi-skill-demo 的 `build_multi_skill_opencode.py`。生产导出真会话:`opencode session list` 找 id → `opencode export <id> > session.json` → audit。**拿到一个 .db 文件**(别处拷来的库、不是本机默认库):`export` 只认默认 db(无 `--db` 参数),设 `XDG_DATA_HOME` 隔离指向它再导出——`cp handed.db /tmp/ocenv/opencode/opencode.db` → `XDG_DATA_HOME=/tmp/ocenv opencode export <id>` → audit(完整三步见 [reference 的 audit 段](../../docs/skill-eval-reference.md))。
 
 ## 每个怎么跑
 
