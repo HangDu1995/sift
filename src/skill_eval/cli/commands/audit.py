@@ -65,18 +65,29 @@ def audit(
 
         out = output_dir or Path("output")
 
-        # --by-skill:transcript 含多个 skill 时,按 Skill 工具调用切出本 skill 的段,
-        # 每段写一个子 transcript jsonl,再喂给 TranscriptAuditor(其已支持多 transcript 聚合)。
+        # --by-skill:transcript 含多个 skill/agent 时,切出本 skill 被调用期间的段,
+        # 每段写一个子段文件(.jsonl=cc / .json=opencode),再喂给 TranscriptAuditor
+        # (其已支持多 transcript 聚合)。子段格式按 transcript 格式分派,rebuild 再按
+        # 各子段格式分派 cc/opencode。
         # 文件名带 transcript 级序号 ti:多个 --transcript 可能同名 stem(如各 run 的
         # transcript.jsonl),仅靠内层 i 会碰撞 → 后者覆盖前者(静默丢数据)。
         if by_skill:
             from skill_eval.audit.slice import slice_transcript_by_skill
+            from skill_eval.evals.opencode import (
+                is_opencode_session,
+                slice_opencode_by_agent,
+            )
 
             # 先切所有段(暂存内存):确认有段再建目录,never-invoked → exit 2 不留空 slices/。
-            segs: list[tuple[Path, int, int, list[dict]]] = []
+            # seg = (tp, ti, i, payload, is_oc);payload:cc=record 列表,opencode=子 session dict。
+            segs: list[tuple[Path, int, int, object, bool]] = []
             for ti, tp in enumerate(transcript, 1):
-                for i, seg in enumerate(slice_transcript_by_skill(tp, name), 1):
-                    segs.append((tp, ti, i, seg))
+                if is_opencode_session(tp):
+                    for i, seg in enumerate(slice_opencode_by_agent(tp, name), 1):
+                        segs.append((tp, ti, i, seg, True))
+                else:
+                    for i, seg in enumerate(slice_transcript_by_skill(tp, name), 1):
+                        segs.append((tp, ti, i, seg, False))
             if not segs:
                 console.print(
                     f"[red]Error:[/red] skill '{name}' 未在此 transcript 中被调用"
@@ -86,12 +97,19 @@ def audit(
             slice_dir = out / "slices"
             slice_dir.mkdir(parents=True, exist_ok=True)
             sliced: list[Path] = []
-            for tp, ti, i, seg in segs:
-                sp = slice_dir / f"{tp.stem}-{name}-{ti}-{i}.jsonl"
-                sp.write_text(
-                    "\n".join(json.dumps(r, ensure_ascii=False) for r in seg),
-                    encoding="utf-8",
-                )
+            for tp, ti, i, seg, is_oc in segs:
+                ext = ".json" if is_oc else ".jsonl"
+                sp = slice_dir / f"{tp.stem}-{name}-{ti}-{i}{ext}"
+                if is_oc:
+                    sp.write_text(
+                        json.dumps(seg, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                else:
+                    sp.write_text(
+                        "\n".join(json.dumps(r, ensure_ascii=False) for r in seg),
+                        encoding="utf-8",
+                    )
                 sliced.append(sp)
             transcript = sliced
 
