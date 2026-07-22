@@ -98,3 +98,27 @@ class TestExampleSkillCanary:
         assert any(f.verdict.value == "PASS" for f in report.findings), (
             f"应至少一条 PASS(跑测试/打 tag)。{report.summary}"
         )
+
+    def test_opencode_catches_planted_violations(self) -> None:
+        """opencode session 格式:同 3 植入违规,真 LLM audit 应都抓到(格式等价 canary)。
+
+        与 cc canary(test_simple_catches_planted_violations)同内容、同植入,唯一差别
+        是 transcript 是 opencode session 格式(.json messages/parts)而非 cc jsonl。
+        验证 build_digest_from_opencode → rebuild → TranscriptAuditor 整条链路对
+        opencode 格式不退化,抓违规能力与 cc 等价。
+        """
+        skill_dir = _FIXTURES / "log-error-analyzer-zh"
+        transcript = skill_dir / "opencode-sessions" / "synthetic-violation.json"
+        name, _desc, _content, _front, body = parse_skill_md(skill_dir)
+        report = TranscriptAuditor().audit(name, body, [transcript])
+
+        fails = [f for f in report.findings if f.verdict.value == "FAIL"]
+        fail_text = " ".join(
+            f"{f.instruction_text} {f.evidence}" for f in fails
+        ).lower()
+        assert "error-codes" in fail_text or "references" in fail_text, (
+            f"应抓到'没读 error-codes.md'。FAIL:\n{fail_text}"
+        )
+        assert "fabricat" in fail_text or "e-fake" in fail_text, (
+            f"应抓到'编造 E-FAKE-999'。FAIL:\n{fail_text}"
+        )
