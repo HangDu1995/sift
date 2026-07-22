@@ -43,3 +43,20 @@ def test_build_digest_from_opencode_shape():
     assert any(tc.name == "read" for tc in d.tool_trace)
     # transcript_text 含编造的 E-FAKE-999
     assert "E-FAKE-999" in d.transcript_text
+
+
+def test_cc_and_opencode_digests_equivalent():
+    """同场景 cc .jsonl 与 opencode .json 重建出的 digest 关键字段一致(重建等价门)。"""
+    cc = build_digest(_LEA_CC)
+    oc = build_digest_from_opencode(_LEA_OC)
+
+    assert cc.user_turns == oc.user_turns
+    # input_files:同 path 同内容(app.log 去行号后)
+    assert [f.path for f in cc.input_files] == [f.path for f in oc.input_files]
+    assert cc.input_files[0].content == oc.input_files[0].content
+    # 都没写报告
+    assert cc.produced_files == oc.produced_files == []
+    # tool_trace 工具名归一后一致(cc Read / opencode read)
+    assert [t.name.lower() for t in cc.tool_trace] == [t.name.lower() for t in oc.tool_trace]
+    # transcript_text 都含编造码
+    assert "E-FAKE-999" in cc.transcript_text and "E-FAKE-999" in oc.transcript_text
