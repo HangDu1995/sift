@@ -6,7 +6,12 @@
 (而非 cc 的 Skill tool_use)。同一 5-run 交错场景(LEA → CRA → RCZ → LEA → CRA),
 agent 切换 = skill 切换。每 run 自带 user 子任务 prompt + assistant 工具工作。
 
-产出(与 cc .jsonl 平级新格式 .json,镜像 opencode session/messages/parts 表结构):
+**输出格式 = 真实 ``opencode export <sessionID>`` 产出**(``{info, messages}``,parts 嵌在
+message 里、role/agent 在 ``message.info``),与 cc fixture 用真 cc jsonl 同理 —— 用真
+opencode export 格式,非自造。``is_opencode_session`` 直接认、``build_digest_from_opencode``
+直接吃,等同 ``opencode export`` 导出的真实会话。
+
+产出:
 - multi-skill.json —— 违规版(各 agent 产物刻意缺字段/缺段)
 - multi-skill-clean.json —— 好版本(产物正确)
 
@@ -80,37 +85,45 @@ REVIEW_REPORT_GOOD_SUB = json.dumps({"file": "src/orders.py",
 
 
 class _Builder:
+    """发射真实 opencode export 形状:{info, messages},parts 嵌在 message 里。"""
+
     def __init__(self):
         self.messages: list[dict] = []
-        self.parts: list[dict] = []
         self._t = 0
-        self._cur_msg: str | None = None
+        self._cur_msg_id: str | None = None
+        self._cur_parts: list[dict] | None = None
 
     def _tick(self):
         self._t += 1
         return self._t
 
-    def user(self, agent: str, text: str):
+    def _msg(self, role: str, agent: str, model: bool = False) -> str:
         mid = _id("msg")
-        self.messages.append({"id": mid, "time_created": self._tick(),
-                              "data": {"role": "user", "agent": agent}})
-        self.parts.append({"id": _id("prt"), "message_id": mid, "time_created": self._tick(),
-                           "data": {"type": "text", "text": text}})
+        info = {"role": role, "agent": agent, "id": mid,
+                "time": {"created": self._tick()}, "sessionID": SESSION}
+        if model:
+            info["modelID"] = MODEL
+        parts: list[dict] = []
+        self.messages.append({"info": info, "parts": parts})
+        self._cur_msg_id = mid
+        self._cur_parts = parts
+        return mid
+
+    def user(self, agent: str, text: str):
+        mid = self._msg("user", agent)
+        self._cur_parts.append({"type": "text", "text": text,
+                                "id": _id("prt"), "sessionID": SESSION, "messageID": mid})
 
     def assistant(self, agent: str, text: str | None = None):
-        mid = _id("msg")
-        self.messages.append({"id": mid, "time_created": self._tick(),
-                              "data": {"role": "assistant", "agent": agent, "model": MODEL}})
+        mid = self._msg("assistant", agent, model=True)
         if text:
-            self.parts.append({"id": _id("prt"), "message_id": mid, "time_created": self._tick(),
-                               "data": {"type": "text", "text": text}})
-        self._cur_msg = mid
+            self._cur_parts.append({"type": "text", "text": text,
+                                    "id": _id("prt"), "sessionID": SESSION, "messageID": mid})
 
     def tool(self, tool: str, input_: dict, output: str = ""):
-        self.parts.append({"id": _id("prt"), "message_id": self._cur_msg, "time_created": self._tick(),
-                           "data": {"type": "tool", "tool": tool,
-                                    "state": {"input": input_, "output": output,
-                                              "status": "completed"}}})
+        self._cur_parts.append({"type": "tool", "tool": tool,
+                                "state": {"status": "completed", "input": input_, "output": output},
+                                "id": _id("prt"), "sessionID": SESSION, "messageID": self._cur_msg_id})
 
     def read(self, path: str, content: str):
         self.tool("read", {"filePath": path}, content)
@@ -121,10 +134,10 @@ class _Builder:
     def bash(self, cmd: str, out: str):
         self.tool("bash", {"command": cmd}, out)
 
-    def session_json(self) -> dict:
-        return {"session": {"id": SESSION, "agent": LEA, "model": MODEL,
-                            "directory": "/tmp/multi-skill-demo", "title": "multi-agent triage"},
-                "messages": self.messages, "parts": self.parts}
+    def export_json(self) -> dict:
+        return {"info": {"id": SESSION, "agent": LEA, "model": {"id": MODEL},
+                         "directory": "/tmp/multi-skill-demo", "title": "multi-agent triage"},
+                "messages": self.messages}
 
 
 def build(clean: bool = False) -> dict:
@@ -167,7 +180,7 @@ def build(clean: bool = False) -> dict:
     b.read("src/orders.py", ORDERS_PY)
     b.bash("grep -n except src/orders.py", "2:    except:")
     b.write("review-report.json", rev_sub)
-    return b.session_json()
+    return b.export_json()
 
 
 def main() -> None:

@@ -282,11 +282,11 @@ skill-eval audit /path/to/skill/ --transcript run-1/transcript.jsonl -o audit-ou
 skill-eval audit /path/to/skill/ --transcript a.jsonl --transcript b.jsonl --format json --open
 # transcript 里调了多个 skill,只对账本 skill 被调用的段:
 skill-eval audit /path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
-# opencode 跑出的 session(从 opencode.db 导出的单 session .json,含 session/messages/parts):
+# opencode 跑出的 session(`opencode export <sessionID>` 导出,顶层 info/messages、parts 嵌在 message 里):
 skill-eval audit /path/to/skill/ --transcript opencode-session.json
 ```
 
-> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`（逐行 JSON 记录，含 `Skill`/`Read`/`Write`/`Bash` tool_use）；opencode session `.json`（从 `opencode.db` 导出的单 session，顶层 `session`/`messages`/`parts` 三键，tool part 的 `state` 一体含 input+output，per-message `agent` 字段标 skill）。两者重建成同一 `SessionDigest` 再对账。run 产的 `transcript.jsonl` 永远是 cc 格式（run 只 spawn cc）。
+> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`（逐行 JSON 记录，含 `Skill`/`Read`/`Write`/`Bash` tool_use）；opencode session `.json`（`opencode export <sessionID>` 的产出，顶层 `info`/`messages`，parts 嵌在 message 里、role/agent 在 `message.info`）。两者重建成同一 `SessionDigest` 再对账。生产导出：`opencode session list` 找 id → `opencode export <id> > session.json`（`--sanitize` 可脱敏分享）。run 产的 `transcript.jsonl` 永远是 cc 格式（run 只 spawn cc）。
 
 | 参数 | 默认 | 说明 |
 |---|---|---|

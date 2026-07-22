@@ -20,7 +20,7 @@
 >
 > 另两个不带这种 transcript:`code-review-auditor` 走路径1 真任务(自己 run 出来再审),`multi-skill-demo` 靠 `build_multi_skill.py` 脚本生成(验的是切分纯度,不是确定性违规)。
 >
-> **opencode 格式 transcript(`opencode-sessions/`)**:audit `--transcript` 除 cc `.jsonl` 外也吃 **opencode session `.json`**(从 `opencode.db` 导出的单 session,顶层 `session`/`messages`/`parts` 三键;tool part 的 `state` 一体含 input+output,per-message `agent` 字段标 skill)。两者重建成同一 `SessionDigest`、对账等价。`log-error-analyzer-zh/opencode-sessions/synthetic-violation.json` 是 cc 同名 `.jsonl` 的 opencode 镜像(同 prompt、同 3 植入违规、同样不写报告);多 skill 版见下面 multi-skill-demo 的 `build_multi_skill_opencode.py`。opencode 直读 `.db` 暂不支持(B 路径),生产手动导出单 session 到 `.json` 再审。
+> **opencode 格式 transcript(`opencode-sessions/`)**:audit `--transcript` 除 cc `.jsonl` 外也吃 **opencode session `.json`** —— 即真实 `opencode export <sessionID>` 的产出(顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`;与 cc fixture 用真 cc jsonl 同理,用真 opencode export 格式,非自造)。两者重建成同一 `SessionDigest`、对账等价。`log-error-analyzer-zh/opencode-sessions/synthetic-violation.json` 是 cc 同名 `.jsonl` 的 opencode 镜像(同 prompt、同 3 植入违规、同样不写报告);多 skill 版见下面 multi-skill-demo 的 `build_multi_skill_opencode.py`。生产导出真会话:`opencode session list` 找 id → `opencode export <id> > session.json` → audit。
 
 ## 每个怎么跑
 
@@ -65,7 +65,7 @@ skill-eval analyze fixtures/example-skills/log-error-analyzer-zh/
 skill-eval run fixtures/example-skills/log-error-analyzer-zh/ --runs 3                               # 路径3:跑自带的 evals.json
 skill-eval audit fixtures/example-skills/log-error-analyzer-zh/ \
   --transcript fixtures/example-skills/log-error-analyzer-zh/transcripts/synthetic-violation.jsonl   # 路径2(cc 格式)
-# 同一份违规场景的 opencode 格式镜像(从 opencode.db 导出的单 session .json,同 prompt/同 3 植入违规):
+# 同一份违规场景的 opencode 格式镜像(`opencode export` 产出的真格式,同 prompt/同 3 植入违规):
 skill-eval audit fixtures/example-skills/log-error-analyzer-zh/ \
   --transcript fixtures/example-skills/log-error-analyzer-zh/opencode-sessions/synthetic-violation.json
 # 想重新生成考卷(会覆盖自带版,两种方式):

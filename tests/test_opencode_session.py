@@ -14,12 +14,12 @@ _LEA_CC = _FIX / "log-error-analyzer-zh" / "transcripts" / "synthetic-violation.
 
 
 def test_is_opencode_session_by_extension_and_shape(tmp_path):
-    # .json + 三键 → True;.jsonl / 缺键 / 坏 JSON → False
+    # .json + 两键(info/messages)→ True;.jsonl / 缺键 / 坏 JSON → False
     assert is_opencode_session(_LEA_OC) is True
     assert is_opencode_session(_LEA_CC) is False  # .jsonl
     bad = tmp_path / "bad.json"
     bad.write_text('{"not": "a session"}', encoding="utf-8")
-    assert is_opencode_session(bad) is False  # 缺 session/messages/parts
+    assert is_opencode_session(bad) is False  # 缺 info/messages
     ugly = tmp_path / "ugly.json"
     ugly.write_text("{not valid", encoding="utf-8")
     assert is_opencode_session(ugly) is False  # 坏 JSON(JSONDecodeError 分支)
@@ -27,7 +27,7 @@ def test_is_opencode_session_by_extension_and_shape(tmp_path):
 
 def test_build_digest_from_opencode_shape():
     d = build_digest_from_opencode(_LEA_OC)
-    # skill_used = session.agent
+    # skill_used = info.agent
     assert d.skill_used == "log-error-analyzer"
     # user_turn = prompt
     assert d.user_turns == ["分析 logs/app.log 里的错误,写 error-report.json"]
@@ -107,10 +107,10 @@ def test_slice_opencode_by_agent_segments():
 
 
 def test_slice_opencode_purity_and_skill_used():
-    """每段只含 target agent 的 message;子 session.agent = target(rebuild 取 skill_used)。
+    """每段只含 target agent 的 message;子 info.agent = target(rebuild 取 skill_used)。
 
-    CRA(非顶层 agent)锁 override:fixture 顶层 session.agent 是 LEA,若 slicer 没把
-    子段 session.agent 改写为 target,CRA 段会继承 LEA → skill_used 错。所以必须用 CRA
+    CRA(非顶层 agent)锁 override:fixture 顶层 info.agent 是 LEA,若 slicer 没把
+    子段 info.agent 改写为 target,CRA 段会继承 LEA → skill_used 错。所以必须用 CRA
     验 override,光验 LEA(顶层本就是 LEA)是 no-op 断言。
     """
     import json
@@ -127,10 +127,10 @@ def test_slice_opencode_purity_and_skill_used():
         segs = slice_opencode_by_agent(_MULTI_OC, target)
         assert segs  # 两 agent 都有段
         for seg in segs:
-            # 纯度:段内 message 全是 target
-            assert {m.get("data", {}).get("agent") for m in seg["messages"]} == {target}
-            # override:子 session.agent 改写为 target(CRA 才真验)
-            assert seg["session"]["agent"] == target
+            # 纯度:段内 message.info.agent 全是 target
+            assert {m.get("info", {}).get("agent") for m in seg["messages"]} == {target}
+            # override:子 info.agent 改写为 target(CRA 才真验)
+            assert seg["info"]["agent"] == target
             # 端到端:rebuild → skill_used = target
             assert _skill_used_of(seg) == target
 
@@ -142,3 +142,22 @@ def test_slice_opencode_purity_and_skill_used():
         d = build_digest_from_opencode(p)
         assert d.user_turns
         assert any(tc.name == "read" for tc in d.tool_trace)
+
+
+# 真 `opencode export` 产出的会话(本地 /tmp/oc_export.json,缺席则 skip)。
+# 证明 build_digest_from_opencode 吃的是真实生产格式,非自造。生成:
+#   opencode session list  # 找 sessionID
+#   opencode export <sessionID> > /tmp/oc_export.json
+_REAL_EXPORT = Path("/tmp/oc_export.json")
+
+
+def test_real_opencode_export_consumed():
+    """真 opencode export 输出能被 build_digest_from_opencode 消费(非自造格式证明)。"""
+    if not _REAL_EXPORT.exists():
+        import pytest
+        pytest.skip(f"无真 export fixture:({_REAL_EXPORT};生成见上注释)")
+    assert is_opencode_session(_REAL_EXPORT) is True
+    d = build_digest_from_opencode(_REAL_EXPORT)
+    # 真 session 有 tool_trace(该 session 跑了 read/bash/write 等)或至少有内容
+    assert d.tool_trace or d.transcript_text or d.user_turns
+    assert d.skill_used  # info.agent 非空

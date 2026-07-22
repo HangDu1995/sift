@@ -1,404 +1,412 @@
 {
-  "session": {
+  "info": {
     "id": "synth-multi-skill-oc",
     "agent": "log-error-analyzer",
-    "model": "glm-5.2",
+    "model": {
+      "id": "glm-5.2"
+    },
     "directory": "/tmp/multi-skill-demo",
     "title": "multi-agent triage"
   },
   "messages": [
     {
-      "id": "msg_001",
-      "time_created": 1,
-      "data": {
+      "info": {
         "role": "user",
-        "agent": "log-error-analyzer"
-      }
+        "agent": "log-error-analyzer",
+        "id": "msg_001",
+        "time": {
+          "created": 1
+        },
+        "sessionID": "synth-multi-skill-oc"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "分析 logs/app.log 里的错误,写 error-report.json",
+          "id": "prt_002",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_001"
+        }
+      ]
     },
     {
-      "id": "msg_003",
-      "time_created": 3,
-      "data": {
+      "info": {
         "role": "assistant",
         "agent": "log-error-analyzer",
-        "model": "glm-5.2"
-      }
+        "id": "msg_003",
+        "time": {
+          "created": 2
+        },
+        "sessionID": "synth-multi-skill-oc",
+        "modelID": "glm-5.2"
+      },
+      "parts": [
+        {
+          "type": "tool",
+          "tool": "read",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "logs/app.log"
+            },
+            "output": "2026-07-14 10:22:01 ERROR [E1002] disk quota exceeded on /var/data\n2026-07-14 10:24:02 ERROR [E9001] unknown auth failure for user alice\n"
+          },
+          "id": "prt_004",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_003"
+        },
+        {
+          "type": "tool",
+          "tool": "read",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "references/error-codes.md"
+            },
+            "output": "# Error codes\n- E1002: disk quota exceeded\n"
+          },
+          "id": "prt_005",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_003"
+        },
+        {
+          "type": "tool",
+          "tool": "write",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "error-report.json",
+              "content": "{\n  \"errors\": [\n    {\n      \"code\": \"E1002\",\n      \"message\": \"disk quota exceeded on /var/data\",\n      \"line_number\": 1\n    },\n    {\n      \"code\": \"E9001\",\n      \"message\": \"unknown auth failure for user alice\",\n      \"line_number\": 2\n    }\n  ]\n}"
+            },
+            "output": "wrote error-report.json"
+          },
+          "id": "prt_006",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_003"
+        }
+      ]
     },
     {
-      "id": "msg_007",
-      "time_created": 7,
-      "data": {
+      "info": {
         "role": "user",
-        "agent": "code-review-auditor"
-      }
+        "agent": "code-review-auditor",
+        "id": "msg_007",
+        "time": {
+          "created": 3
+        },
+        "sessionID": "synth-multi-skill-oc"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "review src/payment.py,写 review-report.json",
+          "id": "prt_008",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_007"
+        }
+      ]
     },
     {
-      "id": "msg_009",
-      "time_created": 9,
-      "data": {
+      "info": {
         "role": "assistant",
         "agent": "code-review-auditor",
-        "model": "glm-5.2"
-      }
+        "id": "msg_009",
+        "time": {
+          "created": 4
+        },
+        "sessionID": "synth-multi-skill-oc",
+        "modelID": "glm-5.2"
+      },
+      "parts": [
+        {
+          "type": "tool",
+          "tool": "read",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "src/payment.py"
+            },
+            "output": "def charge(amount):\n    if amount = 0:\n        return None\n    return process(amount)\n"
+          },
+          "id": "prt_010",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_009"
+        },
+        {
+          "type": "tool",
+          "tool": "read",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "references/code-patterns.md"
+            },
+            "output": "# Patterns\n- assignment-in-conditional: `if x = y:` is a bug (use ==)\n"
+          },
+          "id": "prt_011",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_009"
+        },
+        {
+          "type": "tool",
+          "tool": "write",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "review-report.json",
+              "content": "{\n  \"file\": \"src/payment.py\",\n  \"issues\": [\n    {\n      \"line\": 2,\n      \"severity\": \"high\",\n      \"category\": \"assignment-in-conditional\",\n      \"description\": \"assignment in conditional; use ==\"\n    }\n  ]\n}"
+            },
+            "output": "wrote review-report.json"
+          },
+          "id": "prt_012",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_009"
+        }
+      ]
     },
     {
-      "id": "msg_013",
-      "time_created": 13,
-      "data": {
+      "info": {
         "role": "user",
-        "agent": "release-checklist-zh"
-      }
+        "agent": "release-checklist-zh",
+        "id": "msg_013",
+        "time": {
+          "created": 5
+        },
+        "sessionID": "synth-multi-skill-oc"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "做发布检查",
+          "id": "prt_014",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_013"
+        }
+      ]
     },
     {
-      "id": "msg_015",
-      "time_created": 15,
-      "data": {
+      "info": {
         "role": "assistant",
         "agent": "release-checklist-zh",
-        "model": "glm-5.2"
-      }
+        "id": "msg_015",
+        "time": {
+          "created": 6
+        },
+        "sessionID": "synth-multi-skill-oc",
+        "modelID": "glm-5.2"
+      },
+      "parts": [
+        {
+          "type": "tool",
+          "tool": "bash",
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "pytest -q"
+            },
+            "output": "3 passed in 0.42s"
+          },
+          "id": "prt_016",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_015"
+        },
+        {
+          "type": "tool",
+          "tool": "bash",
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "ruff check ."
+            },
+            "output": "All checks passed!"
+          },
+          "id": "prt_017",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_015"
+        },
+        {
+          "type": "tool",
+          "tool": "read",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "references/dependency-policy.md"
+            },
+            "output": "# Dependency policy\n- no new high-risk deps\n"
+          },
+          "id": "prt_018",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_015"
+        },
+        {
+          "type": "tool",
+          "tool": "write",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "CHANGELOG.md",
+              "content": "## [未发布]\n### 新增\n- payment 模块错误处理改进\n"
+            },
+            "output": "wrote CHANGELOG.md"
+          },
+          "id": "prt_019",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_015"
+        },
+        {
+          "type": "tool",
+          "tool": "bash",
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "git tag v1.2.0"
+            },
+            "output": "Tagged v1.2.0"
+          },
+          "id": "prt_020",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_015"
+        }
+      ]
     },
     {
-      "id": "msg_021",
-      "time_created": 21,
-      "data": {
+      "info": {
         "role": "user",
-        "agent": "log-error-analyzer"
-      }
+        "agent": "log-error-analyzer",
+        "id": "msg_021",
+        "time": {
+          "created": 7
+        },
+        "sessionID": "synth-multi-skill-oc"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "分析 logs/auth.log",
+          "id": "prt_022",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_021"
+        }
+      ]
     },
     {
-      "id": "msg_023",
-      "time_created": 23,
-      "data": {
+      "info": {
         "role": "assistant",
         "agent": "log-error-analyzer",
-        "model": "glm-5.2"
-      }
+        "id": "msg_023",
+        "time": {
+          "created": 8
+        },
+        "sessionID": "synth-multi-skill-oc",
+        "modelID": "glm-5.2"
+      },
+      "parts": [
+        {
+          "type": "tool",
+          "tool": "read",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "logs/auth.log"
+            },
+            "output": "2026-07-14 11:00:10 ERROR [E1003] network timeout contacting auth-service\n"
+          },
+          "id": "prt_024",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_023"
+        },
+        {
+          "type": "tool",
+          "tool": "write",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "error-report.json",
+              "content": "{\n  \"errors\": [\n    {\n      \"code\": \"E1002\",\n      \"message\": \"disk quota exceeded on /var/data\",\n      \"line_number\": 1\n    },\n    {\n      \"code\": \"E9001\",\n      \"message\": \"unknown auth failure for user alice\",\n      \"line_number\": 2\n    }\n  ]\n}"
+            },
+            "output": "wrote error-report.json"
+          },
+          "id": "prt_025",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_023"
+        }
+      ]
     },
     {
-      "id": "msg_026",
-      "time_created": 26,
-      "data": {
+      "info": {
         "role": "user",
-        "agent": "code-review-auditor"
-      }
+        "agent": "code-review-auditor",
+        "id": "msg_026",
+        "time": {
+          "created": 9
+        },
+        "sessionID": "synth-multi-skill-oc"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "review src/orders.py,写 review-report.json",
+          "id": "prt_027",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_026"
+        }
+      ]
     },
     {
-      "id": "msg_028",
-      "time_created": 28,
-      "data": {
+      "info": {
         "role": "assistant",
         "agent": "code-review-auditor",
-        "model": "glm-5.2"
-      }
-    }
-  ],
-  "parts": [
-    {
-      "id": "prt_002",
-      "message_id": "msg_001",
-      "time_created": 2,
-      "data": {
-        "type": "text",
-        "text": "分析 logs/app.log 里的错误,写 error-report.json"
-      }
-    },
-    {
-      "id": "prt_004",
-      "message_id": "msg_003",
-      "time_created": 4,
-      "data": {
-        "type": "tool",
-        "tool": "read",
-        "state": {
-          "input": {
-            "filePath": "logs/app.log"
+        "id": "msg_028",
+        "time": {
+          "created": 10
+        },
+        "sessionID": "synth-multi-skill-oc",
+        "modelID": "glm-5.2"
+      },
+      "parts": [
+        {
+          "type": "tool",
+          "tool": "read",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "src/orders.py"
+            },
+            "output": "def fulfill(order):\n    except:\n        pass\n    return True\n"
           },
-          "output": "2026-07-14 10:22:01 ERROR [E1002] disk quota exceeded on /var/data\n2026-07-14 10:24:02 ERROR [E9001] unknown auth failure for user alice\n",
-          "status": "completed"
-        }
-      }
-    },
-    {
-      "id": "prt_005",
-      "message_id": "msg_003",
-      "time_created": 5,
-      "data": {
-        "type": "tool",
-        "tool": "read",
-        "state": {
-          "input": {
-            "filePath": "references/error-codes.md"
+          "id": "prt_029",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_028"
+        },
+        {
+          "type": "tool",
+          "tool": "bash",
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "grep -n except src/orders.py"
+            },
+            "output": "2:    except:"
           },
-          "output": "# Error codes\n- E1002: disk quota exceeded\n",
-          "status": "completed"
-        }
-      }
-    },
-    {
-      "id": "prt_006",
-      "message_id": "msg_003",
-      "time_created": 6,
-      "data": {
-        "type": "tool",
-        "tool": "write",
-        "state": {
-          "input": {
-            "filePath": "error-report.json",
-            "content": "{\n  \"errors\": [\n    {\n      \"code\": \"E1002\",\n      \"message\": \"disk quota exceeded on /var/data\",\n      \"line_number\": 1\n    },\n    {\n      \"code\": \"E9001\",\n      \"message\": \"unknown auth failure for user alice\",\n      \"line_number\": 2\n    }\n  ]\n}"
+          "id": "prt_030",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_028"
+        },
+        {
+          "type": "tool",
+          "tool": "write",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "review-report.json",
+              "content": "{\n  \"file\": \"src/orders.py\",\n  \"issues\": [\n    {\n      \"line\": 2,\n      \"severity\": \"medium\",\n      \"category\": \"bare-except\",\n      \"description\": \"bare except swallows all errors\"\n    }\n  ]\n}"
+            },
+            "output": "wrote review-report.json"
           },
-          "output": "wrote error-report.json",
-          "status": "completed"
+          "id": "prt_031",
+          "sessionID": "synth-multi-skill-oc",
+          "messageID": "msg_028"
         }
-      }
-    },
-    {
-      "id": "prt_008",
-      "message_id": "msg_007",
-      "time_created": 8,
-      "data": {
-        "type": "text",
-        "text": "review src/payment.py,写 review-report.json"
-      }
-    },
-    {
-      "id": "prt_010",
-      "message_id": "msg_009",
-      "time_created": 10,
-      "data": {
-        "type": "tool",
-        "tool": "read",
-        "state": {
-          "input": {
-            "filePath": "src/payment.py"
-          },
-          "output": "def charge(amount):\n    if amount = 0:\n        return None\n    return process(amount)\n",
-          "status": "completed"
-        }
-      }
-    },
-    {
-      "id": "prt_011",
-      "message_id": "msg_009",
-      "time_created": 11,
-      "data": {
-        "type": "tool",
-        "tool": "read",
-        "state": {
-          "input": {
-            "filePath": "references/code-patterns.md"
-          },
-          "output": "# Patterns\n- assignment-in-conditional: `if x = y:` is a bug (use ==)\n",
-          "status": "completed"
-        }
-      }
-    },
-    {
-      "id": "prt_012",
-      "message_id": "msg_009",
-      "time_created": 12,
-      "data": {
-        "type": "tool",
-        "tool": "write",
-        "state": {
-          "input": {
-            "filePath": "review-report.json",
-            "content": "{\n  \"file\": \"src/payment.py\",\n  \"issues\": [\n    {\n      \"line\": 2,\n      \"severity\": \"high\",\n      \"category\": \"assignment-in-conditional\",\n      \"description\": \"assignment in conditional; use ==\"\n    }\n  ]\n}"
-          },
-          "output": "wrote review-report.json",
-          "status": "completed"
-        }
-      }
-    },
-    {
-      "id": "prt_014",
-      "message_id": "msg_013",
-      "time_created": 14,
-      "data": {
-        "type": "text",
-        "text": "做发布检查"
-      }
-    },
-    {
-      "id": "prt_016",
-      "message_id": "msg_015",
-      "time_created": 16,
-      "data": {
-        "type": "tool",
-        "tool": "bash",
-        "state": {
-          "input": {
-            "command": "pytest -q"
-          },
-          "output": "3 passed in 0.42s",
-          "status": "completed"
-        }
-      }
-    },
-    {
-      "id": "prt_017",
-      "message_id": "msg_015",
-      "time_created": 17,
-      "data": {
-        "type": "tool",
-        "tool": "bash",
-        "state": {
-          "input": {
-            "command": "ruff check ."
-          },
-          "output": "All checks passed!",
-          "status": "completed"
-        }
-      }
-    },
-    {
-      "id": "prt_018",
-      "message_id": "msg_015",
-      "time_created": 18,
-      "data": {
-        "type": "tool",
-        "tool": "read",
-        "state": {
-          "input": {
-            "filePath": "references/dependency-policy.md"
-          },
-          "output": "# Dependency policy\n- no new high-risk deps\n",
-          "status": "completed"
-        }
-      }
-    },
-    {
-      "id": "prt_019",
-      "message_id": "msg_015",
-      "time_created": 19,
-      "data": {
-        "type": "tool",
-        "tool": "write",
-        "state": {
-          "input": {
-            "filePath": "CHANGELOG.md",
-            "content": "## [未发布]\n### 新增\n- payment 模块错误处理改进\n"
-          },
-          "output": "wrote CHANGELOG.md",
-          "status": "completed"
-        }
-      }
-    },
-    {
-      "id": "prt_020",
-      "message_id": "msg_015",
-      "time_created": 20,
-      "data": {
-        "type": "tool",
-        "tool": "bash",
-        "state": {
-          "input": {
-            "command": "git tag v1.2.0"
-          },
-          "output": "Tagged v1.2.0",
-          "status": "completed"
-        }
-      }
-    },
-    {
-      "id": "prt_022",
-      "message_id": "msg_021",
-      "time_created": 22,
-      "data": {
-        "type": "text",
-        "text": "分析 logs/auth.log"
-      }
-    },
-    {
-      "id": "prt_024",
-      "message_id": "msg_023",
-      "time_created": 24,
-      "data": {
-        "type": "tool",
-        "tool": "read",
-        "state": {
-          "input": {
-            "filePath": "logs/auth.log"
-          },
-          "output": "2026-07-14 11:00:10 ERROR [E1003] network timeout contacting auth-service\n",
-          "status": "completed"
-        }
-      }
-    },
-    {
-      "id": "prt_025",
-      "message_id": "msg_023",
-      "time_created": 25,
-      "data": {
-        "type": "tool",
-        "tool": "write",
-        "state": {
-          "input": {
-            "filePath": "error-report.json",
-            "content": "{\n  \"errors\": [\n    {\n      \"code\": \"E1002\",\n      \"message\": \"disk quota exceeded on /var/data\",\n      \"line_number\": 1\n    },\n    {\n      \"code\": \"E9001\",\n      \"message\": \"unknown auth failure for user alice\",\n      \"line_number\": 2\n    }\n  ]\n}"
-          },
-          "output": "wrote error-report.json",
-          "status": "completed"
-        }
-      }
-    },
-    {
-      "id": "prt_027",
-      "message_id": "msg_026",
-      "time_created": 27,
-      "data": {
-        "type": "text",
-        "text": "review src/orders.py,写 review-report.json"
-      }
-    },
-    {
-      "id": "prt_029",
-      "message_id": "msg_028",
-      "time_created": 29,
-      "data": {
-        "type": "tool",
-        "tool": "read",
-        "state": {
-          "input": {
-            "filePath": "src/orders.py"
-          },
-          "output": "def fulfill(order):\n    except:\n        pass\n    return True\n",
-          "status": "completed"
-        }
-      }
-    },
-    {
-      "id": "prt_030",
-      "message_id": "msg_028",
-      "time_created": 30,
-      "data": {
-        "type": "tool",
-        "tool": "bash",
-        "state": {
-          "input": {
-            "command": "grep -n except src/orders.py"
-          },
-          "output": "2:    except:",
-          "status": "completed"
-        }
-      }
-    },
-    {
-      "id": "prt_031",
-      "message_id": "msg_028",
-      "time_created": 31,
-      "data": {
-        "type": "tool",
-        "tool": "write",
-        "state": {
-          "input": {
-            "filePath": "review-report.json",
-            "content": "{\n  \"file\": \"src/orders.py\",\n  \"issues\": [\n    {\n      \"line\": 2,\n      \"severity\": \"medium\",\n      \"category\": \"bare-except\",\n      \"description\": \"bare except swallows all errors\"\n    }\n  ]\n}"
-          },
-          "output": "wrote review-report.json",
-          "status": "completed"
-        }
-      }
+      ]
     }
   ]
 }

@@ -1,12 +1,15 @@
-"""opencode session(JSON)→ SessionDigest:把 opencode 单 session JSON 解析成 digest。
+"""opencode session(JSON)→ SessionDigest:把 opencode export 导出的单 session 解析成 digest。
 
-平行派(非归一):与 cc 的 ``build_digest`` 平级,opencode 的 message/part 结构、tool 一体
-的 state、per-message agent 字段都走原生解析,不捏成 cc record 形状。重建逻辑镜像 cc
+**格式 = ``opencode export <sessionID>`` 的真实产出**(与 cc fixture 用真 cc jsonl 同理,
+用真 opencode export 格式,非自造):顶层 ``{info, messages}``,messages 各带嵌套 ``parts``
+(``message.info`` 含 role/agent),part 的 ``state`` 一体含 input+output。
+
+与 cc 的 ``build_digest`` 平级(平行派,cc 代码零改动),重建逻辑镜像 cc
 (read→input_files、write→produced_files、bash→commands),字段名按 opencode(filePath)。
+parts 嵌在 message 里 → 不用像 cc 那样按 tool_use_id 两趟关联(更简单)。
 
-复用 cc ``transcript`` 的共享重建 helper(_strip_line_numbers/_detect_root/_rel/
-_BASH_WRITE_RE + FileContent/Command/SessionDigest),cc 模块零改动。耦合到 cc 私有 helper
-是已知技术债(后续可把 helper 提为公共)。
+复用 cc ``transcript`` 的共享重建 helper,cc 模块零改动。耦合到 cc 私有 helper 是已知
+技术债(后续可把 helper 提为公共)。
 """
 from __future__ import annotations
 
@@ -21,22 +24,25 @@ from skill_eval.models import ToolCallRecord
 
 
 def is_opencode_session(path: Path) -> bool:
-    """opencode session JSON:.json 后缀 + 顶层有 session/messages/parts 三键。"""
+    """opencode export 产物:.json 后缀 + 顶层有 info/messages 两键。"""
     if path.suffix != ".json":
         return False
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return False
-    return isinstance(data, dict) and {"session", "messages", "parts"} <= set(data)
+    return isinstance(data, dict) and {"info", "messages"} <= set(data)
 
 
 def load_opencode_session(path: Path) -> dict:
-    """读 JSON,按 time_created 排序 messages/parts,返回 {session, messages, parts}。"""
+    """读 export JSON,返回 {info, messages}(messages 按 info.time.created 排序;export 本
+    已有序,此为保险)。"""
     data = json.loads(path.read_text(encoding="utf-8"))
-    msgs = sorted(data.get("messages") or [], key=lambda m: m.get("time_created", 0))
-    parts = sorted(data.get("parts") or [], key=lambda p: p.get("time_created", 0))
-    return {"session": data.get("session") or {}, "messages": msgs, "parts": parts}
+    msgs = sorted(
+        data.get("messages") or [],
+        key=lambda m: ((m.get("info") or {}).get("time") or {}).get("created", 0),
+    )
+    return {"info": data.get("info") or {}, "messages": msgs}
 
 
 def _file_path(inp: dict) -> str:
@@ -45,16 +51,16 @@ def _file_path(inp: dict) -> str:
 
 
 def build_digest_from_opencode(path: Path, root: str | None = None) -> SessionDigest:
-    """解析 opencode 单 session JSON → SessionDigest(重建逻辑镜像 cc build_digest)。
+    """解析 opencode export 单 session → SessionDigest(重建逻辑镜像 cc build_digest)。
 
-    假定 tool part 的 ``state.output`` / ``state.input.content`` 为字符串(合成 fixture
-    与真实 opencode 文本输出均如此);若某 opencode 版本把 output 存成 dict/list,read/bash
-    分支的 ``_strip_line_numbers(out)`` / 切片会 TypeError —— 届时在此 guard,v1 不预判。
+    假定 tool part 的 ``state.output`` / ``state.input.content`` 为字符串(export 文本输出
+    均如此);若某版本存 dict/list,read/bash 分支会 TypeError —— 届时 guard,v1 不预判。
+
+    注:opencode read 的 output 可能带 ``<path>...<content>...</content>`` XML 包裹(真 export
+    如此),v1 原样保留(内容在、audit 可用);手写 fixture 用裸内容以与 cc 逐字节对照。
     """
     sess = load_opencode_session(path)
-    parts_by_msg: dict[str, list[dict]] = {}
-    for p in sess["parts"]:
-        parts_by_msg.setdefault(p.get("message_id"), []).append(p)
+    info = sess["info"]
 
     user_turns: list[str] = []
     reads: dict[str, str] = {}            # path -> stripped initial content
@@ -71,21 +77,20 @@ def build_digest_from_opencode(path: Path, root: str | None = None) -> SessionDi
             all_paths.append(p)
 
     for m in sess["messages"]:
-        mobj = m.get("data") or {}
-        role = mobj.get("role")
-        for p in parts_by_msg.get(m.get("id"), []):
-            pdata = p.get("data") or {}
-            ptype = pdata.get("type")
+        mi = m.get("info") or {}
+        role = mi.get("role")
+        for p in m.get("parts") or []:
+            ptype = p.get("type")
             if ptype == "text":
-                t = pdata.get("text", "")
+                t = p.get("text", "")
                 if role == "user":
                     if t and not t.startswith("<"):
                         user_turns.append(t)
                 elif role == "assistant" and t:
                     transcript_text_parts.append(t)
             elif ptype == "tool":
-                tool = (pdata.get("tool") or "").lower()
-                state = pdata.get("state") or {}
+                tool = (p.get("tool") or "").lower()
+                state = p.get("state") or {}
                 inp = state.get("input") or {}
                 tool_trace.append(ToolCallRecord(
                     name=tool,
@@ -123,7 +128,7 @@ def build_digest_from_opencode(path: Path, root: str | None = None) -> SessionDi
               for p in read_order if p not in written]
 
     return SessionDigest(
-        skill_used=sess["session"].get("agent"),
+        skill_used=info.get("agent"),
         user_turns=user_turns,
         input_files=inputs,
         produced_files=produced,
@@ -134,16 +139,17 @@ def build_digest_from_opencode(path: Path, root: str | None = None) -> SessionDi
 
 
 def slice_opencode_by_agent(path: Path, target_agent: str) -> list[dict]:
-    """按连续 message 的 data.agent == target_agent 切段。
+    """按连续 message 的 info.agent == target_agent 切段。
 
-    每段返回一个子 opencode session JSON({session, messages, parts}),session.agent 设为
-    target(rebuild 经 build_digest_from_opencode 取 skill_used 用)。target 未出现 → []。
+    每段返回一个子 opencode export JSON(``{info, messages}``,parts 嵌在 message 里跟着走,
+    无需单独过滤),info.agent 设为 target(rebuild 经 build_digest_from_opencode 取 skill_used)。
+    target 未出现 → []。
 
-    平扁切分(诚实局限):opencode 的 agent 字段无父子作用域,不同于 cc 的 parent_tool_use_id
+    扁平切分(诚实局限):opencode 的 agent 字段无父子作用域,不同于 cc 的 parent_tool_use_id
     scope-aware 切分;子 agent(如 opencode task 工具)在扁平模型里就是另一段 agent run。
     """
     sess = load_opencode_session(path)
-    session_meta = dict(sess["session"])
+    info_meta = dict(sess["info"])
     msgs = sess["messages"]
 
     segments: list[dict] = []
@@ -151,17 +157,14 @@ def slice_opencode_by_agent(path: Path, target_agent: str) -> list[dict]:
 
     def _flush():
         if cur:
-            cur_ids = {m.get("id") for m in cur}
-            sub_parts = [p for p in sess["parts"] if p.get("message_id") in cur_ids]
             segments.append({
-                "session": {**session_meta, "agent": target_agent},
+                "info": {**info_meta, "agent": target_agent},
                 "messages": list(cur),
-                "parts": sub_parts,
             })
             cur.clear()
 
     for m in msgs:
-        if (m.get("data") or {}).get("agent") == target_agent:
+        if (m.get("info") or {}).get("agent") == target_agent:
             cur.append(m)
         else:
             _flush()
