@@ -667,6 +667,29 @@ class TestReportGeneratorStatic:
         # 数据流(文档性):insights 真嵌入 EMBEDDED_DATA
         assert "winner_execution_pattern" in html
 
+    def test_generate_html_loser_instruction_following_null_shows_na(self, tmp_path):
+        """败者(without 基线)遵循度 score=null 时显「N/A(无 skill 基线)」,不显假 ?/10 或 0/10。
+        回归:无 skill 侧不该有遵循度数字(遵循性引擎只跑 with_skill)。"""
+        import json as _json, re as _re
+        from skill_eval.reporting.viewer import ReportGenerator
+        workspace = tmp_path / "iteration-1"; workspace.mkdir()
+        benchmark = {
+            "metadata": {"skill_name": "x"}, "runs": [], "run_summary": {},
+            "analysis": {
+                "winner_strengths": ["s"], "loser_weaknesses": [],
+                "instruction_following": {
+                    "winner": {"score": 10, "issues": []},
+                    "loser": {"score": None, "issues": ["N/A — 无 skill 基线"]},
+                },
+                "improvement_suggestions": [],
+            },
+        }
+        html = ReportGenerator().generate_html(workspace, benchmark)
+        # 模板对 null score 显 N/A(模板字面锚点)
+        assert "N/A(无 skill 基线)" in html
+        # 模板逻辑不再无脑拼 "/10"(防 score=null 显 "null/10" 或 "?/10")
+        assert "败者指令遵循度" in html
+
     def test_generate_html_comparison_renders_expectation_results(self, tmp_path):
         """C: comparison.expectation_results (dict[label→{passed,total,pass_rate,details}]) 旧只 normalize 不渲染 → 补展示。
 

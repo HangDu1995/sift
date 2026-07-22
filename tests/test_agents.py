@@ -362,10 +362,36 @@ class TestPosthocAnalyzer:
         prompt = a._build_comparison_prompt(
             "A", "winner skill content", "loser skill content",
             "A was better", "winner transcript", "loser transcript",
+            focus_skill="focus skill content",
         )
         assert "WINNER SKILL" in prompt
         assert "LOSER SKILL" in prompt
         assert "A was better" in prompt
+        # focus_skill 作为改进对象显式注入(独立段)
+        assert "FOCUS SKILL" in prompt
+        assert "focus skill content" in prompt
+
+    def test_instruction_following_score_allows_null(self):
+        """无 skill 侧(without)遵循度 N/A:score=null(不打分),非假 0/10。
+        model 必须接受 score=None(LLM 产 null 时解析为 None,viewer 据此显 N/A)。"""
+        from skill_eval.models.analysis_models import AnalysisInstructionFollowing
+        na = AnalysisInstructionFollowing(score=None, issues=["N/A — 无 skill 基线"])
+        dumped = na.model_dump()
+        assert dumped["score"] is None
+        assert dumped["issues"] == ["N/A — 无 skill 基线"]
+        # 有 skill 侧正常打分(0-10 int)不受影响
+        assert AnalysisInstructionFollowing(score=8, issues=[]).model_dump()["score"] == 8
+
+    def test_analyzer_prompt_focus_skill_and_null_score_rules(self):
+        """analyzer.md Mode 2:加 FOCUS SKILL(改进对象)+ 无 skill 侧 score=null 规则,
+        guideline 从 'improve the losing skill' 改成针对 FOCUS SKILL。
+        RED:旧 prompt 无 FOCUS SKILL 段、仍说 losing skill、无 null 规则。"""
+        a = PosthocAnalyzer()
+        p = a._prompt_template
+        assert "FOCUS SKILL" in p                       # 新增:改进对象显式段
+        assert "improve the losing skill" not in p      # 旧 guideline 换掉
+        # 无 skill 侧(LOSER SKILL = (no skill))遵循度 N/A 规则
+        assert "(no skill)" in p and "null" in p.lower()
 
     def test_parse_notes_valid_array(self):
         a = PosthocAnalyzer()
@@ -412,6 +438,7 @@ class TestPosthocAnalyzer:
         result = a.analyze_comparison(
             "A", "winner skill", "loser skill",
             "A was better", "winner transcript", "loser transcript",
+            focus_skill="focus skill",
         )
         assert len(result.winner_strengths) == 2
         assert result.improvement_suggestions[0].priority == "high"

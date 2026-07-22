@@ -374,6 +374,36 @@ class TestBenchmarkAggregator:
         assert "3" in captured["comparison_reasoning"]   # with 3 次
         assert "1" in captured["comparison_reasoning"]   # without 1 次
 
+    def test_run_comparison_analysis_focus_skill_is_tested_skill(self, tmp_path: Path):
+        """focus_skill 永远 = 被测 skill(skill_content),不随 winner 侧变化:
+        winner=with 时被测 skill 在 winner 位,winner=without 时在 loser 位,
+        但 focus_skill 两场景都该 = 被测 skill 全文(改进对象恒定)。"""
+        from skill_eval.execution.analysis_suite import run_comparison_analysis
+        from skill_eval.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
+
+        skill_dir = tmp_path / "skill"; skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# 被测 skill body\n", encoding="utf-8")
+        (tmp_path / "with_skill" / "run-1").mkdir(parents=True)
+        (tmp_path / "with_skill" / "run-1" / "transcript.md").write_text("WS", encoding="utf-8")
+        (tmp_path / "without_skill" / "run-1").mkdir(parents=True)
+        (tmp_path / "without_skill" / "run-1" / "transcript.md").write_text("WOS", encoding="utf-8")
+
+        captured: dict = {}
+        analyzer = type("A", (), {"analyze_comparison": lambda self, **kw: (captured.update(kw) or "OK")})()
+
+        # winner=with(被测 skill 在 winner 位)
+        bd_with = BenchmarkData(metadata=BenchmarkMetadata(skill_name="s", skill_path=str(skill_dir)),
+                                comparisons=[ComparisonResult(winner="with", reasoning="r")])
+        run_comparison_analysis(None, tmp_path, bd_with, analyzer)
+        assert "被测 skill body" in captured["focus_skill"]
+
+        captured.clear()
+        # winner=without(被测 skill 在 loser 位)
+        bd_without = BenchmarkData(metadata=BenchmarkMetadata(skill_name="s", skill_path=str(skill_dir)),
+                                   comparisons=[ComparisonResult(winner="without", reasoning="r")])
+        run_comparison_analysis(None, tmp_path, bd_without, analyzer)
+        assert "被测 skill body" in captured["focus_skill"]   # 仍是被测 skill,不是 "(no skill)"
+
     def test_run_comparison_analysis_tie_returns_none(self, tmp_path: Path):
         """整体平局(with==without)→ 无代表性强弱,返 None 不分析。
         RED:旧代码 winner=comparisons[0].winner='with' → 不 None 继续分析。"""

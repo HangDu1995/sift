@@ -13,7 +13,7 @@ class AnalysisImprovementSuggestion(BaseModel):
 
 
 class AnalysisInstructionFollowing(BaseModel):
-    score: int = 0
+    score: int | None = None
     issues: list[str] = Field(default_factory=list)
 
 

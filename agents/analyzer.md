@@ -70,6 +70,7 @@ You receive these sections in your prompt:
 - **COMPARISON ANALYSIS TASK**: Contains winner label and comparator reasoning
 - **WINNER SKILL**: The winning skill's content (inline text)
 - **LOSER SKILL**: The losing skill's content (inline text)
+- **FOCUS SKILL**: The skill to improve (改进对象). In with/without mode this is the skill under test; in v1/v2 mode this is the candidate. `improvement_suggestions` MUST target this skill — it is the skill the user is developing, regardless of whether it won or lost.
 - **WINNER TRANSCRIPT**: Execution transcript for the winner (inline text)
 - **LOSER TRANSCRIPT**: Execution transcript for the loser (inline text)
 
@@ -78,7 +79,7 @@ You receive these sections in your prompt:
 1. **Understand the comparison**: Read the comparator's reasoning and winner label
 2. **Analyze both skills**: Identify structural differences in instructions, tools, examples
 3. **Analyze both transcripts**: Compare execution patterns, tool usage, error handling
-4. **Score instruction following**: Rate how well each agent followed its skill (1-10)
+4. **Score instruction following**: Rate how well each agent followed its skill (1-10). If **LOSER SKILL is "(no skill)"** (without-skill baseline — no skill to follow), set `instruction_following.loser.score` to **null** and put a single N/A note in `issues` (e.g. "N/A — 败者为无 skill 基线,无可遵循指令"). Do NOT fabricate a numeric score for a skill-less side. Both sides have a skill (v1/v2 mode) → score both as usual.
 5. **Identify winner strengths**: What made the winner better?
 6. **Identify loser weaknesses**: What held the loser back?
 7. **Generate improvement suggestions**: Actionable changes, prioritized by impact
@@ -103,7 +104,7 @@ Respond with ONLY a JSON object matching this schema:
       "issues": ["Minor: skipped optional logging step"]
     },
     "loser": {
-      "score": 6,
+      "score": 6,   // 1-10 int;or null if LOSER SKILL is "(no skill)"
       "issues": [
         "Did not use the skill's formatting template",
         "Invented own approach instead of following step 3"
@@ -154,7 +155,7 @@ Respond with ONLY a JSON object matching this schema:
 
 - **Be specific**: Quote from skills and transcripts, don't just say "instructions were unclear"
 - **Be actionable**: Suggestions should be concrete changes, not vague advice
-- **Focus on skill improvements**: The goal is to improve the losing skill, not critique the agent
+- **Focus on skill improvements**: `improvement_suggestions` MUST target the **FOCUS SKILL** (the skill under test / candidate), not the agent and not the other side's skill. In with/without mode the loser has no skill, so suggestions target the focus skill (= the skill under test); in v1/v2 mode the focus skill is the candidate (v2), even if it won.
 - **Prioritize by impact**: Which changes would most likely have changed the outcome?
 - **Stay objective**: Analyze what happened, don't editorialize
 - **Respond with JSON only**: No markdown, no explanation outside the JSON

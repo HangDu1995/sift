@@ -1597,9 +1597,11 @@
           const fi = analysis.instruction_following;
           const wsIf = fi.winner || fi.A || {};
           const lsIf = fi.loser || fi.B || {};
+          // 败者 score=null(无 skill 基线,without 侧无 compliance)→ 显 N/A,不显假 ?/10
+          const scoreText = (v) => (v == null ? "N/A(无 skill 基线)" : v + "/10");
           html += '<div style="display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap;">';
-          html += '<div style="flex:1;min-width:150px;"><strong>胜者指令遵循度：</strong> ' + (wsIf.score || "?") + '/10</div>';
-          html += '<div style="flex:1;min-width:150px;"><strong>败者指令遵循度：</strong> ' + (lsIf.score || "?") + '/10</div>';
+          html += '<div style="flex:1;min-width:150px;"><strong>胜者指令遵循度：</strong> ' + scoreText(wsIf.score) + '</div>';
+          html += '<div style="flex:1;min-width:150px;"><strong>败者指令遵循度：</strong> ' + scoreText(lsIf.score) + '</div>';
           html += '</div>';
         }
 

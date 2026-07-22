@@ -95,6 +95,7 @@ def run_comparison_analysis(aggregator, iteration_dir: Path, benchmark: Benchmar
         comparison_reasoning=comparison_reasoning,
         winner_transcript=winner_trans,
         loser_transcript=loser_trans,
+        focus_skill=skill_content,   # 改进对象:恒 = 被测/candidate skill(不随 winner 侧变)
     )
 
 

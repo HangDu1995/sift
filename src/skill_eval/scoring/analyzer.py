@@ -38,10 +38,13 @@ class PosthocAnalyzer:
         comparison_reasoning: str,
         winner_transcript: str,
         loser_transcript: str,
+        *,
+        focus_skill: str,
     ) -> AnalysisResult | None:
         prompt = self._build_comparison_prompt(
             winner, winner_skill, loser_skill,
             comparison_reasoning, winner_transcript, loser_transcript,
+            focus_skill=focus_skill,
         )
         response = self._call(prompt)
         return self._parse_analysis(response)
@@ -70,6 +73,8 @@ class PosthocAnalyzer:
         comparison_reasoning: str,
         winner_transcript: str,
         loser_transcript: str,
+        *,
+        focus_skill: str,
     ) -> str:
         parts = [
             self._prompt_template,
@@ -84,6 +89,9 @@ class PosthocAnalyzer:
             "",
             "--- LOSER SKILL ---",
             loser_skill[:4000],
+            "",
+            "--- FOCUS SKILL (改进对象;improvement_suggestions 必须针对它)---",
+            focus_skill[:4000],
             "",
             "--- WINNER TRANSCRIPT ---",
             winner_transcript[:4000],
