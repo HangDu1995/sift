@@ -298,11 +298,18 @@ skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl --form
 skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
 # opencode 跑出的 session(`opencode export <sessionID>` 导出,顶层 info/messages、parts 嵌在 message 里):
 skill-eval audit path/to/skill/ --transcript opencode-session.json
+# 直接给 opencode .db 文件(内部自动 list/export/audit;单 session 自动选,多个列出让你挑):
+skill-eval audit path/to/skill/ --db opencode.db
 ```
 
 > **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`(逐行 JSON 记录,含 `Skill`/`Read`/`Write`/`Bash` tool_use);opencode session `.json`(`opencode export <sessionID>` 的产出,顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`)。两者重建成同一 `SessionDigest` 再对账;`--by-skill` cc 按 `Skill` tool_use 切分、opencode 按 per-message `agent` 切分(扁平,无 cc 父子作用域)。run 产的 `transcript.jsonl` 永远是 cc 格式(run 只 spawn cc)。生产导出 opencode 会话:`opencode session list` 找 id → `opencode export <id> > session.json`(`--sanitize` 可脱敏分享)→ `skill-eval audit --transcript session.json`。
 
-> **拿到一个 opencode `.db` 文件怎么审**（别人/别处拷来的库,不是你本机默认库）：opencode 的 `export` 只认它自己配置的 db（无 `--db` 参数），但 opencode 认 `XDG_DATA_HOME` 环境变量——设它就能让 opencode 去指向那个 .db、**不碰你本机真库**（`XDG_DATA_HOME` 是 Linux「应用数据目录」规范,opencode 把 db 放在 `$XDG_DATA_HOME/opencode/opencode.db`）。三步:
+> **拿到一个 opencode `.db` 文件,一行进 audit**(别人/别处拷来的库,不是你本机默认库):直接用 `--db`,skill-eval 内部把 list/export/audit 全包了(隔离 `XDG_DATA_HOME` 指向那个 .db、**不碰本机真库**;需 opencode CLI 在 PATH):
+> ```bash
+> skill-eval audit path/to/skill/ --db handed.db                        # 单 session 自动选;多个则列出让你挑
+> skill-eval audit path/to/skill/ --db handed.db --session ses_xxxx      # 已知 id,直接审
+> ```
+> 不带 `--session` 时:db 里**只有 1 个 session → 自动选**;**多个 → 打印 `id/标题/时间` 表 + exit 2**,记下 id 带 `--session` 重跑(非交互,可脚本化)。底层就是下面三步(隔离 `XDG_DATA_HOME` → `session list` → `export --sanitize`);想手工控制(不脱敏 / 导出留底)就照这套:
 > ```bash
 > # 1. 把 .db 摆成 opencode 认的布局(<envdir>/opencode/opencode.db;库大可 ln -s 软链代替 cp)
 > mkdir -p /tmp/ocenv/opencode && cp /path/to/handed.db /tmp/ocenv/opencode/opencode.db
@@ -312,13 +319,15 @@ skill-eval audit path/to/skill/ --transcript opencode-session.json
 > XDG_DATA_HOME=/tmp/ocenv opencode export ses_xxxx --sanitize > session.json
 > skill-eval audit path/to/skill/ --transcript session.json
 > ```
-> 若 .db **就是你本机 opencode 跑的**（默认位置）,跳过 XDG,直接 `opencode session list` → `opencode export <id>` → audit。
+> 若 .db **就是你本机 opencode 跑的**(默认位置),跳过 XDG,直接 `opencode session list` → `opencode export <id>` → audit。
 
 **参数**：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--transcript` | **必填** | 真实会话 transcript（cc `.jsonl` 或 opencode session `.json`，按格式自动分派；**可重复**，多 transcript 聚合） |
+| `--transcript` | — | 真实会话 transcript（cc `.jsonl` 或 opencode session `.json`，按格式自动分派；**可重复**，多 transcript 聚合)。与 `--db` 二选一,都不给 → exit 2 |
+| `--db` | — | opencode `.db` 文件:内部自动 list/export/audit(隔离 `XDG_DATA_HOME`、不碰本机真库;需 opencode CLI)。与 `--transcript` 互斥 |
+| `--session` | — | `--db` 下指定 session id;不给则单 session 自动选、多个列出让你挑了重跑(仅搭 `--db`) |
 | `--by-skill` | 关闭 | transcript 里调了多个 skill/agent 时，只对账本 skill 被调用的段（cc 按 `Skill` 工具调用切分；opencode 按 per-message `agent` 字段切分，见下） |
 | `--refine-instructions` | 关闭 | 判定前 LLM 精筛：砍掉 extractor 误抽的示例/占位伪指令（精度>召回，见下） |
 | `--output` / `-o` | ./output | 输出目录 |

@@ -175,12 +175,13 @@ skill-eval gate output/benchmark.json --min-win-rate 0.5  # 加主观盲评阈�
 
 ### `audit` — 真实 transcript 对账
 
-把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。不 re-run，直接对账历史执行（支持多 transcript 聚合）。`--transcript` 吃 cc 会话 `.jsonl` 或 **opencode session `.json`**（`opencode export <sessionID>` 导出；按格式自动分派）。
+把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。不 re-run，直接对账历史执行（支持多 transcript 聚合）。`--transcript` 吃 cc 会话 `.jsonl` 或 **opencode session `.json`**（`opencode export <sessionID>` 导出；按格式自动分派);或直接给 opencode **`.db` 文件**(`--db`,内部自动 list/export/audit,单 session 自动选、多个列出让你挑)。
 
 ```bash
 skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl
 skill-eval audit path/to/skill/ --transcript t.jsonl --refine-instructions  # 教程型 skill：砍 extractor 误抽的示例/占位伪指令
 skill-eval audit path/to/skill/ --transcript opencode-session.json          # opencode 跑出的 session
+skill-eval audit path/to/skill/ --db opencode.db                            # 直接给 opencode .db(自动 list/export/audit)
 ```
 
 ### `report` — HTML 报告

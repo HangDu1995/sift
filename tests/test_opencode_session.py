@@ -161,3 +161,40 @@ def test_real_opencode_export_consumed():
     # 真 session 有 tool_trace(该 session 跑了 read/bash/write 等)或至少有内容
     assert d.tool_trace or d.transcript_text or d.user_turns
     assert d.skill_used  # info.agent 非空
+
+
+# 真 opencode .db 端到端:audit --db 路径的 list→export→digest 闭环(需 opencode CLI + 真 .db)。
+# 生成:cp <你的 opencode.db> /tmp/oc_export.db
+#   (opencode db 默认在 ~/.local/share/opencode/opencode.db,或 $XDG_DATA_HOME/opencode/ 下)
+_REAL_DB = Path("/tmp/oc_export.db")
+
+
+def test_real_opencode_db_export_consumed():
+    """真 .db → list_sessions/export_session → build_digest_from_opencode 端到端通(audit --db 闭环证明)。"""
+    import shutil
+    import tempfile
+    import pytest
+    if not _REAL_DB.exists():
+        pytest.skip(f"无真 .db fixture:({_REAL_DB};生成见上注释)")
+    if not shutil.which("opencode"):
+        pytest.skip("opencode CLI 未装")
+    from skill_eval.evals.opencode_db import (
+        export_session, list_sessions, resolve_session,
+    )
+
+    sessions = list_sessions(_REAL_DB)
+    if not sessions:
+        pytest.skip("真 .db 内无 session")
+    # 取最新那条(list_sessions 已按 updated desc 排)
+    target = resolve_session(sessions, sessions[0]["id"])
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(export_session(_REAL_DB, target["id"]))
+        p = Path(f.name)
+    try:
+        assert is_opencode_session(p) is True
+        d = build_digest_from_opencode(p)
+        assert d.tool_trace or d.transcript_text or d.user_turns
+    finally:
+        p.unlink(missing_ok=True)
