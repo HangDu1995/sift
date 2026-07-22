@@ -74,3 +74,17 @@ def test_rebuild_still_handles_cc_jsonl():
     from skill_eval.audit.rebuild import rebuild
     tool_trace, text, digest = rebuild(_LEA_CC)  # cc 路径不被破坏
     assert any(tc.name.lower() == "read" for tc in tool_trace)
+
+
+def test_tool_match_handles_opencode_lowercase_names():
+    """opencode tool_trace 工具名小写(read),SKILL 指令工具名 Read → match_tool_call
+    已大小写不敏感,应命中。不改 tool_match.py(验证而非加冗余归一)。"""
+    from skill_eval.audit.tool_match import match_tool_call
+    from skill_eval.models import ToolCallRecord
+    trace = [ToolCallRecord(name="read", input_summary='{"filePath": "logs/app.log"}')]
+    # 条件1:工具名大小写不敏感命中(Read vs read)
+    assert match_tool_call("Read", "", trace) is True
+    # 条件2:script_path 子串命中(opencode filePath 也含路径)
+    assert match_tool_call("", "logs/app.log", trace) is True
+    # 未出现的工具不命中
+    assert match_tool_call("Bash", "", trace) is False
