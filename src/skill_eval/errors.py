@@ -49,3 +49,8 @@ class CalibrationError(ExecutionError):
 
 class ReportError(ExecutionError):
     pass
+
+
+class OpencodeDbError(ExecutionError):
+    """opencode .db → export 流程失败(binary 缺失 / 非零退出 / 超时 / 无 session / id 不匹配)。"""
+    pass
