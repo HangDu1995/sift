@@ -88,3 +88,57 @@ def test_tool_match_handles_opencode_lowercase_names():
     assert match_tool_call("", "logs/app.log", trace) is True
     # 未出现的工具不命中
     assert match_tool_call("Bash", "", trace) is False
+
+
+_MULTI_OC = _FIX / "multi-skill-demo" / "multi-skill.json"
+
+
+def test_slice_opencode_by_agent_segments():
+    from skill_eval.evals.opencode import slice_opencode_by_agent
+    lea = slice_opencode_by_agent(_MULTI_OC, "log-error-analyzer")
+    cra = slice_opencode_by_agent(_MULTI_OC, "code-review-auditor")
+    rcz = slice_opencode_by_agent(_MULTI_OC, "release-checklist-zh")
+    # LEA 2 段(run1+run4)、CRA 2 段(run2+run5)、RCZ 1 段(run3)
+    assert len(lea) == 2
+    assert len(cra) == 2
+    assert len(rcz) == 1
+    # target 未出现 → []
+    assert slice_opencode_by_agent(_MULTI_OC, "nope") == []
+
+
+def test_slice_opencode_purity_and_skill_used():
+    """每段只含 target agent 的 message;子 session.agent = target(rebuild 取 skill_used)。
+
+    CRA(非顶层 agent)锁 override:fixture 顶层 session.agent 是 LEA,若 slicer 没把
+    子段 session.agent 改写为 target,CRA 段会继承 LEA → skill_used 错。所以必须用 CRA
+    验 override,光验 LEA(顶层本就是 LEA)是 no-op 断言。
+    """
+    import json
+    import tempfile
+    from skill_eval.evals.opencode import slice_opencode_by_agent, build_digest_from_opencode
+
+    def _skill_used_of(seg: dict) -> str:
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "seg.json"
+            p.write_text(json.dumps(seg, ensure_ascii=False), encoding="utf-8")
+            return build_digest_from_opencode(p).skill_used
+
+    for target in ("log-error-analyzer", "code-review-auditor"):
+        segs = slice_opencode_by_agent(_MULTI_OC, target)
+        assert segs  # 两 agent 都有段
+        for seg in segs:
+            # 纯度:段内 message 全是 target
+            assert {m.get("data", {}).get("agent") for m in seg["messages"]} == {target}
+            # override:子 session.agent 改写为 target(CRA 才真验)
+            assert seg["session"]["agent"] == target
+            # 端到端:rebuild → skill_used = target
+            assert _skill_used_of(seg) == target
+
+    # 段自带 user 子任务 prompt + read 工具(用 LEA 段验产物重建)
+    lea0 = slice_opencode_by_agent(_MULTI_OC, "log-error-analyzer")[0]
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "seg.json"
+        p.write_text(json.dumps(lea0, ensure_ascii=False), encoding="utf-8")
+        d = build_digest_from_opencode(p)
+        assert d.user_turns
+        assert any(tc.name == "read" for tc in d.tool_trace)

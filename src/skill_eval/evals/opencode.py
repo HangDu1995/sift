@@ -131,3 +131,39 @@ def build_digest_from_opencode(path: Path, root: str | None = None) -> SessionDi
         tool_trace=tool_trace,
         transcript_text="\n".join(transcript_text_parts),
     )
+
+
+def slice_opencode_by_agent(path: Path, target_agent: str) -> list[dict]:
+    """按连续 message 的 data.agent == target_agent 切段。
+
+    每段返回一个子 opencode session JSON({session, messages, parts}),session.agent 设为
+    target(rebuild 经 build_digest_from_opencode 取 skill_used 用)。target 未出现 → []。
+
+    平扁切分(诚实局限):opencode 的 agent 字段无父子作用域,不同于 cc 的 parent_tool_use_id
+    scope-aware 切分;子 agent(如 opencode task 工具)在扁平模型里就是另一段 agent run。
+    """
+    sess = load_opencode_session(path)
+    session_meta = dict(sess["session"])
+    msgs = sess["messages"]
+
+    segments: list[dict] = []
+    cur: list[dict] = []
+
+    def _flush():
+        if cur:
+            cur_ids = {m.get("id") for m in cur}
+            sub_parts = [p for p in sess["parts"] if p.get("message_id") in cur_ids]
+            segments.append({
+                "session": {**session_meta, "agent": target_agent},
+                "messages": list(cur),
+                "parts": sub_parts,
+            })
+            cur.clear()
+
+    for m in msgs:
+        if (m.get("data") or {}).get("agent") == target_agent:
+            cur.append(m)
+        else:
+            _flush()
+    _flush()
+    return segments
