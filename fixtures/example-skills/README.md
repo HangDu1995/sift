@@ -19,6 +19,8 @@
 > - **`real-clean.jsonl`**(仅 log-en / log-zh)— **真跑** path-1(`run --task --cwd` spawn cc)产出的真实正确会话,和 `synthetic-clean` **同任务同输入**,用来**对照手构 vs 真跑**的出卷效果(真跑 transcript 大/杂、25+ 条 vs 手构 8 条)。release-zh 7 步太复杂、真跑难一次跑对,故只手构。
 >
 > 另两个不带这种 transcript:`code-review-auditor` 走路径1 真任务(自己 run 出来再审),`multi-skill-demo` 靠 `build_multi_skill.py` 脚本生成(验的是切分纯度,不是确定性违规)。
+>
+> **opencode 格式 transcript(`opencode-sessions/`)**:audit `--transcript` 除 cc `.jsonl` 外也吃 **opencode session `.json`**(从 `opencode.db` 导出的单 session,顶层 `session`/`messages`/`parts` 三键;tool part 的 `state` 一体含 input+output,per-message `agent` 字段标 skill)。两者重建成同一 `SessionDigest`、对账等价。`log-error-analyzer-zh/opencode-sessions/synthetic-violation.json` 是 cc 同名 `.jsonl` 的 opencode 镜像(同 prompt、同 3 植入违规、同样不写报告);多 skill 版见下面 multi-skill-demo 的 `build_multi_skill_opencode.py`。opencode 直读 `.db` 暂不支持(B 路径),生产手动导出单 session 到 `.json` 再审。
 
 ## 每个怎么跑
 
@@ -62,7 +64,10 @@ skill-eval audit fixtures/example-skills/log-error-analyzer/ \
 skill-eval analyze fixtures/example-skills/log-error-analyzer-zh/
 skill-eval run fixtures/example-skills/log-error-analyzer-zh/ --runs 3                               # 路径3:跑自带的 evals.json
 skill-eval audit fixtures/example-skills/log-error-analyzer-zh/ \
-  --transcript fixtures/example-skills/log-error-analyzer-zh/transcripts/synthetic-violation.jsonl   # 路径2
+  --transcript fixtures/example-skills/log-error-analyzer-zh/transcripts/synthetic-violation.jsonl   # 路径2(cc 格式)
+# 同一份违规场景的 opencode 格式镜像(从 opencode.db 导出的单 session .json,同 prompt/同 3 植入违规):
+skill-eval audit fixtures/example-skills/log-error-analyzer-zh/ \
+  --transcript fixtures/example-skills/log-error-analyzer-zh/opencode-sessions/synthetic-violation.json
 # 想重新生成考卷(会覆盖自带版,两种方式):
 skill-eval init fixtures/example-skills/log-error-analyzer-zh/                                       # 方式1:从 SKILL.md 直接生成
 skill-eval init fixtures/example-skills/log-error-analyzer-zh/ \
@@ -71,7 +76,7 @@ skill-eval init fixtures/example-skills/log-error-analyzer-zh/ \
 
 > **这份 `evals.json` 是 `init --from-transcript` 从 `synthetic-clean.jsonl` 产的(7 题),不是手写**——对比:英文版 log-error-analyzer 的 evals.json 是 2 题手写金标准(见上)。注意 `--from-transcript` **非纯挖**:7 道里**只有 eval-1(`happy_path`)的 fixture 逐字节来自 transcript**(agent 真实 Read 的 app.log),**其余 6 道是 LLM 综合 SKILL 规则 + transcript 任务生成的压测场景**(空日志 / 全未知码 / 相似码陷阱 / 注入陷阱 等),**fixture 不在 transcript 里**——它们不是 transcript 场景的变体,而是围绕 skill 规则编的独立测试场景(generator 的 prompt 同时喂 LLM 「SKILL 定义 + transcript digest」,要求生成 5-8 道,单 transcript 只够 1 个真实场景,其余必由 skill 规则衍生)。故这份考卷需复核(不像手写是人工金标准);跑 `init` 会**覆盖**自带版。
 
-> **预期 audit 结果**:与上面英文版**完全一致**(同 3 步骤 / 同 reference / 全中文)——3 个植入违规都 **FAIL**(没读 error-codes.md、编造 E-FAKE-999、没写 error-report.json),外加"没引日志原文行"通常也 FAIL;读日志步骤 **PASS**,安全策略 **N/A**。计数与去重/关联拆解同英文版(pass≈3 / fail≈5 / na≈1,4 个行为);LLM 对中文判定不退化(中英对照已验),同样别钉精确条数。
+> **预期 audit 结果**:与上面英文版**完全一致**(同 3 步骤 / 同 reference / 全中文)——3 个植入违规都 **FAIL**(没读 error-codes.md、编造 E-FAKE-999、没写 error-report.json),外加"没引日志原文行"通常也 FAIL;读日志步骤 **PASS**,安全策略 **N/A**。计数与去重/关联拆解同英文版(pass≈3 / fail≈5 / na≈1,4 个行为);LLM 对中文判定不退化(中英对照已验),同样别钉精确条数。**opencode 格式镜像**(`opencode-sessions/synthetic-violation.json`)审出同一批违规——两种格式重建出同一 `SessionDigest`(cc↔opencode 等价门测试已锁),audit 结果一致。
 
 ### code-review-auditor(路径1 真任务)
 
@@ -118,6 +123,8 @@ skill-eval init fixtures/example-skills/release-checklist-zh/ \
 
 两份都由 `build_multi_skill.py` 确定性生成(重生成:`.venv/bin/python fixtures/example-skills/multi-skill-demo/build_multi_skill.py`)。
 
+> **opencode 版**(`build_multi_skill_opencode.py`):同场景、同违规/好产物,但 opencode session 格式(`multi-skill.json` / `multi-skill-clean.json`,5 段 agent 切换 LEA→CRA→RCZ→LEA→CRA,用 per-message `agent` 字段而非 cc 的 `Skill` tool_use)。重生成:`.venv/bin/python fixtures/example-skills/multi-skill-demo/build_multi_skill_opencode.py`。**切分语义差异(诚实)**:cc 用 `parent_tool_use_id` 让主 LEA span 跨子 agent 不断;opencode `agent` 字段扁平,子 agent / `task` 工具 = 另一段 agent run → 不建模 cc 的"跨子 agent 交错"。故 opencode 版 LEA/CRA 各切 2 段、RCZ 1 段(切分数同,交错结构简化)。
+
 **audit(违规版 `multi-skill.jsonl`)—— 抓各 skill 段的违规:**
 
 ```bash
@@ -130,6 +137,13 @@ skill-eval audit fixtures/example-skills/code-review-auditor/ \
 # release-checklist-zh(1 段):
 skill-eval audit fixtures/example-skills/release-checklist-zh/ \
   --transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --by-skill
+```
+
+**opencode 版同样可审(`multi-skill.json`,切分按 per-message `agent`):**
+
+```bash
+skill-eval audit fixtures/example-skills/log-error-analyzer/ \
+  --transcript fixtures/example-skills/multi-skill-demo/multi-skill.json --by-skill
 ```
 
 **mining 出卷(好版本 `multi-skill-clean.jsonl`)—— 各 skill 挖各的干净考卷:**

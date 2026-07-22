@@ -296,14 +296,18 @@ skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out
 skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl --format json
 # transcript 里用了多个 skill,只对账本 skill 被调用的段(按 Skill 工具调用切分):
 skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
+# opencode 跑出的 session(从 opencode.db 导出的单 session .json,顶层 session/messages/parts):
+skill-eval audit path/to/skill/ --transcript opencode-session.json
 ```
+
+> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`(逐行 JSON 记录,含 `Skill`/`Read`/`Write`/`Bash` tool_use);opencode session `.json`(从 `opencode.db` 导出的单 session,顶层 `session`/`messages`/`parts` 三键,tool part 的 `state` 一体含 input+output,per-message `agent` 字段标 skill)。两者重建成同一 `SessionDigest` 再对账;`--by-skill` cc 按 `Skill` tool_use 切分、opencode 按 per-message `agent` 切分(扁平,无 cc 父子作用域)。run 产的 `transcript.jsonl` 永远是 cc 格式(run 只 spawn cc)。opencode 直读 `.db`(B 路径)暂不支持——生产手动导出单 session 到 `.json` 再审。
 
 **参数**：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--transcript` | **必填** | 真实会话 transcript jsonl（**可重复**，多 transcript 聚合） |
-| `--by-skill` | 关闭 | transcript 里调了多个 skill 时，只对账本 skill 被调用的段（按 `Skill` 工具调用切分，见下） |
+| `--transcript` | **必填** | 真实会话 transcript（cc `.jsonl` 或 opencode session `.json`，按格式自动分派；**可重复**，多 transcript 聚合） |
+| `--by-skill` | 关闭 | transcript 里调了多个 skill/agent 时，只对账本 skill 被调用的段（cc 按 `Skill` 工具调用切分；opencode 按 per-message `agent` 字段切分，见下） |
 | `--refine-instructions` | 关闭 | 判定前 LLM 精筛：砍掉 extractor 误抽的示例/占位伪指令（精度>召回，见下） |
 | `--output` / `-o` | ./output | 输出目录 |
 | `--model` | 默认 | 语义判定 LLM |

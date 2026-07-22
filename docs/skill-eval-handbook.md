@@ -602,15 +602,16 @@ audit 是**对账**，不是单看 transcript——背后有个根本前提：**
 skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out/
 skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl   # 多 transcript 聚合
 skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
+skill-eval audit path/to/skill/ --transcript opencode-session.json          # opencode session(.json)
 ```
 
-audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md 对账。`--transcript` 可重复，多条 transcript 做指令级聚合（跨会话看 fail%）。
+audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md 对账。`--transcript` 吃两种格式(按后缀自动分派):cc 会话 `.jsonl`(run 产的 `transcript.jsonl` 永远是这种,run 只 spawn cc)或 opencode session `.json`(从 `opencode.db` 导出的单 session,顶层 `session`/`messages`/`parts`)。可重复,多条 transcript 做指令级聚合(跨会话看 fail%)。
 
 判定要逐批调 LLM（每批约 40–257s），跑期间实时打印进度（`[条件性/禁令/步骤] 判定 N 条…`），三个 LLM 类别判定器（条件性 / 禁令 / 步骤；输出格式走程序判定不调 LLM）并发跑（约 2× 提速）。看到 `[类别] …` 滚动就是在跑，别误以为卡死。
 
 几个关键点：
 
-- **`--by-skill`**：transcript 里调了多个 skill 时，默认会把整段会话不区分是哪个 skill 干的、混在一起判（其他 skill 的行为会混进本 skill 的对账）。加 `--by-skill` 后按 `Skill` 工具调用切成若干单 skill 子 transcript，只对账本 skill 的段。两条固有限制：① skill 没有"返回"信号，"调 A→调 B→不重调 A 接着干 A"那段会归给 B（不可检测，解法是 agent 显式重调 A）；② 把委派子 skill 的段折进来审（inclusive）需用户声明，暂不支持。
+- **`--by-skill`**：transcript 里调了多个 skill 时，默认会把整段会话不区分是哪个 skill 干的、混在一起判（其他 skill 的行为会混进本 skill 的对账）。加 `--by-skill` 后切成若干单 skill 子段，只对账本 skill 的段。**cc** 按 `Skill` 工具调用切分(两条固有限制:① skill 无"返回"信号,"调 A→调 B→不重调 A 接着干 A"那段归 B(不可测);② 委派子 skill 折进来审(inclusive)需声明、暂不支持);**opencode** 无 `Skill` tool_use,按 per-message `agent` 字段切连续同 agent 段(扁平,无 cc 父子作用域——子 agent / `task` 工具就是另一段 agent run)。
 - **derived_from_transcript（反推）**：findings 里 `derived_from_transcript: true` 的不是从 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（**只增不减** = 只新增 finding，不会替换或删掉从 SKILL.md 抽出来的指令）。**目前只补一类**：transcript 里 agent 真实 Read 过的输入/参考文件 → 各补一条"读取 \<path\>"（REFERENCE_USAGE，构造上即命中 → PASS，不膨胀 fail）。另外两类不反推——工具调用反推（`required_tools`，Bash 命令分不清业务专用还是通用）和产物文件反推（`required_outputs`，历史 trace 的产物未必还在盘，且"产出文件检查"属评分断言、不属遵循性指令），因为映射不干净、容易误判。
 - **别只数 fail**：每条 finding 带序号。**来源徽章**显示这条 finding 是从哪个 / 哪些 `InstructionSource` 抽出来的（CONSTRAINT / ANTI_FABRICATION / HEADING_STEP / TOOL_REQUIREMENT / REFERENCE_USAGE / OUTPUT_FORMAT）。当同一句 SKILL.md 文本同时匹配多个抽取模式（如同句既是约束、又是反捏造）、且同 transcript 同 verdict 时，会**合并成一条**，徽章就显示两个来源（如 `CONSTRAINT + ANTI_FABRICATION`）——证明同文重复已去重、没有虚增 fail。而同一行为跨两条**不同**规则（如没读某 reference 同时违反"条件性"+"步骤"两条）仍会是两条，但互标"↔ 同源违规 #N"。所以 fail 条数可能 > 真实问题数，逐条看 evidence 对照"哪个行为"，别数条数。
 
@@ -896,7 +897,7 @@ UNEVAL / 出错时自动重试（`--max-retries`，默认 2），每次重跑完
 | `run` | **生产者** | spawn cc 跑题 → 产出 grading / compliance / transcript 等产物 | 费 token、慢、有方差 |
 | `gate` | **消费者** | 读 `benchmark.json` → 出 PASS/FAIL 判决 + gate.json | 不碰（毫秒级） |
 | `report` | **消费者** | 读 benchmark.json + gate.json + previous/ → 渲染 report.html | 不碰（纯渲染，毫秒级） |
-| `audit` | **消费者** | 读 transcript.jsonl + SKILL.md → 对账遵循性 | 调 LLM 判定，但审**历史** transcript，**不 re-run cc** |
+| `audit` | **消费者** | 读 transcript(cc `.jsonl` 或 opencode `.json`)+ SKILL.md → 对账遵循性 | 调 LLM 判定，但审**历史** transcript，**不 re-run cc** |
 
 三者共性 = **post-hoc（跑在 run 之后、以 run 产物为输入）+ 不 spawn cc 跑题 + 可反复跑（改参数重跑不必重跑 cc）**。落到 `gate` 上就是它的核心卖点：改门禁阈值不用重跑 cc、毫秒级重判——调阈值、试不同门禁策略随便反复跑，不心疼 token。
 
