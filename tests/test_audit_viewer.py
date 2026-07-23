@@ -118,3 +118,56 @@ def test_audit_html_renders_by_instruction_and_groups_findings_multi_transcript(
     assert 'id="audit-findings-grouped"' in html
     # 单 transcript 的扁平容器在多 transcript 下不应出现(分组了)
     assert 'id="audit-findings"' not in html or 'id="audit-findings-grouped"' in html
+
+
+def test_audit_html_renders_noise_badges_on_fail_findings_and_aggregate():
+    """FAIL finding + by_instruction 失败行加噪声判别徽章(Task 8)。
+
+    source/category 徽章 finding-head 已有(本测试覆盖重点在新增 noise 徽章):
+    - finding-head:FAIL 且 noise_label → 噪声徽章(疑似工具噪声 / skill 问题 / 待确认);
+    - by_instruction 违规表加「噪声判别」列。
+    RED 锚点:模板定义 noiseBadge 函数 + 列头「噪声判别」(改前 grep=0);label 字面量在 map。
+    运行时正确性靠 node --check(test_audit_cli)+ 肉眼;pytest 验模板 JS 源引用。
+    """
+    report = AuditReport(
+        skill_name="s",
+        transcripts=["t1.jsonl", "t2.jsonl"],
+        summary={"total": 2, "pass": 0, "fail": 2, "na": 0},
+        findings=[
+            AuditFinding(
+                instruction_text="NEVER 编造", source="CONSTRAINT",
+                verdict=AuditVerdict.FAIL, category=AuditCategory.PROHIBITION,
+                evidence="ev", method=AuditMethod.LLM, transcript="t1.jsonl",
+                noise_label="tool_noise", noise_reasons=["evidence 自相矛盾"],
+            ),
+            AuditFinding(
+                instruction_text="NEVER 编造", source="CONSTRAINT",
+                verdict=AuditVerdict.PASS, category=AuditCategory.PROHIBITION,
+                evidence="ev2", method=AuditMethod.PROGRAMMATIC, transcript="t2.jsonl",
+            ),
+        ],
+        by_instruction=[
+            InstructionAggregate(
+                instruction_text="NEVER 编造", source="CONSTRAINT",
+                category=AuditCategory.PROHIBITION, pass_count=1, fail_count=1,
+                na_count=0, total=2, fail_rate=0.5,
+                fail_in_transcripts=["t1.jsonl"], fail_seqs=[1],
+                noise_label="uncertain", noise_reasons=["分布无显著噪声特征"],
+            ),
+        ],
+        warnings=[],
+    )
+    html = AuditReportGenerator().generate_html(report)
+    # RED 锚点:模板定义 noiseBadge 函数 + 违规表加「噪声判别」列头(改前无)
+    assert "function noiseBadge" in html
+    assert "噪声判别" in html
+    # label 字面量在 NOISE_LABELS map(三态全列)
+    assert "疑似工具噪声" in html
+    assert "疑似 skill 问题" in html
+    assert "待确认" in html
+    # 数据流:finding 级 + 聚合级 noise_label 随 model_dump 嵌入
+    assert '"noise_label": "tool_noise"' in html      # finding 级
+    assert '"noise_label": "uncertain"' in html       # 聚合级
+    # 违规表渲染(fail_count>0) + finding-head 渲染(FAIL finding)
+    assert 'id="audit-by-instruction-fail"' in html
+    assert 'id="audit-findings-grouped"' in html

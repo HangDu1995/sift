@@ -964,6 +964,82 @@ class TestReportGeneratorStatic:
         result = subprocess.run(["node", "--check", str(jsfile)], capture_output=True, text=True)
         assert result.returncode == 0, f"node --check 失败:\n{result.stderr}"
 
+    def test_generate_html_compliance_finding_renders_source_and_noise_badges(self, tmp_path):
+        """per-run compliance findings 块加 source 徽章 + FAIL 噪声判别标注(Task 6)。
+
+        FAIL finding 带 noise_label → viewer 显噪声徽章(title 悬停显 reasons);
+        source(HEADING_STEP/CONSTRAINT)显来源徽章(catTag 旁,内联胶囊 uppercase)。
+        RED 锚点:JS 源引用 f.noise_label / f.sources(改前 grep=0);label 字面量
+        「疑似工具噪声」在 NOISE_LABELS map。数据流:noise_label/source 随 compliance.json 嵌入。
+        运行时正确性靠 node --check(见上)+ 重生成 report 肉眼;pytest 验模板 JS 源引用。
+        """
+        workspace = tmp_path / "iteration-1"
+        ws_dir = workspace / "with_skill" / "run-1"
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "outputs").mkdir()
+        (ws_dir / "outputs" / "out.txt").write_text("hello")
+        (ws_dir / "compliance.json").write_text(json.dumps({
+            "summary": {"total": 2, "pass": 1, "fail": 1, "na": 0},
+            "findings": [
+                {"instruction_text": "按步骤执行", "source": "HEADING_STEP",
+                 "verdict": "FAIL", "category": "step", "evidence": "ev-fail",
+                 "method": "LLM", "transcript": "t.jsonl",
+                 "noise_label": "tool_noise", "noise_reasons": ["资源描述被当步骤", "evidence 自相矛盾"]},
+                {"instruction_text": "禁编造", "source": "CONSTRAINT",
+                 "verdict": "PASS", "category": "prohibition", "evidence": "ev-pass",
+                 "method": "LLM", "transcript": "t.jsonl"},
+            ],
+        }), encoding="utf-8")
+
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, None)
+        # RED 锚点:per-run JS 引用 f.noise_label / f.sources(改前模板无)
+        assert "f.noise_label" in html
+        assert "f.sources" in html
+        # label 字面量在 NOISE_LABELS map(改前无)
+        assert "疑似工具噪声" in html
+        assert "疑似 skill 问题" in html      # skill_issue / uncertain 三态全列(口径一致)
+        # 数据流:noise_label + source 随 compliance.json 嵌入 EMBEDDED_DATA
+        assert '"noise_label": "tool_noise"' in html
+        assert "HEADING_STEP" in html
+
+    def test_generate_html_compliance_aggregate_renders_source_category_noise(self, tmp_path):
+        """整体汇总 by_instruction 表加 source/category 徽章 + FAIL 噪声判别(Task 7)。
+
+        聚合行 inst 在指令列贴 category + source 徽章(fail_count>0 + noise_label → noise 徽章)。
+        嵌入指令列而非独立列——7 列表已宽,徽章贴指令文本旁更紧凑且与所属指令不分离。
+        RED 锚点:JS 源引用 inst.source / inst.category / inst.noise_label(改前 grep=0)。
+        """
+        workspace = tmp_path / "iteration-1"
+        ws_dir = workspace / "with_skill" / "run-1"
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "outputs").mkdir()
+        (ws_dir / "outputs" / "out.txt").write_text("hello")
+        (ws_dir / "compliance.json").write_text(json.dumps({
+            "summary": {"total": 2, "pass": 1, "fail": 1, "na": 0},
+            "findings": [
+                {"instruction_text": "按步骤执行", "source": "HEADING_STEP",
+                 "verdict": "FAIL", "category": "step", "evidence": "ev-fail",
+                 "method": "LLM", "transcript": "t.jsonl"},
+                {"instruction_text": "禁编造", "source": "CONSTRAINT",
+                 "verdict": "PASS", "category": "prohibition", "evidence": "ev-pass",
+                 "method": "LLM", "transcript": "t.jsonl"},
+            ],
+        }), encoding="utf-8")
+
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, None)
+        # RED 锚点:aggregate JS 引用 inst.source / inst.category / inst.noise_label(改前无)
+        assert "inst.source" in html
+        assert "inst.category" in html
+        assert "inst.noise_label" in html
+        # label 字面量在 map(三态一致,与 per-run 同源)
+        assert "疑似工具噪声" in html
+        # 聚合 section 渲染(有 compliance 数据 → compliance_aggregate 非空 → 指令对账表出现)
+        assert "指令对账" in html
+        # 数据流:聚合级 noise 经 annotate_aggregate_noise 标注后嵌入(fail_count>0 → uncertain)
+        assert "noise_reasons" in html
+
     def test_generate_html_anomaly_header_shows_denominator(self, tmp_path):
         """anomaly 标题加分母 total_runs:"X 个异常" → "X 个异常 / 共 Y 次"(一眼判严重度)。
 

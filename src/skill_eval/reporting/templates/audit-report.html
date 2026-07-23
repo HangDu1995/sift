@@ -90,6 +90,7 @@
     .evidence { color: var(--text-muted); font-size: 0.9rem; margin: 0.25rem 0; }
     .transcript { color: var(--text-muted); font-size: 0.8rem; }
     .src { color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; font-size: 0.7rem; text-transform: uppercase; }
+    .noise { padding: 0.05rem 0.4rem; border-radius: 3px; font-size: 0.72rem; margin-left: 0.3rem; border: 1px solid; display: inline-block; }
     .finding-head .method-prog { color: var(--green); }
     .finding-head .method-llm { color: var(--text-muted); }
     .warnings { background: var(--red-bg); border: 1px solid var(--red); border-radius: var(--radius); padding: 0.75rem 1rem; }
@@ -122,6 +123,20 @@
         return String(s).replace(/[&<>"']/g, function (c) {
           return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
         });
+      }
+
+      // FAIL 噪声判别徽章(tool_noise 疑似工具噪声 / skill_issue 疑似 skill 问题 / uncertain 待确认)。
+      // reasons 进 title hover 显。无 label / 未知 label → 空串。finding-head 与 by_instruction 表共用。
+      var NOISE_LABELS = {
+        tool_noise: { text: '疑似工具噪声', color: 'var(--text-muted)' },
+        skill_issue: { text: '疑似 skill 问题', color: 'var(--red)' },
+        uncertain: { text: '待确认', color: 'var(--accent)' }
+      };
+      function noiseBadge(label, reasons) {
+        var nl = NOISE_LABELS[label];
+        if (!nl) return '';
+        var title = escapeHtml((reasons || []).join('; '));
+        return '<span class="noise" style="color:' + nl.color + ';border-color:' + nl.color + ';" title="' + title + '">' + escapeHtml(nl.text) + '</span>';
       }
 
       // verdict 五态 → (cls, icon, label) 一致表(汇总徽章 + 明细共用,DRY)。
@@ -161,10 +176,12 @@
           return '<a class="ref-link" href="#finding-' + n + '">' + escapeHtml(r) + '</a>';
         }).join('');
         var related = relLinks ? '<span class="related">↔ 同源违规</span>' + relLinks : '';
+        // FAIL 噪声判别徽章(仅 FAIL 且 noise_label 才显);放 method 前,留在徽章簇里(不跟 method 跑到右侧)
+        var noise = (f.verdict === 'FAIL' && f.noise_label) ? noiseBadge(f.noise_label, f.noise_reasons) : '';
         return '<div class="finding-head">' + verdictHtml +
           seqTag +
           '<span class="cat">' + escapeHtml(f.category || '') + '</span>' +
-          srcTag + derived + related +
+          srcTag + derived + related + noise +
           methodTag(f.method) + '</div>' +
           '<div class="instruction">' + escapeHtml(f.instruction_text || '') + '</div>' +
           '<div class="evidence">' + escapeHtml(f.evidence || '') + '</div>' +
@@ -235,16 +252,19 @@
             var pct = Math.round((a.fail_rate || 0) * 100);
             var colorCls = (a.fail_rate || 0) >= 0.5 ? 'badge-fail' : 'badge-na';
             var seqs = (a.fail_seqs || []).map(function (s) { return '#' + s; }).join(', ');
+            // 噪声判别徽章(fail_count>0 行才有;无 noise_label → —)。整列让 reader 扫哪些 FAIL 是工具噪声。
+            var noise = a.noise_label ? noiseBadge(a.noise_label, a.noise_reasons) : '—';
             return '<tr><td class="seq">' + escapeHtml(seqs) + '</td><td class="' + colorCls + '">' + pct + '%</td>' +
               '<td>' + escapeHtml(a.instruction_text || '') + '</td>' +
               '<td>' + escapeHtml(a.category || '') + '</td>' +
               '<td>' + (a.fail_count || 0) + '/' + (a.total || 0) + '</td>' +
+              '<td>' + noise + '</td>' +
               '<td>' + escapeHtml((a.fail_in_transcripts || []).join(', ')) + '</td></tr>';
           }).join('');
           root.insertAdjacentHTML('beforeend',
             '<div id="audit-by-instruction-fail" class="by-instruction">' +
               '<h2>违规 FAIL(跨 ' + nTrans + ' transcript)</h2>' +
-              '<table><thead><tr><th>明细 #</th><th>fail%</th><th>指令</th><th>类别</th><th>fail/total</th><th>fail in transcripts</th></tr></thead>' +
+              '<table><thead><tr><th>明细 #</th><th>fail%</th><th>指令</th><th>类别</th><th>fail/total</th><th>噪声判别</th><th>fail in transcripts</th></tr></thead>' +
               '<tbody>' + failHtml + '</tbody></table>' +
             '</div>');
         }

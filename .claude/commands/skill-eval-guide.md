@@ -273,7 +273,7 @@ skill-eval gate out/iteration-1/benchmark.json --no-programmatic-guard --min-win
 
 ### `audit` — 真实 transcript 对账
 
-把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。**不 re-run**，直接对账历史执行。
+把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。**不 re-run**，直接对账历史执行。每条 FAIL 自动标**疑似工具噪声 / skill 问题 / 待确认** + 理由（`noise_label` 徽章；判别法见 handbook §7.8）——fixture 下 FAIL 常混工具噪声（extractor 误提资源描述当步骤、evidence 自相矛盾），别据噪声误改 skill。
 
 > 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行——`[条件性/禁令/步骤] 判定 N 条…` → `[条件性/禁令/步骤] 完成 ⏱ Xs`（类别名打头；>10 条分批才显 `批 k/总`）。两种失败（调用失败 / 0 条解析成功）都先自动重试最多 2 次再兜底 UNRESOLVED（没判成），重试打 `重试 n/2…`、耗尽打 `重试耗尽`。三个 LLM 类别判定器并发跑（max_workers=3），约 2× 提速，进度行交错但每行 `[类别]` 打头、一眼分清。看到 `[条件性/禁令/步骤] …` 滚动就是在跑。
 

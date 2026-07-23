@@ -624,6 +624,20 @@ audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md �
 
 所以：做 fixture A/B 评测，别对 compliance 的数字过度解读（尤其 N/A 多时，先想 extractor 误抽）；要评估 skill 的真实遵循质量，拿真实会话跑 audit。
 
+### 7.8 逐条判别：某条 FAIL 是工具噪声还是 skill 问题
+
+fixture 下遵循性的 FAIL 混着工具噪声和真 skill 问题（见 7.7）。报告现在给每条 FAIL **自动标**一个启发式判别（per-run findings、整体汇总 by_instruction、单次 audit-report 的违规表都带徽章 + hover 理由）：
+
+| `noise_label` | 含义 | 典型信号（命中即标）|
+|---|---|---|
+| `tool_noise`（疑似工具噪声）| 改 skill 治不了，根因在工具 | `source=HEADING_STEP` 且指令像资源链接（资源描述被当步骤）；evidence 自相矛盾（称"不涉及"却判 FAIL）；LLM 判定带跨类关联（`related` 非空）；聚合 NA 多 FAIL 少（条件性资源被当无条件步骤）|
+| `skill_issue`（疑似 skill 问题）| 大概率真 skill 没做到 | 硬约束（`CONSTRAINT`/`ANTI_FABRICATION`）+ 程序判定 FAIL（确定、可复现）|
+| `uncertain`（待确认）| 单条信号不足 | 其余 FAIL —— 看汇总分布或人工复核 evidence |
+
+**怎么用**：看到 FAIL 先看徽章 + 理由（hover）。`tool_noise` → 别急着改 skill，先想 extractor/判定/evidence 是不是工具的洞（典型：SKILL「详细资源」段的链接描述被抽成步骤）；`skill_issue` → 这才是改 skill 的信号；`uncertain` → 人工看 evidence。优先级 `tool_noise > skill_issue > uncertain`（取最严：有一条噪声信号就归 tool_noise，**避免据噪声误改 skill**）。
+
+**诚实说**：这是**启发式 + 疑似 + 理由，不是权威判决**（可能假阳/假阴）。它**治标**（帮解读现有噪声），没让 compliance 更准 —— 治本仍 `--refine-instructions`（判定前 LLM 砍伪指令，opt-in）/ 结构化声明（frontmatter 声明 required_*）/ 真实 transcript audit。**别以为"标了 tool_noise = compliance 可信了"**。判别规则源码：`audit/noise.py`（纯函数，不调 LLM/不读 transcript）。
+
 ---
 
 ## 第八章 校准

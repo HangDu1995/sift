@@ -852,6 +852,12 @@
               const statusIcon = VERDICT_ICON[verdict] != null ? VERDICT_ICON[verdict] : '○';
               const instrText = f.instruction_text || '(未命名)';
               const catTag = f.category ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">' + escapeHtml(f.category) + '</span>' : '';
+              // source 徽章(指令来源:CONSTRAINT / HEADING_STEP …)。sources 是同文去重合并的
+              // 多来源;单条=[source]。旧数据无 source → srcs 空 → 不显(防御向后兼容)。
+              const srcs = (f.sources && f.sources.length) ? f.sources : (f.source ? [f.source] : []);
+              const srcTag = srcs.length
+                ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;text-transform:uppercase;" title="指令来源">' + escapeHtml(srcs.join(' + ')) + '</span>'
+                : '';
               const derivTag = f.derived_from_transcript ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:0.25rem;">反推</span>' : '';
               // method(判定方法)→ 程序 / LLM 标签(口径同 audit-report.html)。旧数据无 method
               // 字段时,据旧 confidence 推导(>=1.0 程序,否则 LLM);无 confidence 则不显。
@@ -862,9 +868,11 @@
                 if (m === 'LLM') return '<span style="font-size:0.7rem;color:var(--text-muted);margin-left:0.25rem;" title="LLM 给出结论">LLM</span>';
                 return '';
               })();
+              // FAIL 噪声判别徽章(仅 FAIL 有 noise_label 才显;非 FAIL / 旧数据无 label → 空串)
+              const noiseTag = (verdict === 'FAIL' && f.noise_label) ? noiseBadge(f.noise_label, f.noise_reasons) : '';
               html += '<li class="assertion-item">';
               html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
-              html += '<span>' + escapeHtml(instrText) + catTag + derivTag + methodTag + '</span>';
+              html += '<span>' + escapeHtml(instrText) + catTag + srcTag + derivTag + methodTag + noiseTag + '</span>';
               if (f.evidence) {
                 html += '<div class="assertion-evidence">' + escapeHtml(f.evidence) + '</div>';
               }
@@ -1069,6 +1077,22 @@
       return div.innerHTML;
     }
 
+    // FAIL 噪声判别徽章(tool_noise 疑似工具噪声 / skill_issue 疑似 skill 问题 / uncertain 待确认)。
+    // reasons 进 title hover 显。非 FAIL / 无 label → 空串。per-run findings 与 aggregate 共用。
+    const NOISE_LABELS = {
+      tool_noise: { text: '疑似工具噪声', color: 'var(--text-muted)' },
+      skill_issue: { text: '疑似 skill 问题', color: 'var(--red)' },
+      uncertain: { text: '待确认', color: 'var(--accent)' },
+    };
+    function noiseBadge(label, reasons) {
+      const nl = NOISE_LABELS[label];
+      if (!nl) return '';
+      const title = escapeHtml((reasons || []).join('; '));
+      return '<span style="font-size:0.7rem;margin-left:0.25rem;border:1px solid ' + nl.color
+        + ';color:' + nl.color + ';padding:0 0.25rem;border-radius:3px;" title="' + title + '">'
+        + nl.text + '</span>';
+    }
+
     // ---- View switching ----
     function switchView(view) {
       document.querySelectorAll(".view-tab").forEach(t => t.classList.remove("active"));
@@ -1112,8 +1136,18 @@
           for (const inst of bi) {
             const failIn = (inst.fail_in_transcripts || []).join(', ') || '—';
             const failCell = inst.fail_count ? '<span style="color:var(--red);font-weight:600;">' + inst.fail_count + '</span>' : String(inst.fail_count || 0);
+            // 指令列内嵌 类别 + 来源 徽章(都是指令的固有属性,贴在指令文本旁比独立列更紧凑清晰)。
+            // 聚合级 InstructionAggregate 只有 source(单 str,非 sources 列表)。
+            const catBadge = inst.category
+              ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;" title="指令类别">' + escapeHtml(inst.category) + '</span>'
+              : '';
+            const srcBadge = inst.source
+              ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;text-transform:uppercase;" title="指令来源">' + escapeHtml(inst.source) + '</span>'
+              : '';
+            // FAIL 行的噪声判别徽章(仅 fail_count>0 且 noise_label 才显)
+            const noiseTag = (inst.fail_count > 0 && inst.noise_label) ? noiseBadge(inst.noise_label, inst.noise_reasons) : '';
             html += '<tr>'
-              + '<td style="text-align:left;">' + escapeHtml(inst.instruction_text || '(未命名)') + '</td>'
+              + '<td style="text-align:left;">' + escapeHtml(inst.instruction_text || '(未命名)') + catBadge + srcBadge + noiseTag + '</td>'
               + '<td>' + (inst.pass_count || 0) + '</td><td>' + failCell + '</td><td>' + (inst.na_count || 0) + '</td>'
               + '<td>' + (inst.unresolved_count || 0) + '</td><td>' + (inst.indeterminate_count || 0) + '</td>'
               + '<td style="text-align:left;font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(failIn) + '</td>'
