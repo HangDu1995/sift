@@ -201,6 +201,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 | `--evals` | 自动查找 | evals.json 路径 |
 | `--task` | 无 | **路径 1 真任务模式**：直接 spawn 跑此真实任务（不读 evals.json），产物 transcript 可喂 `audit` |
 | `--cwd` | 无 | 真任务模式工作目录（任务材料真实文件）；拷贝隔离，cc 不碰原目录 |
+| `--executor` | cc | 路径 1 执行器：`cc`（默认）/ `opencode` / `cc,opencode`（逗号分隔，多执行器各跑 `--runs` 次）。未知名 exit 2。`opencode` 需 opencode CLI 在 PATH，且用 `provider/model` 格式配置模型（`--model` 给 cc 用；opencode 省略 `--model` 走 `opencode.json` 默认）。cc 产 `run-*/transcript.jsonl`、opencode 产 `run-*/transcript.json`（audit 都吃） |
 | `--runs` | 1 | 每种配置的运行次数 |
 | `--model` | 用户默认 | claude -p 模型 |
 | `--workers` | 4 | 最大并行 worker 数 |
@@ -225,7 +226,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 **两种模式**：
 
 - **默认 A/B**（无 `--task`）：位置参数 skill = 候选（side A）。不给 `--skill-b` → with/without 对照（同 skill 开/关）；给 `--skill-b <dir>` → v1/v2 双 skill 对照（两边各注入各自的 skill，标签默认取目录名）。
-- **路径 1 真任务模式**（给 `--task`）：忽略 evals.json，spawn cc 在 `--cwd`（拷贝隔离）跑真任务，产 `run-*/transcript.jsonl`，结尾打印 `audit` 命令提示。每 run 另在终端打印 operational 摘要（耗时 / turns / tokens / stop_reason / tool_calls + 结果头部，读自 `run-*/run_debug.json`）。此模式 `--evals`/`--scoring`/`--workers` 等大多不生效。
+- **路径 1 真任务模式**（给 `--task`）：忽略 evals.json，按 `--executor`（默认 `cc`，可 `opencode` 或 `cc,opencode` 多执行器各跑）在 `--cwd`（拷贝隔离）跑真任务，产 `run-*/transcript.jsonl`（cc）或 `run-*/transcript.json`（opencode），结尾打印 `audit` 命令提示。每 run 另在终端打印 operational 摘要（耗时 / turns / tokens / stop_reason / tool_calls + 结果头部，读自 `run-*/run_debug.json`）。此模式 `--evals`/`--scoring`/`--workers` 等大多不生效。
 
 > **退出码**：`run` 是纯数据生产者——exit 0 = 产数据成功，2 = 输入错误，3 = 执行错误。**通过/失败判决不再由 `run` 的退出码决定**（旧版读混合 `delta.pass_rate<0` 退 1 的逻辑已退役），改由独立 [`gate`](#gate--通过失败判决) 命令出。`--security-gate` 触发时仍退 1。
 
@@ -302,7 +303,7 @@ skill-eval audit path/to/skill/ --transcript opencode-session.json
 skill-eval audit path/to/skill/ --db opencode.db
 ```
 
-> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`(逐行 JSON 记录,含 `Skill`/`Read`/`Write`/`Bash` tool_use);opencode session `.json`(`opencode export <sessionID>` 的产出,顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`)。两者重建成同一 `SessionDigest` 再对账;`--by-skill` cc 按 `Skill` tool_use 切分、opencode 按 per-message `agent` 切分(扁平,无 cc 父子作用域)。run 产的 `transcript.jsonl` 永远是 cc 格式(run 只 spawn cc)。生产导出 opencode 会话喂 audit:`opencode session list` 找 id → `opencode export <id> > session.json`(**导原文**,audit 靠 part.text 判遵循性;`--sanitize` 仅用于对外分享脱敏版,脱敏后别喂 audit)→ `skill-eval audit --transcript session.json`。
+> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`(逐行 JSON 记录,含 `Skill`/`Read`/`Write`/`Bash` tool_use);opencode session `.json`(`opencode export <sessionID>` 的产出,顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`)。两者重建成同一 `SessionDigest` 再对账;`--by-skill` cc 按 `Skill` tool_use 切分、opencode 按 per-message `agent` 切分(扁平,无 cc 父子作用域)。`run --task` 两种执行器都支持(默认 `cc` 产 `.jsonl`,`--executor opencode` 产 `.json`),run 产的 transcript 直接喂 audit 即可。生产导出 opencode 会话喂 audit:`opencode session list` 找 id → `opencode export <id> > session.json`(**导原文**,audit 靠 part.text 判遵循性;`--sanitize` 仅用于对外分享脱敏版,脱敏后别喂 audit)→ `skill-eval audit --transcript session.json`。
 
 > **拿到一个 opencode `.db` 文件,一行进 audit**(别人/别处拷来的库,不是你本机默认库):直接用 `--db`,skill-eval 内部把 list/export/audit 全包了(隔离 `XDG_DATA_HOME` 指向那个 .db、**不碰本机真库**;需 opencode CLI 在 PATH):
 > ```bash

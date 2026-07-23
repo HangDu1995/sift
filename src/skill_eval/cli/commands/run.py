@@ -14,6 +14,7 @@ from skill_eval.cli.pipeline import _run_ab_eval
 from skill_eval.env_check import check_skill_env, check_eval_env
 from skill_eval.errors import SkillEvalError
 from skill_eval.evals.baseline import skill_name_mismatch
+from skill_eval.execution.live_runner import run_live_task
 from skill_eval.parser import parse_skill_md, resolve_skill_dir
 
 
@@ -153,6 +154,10 @@ def run(
     workers: int = typer.Option(4, "--workers", help="Max parallel workers"),
     timeout: int = typer.Option(300, "--timeout", help="Timeout per run in seconds"),
     max_turns: int = typer.Option(10, "--max-turns", help="Max agentic turns per claude -p run"),
+    executor: Optional[str] = typer.Option(
+        None, "--executor",
+        help="路径1 执行器:cc(默认)/ opencode / cc,opencode(多执行器各跑一次)",
+    ),
     max_retries: int = typer.Option(2, "--max-retries", help="Max retries per eval on UNEVAL/error (each retry re-runs claude + scoring + compliance LLM; heavy skills may want 0-1 to save tokens)"),
     scoring: str = typer.Option("hybrid", "--scoring", help="Scoring mode: hybrid, programmatic, or llm"),
     no_compliance: Optional[bool] = typer.Option(None, "--no-compliance/--compliance", help="Skip compliance checking (auto: on for --runs<3)"),
@@ -186,22 +191,31 @@ def run(
 
     # 路径1 真任务模式:--task 直接 spawn 真实任务(--cwd 拷贝隔离),不走 evals.json
     if task:
-        from skill_eval.execution.live_runner import run_live_task
         if not output_dir:
             output_dir = Path("output")
-        run_live_task(
-            skill_path=skill_path,
-            task=task,
-            cwd=cwd,
-            runs=runs,
-            model=model,
-            timeout=timeout,
-            max_turns=max_turns,
-            output_dir=output_dir,
-            on_run_progress=lambda line: console.print(line),
-        )
-        transcripts = sorted(output_dir.glob("run-*/transcript.jsonl"))
-        console.print(f"\n[bold]Live task:[/bold] {runs} run(s) → {len(transcripts)} transcript(s)")
+        exec_list = [e.strip() for e in (executor or "cc").split(",") if e.strip()]
+        bad = [e for e in exec_list if e not in ("cc", "opencode")]
+        if bad:
+            console.print(f"[red]Error:[/red] 未知 executor: {', '.join(bad)}(支持: cc, opencode)")
+            raise typer.Exit(code=2)
+        try:
+            run_live_task(
+                skill_path=skill_path,
+                task=task,
+                cwd=cwd,
+                runs=runs,
+                model=model,
+                timeout=timeout,
+                max_turns=max_turns,
+                output_dir=output_dir,
+                on_run_progress=lambda line: console.print(line),
+                executors=exec_list,
+            )
+        except SkillEvalError as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(code=exc.exit_code)
+        transcripts = sorted(output_dir.glob("run-*/transcript.*"))
+        console.print(f"\n[bold]Live task:[/bold] {len(exec_list)} executor(s) × {runs} run(s) → {len(transcripts)} transcript(s)")
         # 每 run 的 operational 摘要(读 run-N/run_debug.json;解 §50 "run_debug 孤儿")
         for debug_path in sorted(output_dir.glob("run-*/run_debug.json")):
             try:

@@ -605,7 +605,7 @@ skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
 skill-eval audit path/to/skill/ --transcript opencode-session.json          # opencode session(.json)
 ```
 
-audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md 对账。`--transcript` 吃两种格式(按后缀自动分派):cc 会话 `.jsonl`(run 产的 `transcript.jsonl` 永远是这种,run 只 spawn cc)或 opencode session `.json`(`opencode export <sessionID>` 导出,顶层 `info`/`messages`、parts 嵌在 message 里;生产:`opencode session list` 找 id → `opencode export <id> > s.json`)。**拿到一个 .db 文件**(别处拷来的库)直接 `audit --db handed.db`(内部自动 list/export/audit;单 session 自动选,多个列出挑;底层三步见 reference audit 段)。可重复,多条 transcript 做指令级聚合(跨会话看 fail%)。
+audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md 对账。`--transcript` 吃两种格式(按后缀自动分派):cc 会话 `.jsonl`(`run --task` 两种执行器都支持,默认 `cc` 产 `.jsonl`,`--executor opencode` 产 `.json`)或 opencode session `.json`(`opencode export <sessionID>` 导出,顶层 `info`/`messages`、parts 嵌在 message 里;生产:`opencode session list` 找 id → `opencode export <id> > s.json`)。**拿到一个 .db 文件**(别处拷来的库)直接 `audit --db handed.db`(内部自动 list/export/audit;单 session 自动选,多个列出挑;底层三步见 reference audit 段)。可重复,多条 transcript 做指令级聚合(跨会话看 fail%)。
 
 判定要逐批调 LLM（每批约 40–257s），跑期间实时打印进度（`[条件性/禁令/步骤] 判定 N 条…`），三个 LLM 类别判定器（条件性 / 禁令 / 步骤；输出格式走程序判定不调 LLM）并发跑（约 2× 提速）。看到 `[类别] …` 滚动就是在跑，别误以为卡死。
 
@@ -1042,6 +1042,8 @@ skill-eval run path/to/skill/ --task "重构 X 模块，拆成三个文件" --cw
 ```
 
 给 `--task` 就进入真任务模式：**忽略 evals.json**，spawn Claude 在 `--cwd` 里跑这个真任务，产 `run-*/transcript.jsonl`。每 run 在终端打印 operational 摘要（耗时/turns/tokens/stop_reason/tool_calls + 结果头部，读自 run_debug.json）。此模式 `--evals`/`--scoring`/`--workers` 等大多不生效。
+
+**执行器**：默认 `cc`（claude code）；给 `--executor opencode` 改用 opencode 跑（产 `run-*/transcript.json`，需 opencode CLI 在 PATH，模型在 `opencode.json` 里配，省略 `--model`）；`--executor cc,opencode` 两个执行器各跑 `--runs` 次。两种 transcript 都能直接喂 audit。
 
 ### 13.2 拷贝隔离
 

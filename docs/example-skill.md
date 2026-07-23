@@ -19,9 +19,9 @@ example skill 的 `SKILL.md` 可被三条评测路径复用,但**任务源不同
 |---|---|---|---|
 | 路径3 fixture run(当前主路) | `init` → `run`(evals.json 剧本 spawn;`--from-transcript` 是剧本来自 transcript 的变体) | `SKILL.md` + `evals.json` / transcript | ✅ 已验证 |
 | 路径2 audit(对账) | `audit --transcript`(不 run,审历史 trace) | `SKILL.md` + `transcripts/synthetic-violation.jsonl` | ✅ 已验证(canary) |
-| 路径1 live 真任务模式 | `run --task/--cwd` spawn cc 在真任务上真跑(--cwd 拷贝隔离),审 re-run 的新 trace | `SKILL.md` + `--task`(真任务)+ `--cwd`(真代码库/真数据,非 fixture) | ✅ 已实现(code-review-auditor 验证) |
+| 路径1 live 真任务模式 | `run --task/--cwd` spawn 执行器(默认 cc;`--executor opencode`)在真任务上真跑(--cwd 拷贝隔离),审 re-run 的新 trace | `SKILL.md` + `--task`(真任务)+ `--cwd`(真代码库/真数据,非 fixture) | ✅ 已实现(code-review-auditor 验证) |
 
-> **路径1 澄清(2026-07-11 更新)**:`run --task/--cwd` 是路径1 真任务模式——不读 evals.json,直接 spawn cc 跑真任务(--cwd 真代码库/真数据,拷贝隔离)。example skill 自带的 `evals.json` 仍是 fixture(用它 `run` = 路径3)。路径1 用 example skill 的 `SKILL.md` 当被测对象,配 `--task`(真任务)+ `--cwd`(真材料)——code-review-auditor 即此模式的验证(审 skill-eval 真代码)。真环境动态评测由算子上库流程负责(skill-eval 只审 skill、不动态跑算子;原 P0-3 driver **已撤议**);**审 opencode 跑出的 session 已支持**——audit `--transcript` 除 cc `.jsonl` 外也吃 opencode session `.json`(见下)。
+> **路径1 澄清(2026-07-11 更新)**:`run --task/--cwd` 是路径1 真任务模式——不读 evals.json,直接 spawn 跑真任务(默认 `cc`;`--executor opencode` 改用 opencode 跑,或 `--executor cc,opencode` 两个都跑;--cwd 真代码库/真数据,拷贝隔离)。example skill 自带的 `evals.json` 仍是 fixture(用它 `run` = 路径3)。路径1 用 example skill 的 `SKILL.md` 当被测对象,配 `--task`(真任务)+ `--cwd`(真材料)——code-review-auditor 即此模式的验证(审 skill-eval 真代码)。真环境动态评测由算子上库流程负责(skill-eval 只审 skill、不动态跑算子;原 P0-3 driver **已撤议**);**审 opencode 跑出的 session 已支持**——audit `--transcript` 除 cc `.jsonl` 外也吃 opencode session `.json`(见下)。
 >
 > 路径2 和路径3 的 `--from-transcript` 变体**共用同一份 transcript**(audit 对账它、init --from-transcript 挖它)。
 
