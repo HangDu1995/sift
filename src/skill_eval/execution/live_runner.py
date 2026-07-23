@@ -20,6 +20,7 @@ import shutil
 from pathlib import Path
 from typing import Callable
 
+from skill_eval.errors import InputError
 from skill_eval.execution.cli_runner import ClaudeRunner
 from skill_eval.execution.runner import _copy_skill_references
 from skill_eval.models import RunOutput
@@ -30,6 +31,19 @@ ProgressCallback = Callable[..., None]
 _IGNORE_ON_COPY = shutil.ignore_patterns(
     ".git", ".venv", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache"
 )
+
+
+def make_live_runner(name: str):
+    """执行器名 → runner 实例(路径1 多态 seam)。未知名 → InputError(exit 2)。
+
+    OpenCodeRunner 懒 import(避免无 opencode 时也拖进依赖/启动开销)。
+    """
+    if name == "cc":
+        return ClaudeRunner()
+    if name == "opencode":
+        from skill_eval.execution.opencode_runner import OpenCodeRunner
+        return OpenCodeRunner()
+    raise InputError(f"未知 executor: {name}(支持: cc, opencode)")
 
 
 def run_live_task(
@@ -43,11 +57,17 @@ def run_live_task(
     output_dir: Path = Path("output"),
     on_progress: ProgressCallback | None = None,
     on_run_progress: ProgressCallback | None = None,
+    executors: list[str] | None = None,
 ) -> Path:
     """跑路径1 真任务模式,返回 output_dir。
 
-    产物:output_dir/workspace/(隔离拷贝)、output_dir/run-{N}/transcript.jsonl
-    (raw stream-json,可直接喂 `audit --transcript`)、run-{N}/run_debug.json。
+    产物:output_dir/workspace/(隔离拷贝,多执行器共享同一考场 = 公平比较基底)、
+    output_dir/run-{N}/transcript.jsonl(单执行器,向后兼容老 audit 提示)、
+    output_dir/run-{N}-{exec}/transcript.{jsonl,json}(多执行器,按执行器命名空间)、
+    run-{N}[-{exec}]/run_debug.json。
+
+    executors 默认 ["cc"];多执行器时各执行器分别跑 runs 次,
+    transcript 扩展名按执行器分派(cc .jsonl / opencode .json)。
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -61,46 +81,51 @@ def run_live_task(
     # 2. skill references/ 拷进 workspace(SKILL.md 里 references/xxx 可读)
     _copy_skill_references(skill_path, workspace)
 
-    # 3. N 次 spawn
-    runner = ClaudeRunner()
-    for run_num in range(1, runs + 1):
-        run_dir = output_dir / f"run-{run_num}"
-        run_dir.mkdir(parents=True, exist_ok=True)
+    # 3. executor × run 双层 spawn
+    execs = list(executors) if executors else ["cc"]
+    multi = len(execs) > 1
+    for exec_name in execs:
+        runner = make_live_runner(exec_name)
+        ext = ".json" if exec_name == "opencode" else ".jsonl"
+        for run_num in range(1, runs + 1):
+            run_dir = output_dir / (f"run-{run_num}-{exec_name}" if multi else f"run-{run_num}")
+            run_dir.mkdir(parents=True, exist_ok=True)
 
-        if on_run_progress:
-            on_run_progress(f"▶ run {run_num}/{runs}")
-        # 每次 spawn 流式吐进度(cc 逐行 stream-json → on_progress),不再全程静默到结束
-        during = (lambda msg: on_run_progress(f"  {msg}")) if on_run_progress else None
+            if on_run_progress:
+                on_run_progress(f"▶ {exec_name} run {run_num}/{runs}")
+            # 每次 spawn 流式吐进度(cc 逐行 stream-json → on_progress),不再全程静默到结束
+            during = (lambda msg: on_run_progress(f"  {msg}")) if on_run_progress else None
 
-        run_output: RunOutput = runner.run(
-            prompt=task,
-            skill_path=skill_path,
-            model=model,
-            timeout=timeout,
-            cwd=workspace,
-            max_turns=max_turns,
-            on_progress=during,
-        )
+            run_output: RunOutput = runner.run(
+                prompt=task,
+                skill_path=skill_path,
+                model=model,
+                timeout=timeout,
+                cwd=workspace,
+                max_turns=max_turns,
+                on_progress=during,
+            )
 
-        # 4. dump raw stream-json 成 transcript.jsonl(打通 audit 闭环)
-        if run_output.stdout:
-            (run_dir / "transcript.jsonl").write_text(run_output.stdout, encoding="utf-8")
+            # 4. dump 会话流成 transcript(cc .jsonl / opencode .json),打通 audit 闭环
+            if run_output.stdout:
+                (run_dir / f"transcript{ext}").write_text(run_output.stdout, encoding="utf-8")
 
-        run_debug = {
-            "run_num": run_num,
-            "task": task[:500],
-            "duration_ms": run_output.duration_ms,
-            "total_tokens": run_output.total_tokens,
-            "num_turns": run_output.num_turns,
-            "stop_reason": run_output.stop_reason,
-            "tool_calls": run_output.tool_calls,
-            "result_text": run_output.result_text[:2000] if run_output.result_text else "",
-        }
-        (run_dir / "run_debug.json").write_text(
-            json.dumps(run_debug, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+            run_debug = {
+                "run_num": run_num,
+                "executor": exec_name,
+                "task": task[:500],
+                "duration_ms": run_output.duration_ms,
+                "total_tokens": run_output.total_tokens,
+                "num_turns": run_output.num_turns,
+                "stop_reason": run_output.stop_reason,
+                "tool_calls": run_output.tool_calls,
+                "result_text": run_output.result_text[:2000] if run_output.result_text else "",
+            }
+            (run_dir / "run_debug.json").write_text(
+                json.dumps(run_debug, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
 
-        if on_progress:
-            on_progress(run_num, runs, run_output)
+            if on_progress:
+                on_progress(run_num, runs, run_output)
 
     return output_dir

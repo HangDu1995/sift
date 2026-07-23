@@ -152,3 +152,62 @@ def test_format_run_summary_handles_missing_fields():
     assert "0 tokens" in s
     assert "0 tool_calls" in s
     assert "—" in s  # stop_reason 缺省
+
+
+def _skill_with_md(tmp_path):
+    sp = tmp_path / "skill"
+    sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: sv\ndescription: d\n---\n# b\n", encoding="utf-8")
+    return sp
+
+
+def _cwd_dir(tmp_path):
+    d = tmp_path / "repo"
+    d.mkdir()
+    (d / "f.txt").write_text("x", encoding="utf-8")
+    return d
+
+
+def test_run_live_task_multi_executor_namespaced_dirs(tmp_path, monkeypatch):
+    """executors=[cc,opencode] → run-1-cc/transcript.jsonl + run-1-opencode/transcript.json。"""
+    from skill_eval.execution import live_runner as lr
+    from skill_eval.models import RunOutput
+
+    def fake_factory(name):
+        class F:
+            def run(self, **kw):
+                return RunOutput(exit_code=0, stdout=f"{name}-TRANSCRIPT")
+        return F()
+
+    monkeypatch.setattr(lr, "make_live_runner", fake_factory)
+    out = tmp_path / "out"
+    lr.run_live_task(
+        skill_path=_skill_with_md(tmp_path), task="t", cwd=_cwd_dir(tmp_path),
+        runs=1, executors=["cc", "opencode"], output_dir=out,
+    )
+    assert (out / "run-1-cc" / "transcript.jsonl").read_text(encoding="utf-8") == "cc-TRANSCRIPT"
+    assert (out / "run-1-opencode" / "transcript.json").read_text(encoding="utf-8") == "opencode-TRANSCRIPT"
+
+
+def test_run_live_task_single_executor_no_suffix_backward_compat(tmp_path, monkeypatch):
+    """单执行器(任一)→ run-1/(无 -exec 后缀),向后兼容老 audit 提示。"""
+    from skill_eval.execution import live_runner as lr
+    from skill_eval.models import RunOutput
+
+    monkeypatch.setattr(lr, "make_live_runner",
+                        lambda name: type("F", (), {"run": lambda self, **kw: RunOutput(exit_code=0, stdout="X")})())
+    out = tmp_path / "out"
+    lr.run_live_task(
+        skill_path=_skill_with_md(tmp_path), task="t", cwd=_cwd_dir(tmp_path),
+        runs=1, executors=["opencode"], output_dir=out,
+    )
+    assert (out / "run-1" / "transcript.json").exists()
+    assert not (out / "run-1-opencode").exists()
+
+
+def test_make_live_runner_unknown_raises(tmp_path):
+    from skill_eval.execution import live_runner as lr
+    from skill_eval.errors import InputError
+    import pytest
+    with pytest.raises(InputError, match="未知 executor"):
+        lr.make_live_runner("foo")
