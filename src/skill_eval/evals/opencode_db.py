@@ -82,6 +82,22 @@ def _isolated_xdg_env(db_path: Path):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+@contextmanager
+def _isolated_xdg_env_empty():
+    """空隔离 XDG(写侧):mkdtemp → mkdir opencode/ → yield → rmtree。
+
+    给 ``opencode run`` 用:会话落一次性 ``<tmp>/opencode/opencode.db``、不碰真库。
+    与 ``_isolated_xdg_env(db_path)``(拷贝版,audit --db 读侧)对偶 —— 那个拷一个已有
+    db 进去,这个建空目录让 opencode 自己写。
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="skill-eval-opencode-run-"))
+    try:
+        (tmp / "opencode").mkdir(parents=True)
+        yield tmp
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def list_sessions(db_path: Path) -> list[dict]:
     """列出 opencode db 里所有 session,按 ``updated`` desc(新→旧)返回。
 

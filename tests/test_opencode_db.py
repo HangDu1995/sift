@@ -98,6 +98,19 @@ def test_isolated_xdg_env_missing_db_raises(tmp_path):
             pass
 
 
+# ---- _isolated_xdg_env_empty(写侧,与拷贝版对偶)----
+
+def test_isolated_xdg_env_empty_yields_opencode_dir_and_cleans_up():
+    """空隔离 XDG:yield 时 <tmp>/opencode/ 在;退出 rmtree。不拷 db(与拷贝版对偶)。"""
+    from contextlib import ExitStack
+    stack = ExitStack()
+    xdg = stack.enter_context(ocdb._isolated_xdg_env_empty())
+    assert (Path(xdg) / "opencode").is_dir()   # yield 时 opencode/ 目录在
+    captured_xdg = Path(xdg)
+    stack.close()
+    assert not captured_xdg.exists()             # 退出后整个临时目录消失
+
+
 # ---- list_sessions ----
 
 _LIST_JSON = json.dumps([
