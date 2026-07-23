@@ -211,3 +211,39 @@ def test_make_live_runner_unknown_raises(tmp_path):
     import pytest
     with pytest.raises(InputError, match="未知 executor"):
         lr.make_live_runner("foo")
+
+
+def test_real_opencode_executor_end_to_end(tmp_path):
+    """opt-in 真测(Pattern B):opencode 装好 + auth 配好才跑;否则 skip。
+
+    跑最小 task,断 transcript.json 含真文本(非 [redacted:...])。spike 已证可行;
+    本测固化端到端(隔离 XDG + auth alias + run + export 原文)。
+    """
+    import json as _json
+    import os as _os
+    import shutil as _sh
+
+    import pytest
+
+    if _sh.which("opencode") is None:
+        pytest.skip("opencode CLI 未安装")
+    # gate:env 无 ANTHROPIC_AUTH_TOKEN 且无 ANTHROPIC_API_KEY → skip(auth 未配)
+    if not (_os.environ.get("ANTHROPIC_AUTH_TOKEN") or _os.environ.get("ANTHROPIC_API_KEY")):
+        pytest.skip("opencode auth 未配(需 ANTHROPIC_AUTH_TOKEN 或 ANTHROPIC_API_KEY)")
+
+    sp = tmp_path / "skill"
+    sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: sv\ndescription: d\n---\n# b\n", encoding="utf-8")
+    out = tmp_path / "out"
+    from skill_eval.execution.live_runner import run_live_task
+    run_live_task(
+        skill_path=sp, task="Reply with exactly one word: PONG",
+        runs=1, executors=["opencode"], output_dir=out, timeout=180,
+    )
+    transcript = out / "run-1" / "transcript.json"
+    assert transcript.exists()
+    data = _json.loads(transcript.read_text(encoding="utf-8"))
+    texts = [p.get("text", "") for m in data.get("messages", []) for p in m.get("parts", []) if p.get("type") == "text"]
+    joined = " ".join(texts)
+    assert "[redacted:" not in joined  # 原文未脱敏(export 没带 --sanitize)
+    assert any("PONG" in t for t in texts)  # 真回复在
