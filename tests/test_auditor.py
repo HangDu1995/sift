@@ -1145,6 +1145,78 @@ class TestAuditAggregate:
         assert len(report.findings) == 5  # 2 CONDITIONAL + 1 + 1 + 1
 
 
+class TestAuditNoiseWiring:
+    """Task 4 接线:audit() 在 post_process_findings 后跑 annotate_noise、
+    在 aggregate_by_instruction 后跑 annotate_aggregate_noise,AuditReport 携带标注后的
+    findings / by_instruction。
+
+    全程 mock call_claude(不真跑 LLM)。构造 1 FAIL(prohibition violated=true)+
+    1 PASS(step verdict=pass)的最小混档,断言:FAIL 的 noise_label 非 None、PASS 的为 None、
+    by_instruction 里 fail_count>0 的行 noise_label 非 None。
+    """
+
+    @staticmethod
+    def _mixed_fake():
+        """通用 mock call_claude:prohibition 全 FAIL、conditional 全 N/A、step 全 PASS。"""
+        def fake(prompt, *a, **k):
+            return json.dumps([
+                {
+                    "index": i,
+                    "applicable": False,
+                    "violated": True,
+                    "verdict": "pass",
+                    "evidence": "violated",
+                }
+                for i in range(60)
+            ])
+        return fake
+
+    def test_findings_and_by_instruction_are_noise_annotated(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """audit() 产出的 findings / by_instruction 都被 noise 标注。"""
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", self._mixed_fake())
+
+        body = "NEVER fabricate data\n\n1. Analyze input format"
+        tp = _write_jsonl(
+            tmp_path / "only_user.jsonl",
+            [{"message": {"role": "user", "content": "hello"}}],
+        )
+        report = TranscriptAuditor().audit("s", body, [tp])
+
+        # 最少:1 FAIL(prohibition)+ 1 PASS(step),覆盖 FAIL / 非 FAIL 两侧
+        fails = [f for f in report.findings if f.verdict == AuditVerdict.FAIL]
+        non_fails = [f for f in report.findings if f.verdict != AuditVerdict.FAIL]
+        assert fails, "前置:至少有 1 条 FAIL finding(否则测试无意义)"
+        assert non_fails, "前置:至少有 1 条非 FAIL finding(否则测不到 None 分支)"
+
+        # ① FAIL finding 的 noise_label ∈ {tool_noise, skill_issue, uncertain}(非 None)
+        for f in fails:
+            assert f.noise_label in {"tool_noise", "skill_issue", "uncertain"}, (
+                f"FAIL finding 应被标 noise_label,得到 {f.noise_label!r}"
+            )
+            assert f.noise_reasons, "FAIL finding 应附非空 noise_reasons"
+
+        # ② PASS / N/A / 其它非 FAIL finding 的 noise_label 为 None、reasons 空
+        for f in non_fails:
+            assert f.noise_label is None, (
+                f"非 FAIL finding 不应被标 noise_label,得到 {f.noise_label!r}"
+            )
+            assert f.noise_reasons == []
+
+        # ③ by_instruction 里 fail_count>0 的行 noise_label 非 None;
+        #    fail_count==0 的行 noise_label 为 None
+        fail_rows = [r for r in report.by_instruction if r.fail_count > 0]
+        no_fail_rows = [r for r in report.by_instruction if r.fail_count <= 0]
+        assert fail_rows, "前置:至少有 1 行 fail_count>0 的聚合"
+        for r in fail_rows:
+            assert r.noise_label in {"tool_noise", "uncertain"}, (
+                f"fail_count>0 的行应被标 noise_label,得到 {r.noise_label!r}"
+            )
+        for r in no_fail_rows:
+            assert r.noise_label is None
+
+
 class TestProgressCallback:
     """on_progress 回调:audit 长跑(每批 LLM 40-257s)时让用户看到进度,而非全程静默。
 

@@ -265,6 +265,7 @@ def _aggregate_compliance(runs: list[dict]) -> list[dict]:
     """
     from collections import defaultdict
     from skill_eval.audit.aggregate import aggregate_by_instruction
+    from skill_eval.audit.noise import annotate_aggregate_noise
     from skill_eval.models import AuditFinding, AuditVerdict
 
     by_side: dict[str, list[dict]] = defaultdict(list)   # side -> findings(dict)
@@ -287,6 +288,9 @@ def _aggregate_compliance(runs: list[dict]) -> list[dict]:
         # legacy validator 折成 UNRESOLVED,与新数据统一(summary 与 by_instruction 同源)。
         validated = [AuditFinding.model_validate(f) for f in findings]
         ai = aggregate_by_instruction(validated)
+        # 聚合级噪声判别(每 side 各跑一次:fail_count>0 的行标 noise_label / noise_reasons)。
+        # 在 model_dump 前做,使 by_instruction 字段携带标注——与 audit() 产出的 report 对齐。
+        ai = annotate_aggregate_noise(ai)
         out.append({
             "side": side,
             "summary": {

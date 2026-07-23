@@ -58,6 +58,7 @@ from skill_eval.audit.rebuild import rebuild
 from skill_eval.audit.tool_match import extract_first_balanced, match_tool_call
 from skill_eval.audit.aggregate import aggregate_by_instruction
 from skill_eval.audit.dedup import post_process_findings
+from skill_eval.audit.noise import annotate_aggregate_noise, annotate_noise
 from skill_eval.compliance.extractor import InstructionExtractor
 from skill_eval.errors import SkillEvalError
 from skill_eval.evals.opencode import transcript_source
@@ -298,6 +299,10 @@ class TranscriptAuditor:
         # findings(同文重复不再虚增 fail、by_instruction 不再同 transcript 双计)。
         all_findings = post_process_findings(all_findings)
 
+        # FAIL 噪声/skill 判别(每条 FAIL 标 noise_label / noise_reasons,非 FAIL 置 None)。
+        # 在 dedup 后、汇总前做:基于去重后的 findings,related 已就位(LLM+related 信号要用)。
+        all_findings = annotate_noise(all_findings)
+
         # 没判成(UNRESOLVED)vs 判不准(INDETERMINATE)分开汇总、不同警告:
         # - 没判成是操作性失败(LLM 调用/解析失败/未提及),**可重跑**救回 → 提示重跑。
         # - 判不准是语义模糊(LLM 看了证据真判不了),重跑无益 → 不提示重跑;
@@ -325,13 +330,17 @@ class TranscriptAuditor:
             "unresolved": unresolved,
             "indeterminate": indeterminate,
         }
+        by_instruction = aggregate_by_instruction(all_findings)
+        # 聚合级噪声判别(fail_count>0 的行标 noise_label / noise_reasons)。在 AuditReport
+        # 构造前做,使 report.by_instruction 直接携带标注。
+        by_instruction = annotate_aggregate_noise(by_instruction)
         return AuditReport(
             skill_name=skill_name,
             transcripts=transcript_names,
             transcript_sources=transcript_sources,
             summary=summary,
             findings=all_findings,
-            by_instruction=aggregate_by_instruction(all_findings),
+            by_instruction=by_instruction,
             warnings=warnings,
         )
 

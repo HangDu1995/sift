@@ -96,6 +96,9 @@ class AuditFinding(BaseModel):
     seq: int = 0  # #1..#N:去重后编排的序号(供 related 引用 + 报告里 #N 可读定位)
     sources: list[str] = Field(default_factory=list)  # 同文去重后合并的所有来源;单条=[source]
     related: list[str] = Field(default_factory=list)  # 同行为跨类(Case B)关联的其它 finding 序号,如 ["#9"]
+    # FAIL 噪声判别(audit.noise.annotate_noise)填,只对 FAIL 标;None/[] 向后兼容旧 JSON
+    noise_label: str | None = None  # "tool_noise" / "skill_issue" / "uncertain";非 FAIL 为 None
+    noise_reasons: list[str] = Field(default_factory=list)  # 命中理由(中文);非 FAIL 为空
 
     @model_validator(mode="before")
     @classmethod
@@ -138,6 +141,9 @@ class InstructionAggregate(BaseModel):
     na_in_transcripts: list[str] = Field(default_factory=list)  # 哪些 transcript 判 N/A(场景不适用,定位用);默认空兼容旧 report
     fail_seqs: list[int] = Field(default_factory=list)  # FAIL findings 的明细 #N(汇总表交叉引用到明细用)
     na_seqs: list[int] = Field(default_factory=list)  # N/A findings 的明细 #N
+    # FAIL 噪声判别(audit.noise.annotate_aggregate_noise)填,只对 fail_count>0 标;None/[] 向后兼容
+    noise_label: str | None = None  # "tool_noise" / "uncertain";无 FAIL 为 None
+    noise_reasons: list[str] = Field(default_factory=list)
 
 
 class AuditReport(BaseModel):

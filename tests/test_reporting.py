@@ -1112,6 +1112,60 @@ class TestComplianceAggregate:
         assert len(agg) == 1
         assert agg[0]["summary"]["pass"] == 1 and agg[0]["summary"]["total"] == 1
 
+    @staticmethod
+    def _heading_f(text: str, verdict: str, transcript: str) -> dict:
+        """HEADING_STEP finding(资源链接形态,触发 aggregate tool_noise)。"""
+        return {"instruction_text": text, "source": "HEADING_STEP", "verdict": verdict,
+                "category": "step", "evidence": "e", "method": "LLM", "transcript": transcript}
+
+    def test_annotates_aggregate_noise_tool_noise(self):
+        """Task 5 接线:_aggregate_compliance 跑 annotate_aggregate_noise——
+        HEADING_STEP + NA 多 FAIL 少 → aggregate noise_label=="tool_noise"。"""
+        from skill_eval.reporting.viewer import _aggregate_compliance
+        runs = [
+            {"config": "with_skill", "compliance": {"findings": [
+                self._heading_f("[设计](design.md)", "FAIL", "run-1.jsonl"),
+                self._heading_f("[设计](design.md)", "N/A", "run-2.jsonl"),
+                self._heading_f("[设计](design.md)", "N/A", "run-3.jsonl"),
+            ]}},
+        ]
+        agg = _aggregate_compliance(runs)
+        assert len(agg) == 1
+        bi = agg[0]["by_instruction"]
+        assert len(bi) == 1
+        assert bi[0]["source"] == "HEADING_STEP"
+        assert bi[0]["fail_count"] == 1
+        assert bi[0]["na_count"] == 2
+        assert bi[0]["noise_label"] == "tool_noise"
+        assert bi[0]["noise_reasons"], "应附非空 noise_reasons"
+
+    def test_annotates_aggregate_noise_runs_per_side(self):
+        """Task 5 接线:per-side 都跑(不是只跑一次)——两个 side 各自的 aggregate 都标。"""
+        from skill_eval.reporting.viewer import _aggregate_compliance
+        runs = [
+            {"config": "with_skill", "compliance": {"findings": [
+                self._heading_f("[a](a.md)", "FAIL", "r1"),
+                self._heading_f("[a](a.md)", "N/A", "r2"),
+                self._heading_f("[a](a.md)", "N/A", "r3"),
+            ]}},
+            {"config": "without_skill", "compliance": {"findings": [
+                self._heading_f("[b](b.md)", "FAIL", "r1"),
+                self._heading_f("[b](b.md)", "N/A", "r2"),
+                self._heading_f("[b](b.md)", "N/A", "r3"),
+            ]}},
+        ]
+        agg = _aggregate_compliance(runs)
+        assert len(agg) == 2, "两个 side 都有 findings,应各产一份聚合"
+        by_side = {a["side"]: a for a in agg}
+        for side in ("with_skill", "without_skill"):
+            bi = by_side[side]["by_instruction"]
+            assert len(bi) == 1
+            assert bi[0]["fail_count"] == 1
+            assert bi[0]["na_count"] == 2
+            assert bi[0]["noise_label"] == "tool_noise", (
+                f"{side} 侧应被标 tool_noise(证明 per-side 都跑了 annotate)"
+            )
+
 
 class TestPreviousDelta:
     """Task 3:_compute_previous_delta 算 current vs previous/benchmark.json 的聚合纵向 delta。
