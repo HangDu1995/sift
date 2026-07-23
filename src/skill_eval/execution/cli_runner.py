@@ -53,6 +53,18 @@ def _build_non_interactive_prompt(prompt: str, skill_name: str, skill_body: str)
     )
 
 
+def build_live_prompt(task: str, skill_path: Path | None) -> str:
+    """构造路径1 真任务注入 prompt:skill body + 非交互前言 + task。
+
+    cc/opencode 两执行器共用 → 保证同一份 prompt(执行器无关)。``skill_path`` 为 None
+    (无 skill 注入)时原样返回 task。抽自 ClaudeRunner.run 内联块,供 OpenCodeRunner 复用。
+    """
+    if skill_path is None:
+        return task
+    name, _description, _content, _, skill_body = parse_skill_md(skill_path)
+    return _build_non_interactive_prompt(task, name, skill_body)
+
+
 def _progress_from_event(line: str) -> str | None:
     """stream-json 一行 → 进度字符串(供 run 流式 on_progress 实时吐),无足轻重返 None。
 
@@ -103,10 +115,7 @@ class ClaudeRunner:
         project_root = cwd or find_project_root()
 
         try:
-            skill_injected_prompt = prompt
-            if skill_path:
-                name, description, content, _, skill_body = parse_skill_md(skill_path)
-                skill_injected_prompt = _build_non_interactive_prompt(prompt, name, skill_body)
+            skill_injected_prompt = build_live_prompt(prompt, skill_path)
 
             cmd = ["claude", "-p", skill_injected_prompt, "--output-format", "stream-json", "--verbose",
                     "--dangerously-skip-permissions",

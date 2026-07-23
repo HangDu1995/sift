@@ -9,7 +9,11 @@ import stat
 import pytest
 
 from skill_eval.errors import ClaudeRunnerError
-from skill_eval.execution.cli_runner import ClaudeRunner, _build_non_interactive_prompt
+from skill_eval.execution.cli_runner import (
+    ClaudeRunner,
+    _build_non_interactive_prompt,
+    build_live_prompt,
+)
 
 
 class TestNonInteractivePrompt:
@@ -180,3 +184,29 @@ class TestRunStreaming:
         self._prepend(monkeypatch, tmp_path)
         with pytest.raises(ClaudeRunnerError, match="timed out"):
             ClaudeRunner().run(prompt="x", cwd=tmp_path, timeout=2)
+
+
+class TestBuildLivePrompt:
+    """build_live_prompt:抽自 ClaudeRunner.run 内联块,供 cc/opencode 两执行器共用同一份
+    注入 prompt。``skill_path`` 为 None 时原样返回 task;否则与 _build_non_interactive_prompt
+    等价(只换入参来源:从 skill_path 解析出 name/body)。"""
+
+    def test_no_skill_returns_task_unchanged(self):
+        assert build_live_prompt("do the thing", None) == "do the thing"
+
+    def test_with_skill_wraps_body(self, tmp_path):
+        sp = tmp_path / "skill"
+        sp.mkdir()
+        (sp / "SKILL.md").write_text(
+            "---\nname: myskill\ndescription: d\n---\n# Steps\n1. do X\n",
+            encoding="utf-8",
+        )
+        out = build_live_prompt("the task", sp)
+        assert "<skill name=\"myskill\">" in out
+        assert "do X" in out                       # skill body 注入
+        assert out.splitlines()[-1] == "the task"  # task 在末尾
+        # 与 _build_non_interactive_prompt 等价(只换入参来源);skill_body 从同一
+        # parse_skill_md 取,避免硬编码与真实解析结果漂移(parse_skill_md 会去尾换行)。
+        from skill_eval.parser import parse_skill_md
+        name, _desc, _content, _refs, body = parse_skill_md(sp)
+        assert out == _build_non_interactive_prompt("the task", name, body)
