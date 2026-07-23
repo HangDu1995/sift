@@ -145,7 +145,8 @@ skill-eval run path/to/skill/
 skill-eval run path/to/skill/ --runs 3 --model claude-sonnet-5
 skill-eval run path/to/skill/ --scoring programmatic   # 仅程序化，零 LLM 评分成本
 skill-eval run v2/ --skill-b v1/                        # v1/v2 双 skill 回归对照
-skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo   # 路径 1 真任务模式
+skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo   # 路径 1 真任务模式（默认 cc）
+skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo --executor opencode   # 同上，改用 opencode 跑
 ```
 
 关键参数：
@@ -156,6 +157,7 @@ skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo   # 路径 1
 | `--scoring` | hybrid | hybrid / programmatic / llm |
 | `--skill-b` | — | v1/v2 模式：第二个 skill 路径（两边各注入各自 skill） |
 | `--task` / `--cwd` | — | 路径 1 真任务模式：直接跑真实任务（不读 evals.json） |
+| `--executor` | cc | 路径 1 执行器：`cc`（默认）/ `opencode` / `cc,opencode`（逗号分隔，各跑 `--runs` 次） |
 | `--no-compliance` | auto | 跳过遵循性检查（`--runs<3` 时默认开） |
 | `--security-gate` | off | 安全审查返回 BLOCKED/REVIEW_NEEDED 时判失败 |
 | `--model` | — | claude -p 模型（也控制盲比较/赛后分析是否执行） |

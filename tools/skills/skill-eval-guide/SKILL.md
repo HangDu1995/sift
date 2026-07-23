@@ -248,7 +248,7 @@ skill-eval run /path/to/skill --task "重构 X 模块" --cwd ./repo   # 路径1 
 
 - **默认 A/B**：位置参数 skill = 候选（side A）。不给 `--skill-b` → with/without 对照；给 `--skill-b <dir>` → v1/v2 双 skill。
 - **末尾自动产评分卡 + 安全审查 + HTML 报告**：A/B 模式跑完后，自动把 `scorecard.json`（静态 11 项）+ `vet-report.json`（原生安全扫描）+ `report.html`（聚合 benchmark/评分卡/安全的自包含 HTML）写进 `iteration-1/`，跑完即得报告（不用再单独 `skill-eval report`；该命令仍可用于 `--previous` 基线对照 / `--open` / 重生成）。三者秒级零 API 成本、各自失败不阻断 run；`--no-static` / `--no-vet` / `--no-report` 跳过。**仅 A/B 模式**——真任务模式（`--task`）无 iteration-1/，不产。
-- **路径1 真任务**（给 `--task`）：忽略 evals.json，spawn cc 在 `--cwd`（拷贝隔离）跑真任务，产 `run-*/transcript.jsonl` 喂 `audit`，每 run 打印 operational 摘要。
+- **路径1 真任务**（给 `--task`）：忽略 evals.json，在 `--cwd`（拷贝隔离）跑真任务，产 transcript 喂 `audit`，每 run 打印 operational 摘要。**执行器**：默认 `cc`（产 `run-*/transcript.jsonl`）；`--executor opencode` 改用 opencode（产 `run-*/transcript.json`，需 opencode CLI 在 PATH，模型在 `opencode.json` 配，省略 `--model`）；`--executor cc,opencode` 两执行器各跑 `--runs` 次。
 - **退出码**：`run` 是纯数据生产者——0 = 产数据成功（**不代表通过**），2 = 输入错误，3 = 执行错误。**通过/失败由 `gate` 判**。`--security-gate` 触发时退 1。
 
 ### `gate` — 通过/失败判决
@@ -286,7 +286,7 @@ skill-eval audit /path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
 skill-eval audit /path/to/skill/ --transcript opencode-session.json
 ```
 
-> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`（逐行 JSON 记录，含 `Skill`/`Read`/`Write`/`Bash` tool_use）；opencode session `.json`（`opencode export <sessionID>` 的产出，顶层 `info`/`messages`，parts 嵌在 message 里、role/agent 在 `message.info`）。两者重建成同一 `SessionDigest` 再对账。生产导出：`opencode session list` 找 id → `opencode export <id> > session.json`（`--sanitize` 可脱敏分享）。**拿到一个 opencode `.db` 文件**(别处拷来的库):直接 `audit --db handed.db` —— 内部自动 list/export/audit(单 session 自动选,多个列出让你挑;底层 = XDG 隔离 + `opencode export`,完整见 reference audit 段)。run 产的 `transcript.jsonl` 永远是 cc 格式（run 只 spawn cc）。
+> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`（逐行 JSON 记录，含 `Skill`/`Read`/`Write`/`Bash` tool_use）；opencode session `.json`（`opencode export <sessionID>` 的产出，顶层 `info`/`messages`，parts 嵌在 message 里、role/agent 在 `message.info`）。两者重建成同一 `SessionDigest` 再对账。生产导出：`opencode session list` 找 id → `opencode export <id> > session.json`（`--sanitize` 可脱敏分享）。**拿到一个 opencode `.db` 文件**(别处拷来的库):直接 `audit --db handed.db` —— 内部自动 list/export/audit(单 session 自动选,多个列出让你挑;底层 = XDG 隔离 + `opencode export`,完整见 reference audit 段)。run 产的 transcript 默认 cc 格式（`.jsonl`）；给 `--executor opencode` 时产 opencode 格式（`.json`）。
 
 | 参数 | 默认 | 说明 |
 |---|---|---|

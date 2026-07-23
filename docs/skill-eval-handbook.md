@@ -92,7 +92,7 @@ skill-eval 不是一条路，而是三条，按"怎么产生 Claude 的执行"�
 
 - 路径 3 是日常主路：你出一份考卷（evals.json），skill-eval 让 Claude 在两种配置下各答一遍——同一 skill 开/关对照（with/without），或两个版本对照（v1/v2），评分 + 查遵循性 + 校准，聚合出 benchmark。
 - 路径 2（audit）不重跑，直接拿真实会话的 transcript（**可一份或多份**，多份做指令级聚合）跟 SKILL.md 对账。它回答两类问题：① 这一段执行有没有按 skill 做（审一次会话）；② 多段真实会话聚合后，这个 skill 在实际使用中遵循得怎么样——反过来反映 skill 的指令设计清不清晰、容不容易被遵循。
-- 路径 1（live）spawn Claude 在真实代码库/数据目录里跑一个真任务，产出的 transcript 既能直接看，也能喂给 audit。它和路径 2 闭环：路径 1 产 transcript，路径 2 审 transcript。
+- 路径 1（live）spawn 执行器（默认 `cc`，可选 `opencode`，见第十三章）在真实代码库/数据目录里跑一个真任务，产出的 transcript 既能直接看，也能喂给 audit。它和路径 2 闭环：路径 1 产 transcript，路径 2 审 transcript。
 
 这三条路的**遵循性判定引擎是同一套**（`TranscriptAuditor`），只是喂给它的 transcript 来源不同。
 
@@ -1039,6 +1039,7 @@ benchmark.json 的 `analysis` 字段来自两个 LLM 分析步骤：
 
 ```bash
 skill-eval run path/to/skill/ --task "重构 X 模块，拆成三个文件" --cwd ./repo --runs 2 -o /tmp/live
+skill-eval run path/to/skill/ --task "重构 X 模块，拆成三个文件" --cwd ./repo --executor opencode -o /tmp/live   # 改用 opencode 跑（产 transcript.json）
 ```
 
 给 `--task` 就进入真任务模式：**忽略 evals.json**，spawn Claude 在 `--cwd` 里跑这个真任务，产 `run-*/transcript.jsonl`。每 run 在终端打印 operational 摘要（耗时/turns/tokens/stop_reason/tool_calls + 结果头部，读自 run_debug.json）。此模式 `--evals`/`--scoring`/`--workers` 等大多不生效。
