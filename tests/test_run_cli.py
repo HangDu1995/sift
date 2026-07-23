@@ -124,3 +124,27 @@ def test_run_task_executor_error_clean_not_traceback(monkeypatch, tmp_path):
     assert "opencode CLI 未找到" in r.output
     # try/except 兜住→干净 typer.Exit(3)=SystemExit(3);无 try/except 则裸 ExecutionError 透出,r.exception 是它而非 SystemExit
     assert isinstance(r.exception, SystemExit)
+
+
+def test_run_task_opencode_not_blocked_by_cc_check(monkeypatch, tmp_path):
+    """--executor opencode 不该被 cc-check 挡(用户可能只装了 opencode 没装 claude)。"""
+    import typer as _typer
+    def fake_check():  # 模拟 claude 缺失
+        raise _typer.Exit(code=3)
+    monkeypatch.setattr("skill_eval.cli.commands.run._check_claude_or_exit", fake_check)
+    monkeypatch.setattr("skill_eval.cli.commands.run.run_live_task", lambda **kw: kw["output_dir"])
+    sp = _skill(tmp_path)
+    r = runner.invoke(app, ["run", str(sp), "--task", "t", "--executor", "opencode",
+                            "--cwd", str(tmp_path), "-o", str(tmp_path / "o")])
+    assert r.exit_code == 0, r.output  # cc-check 被跳过 → 不 exit 3
+
+
+def test_run_task_cc_still_checked(monkeypatch, tmp_path):
+    """默认(或 --executor cc)仍走 cc-check。"""
+    called = []
+    monkeypatch.setattr("skill_eval.cli.commands.run._check_claude_or_exit", lambda: called.append(1))
+    monkeypatch.setattr("skill_eval.cli.commands.run.run_live_task", lambda **kw: kw["output_dir"])
+    sp = _skill(tmp_path)
+    r = runner.invoke(app, ["run", str(sp), "--task", "t", "--cwd", str(tmp_path), "-o", str(tmp_path / "o")])
+    assert r.exit_code == 0, r.output
+    assert called  # 默认 cc → 走了 cc-check

@@ -201,7 +201,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 | `--evals` | 自动查找 | evals.json 路径 |
 | `--task` | 无 | **路径 1 真任务模式**：直接 spawn 跑此真实任务（不读 evals.json），产物 transcript 可喂 `audit` |
 | `--cwd` | 无 | 真任务模式工作目录（任务材料真实文件）；拷贝隔离，cc 不碰原目录 |
-| `--executor` | cc | 路径 1 执行器：`cc`（默认）/ `opencode` / `cc,opencode`（逗号分隔，多执行器各跑 `--runs` 次）。未知名 exit 2。`opencode` 需 opencode CLI 在 PATH，且用 `provider/model` 格式配置模型（`--model` 给 cc 用；opencode 省略 `--model` 走 `opencode.json` 默认）。cc 产 `run-*/transcript.jsonl`、opencode 产 `run-*/transcript.json`（audit 都吃） |
+| `--executor` | cc | 路径 1 执行器：`cc`（默认）/ `opencode` / `cc,opencode`（逗号分隔，多执行器各跑 `--runs` 次）。未知名 exit 2。`opencode` 需 opencode CLI 在 PATH，且用 `provider/model` 格式配置模型（`--model` 给 cc 用；opencode 省略 `--model` 走 `opencode.json` 默认）。cc 产 `run-*/transcript.jsonl`、opencode 产 `run-*/transcript.json`（audit 都吃）。**公平性注意**：opencode 无 `--max-turns` 对等，多执行器 sweep 时 cc 轮数有界、opencode 无界（已知不对称） |
 | `--runs` | 1 | 每种配置的运行次数 |
 | `--model` | 用户默认 | claude -p 模型 |
 | `--workers` | 4 | 最大并行 worker 数 |

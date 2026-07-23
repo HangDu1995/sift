@@ -143,7 +143,7 @@ def run(
     evals: Optional[Path] = typer.Option(None, "--evals", help="Path to evals.json"),
     task: Optional[str] = typer.Option(
         None, "--task",
-        help="路径1 真任务模式:直接 spawn 跑此真实任务(不读 evals.json)。给 --task 即 live 真任务模式,产物 run-*/transcript.jsonl 可喂 audit",
+        help="路径1 真任务模式:直接 spawn 跑此真实任务(不读 evals.json)。给 --task 即 live 真任务模式,产物 run-*/transcript.{jsonl,json}(cc .jsonl / opencode .json)可喂 audit",
     ),
     cwd: Optional[Path] = typer.Option(
         None, "--cwd",
@@ -156,7 +156,7 @@ def run(
     max_turns: int = typer.Option(10, "--max-turns", help="Max agentic turns per claude -p run"),
     executor: Optional[str] = typer.Option(
         None, "--executor",
-        help="路径1 执行器:cc(默认)/ opencode / cc,opencode(多执行器各跑一次)",
+        help="路径1 执行器:cc(默认)/ opencode / cc,opencode(多执行器各跑一次)。注意 opencode 无 --max-turns 对等,多执行器 sweep 时 cc 轮数有界、opencode 无界(已知不对称)",
     ),
     max_retries: int = typer.Option(2, "--max-retries", help="Max retries per eval on UNEVAL/error (each retry re-runs claude + scoring + compliance LLM; heavy skills may want 0-1 to save tokens)"),
     scoring: str = typer.Option("hybrid", "--scoring", help="Scoring mode: hybrid, programmatic, or llm"),
@@ -180,7 +180,15 @@ def run(
     """Run A/B evaluation of a Skill, or path-1 live task (--task)."""
     skill_path = resolve_skill_dir(skill_path)
     from skill_eval.evals.loader import EvalLoader
-    _check_claude_or_exit()
+    # 路径1 执行器解析(仅 --task 用;提前到 cc-check 前,好按需 gate)
+    exec_list = [e.strip() for e in (executor or "cc").split(",") if e.strip()]
+    bad = [e for e in exec_list if e not in ("cc", "opencode")]
+    if bad:
+        console.print(f"[red]Error:[/red] 未知 executor: {', '.join(bad)}(支持: cc, opencode)")
+        raise typer.Exit(code=2)
+    # cc-check:非 --task(evals 路径恒用 cc)或 --task 且 cc 在 exec_list 时才需要
+    if (not task) or ("cc" in exec_list):
+        _check_claude_or_exit()
 
     if security_gate:
         from skill_eval.security.vetter import SecurityVetter
@@ -193,11 +201,6 @@ def run(
     if task:
         if not output_dir:
             output_dir = Path("output")
-        exec_list = [e.strip() for e in (executor or "cc").split(",") if e.strip()]
-        bad = [e for e in exec_list if e not in ("cc", "opencode")]
-        if bad:
-            console.print(f"[red]Error:[/red] 未知 executor: {', '.join(bad)}(支持: cc, opencode)")
-            raise typer.Exit(code=2)
         try:
             run_live_task(
                 skill_path=skill_path,

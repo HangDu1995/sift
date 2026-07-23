@@ -98,6 +98,7 @@ def test_run_builds_cmd_and_exports_raw(patched_spawn, tmp_path):
     assert json.loads(out.stdout)["messages"][1]["parts"][0]["text"] == "PONG"
     assert out.total_tokens == 7300
     assert out.stop_reason == "stop"
+    assert out.num_turns == 1  # _STREAM_LINES 恰好 1 个 step_finish
 
 
 def test_run_bare_model_skipped(patched_spawn, tmp_path):

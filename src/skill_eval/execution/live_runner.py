@@ -1,16 +1,20 @@
-"""路径1 真任务模式:不读 evals.json,直接 spawn cc 在真实工作目录跑真实任务。
+"""路径1 真任务模式:不读 evals.json,直接 spawn 执行器在真实工作目录跑真实任务。
+
+执行器多态(默认 cc,opt-in opencode 经由 make_live_runner / executors 参数):
+cc spawn `claude -p` 真跑,opencode spawn `opencode run` 真跑 —— 同一考场、同一任务、
+同一 skill,各跑 N 次,公平对照。
 
 区别于:
 - 路径3(evals.json fixture 剧本 spawn + scoring):任务源是 init 编的剧本 + fixture 数据;
 - 路径2(audit 审历史 trace):不 spawn,审已有 trace。
 
 路径1 = 真实工作目录(--cwd 任务材料)+ 真实任务 prompt(--task)+ 被测 skill(--skill)
-→ spawn cc 真跑 → dump 真任务 trace → audit 审 skill 遵循性。
+→ spawn 执行器真跑 → dump 真任务 trace → audit 审 skill 遵循性。
 
 设计要点:
-- --cwd 拷贝到 output_dir/workspace(隔离考场,cc 不碰原目录);
+- --cwd 拷贝到 output_dir/workspace(隔离考场,执行器不碰原目录);
 - skill references/ 拷进 workspace(SKILL.md 里 references/xxx 可读);
-- N 次 spawn,每次 dump raw stream-json 成 run-{N}/transcript.jsonl,打通 audit 闭环。
+- N 次 spawn,每次 dump 会话流成 transcript(cc .jsonl / opencode .json),打通 audit 闭环。
 """
 
 from __future__ import annotations

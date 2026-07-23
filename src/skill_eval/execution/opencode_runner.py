@@ -61,16 +61,18 @@ def _progress_from_opencode_line(line: str) -> str | None:
     return None
 
 
-def _parse_opencode_stream(stdout: str) -> tuple[int, dict[str, int], str, str]:
-    """opencode --format json 流 → (total_tokens, tool_calls, result_text, stop_reason)。best-effort。
+def _parse_opencode_stream(stdout: str) -> tuple[int, dict[str, int], str, str, int]:
+    """opencode --format json 流 → (total_tokens, tool_calls, result_text, stop_reason, num_turns)。best-effort。
 
     transcript 走 export(权威);这里只抽 run_debug.json 用的 operational metrics。
     事件形状:text / tool_use(call+result 合并)/ step_finish(tokens+reason)。
+    num_turns = step_finish 事件计数(每个 ≈ 一轮 agent turn)。
     """
     total_tokens = 0
     tool_calls: dict[str, int] = {}
     result_text = ""
     stop_reason = ""
+    num_turns = 0
     for line in stdout.splitlines():
         line = line.strip()
         if not line:
@@ -90,6 +92,7 @@ def _parse_opencode_stream(stdout: str) -> tuple[int, dict[str, int], str, str]:
             if name:
                 tool_calls[name] = tool_calls.get(name, 0) + 1
         elif typ == "step_finish":
+            num_turns += 1
             tok = part.get("tokens") or {}
             tot = tok.get("total") or ((tok.get("input") or 0) + (tok.get("output") or 0))
             if tot:
@@ -97,7 +100,7 @@ def _parse_opencode_stream(stdout: str) -> tuple[int, dict[str, int], str, str]:
             r = part.get("reason")
             if r:
                 stop_reason = r
-    return total_tokens, tool_calls, result_text, stop_reason
+    return total_tokens, tool_calls, result_text, stop_reason, num_turns
 
 
 class OpenCodeRunner:
@@ -203,7 +206,7 @@ class OpenCodeRunner:
             sid = sessions[0].get("id", "")
             transcript_json = _run_opencode(xdg, ["export", sid])  # 原文,不 sanitize
 
-            total_tokens, tool_calls, result_text, stop_reason = _parse_opencode_stream(stdout)
+            total_tokens, tool_calls, result_text, stop_reason, num_turns = _parse_opencode_stream(stdout)
             duration_ms = int((time.time() - start) * 1000)
             return RunOutput(
                 exit_code=proc.returncode,
@@ -213,4 +216,5 @@ class OpenCodeRunner:
                 tool_calls=tool_calls,
                 result_text=result_text,
                 stop_reason=stop_reason,
+                num_turns=num_turns,
             )
