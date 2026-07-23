@@ -1,9 +1,10 @@
 """opencode .db → 单 session export 的 plumbing:把「拿到一个 opencode .db 文件 → audit」
-的手工三步(XDG_DATA_HOME 隔离 → ``opencode session list`` → ``opencode export --sanitize``)
+的手工三步(XDG_DATA_HOME 隔离 → ``opencode session list`` → ``opencode export`` 原文)
 包成函数,供 audit 命令编排。
 
 **不读 SQLite**:列 session 靠 ``opencode session list --format json``,导出靠
-``opencode export <id> --sanitize``;opencode schema 变是 opencode 的事,skill-eval 不背
+``opencode export <id>``(默认原文;``--sanitize`` 可选,但脱敏后别喂 audit ——
+auditor 读 ``part.text`` 判遵循性);opencode schema 变是 opencode 的事,skill-eval 不背
 SQLite 解析(与 b9ef5be「用真格式、不重造 export」决议一致)。
 
 opencode ``export`` 无 ``--db`` 参数,但 opencode 认 ``XDG_DATA_HOME``(db 放
@@ -105,14 +106,21 @@ def list_sessions(db_path: Path) -> list[dict]:
     return sorted(data, key=lambda s: s.get("updated", 0) or 0, reverse=True)
 
 
-def export_session(db_path: Path, session_id: str) -> str:
-    """导出单 session(``--sanitize`` 脱敏),返回 opencode export 格式 JSON 串(``{info, messages}``)。
+def export_session(db_path: Path, session_id: str, sanitize: bool = False) -> str:
+    """导出单 session,返回 opencode export 格式 JSON 串(``{info, messages}``)。
 
-    脱敏默认开(audit 不需要原始密钥值)。返回的串会被写入临时文件、经现有
-    ``build_digest_from_opencode`` 消费。输出非合法 session JSON → ``OpencodeDbError``。
+    ``sanitize`` 默认 **False**(导原文):audit 靠 ``build_digest_from_opencode`` 读
+    ``part.text`` 判遵循性,``--sanitize`` 会把文本脱敏成 ``[redacted:text:…]`` → auditor
+    看不到任务/回复 → 审计降级(只剩工具骨架)。要脱敏分享请在 skill-eval 外手动
+    ``opencode export --sanitize``。
+
+    输出非合法 session JSON → ``OpencodeDbError``。
     """
+    args = ["export", session_id]
+    if sanitize:
+        args.append("--sanitize")
     with _isolated_xdg_env(db_path) as xdg:
-        out = _run_opencode(xdg, ["export", session_id, "--sanitize"])
+        out = _run_opencode(xdg, args)
     try:
         data = json.loads(out)
     except json.JSONDecodeError as exc:

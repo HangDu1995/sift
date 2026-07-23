@@ -151,7 +151,9 @@ def test_list_sessions_garbage_raises(monkeypatch, tmp_path):
 _EXPORT_JSON = json.dumps({"info": {"id": "ses_x", "agent": "build"}, "messages": []})
 
 
-def test_export_session_runs_export_sanitize_and_returns_json(monkeypatch, tmp_path):
+def test_export_session_default_no_sanitize_returns_json(monkeypatch, tmp_path):
+    """默认不带 --sanitize:audit 靠 build_digest_from_opencode 读 part.text 判遵循性,
+    --sanitize 会把文本脱敏成 [redacted:text:…] → 审计降级。"""
     db = tmp_path / "handed.db"
     db.write_bytes(b"x")
     cmds = []
@@ -164,8 +166,24 @@ def test_export_session_runs_export_sanitize_and_returns_json(monkeypatch, tmp_p
 
     out = ocdb.export_session(db, "ses_x")
     assert json.loads(out)["info"]["id"] == "ses_x"
-    # 跑的是 export <id> --sanitize
-    assert cmds == [["opencode", "export", "ses_x", "--sanitize"]]
+    # 默认 export <id>,无 --sanitize
+    assert cmds == [["opencode", "export", "ses_x"]]
+
+
+def test_export_session_sanitize_opt_in(monkeypatch, tmp_path):
+    """sanitize=True 才带 --sanitize(分享脱敏版;audit 不走这条)。"""
+    db = tmp_path / "handed.db"
+    db.write_bytes(b"x")
+    cmds = []
+
+    def fake_run(cmd, **kw):
+        cmds.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=_EXPORT_JSON, stderr="")
+
+    monkeypatch.setattr(ocdb.subprocess, "run", fake_run)
+
+    ocdb.export_session(db, "ses_y", sanitize=True)
+    assert cmds == [["opencode", "export", "ses_y", "--sanitize"]]
 
 
 def test_export_session_non_session_shape_raises(monkeypatch, tmp_path):
