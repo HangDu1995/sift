@@ -157,3 +157,6 @@ class AuditReport(BaseModel):
     # 多 transcript 对账的指令级聚合(按 fail_rate 降序);单 transcript 也有(每指令 1 verdict)。
     by_instruction: list[InstructionAggregate] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    # refine(LLM 精筛伪指令)砍掉的条数(len(before) - len(after))。
+    # 0 = 没开 refine_instructions 或开了但没砍任何条;向后兼容旧 report(默认 0)。
+    refine_dropped_count: int = 0

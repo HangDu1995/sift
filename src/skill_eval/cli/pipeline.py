@@ -23,7 +23,7 @@ def _run_ab_eval(
     scoring: str,
     no_calibration: bool,
     skip_compliance: bool = False,
-    refine_instructions: bool = False,
+    refine_instructions: bool = True,
     output_dir: Path = Path("output"),
     fmt: str = "table",
     eval_samples: int | float | None = None,

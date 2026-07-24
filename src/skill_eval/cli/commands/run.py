@@ -161,7 +161,7 @@ def run(
     max_retries: int = typer.Option(2, "--max-retries", help="Max retries per eval on UNEVAL/error (each retry re-runs claude + scoring + compliance LLM; heavy skills may want 0-1 to save tokens)"),
     scoring: str = typer.Option("hybrid", "--scoring", help="Scoring mode: hybrid, programmatic, or llm"),
     no_compliance: Optional[bool] = typer.Option(None, "--no-compliance/--compliance", help="Skip compliance checking (auto: on for --runs<3)"),
-    refine_instructions: bool = typer.Option(False, "--refine-instructions", help="精筛:LLM 砍掉 extractor 误抽的示例/占位伪指令(audit/compliance 提精度,精度>召回)"),
+    refine_instructions: bool = typer.Option(True, "--refine-instructions/--no-refine-instructions", help="精筛(默认开):LLM 砍掉 extractor 误抽的示例/占位伪指令(audit/compliance 提精度,精度>召回);--no-refine-instructions 关闭"),
     no_calibration: bool = typer.Option(False, "--no-calibration", help="Skip scoring calibration"),
     security_gate: bool = typer.Option(False, "--security-gate", help="Fail if security vetting returns BLOCKED or REVIEW_NEEDED"),
     no_static: bool = typer.Option(False, "--no-static", help="跳过末尾自动产静态评分卡(默认产,供 report 评分卡面板)"),

@@ -6,7 +6,7 @@
 
 audit(路径2)的有效性需要正面验证:**真 LLM 在干净输入下能不能抓到真实违规**。此前两个 case 都不给力:
 
-- **真实 skill**(dispatching-parallel-agents)是教程型,extractor 把示例文字当指令(49 条伪步骤),源头污染——LLM 再准也 0 真问题。(2026-07-21 起)此类教程型伪指令污染现可经 `audit`/`run` 的 `--refine-instructions` 在判定前 LLM 精筛砍掉(opt-in,精度>召回);log-error-analyzer 仍坚持 extractor 友好写法,但别处遇教程型 skill 不必再手改 SKILL。
+- **真实 skill**(dispatching-parallel-agents)是教程型,extractor 把示例文字当指令(49 条伪步骤),源头污染——LLM 再准也 0 真问题。(2026-07-21 起)此类教程型伪指令污染现可经 `audit`/`run` 的 `--refine-instructions` 在判定前 LLM 精筛砍掉(默认开,精度>召回);log-error-analyzer 仍坚持 extractor 友好写法,但别处遇教程型 skill 不必再手改 SKILL。
 - **mock 集成测试**(`test_audit_integration`)mock 了 LLM,只证管线逻辑(违规→FAIL 检出),不证"真 LLM 判得准"。
 
 log-error-analyzer 量身定做:SKILL.md 写得 extractor 友好(真步骤/禁令/reference,**无代码块**避 OUTPUT_FORMAT 假阳性),合成 transcript 植入**真实感**违规,真 LLM 跑 audit 看抓不抓得到。

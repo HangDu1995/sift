@@ -212,8 +212,9 @@
         return s ? ' <span class="src">' + escapeHtml(s) + '</span>' : '';
       }
 
-      // ① header(skill_name + transcripts + summary 徽章 + derived 计数)
+      // ① header(skill_name + transcripts + summary 徽章 + derived 计数 + refine 砍除数)
       var derivedCount = findings.filter(function (f) { return f.derived_from_transcript; }).length;
+      var refineDropped = EMBEDDED_DATA.refine_dropped_count || 0;
       var s = EMBEDDED_DATA.summary || {};
       root.insertAdjacentHTML('beforeend',
         '<div class="header">' +
@@ -227,6 +228,7 @@
             ((s.indeterminate || 0) ? '<span class="badge-indeterminate" title="LLM 看了证据但真模糊,重跑无益">? 判不准 ' + s.indeterminate + '</span>' : '') +
             '<span>共 ' + (s.total || 0) + '</span>' +
             (derivedCount ? ' · <span class="derived">↺ ' + derivedCount + ' 条由 transcript 反推</span>' : '') +
+            (refineDropped ? ' · <span style="color:var(--accent);" title="LLM 精筛砍掉 extractor 误抽的示例/占位伪指令">↺ refine 砍 ' + refineDropped + ' 条伪指令</span>' : '') +
           '</div>' +
         '</div>');
 

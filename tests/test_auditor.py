@@ -1437,7 +1437,15 @@ class _FakeExtractor:
 
 
 class TestRefineInstructions:
-    """精筛伪指令:extractor 误抽的示例文字 → LLM 判 is_real=False → 砍。"""
+    """精筛伪指令:extractor 误抽的示例文字 → LLM 判 is_real=False → 砍。
+
+    含 per-SKILL hash 缓存(``audit.refine_cache``)的端到端覆盖:同 instructions +
+    model 跨 audit() 调用复用、并发安全(double-check locking)、缓存 hit 产出的
+    findings 与直接 refine 等价。
+
+    缓存目录隔离由 ``conftest._isolate_refine_cache_dir`` 提供(全局 autouse),
+    保证每个测试从空缓存开始、绝不污染 ``~/.cache``。
+    """
 
     def test_drops_pseudo_keeps_real(self, monkeypatch) -> None:
         """is_real=False 的砍、True 的留;warnings 报滤除数。"""
@@ -1541,6 +1549,119 @@ class TestRefineInstructions:
         t1 = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records("a.md"))
         report = TranscriptAuditor().audit("s", "body", [t1])  # 默认关
         assert refine_calls["n"] == 0
+        assert not any("refine:" in w for w in report.warnings)
+
+    # ---- per-SKILL hash 缓存(audit.refine_cache)--------------------------------
+
+    def test_refine_cache_skips_second_audit_call(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """同 SKILL.md 第二次 audit() 命中缓存 → 不再调 ``_refine_pseudo_instructions``。
+
+        跨 audit() 调用复用是缓存的核心价值:runner.py 每 (eval×config×run) 调一次
+        audit(),同 SKILL.md 反复 refine 浪费 LLM。用计数 mock 验证两次 audit() 只调一次。
+        """
+        refine_calls = {"n": 0}
+        original = TranscriptAuditor._refine_pseudo_instructions
+
+        def counting(self_, insts, **kw):
+            refine_calls["n"] += 1
+            return original(self_, insts, **kw)
+
+        monkeypatch.setattr(TranscriptAuditor, "_refine_pseudo_instructions", counting)
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.InstructionExtractor",
+            lambda: _FakeExtractor([_step_inst("Step 1: 真步骤")]),
+        )
+        t1 = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records("a.md"))
+        TranscriptAuditor().audit("s", "body", [t1], refine_instructions=True)
+        assert refine_calls["n"] == 1  # 首次:miss → 调
+        TranscriptAuditor().audit("s", "body", [t1], refine_instructions=True)
+        assert refine_calls["n"] == 1  # 二次:hit → 不调(double-check locking 生效)
+
+    def test_refine_dropped_count_populated(self, tmp_path, monkeypatch) -> None:
+        """``AuditReport.refine_dropped_count`` = 砍掉的条数(len(before) - len(after))。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: json.dumps([
+                {"index": 0, "is_real": True},   # 保留
+                {"index": 1, "is_real": False},  # 砍
+                {"index": 2, "is_real": False},  # 砍
+            ]),
+        )
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.InstructionExtractor",
+            lambda: _FakeExtractor([
+                _step_inst("真"),
+                _step_inst("伪1"),
+                _step_inst("伪2"),
+            ]),
+        )
+        t1 = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records("a.md"))
+        report = TranscriptAuditor().audit("s", "body", [t1], refine_instructions=True)
+        assert report.refine_dropped_count == 2
+        assert any("refine:" in w and "2 条" in w for w in report.warnings)
+
+    def test_refine_cache_hit_equivalent_findings(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """缓存 hit 产出的 findings/instructions 等价于直接 refine(无损序列化)。"""
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: json.dumps([
+                {"index": 0, "is_real": True},   # 保留(进 candidates 的 index 0)
+                {"index": 1, "is_real": False},  # 砍
+            ]),
+        )
+        insts = [_step_inst("真"), _step_inst("伪")]
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.InstructionExtractor",
+            lambda: _FakeExtractor(insts),
+        )
+        t1 = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records("a.md"))
+        report1 = TranscriptAuditor().audit("s", "body", [t1], refine_instructions=True)
+        report2 = TranscriptAuditor().audit("s", "body", [t1], refine_instructions=True)
+        # findings 等价:同指令集 → 同样的 verdict(只有"真"那条进判定的桶)
+        assert [f.instruction_text for f in report1.findings] == [
+            f.instruction_text for f in report2.findings
+        ]
+        assert [f.verdict for f in report1.findings] == [
+            f.verdict for f in report2.findings
+        ]
+        # 伪被砍(两次都砍):不在 findings 里;真保留(两次都留):至少一条含"真"。
+        # (findings 里可能还有 derive_declarations 从 transcript 反推的指令,
+        # 不影响"伪被砍"这一核心断言。)
+        assert all("伪" not in f.instruction_text for f in report1.findings)
+        assert all("伪" not in f.instruction_text for f in report2.findings)
+        assert any("真" in f.instruction_text for f in report1.findings)
+        assert any("真" in f.instruction_text for f in report2.findings)
+        # dropped_count 两次都对(缓存 hit 不丢 dropped_count)
+        assert report1.refine_dropped_count == report2.refine_dropped_count == 1
+
+    def test_refine_off_does_not_touch_cache(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """``refine_instructions=False`` → 不查缓存、不精筛、``refine_dropped_count=0``。
+
+        让 ``get_or_compute`` 一旦被调就 raise —— 验证默认路径完全不触缓存。
+        """
+        from skill_eval.audit import refine_cache
+
+        def bomb(*a, **k):
+            raise AssertionError(
+                "cache should not be touched when refine_instructions=False"
+            )
+
+        monkeypatch.setattr(refine_cache, "get_or_compute", bomb)
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.InstructionExtractor",
+            lambda: _FakeExtractor([_step_inst("Step 1: 真步骤")]),
+        )
+        t1 = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records("a.md"))
+        report = TranscriptAuditor().audit("s", "body", [t1])  # 默认 refine_instructions=False
+        assert report.refine_dropped_count == 0
         assert not any("refine:" in w for w in report.warnings)
 
 

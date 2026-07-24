@@ -58,6 +58,7 @@ from skill_eval.audit.rebuild import rebuild
 from skill_eval.audit.tool_match import extract_first_balanced, match_tool_call
 from skill_eval.audit.aggregate import aggregate_by_instruction
 from skill_eval.audit.dedup import post_process_findings
+from skill_eval.audit import refine_cache
 from skill_eval.audit.noise import annotate_aggregate_noise, annotate_noise
 from skill_eval.compliance.extractor import InstructionExtractor
 from skill_eval.errors import SkillEvalError
@@ -227,11 +228,46 @@ class TranscriptAuditor:
         """
         instructions = InstructionExtractor().extract(skill_body)
         warnings: list[str] = []
+        refine_dropped_count = 0
         if refine_instructions:
-            instructions, refine_warns = self._refine_pseudo_instructions(
-                instructions, model=model, timeout=timeout, on_progress=on_progress
-            )
-            warnings.extend(refine_warns)
+            # per-SKILL hash 缓存:同 instructions + model + prompt 版本只 refine 一次,
+            # 跨 audit() 调用复用(runner.py 每 eval×config×run 调一次 audit,同 SKILL.md
+            # 反复 refine 实测 10+ 分钟)。compute_fn 默认参数绑定当前值(防 instructions
+            # 后面被 reassigned 后闭包看到新值——虽然 get_or_compute 同步调 compute_fn,
+            # 默认参数显式绑定更稳)。
+            instructions_before = instructions
+            key = refine_cache._cache_key(instructions, model)
+
+            def _compute(
+                _insts=instructions,
+                _model=model,
+                _timeout=timeout,
+                _on_progress=on_progress,
+            ):
+                refined, _warns = self._refine_pseudo_instructions(
+                    _insts, model=_model, timeout=_timeout, on_progress=_on_progress
+                )
+                return refined, len(_insts) - len(refined)
+
+            instructions, refine_dropped_count = refine_cache.get_or_compute(key, _compute)
+            # 生成 warning(缓存 hit/miss 都生成,格式一致):基于 instructions_before 与
+            # refined 的 diff 算 source 分布。缓存只存 (refined, dropped_count),warning
+            # 在线重生成 —— hit/miss 输出一致,避免缓存 hit 丢 warning。
+            if refine_dropped_count > 0:
+                from collections import Counter
+                refined_ids = {
+                    (r.source.value, r.section, r.instruction_text)
+                    for r in instructions
+                }
+                dropped_src_counts = Counter(
+                    s.source.value
+                    for s in instructions_before
+                    if (s.source.value, s.section, s.instruction_text) not in refined_ids
+                )
+                parts = ", ".join(f"{src} {n}" for src, n in dropped_src_counts.items())
+                warnings.append(
+                    f"refine: 滤除 {refine_dropped_count} 条疑似示例/占位伪指令({parts})"
+                )
         all_findings: list[AuditFinding] = []
         transcript_names: list[str] = []
         transcript_sources: list[str] = []  # 与 transcript_names 同序;"cc"/"opencode"/...
@@ -342,6 +378,7 @@ class TranscriptAuditor:
             findings=all_findings,
             by_instruction=by_instruction,
             warnings=warnings,
+            refine_dropped_count=refine_dropped_count,
         )
 
     def _judge_conditional(

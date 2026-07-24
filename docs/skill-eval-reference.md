@@ -210,7 +210,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 | `--max-retries` | 2 | 每 eval 在 UNEVAL/出错时的最大重试（每次重跑 claude+scoring+compliance，重 skill 可设 0-1 省 token） |
 | `--scoring` | hybrid | 评分模式：hybrid / programmatic / llm |
 | `--no-compliance` / `--compliance` | 自动 | 跳过/强制遵循性检查（默认自动：`--runs<3` 时开） |
-| `--refine-instructions` | 关闭 | 遵循性判定前 LLM 精筛：砍掉 extractor 误抽的示例/占位伪指令（提精度，见 `audit`） |
+| `--refine-instructions` | 开启 | 遵循性判定前 LLM 精筛（默认开，`--no-refine-instructions` 关）：砍掉 extractor 误抽的示例/占位伪指令（提精度，per-SKILL 缓存，见 `audit`） |
 | `--no-calibration` | 关闭 | 跳过校准（结果×过程 coherence 判决） |
 | `--security-gate` | 关闭 | 安全审查返回 BLOCKED / REVIEW_NEEDED 时判失败 |
 | `--no-static` | 关闭 | 跳过末尾自动产静态评分卡（默认产，写进 output 目录根，供 report 评分卡面板） |
@@ -330,7 +330,7 @@ skill-eval audit path/to/skill/ --db opencode.db
 | `--db` | — | opencode `.db` 文件:内部自动 list/export/audit(隔离 `XDG_DATA_HOME`、不碰本机真库;需 opencode CLI)。与 `--transcript` 互斥 |
 | `--session` | — | `--db` 下指定 session id;不给则单 session 自动选、多个列出让你挑了重跑(仅搭 `--db`) |
 | `--by-skill` | 关闭 | transcript 里调了多个 skill/agent 时，只对账本 skill 被调用的段（cc 按 `Skill` 工具调用切分；opencode 按 per-message `agent` 字段切分，见下） |
-| `--refine-instructions` | 关闭 | 判定前 LLM 精筛：砍掉 extractor 误抽的示例/占位伪指令（精度>召回，见下） |
+| `--refine-instructions` | 开启 | 判定前 LLM 精筛（默认开，`--no-refine-instructions` 关）：砍掉 extractor 误抽的示例/占位伪指令（精度>召回，per-SKILL 缓存，见下） |
 | `--output` / `-o` | ./output | 输出目录 |
 | `--model` | 默认 | 语义判定 LLM |
 | `--format` | table | table / json |
@@ -338,7 +338,7 @@ skill-eval audit path/to/skill/ --db opencode.db
 
 > **`--by-skill`：多 skill transcript 只对账一个 skill**。transcript 里调了多个 skill 时，默认会把整段当一个袋子判（其他 skill 的行为会混进报告）。加 `--by-skill` 后，按 transcript 里的 `Skill` 工具调用切成若干单 skill 子 transcript，只对账 `<skill_path>` 这个 skill 被调用期间的段。归段 **scope-aware**：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent（Agent 工具）是独立作用域，其记录带 `parent_tool_use_id`，子 agent 里用的 skill 切到 Agent 返回、**不污染主 agent 归属**；target 调多次 → 多段 → 多 transcript 聚合。**两条限制**：① skill 没有"返回"信号，所以"调 A → 调 B → 不重调 A 接着干 A"那段会归给 B（不可检测，解法是 agent 显式重调 A）；② 把委派子 skill 的段折进主 skill 审计（inclusive）需用户声明，暂不支持。该 skill 没在 transcript 里被调过 → 报错退出（exit 2），不静默跑空。
 
-> **`--refine-instructions`：判定前精筛伪指令**。extractor 是纯正则（静态全抽 SKILL.md），会把教程型 skill 里的**示例文字 / 模板占位 / 描述性句子**误抽成"指令"——这些伪指令喂给判官只能出 N/A（无法对账）或偶发假 FAIL。加 `--refine-instructions` 后，audit 在 extract 后、判定前用 LLM 逐条分类"真实可检查指令 vs 示例/占位"，**只砍明确判为伪指令的**（精度 > 召回：判不准 / 没判成 / 调用失败一律保留，宁可留伪指令判 N/A，也不砍真指令）。per-skill 只精筛一次（多 transcript 共享），砍掉的条数和来源写进 report 顶部 warnings。OUTPUT_FORMAT（纯程序子串匹配，精筛无收益）不精筛。`run` 也支持（经 RunConfig 传给内部 audit）。opt-in，验证稳定后考虑默认开。
+> **`--refine-instructions`：判定前精筛伪指令**。extractor 是纯正则（静态全抽 SKILL.md），会把教程型 skill 里的**示例文字 / 模板占位 / 描述性句子**误抽成"指令"——这些伪指令喂给判官只能出 N/A（无法对账）或偶发假 FAIL。开启（默认，`--no-refine-instructions` 关）后，audit 在 extract 后、判定前用 LLM 逐条分类"真实可检查指令 vs 示例/占位"，**只砍明确判为伪指令的**（精度 > 召回：判不准 / 没判成 / 调用失败一律保留，宁可留伪指令判 N/A，也不砍真指令）。per-skill 只精筛一次（多 transcript 共享），砍掉的条数和来源写进 report 顶部 warnings。OUTPUT_FORMAT（纯程序子串匹配，精筛无收益）不精筛。`run` 也支持（经 RunConfig 传给内部 audit）。**per-SKILL hash 缓存**：同 instructions + model + prompt 版本只 refine 一次，跨 audit() 调用复用（runner 每 eval×config×run 调一次 audit，缓存避免同 SKILL.md 反复 refine），存 `~/.cache/skill-eval/refine/`；指令内容 / model / prompt 版本变则失效重算。误砍率实测 0（4 结构差异 skill × 139 条，砍表头/占位/资源描述，留步骤/禁令/约束）。
 
 判定分四类——每条指令按 SKILL.md 声明来源路由到一类，各按不同判法出 verdict。每条 finding 有两个**正交**维度：**verdict（结果，五态）** + **method（怎么查的，程序 `PROGRAMMATIC` / LLM `LLM`）**。
 
@@ -364,7 +364,7 @@ skill-eval audit path/to/skill/ --db opencode.db
 >
 > **何时提示“建议重跑”**：`○ 没判成`（UNRESOLVED）条数 > 0 时，audit 在报告顶部出警告（`X 条指令没判成(UNRESOLVED:LLM 调用/解析失败/未提及)，本次结果可能不完整，建议重跑`）。**重跑 = 重跑同一条 `audit` 命令**（纯对账、无副作用，不 re-run）；这些失败多为瞬态（LLM 后端失败 / 限流 / 输出截断，retry 没救回才落到这），重跑常能救回。INDETERMINATE（判不准）**不**提示重跑（重跑无益）。不重跑则那些条没判成、可能漏掉真违规，故 **“0 FAIL ≠ 全过”**——看警告里 UNRESOLVED 是不是 0。
 
-产出 `<out>/audit-report.json`（机器读）+ `<out>/audit-report.html`（人读，**always 写**，与 JSON 并列，对齐 scoring report 视觉）。HTML 自上而下：① 头部（skill / summary 计数徽章：✓通过 / ✗失败 / ⊘不适用 / ○没判成（>0 时）/ ?判不准（>0 时）/ 反推指令数）② 警告框（没判成建议重跑、判不准占比偏高告警）③ 系统性聚合表（**仅多 transcript**，跨会话 fail% + fail in transcripts）④ findings 全集（**含 PASS**，每条带 verdict 徽章 + method 标签（程序/LLM）+ evidence + category + source + FAIL 噪声判别徽章（`noise_label`，见下「怎么看结果」⑥）；多 transcript 按指令分组可折叠，FAIL/UNRESOLVED/INDETERMINATE/N/A 默认展开）。
+产出 `<out>/audit-report.json`（机器读）+ `<out>/audit-report.html`（人读，**always 写**，与 JSON 并列，对齐 scoring report 视觉）。HTML 自上而下：① 头部（skill / summary 计数徽章：✓通过 / ✗失败 / ⊘不适用 / ○没判成（>0 时）/ ?判不准（>0 时）/ 反推指令数 / ↺ refine 砍 N 条（`refine_dropped_count`>0 时，默认开 refine 砍掉的伪指令数））② 警告框（没判成建议重跑、判不准占比偏高告警）③ 系统性聚合表（**仅多 transcript**，跨会话 fail% + fail in transcripts）④ findings 全集（**含 PASS**，每条带 verdict 徽章 + method 标签（程序/LLM）+ evidence + category + source + FAIL 噪声判别徽章（`noise_label`，见下「怎么看结果」⑥）；多 transcript 按指令分组可折叠，FAIL/UNRESOLVED/INDETERMINATE/N/A 默认展开）。
 
 > **transcript 来源标注（cc / opencode）**：JSON 的 `transcript_sources`(与 `transcripts` 同序并行)标每条 transcript 来自哪侧(`"cc"` / `"opencode"` / …,旧 report 无此字段 → 空,向后兼容);HTML 头部 transcript 列表 + 每条 finding 的 transcript 行都带来源徽章,CLI 摘要行显 `sources: …`。多 transcript 混合来源(同时审 cc + opencode)时一眼分清。
 

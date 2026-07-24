@@ -92,7 +92,7 @@ def audit(
         None, "--output", "-o", help="输出目录(默认 ./output)"
     ),
     model: Optional[str] = typer.Option(None, "--model", help="语义判定 LLM"),
-    refine_instructions: bool = typer.Option(False, "--refine-instructions", help="精筛:LLM 砍掉 extractor 误抽的示例/占位伪指令(audit 提精度,精度>召回)"),
+    refine_instructions: bool = typer.Option(True, "--refine-instructions/--no-refine-instructions", help="精筛(默认开):LLM 砍掉 extractor 误抽的示例/占位伪指令(audit 提精度,精度>召回);--no-refine-instructions 关闭"),
     by_skill: bool = typer.Option(
         False,
         "--by-skill",

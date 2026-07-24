@@ -553,7 +553,7 @@ v1/v2 是盲比较的**杀手级应用——CI 回归门禁**：skill 提 PR（v
 
 > 禁令的判法是**反着来**的：其它三类问"该不该做/做没做"（正面遵循），禁令问"这次执行里有没有发生**违反**这条禁令的行为"——主动找违规。例如 `NEVER fabricate error codes`，模型 hallucinate 一个错误码 → `violated=true` → FAIL。
 
-> **extractor 的地基瓶颈**：SKILL.md 是给人读的自由文本——讲解、示例、真步骤混在一起，没有结构标记区分"这行是指令"还是"这行是示例"。extractor 抽指令只能靠正则死规则（标题下、大写开头 ≈ 步骤），于是教程型 skill 里大量的示例文字（如 `3 agents dispatched in parallel`、`6 failures across 3 files`）会被误抽成"指令"喂给判官 → 卷子大半是废题 → 判官再准也只能大量判 N/A（伪指令判不准）。这就是为什么遵循性常出很多 N/A、为什么教程型 skill 特别难审。这是路径 2/3 共用的地基问题。根治有两条路：① **结构化声明**——skill 作者在 frontmatter 声明 `required_tools`/`required_reads`/`required_outputs`，extractor 直接查声明、不再挖散文（最稳，但要 skill 作者配合改格式，仍待做）；② **LLM 抽取**——正则粗召回后用 LLM 逐条精筛"这是不是可查的真指令"（工具侧改进，不改 skill 格式）。**② 已实现**为 opt-in 的 `--refine-instructions`（`audit` / `run` 命令）：开启后 audit 在 extract 后、判定前用 LLM 砍掉明确判为示例/占位的伪指令，精度 > 召回（没判成/判不准全保留，宁可留伪指令判 N/A 也不砍真指令），审计报告 warnings 报滤除数。extractor 本身仍冻结在固定版本、纯正则不调 LLM，精筛是 audit 层加的独立步骤、不破坏 extractor 的 layering。
+> **extractor 的地基瓶颈**：SKILL.md 是给人读的自由文本——讲解、示例、真步骤混在一起，没有结构标记区分"这行是指令"还是"这行是示例"。extractor 抽指令只能靠正则死规则（标题下、大写开头 ≈ 步骤），于是教程型 skill 里大量的示例文字（如 `3 agents dispatched in parallel`、`6 failures across 3 files`）会被误抽成"指令"喂给判官 → 卷子大半是废题 → 判官再准也只能大量判 N/A（伪指令判不准）。这就是为什么遵循性常出很多 N/A、为什么教程型 skill 特别难审。这是路径 2/3 共用的地基问题。根治有两条路：① **结构化声明**——skill 作者在 frontmatter 声明 `required_tools`/`required_reads`/`required_outputs`，extractor 直接查声明、不再挖散文（最稳，但要 skill 作者配合改格式，仍待做）；② **LLM 抽取**——正则粗召回后用 LLM 逐条精筛"这是不是可查的真指令"（工具侧改进，不改 skill 格式）。**② 已实现**为**默认开**的 `--refine-instructions`（`--no-refine-instructions` 关；`audit` / `run` 命令）：开启后 audit 在 extract 后、判定前用 LLM 砍掉明确判为示例/占位的伪指令，精度 > 召回（没判成/判不准全保留，宁可留伪指令判 N/A 也不砍真指令），审计报告 warnings 报滤除数。per-SKILL hash 缓存（同 instructions + model + prompt 版本只 refine 一次，跨 audit() 调用复用，存 `~/.cache/skill-eval/refine/`）。extractor 本身仍冻结在固定版本、纯正则不调 LLM，精筛是 audit 层加的独立步骤、不破坏 extractor 的 layering。
 
 ### 7.3 五态 verdict + method 双维度
 
@@ -636,7 +636,7 @@ fixture 下遵循性的 FAIL 混着工具噪声和真 skill 问题（见 7.7）�
 
 **怎么用**：看到 FAIL 先看徽章 + 理由（hover）。`tool_noise` → 别急着改 skill，先想 extractor/判定/evidence 是不是工具的洞（典型：SKILL「详细资源」段的链接描述被抽成步骤）；`skill_issue` → 这才是改 skill 的信号；`uncertain` → 人工看 evidence。优先级 `tool_noise > skill_issue > uncertain`（取最严：有一条噪声信号就归 tool_noise，**避免据噪声误改 skill**）。
 
-**诚实说**：这是**启发式 + 疑似 + 理由，不是权威判决**（可能假阳/假阴）。它**治标**（帮解读现有噪声），没让 compliance 更准 —— 治本仍 `--refine-instructions`（判定前 LLM 砍伪指令，opt-in）/ 结构化声明（frontmatter 声明 required_*）/ 真实 transcript audit。**别以为"标了 tool_noise = compliance 可信了"**。判别规则源码：`audit/noise.py`（纯函数，不调 LLM/不读 transcript）。
+**诚实说**：这是**启发式 + 疑似 + 理由，不是权威判决**（可能假阳/假阴）。它**治标**（帮解读现有噪声），没让 compliance 更准 —— 治本仍 `--refine-instructions`（判定前 LLM 砍伪指令，默认开）/ 结构化声明（frontmatter 声明 required_*）/ 真实 transcript audit。**别以为"标了 tool_noise = compliance 可信了"**。判别规则源码：`audit/noise.py`（纯函数，不调 LLM/不读 transcript）。
 
 ---
 

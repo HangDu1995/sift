@@ -836,6 +836,9 @@
             + (naN ? ' / 不适用 ' + naN : '')
             + (unresolvedN ? ' / 没判成 ' + unresolvedN : '')
             + (indeterminateN ? ' / 判不准 ' + indeterminateN : '') + '</span>';
+          if (cr.refine_dropped_count) {
+            html += ' <span style="font-size:0.75rem;color:var(--accent);" title="LLM 精筛砍掉 extractor 误抽的示例/占位伪指令(本 run 前置过滤,默认开)">↺ refine 砍 ' + cr.refine_dropped_count + ' 条伪指令</span>';
+          }
           // per-instruction 明细(audit findings,五态 PASS/FAIL/N/A/UNRESOLVED/INDETERMINATE)
           const VERDICT_META = {
             PASS: 'pass', FAIL: 'fail', 'N/A': 'na',

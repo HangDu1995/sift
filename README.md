@@ -252,7 +252,7 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 
 五态：`PASS` / `FAIL` / `N/A`（不适用，场景不触发）/ `UNRESOLVED`（没判成，LLM 失败/解析失败/未提及，可重跑）/ `INDETERMINATE`（判不准，证据真模糊，重跑无益）。遵循度 = `pass/(pass+fail)`，排除 N/A + UNRESOLVED + INDETERMINATE（遵循性不分双率，双率是评分侧概念）。
 
-> extractor 纯正则静态全抽；教程型 skill 的示例文字/模板占位会被误抽成指令（→ 多 N/A）。`audit` / `run` 加 `--refine-instructions` 可在判定前 LLM 精筛砍掉这类伪指令（opt-in，精度 > 召回，详见 [参考手册](docs/skill-eval-reference.md) `audit` 段）。
+> extractor 纯正则静态全抽；教程型 skill 的示例文字/模板占位会被误抽成指令（→ 多 N/A）。`audit` / `run` 的 `--refine-instructions`（默认开，`--no-refine-instructions` 关）在判定前 LLM 精筛砍掉这类伪指令（精度 > 召回，详见 [参考手册](docs/skill-eval-reference.md) `audit` 段）。
 
 ### 校准引擎
 
