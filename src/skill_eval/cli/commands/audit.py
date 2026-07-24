@@ -25,6 +25,7 @@ from skill_eval.audit.auditor import TranscriptAuditor
 from skill_eval.cli.main import app, console
 from skill_eval.errors import SkillEvalError
 from skill_eval.evals.opencode_db import export_session, list_sessions, resolve_session
+from skill_eval.evals.structured import is_structured_records, load_structured_records
 from skill_eval.models.audit_models import AuditVerdict
 from skill_eval.parser import parse_skill_md, resolve_skill_dir
 
@@ -116,6 +117,7 @@ def audit(
     """Audit real session transcript(s) against SKILL.md(不 re-run,直接对账真实历史执行)。"""
     skill_path = resolve_skill_dir(skill_path)
     export_tmp: Optional[Path] = None  # --db 导出的临时 json,finally 清理
+    expanded_tmps: list[Path] = []     # 结构化输入展开出的临时 cc-jsonl,finally 清理
     try:
         name, _desc, _content, _frontmatter, body = parse_skill_md(skill_path)
 
@@ -139,6 +141,24 @@ def audit(
             # rebuild 的 is_opencode_session 分派 → build_digest_from_opencode)。
             export_tmp = _audit_from_db(db, session)
             transcript = [export_tmp]
+
+        # 结构化 records 输入(--transcript 指向 {format:"skill-eval-records"} 的 JSON):
+        # 展开成临时 cc-jsonl 替进去,后续 by-skill 切分 / rebuild 全按 cc 路径走,零改动。
+        # producer(insight 等)因此不必手拼 cc-jsonl(免 tool_use/tool_result 拆分、Skill 大小写)。
+        if any(is_structured_records(tp) for tp in transcript):
+            expanded: list[Path] = []
+            for tp in transcript:
+                if not is_structured_records(tp):
+                    expanded.append(tp)
+                    continue
+                recs = load_structured_records(tp)
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
+                ) as f:
+                    f.write("\n".join(json.dumps(r, ensure_ascii=False) for r in recs))
+                expanded_tmps.append(Path(f.name))
+                expanded.append(Path(f.name))
+            transcript = expanded
 
         # --by-skill:transcript 含多个 skill/agent 时,切出本 skill 被调用期间的段,
         # 每段写一个子段文件(.jsonl=cc / .json=opencode),再喂给 TranscriptAuditor
@@ -202,6 +222,8 @@ def audit(
         # --db 导出的临时 json:引擎读完即清(用户要留存走手工 opencode export)
         if export_tmp is not None:
             export_tmp.unlink(missing_ok=True)
+        for t in expanded_tmps:
+            t.unlink(missing_ok=True)
 
     # transcript 名 → 来源(cc/opencode/...);摘要 + findings 表标注用。同序 zip,同名 last-wins。
     src_of = dict(zip(report.transcripts, report.transcript_sources))
