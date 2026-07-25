@@ -15,6 +15,13 @@ producer 不必拼 cc-jsonl 的 tool_use / tool_result 拆分、不必管 ``Skil
 本模块展开成 cc 记录(``{message:{role,content}, parent_tool_use_id}``),
 ``build_digest`` / ``slice_transcript_by_skill`` / ``audit`` 全程零改动。
 
+**``agent`` 字段当前不消费**:producer(insight 等)虽按 turn 吐 ``agent``,但本 reader 不读、
+slicer 不用 —— structured 走 ``--by-skill`` 的 Skill-based 切(``last-invoked-owns`` 按 ``skill``
+调用切段),不按 agent 切。双方 v1 默契:producer 先吐着占位(``parent_tool_use_id`` 恒 null、
+子 agent 作用域细化留作后续),skill-eval 暂忽略。``agent`` 只够做扁平 per-agent 段(无
+parent/child 信号,非真子作用域);待"无 Skill tool_use、需 per-agent 切分"的真消费者出现,再
+读它 + 仿 ``slice_opencode_by_agent`` 写 ``slice_structured_by_agent``(YAGNI,当前不接)。
+
 识别:顶层 dict ``format == "skill-eval-records"``(与 opencode 的 ``{info,messages}`` 区分)。
 设计动机见 transcript-driven / 结构化输入;此处只做纯展开,无 LLM。
 """
