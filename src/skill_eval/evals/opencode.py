@@ -4,12 +4,15 @@
 用真 opencode export 格式,非自造):顶层 ``{info, messages}``,messages 各带嵌套 ``parts``
 (``message.info`` 含 role/agent),part 的 ``state`` 一体含 input+output。
 
-与 cc 的 ``build_digest`` 平级(平行派,cc 代码零改动),重建逻辑镜像 cc
-(read→input_files、write→produced_files、bash→commands),字段名按 opencode(filePath)。
-parts 嵌在 message 里 → 不用像 cc 那样按 tool_use_id 两趟关联(更简单)。
+**走 canonical 重建路径**(与 cc / structured 同一重建器,非平行派):``_records_from_opencode``
+把 export 归一成 cc-record 形(工具名小写归大写、camelCase 字段映回 snake_case、read 输出
+剥 XML 包裹),再喂共享重建器 ``_digest_from_records``。Read/Write/Edit/MultiEdit 重建 +
+demoted/unreconstructed 推导自动获得,与 cc 同路径、产出等价(见
+``test_cc_opencode_digest_symmetric``)。parts 嵌在 message → 单趟,不用像 cc 那样按
+tool_use_id 两趟关联(更简单)。
 
-复用 cc ``transcript`` 的共享重建 helper,cc 模块零改动。耦合到 cc 私有 helper 是已知
-技术债(后续可把 helper 提为公共)。
+``skill_used`` 取 ``info.agent``:opencode session 无 ``Skill`` tool_use(skill 在
+``info.agent``),共享重建器只从 ``Skill`` tool_use 抽 → 抽不到 → ``build_digest_from_opencode`` 补回。
 """
 from __future__ import annotations
 

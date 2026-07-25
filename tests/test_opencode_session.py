@@ -80,8 +80,9 @@ def test_rebuild_still_handles_cc_jsonl():
 
 
 def test_tool_match_handles_opencode_lowercase_names():
-    """opencode tool_trace 工具名小写(read),SKILL 指令工具名 Read → match_tool_call
-    已大小写不敏感,应命中。不改 tool_match.py(验证而非加冗余归一)。"""
+    """tool_match 对工具名大小写不敏感:trace 里小写 read,SKILL 指令工具名 Read → 应命中。
+    (历史上 opencode tool_trace 是小写;现 opencode 经 _norm_tool 已归一为大写,但 tool_match
+    仍按大小写不敏感设计,小写 trace 依旧命中——测的是 tool_match 鲁棒性,不改 tool_match.py。)"""
     from skill_eval.audit.tool_match import match_tool_call
     from skill_eval.models import ToolCallRecord
     trace = [ToolCallRecord(name="read", input_summary='{"filePath": "logs/app.log"}')]
