@@ -10,7 +10,7 @@ echo "[1/3] Installing skill-eval..."
 # Clone if not already in the project
 if [ ! -f pyproject.toml ]; then
     echo "  Cloning skill-eval..."
-    git clone https://github.com/fuxi-ailabs/skill-eval.git /tmp/skill-eval
+    git clone https://github.com/guixu-labs/skill-eval.git /tmp/skill-eval
     cd /tmp/skill-eval
 fi
 

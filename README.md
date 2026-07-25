@@ -1,5 +1,7 @@
 # Skill-Eval
 
+[![CI](https://github.com/guixu-labs/skill-eval/actions/workflows/ci.yml/badge.svg)](https://github.com/guixu-labs/skill-eval/actions/workflows/ci.yml)
+
 自动评测 [Claude Code Skill](https://github.com/anthropics/skill-creator) 的 CLI——三层质量保障（评分 / 遵循性 / 校准）+ 盲比较 + post-hoc 门禁，CI 就绪。
 
 与 skill-creator 对比，skill-eval 的核心差异：
@@ -21,7 +23,7 @@
 ### 一键安装
 
 ```bash
-git clone https://github.com/fuxi-ailabs/skill-eval.git
+git clone https://github.com/guixu-labs/skill-eval.git
 cd skill-eval
 bash install.sh     # macOS / Linux
 # install.bat       # Windows
@@ -36,7 +38,7 @@ bash install.sh     # macOS / Linux
 
 ```bash
 # 安装 CLI
-git clone https://github.com/fuxi-ailabs/skill-eval.git
+git clone https://github.com/guixu-labs/skill-eval.git
 cd skill-eval
 pip install -e .
 # Debian/Ubuntu/WSL2(PEP 668)报 externally-managed 时,改用 venv:
