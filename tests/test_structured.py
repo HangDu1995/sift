@@ -84,3 +84,44 @@ def test_slice_finds_skill_segment(tmp_path):
     jsonl.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs), encoding="utf-8")
     segs = slice_transcript_by_skill(jsonl, "ascendc-crash-debug")
     assert len(segs) >= 1    # skill 被调用过 → 切得出段
+
+
+def test_digest_cleans_opencode_format_read_result(tmp_path):
+    # insight 实存形态:read 结果是 opencode 格式(<path>/<type>/<content> 包裹 + "N: " 行号),
+    # 非 cc 的 "\d+\t"。共享重建器应按 <content> 标记识别并清洗,否则 input_files 内容被
+    # XML 包裹 + 行号污染(且后续 Edit 的 old_string 匹配不上 → 假 unreconstructed / 假 FAIL)。
+    rec = {
+        "format": "skill-eval-records",
+        "records": [
+            {"role": "user", "text": "读 x.py"},
+            {"role": "assistant", "parent_tool_use_id": None, "tool_calls": [
+                {"name": "read", "input": {"file_path": "src/x.py"},
+                 "result": ("<path>/x.py</path>\n<type>file</type>\n<content>\n"
+                            "1: import os\n2: crash()\n</content>")},
+            ]},
+        ],
+    }
+    digest = _digest_from_records(load_structured_records(_write(tmp_path, rec)))
+    assert digest.input_files, "read 应产出 input_file"
+    content = digest.input_files[0].content
+    assert "<content>" not in content and "<path>" not in content and "<type>" not in content
+    assert "1: " not in content and "2: " not in content        # opencode N: 行号剥掉
+    assert "import os" in content and "crash()" in content      # 真内容保留
+
+
+def test_cc_format_read_not_overcleaned(tmp_path):
+    # 无 <content> 包裹 → 走 cc 清洗(只剥 \d+\t 行号);正文里合法的 "N: ..." 文本不被当
+    # opencode 行号误删(format-detection 守住 cc 不回归)。锁"清洗按 <content> 标记触发"。
+    rec = {
+        "format": "skill-eval-records",
+        "records": [
+            {"role": "assistant", "parent_tool_use_id": None, "tool_calls": [
+                {"name": "read", "input": {"file_path": "a.md"},
+                 "result": "1\tnote: 1: stays\n2\t2: also stays"},
+            ]},
+        ],
+    }
+    digest = _digest_from_records(load_structured_records(_write(tmp_path, rec)))
+    content = digest.input_files[0].content
+    assert "1: stays" in content and "2: also stays" in content   # 冒号文本没被误删
+

@@ -1,7 +1,7 @@
 # tests/test_transcript.py
 import json
 from pathlib import Path
-from skill_eval.evals.transcript import build_digest, SessionDigest, _strip_line_numbers, FileContent, Command, _NAME_MAP, _norm_tool
+from skill_eval.evals.transcript import build_digest, SessionDigest, _strip_line_numbers, _clean_read_result, FileContent, Command, _NAME_MAP, _norm_tool
 from skill_eval.evals.transcript import _digest_from_records
 from skill_eval.models import ToolCallRecord
 
@@ -16,6 +16,31 @@ def _user(text: str) -> dict:
 def test_strip_line_numbers():
     raw = "1\talpha\n2\tbeta\n"
     assert _strip_line_numbers(raw) == "alpha\nbeta\n"
+
+def test_clean_read_result():
+    """``_clean_read_result``:read 结果按 ``<path>`` **起手** + ``<content>`` 包裹区分格式
+    清洗(canonical 重建器用)——opencode read 恒以 ``<path>`` 起手、cc 恒以 ``\\d+\\t`` 起手,
+    首字符分化是两源最可靠的区分点。
+
+    - opencode 形(``<path>/<type>/<content>…</content>`` + ``N: `` 行号)→ 剥包裹 + 去 N: 行号;
+    - cc 形(``N\\t``)/裸内容 → 只去 cc tab 行号;
+    - 裸 ``N: ``(无包裹)→ 不剥;
+    - 正文含 ``<content>`` 乃至 ``<path>``/``<type>file</type>`` 字面、但**不以 ``<path>`` 起手**
+      → 仍走 cc 路(读一个讲 opencode 格式的文档不假阳、正文不被截断吃掉)。
+    """
+    oc = ("<path>/p/app.py</path>\n<type>file</type>\n<content>\n"
+          "1: alpha\n2: beta\n3: gamma\n</content>")
+    assert _clean_read_result(oc) == "alpha\nbeta\ngamma\n"
+    assert _clean_read_result("1\talpha\n2\tbeta\n") == "alpha\nbeta\n"   # cc tab 行号 → 剥
+    assert _clean_read_result("1  alpha\n2  beta\n") == "1  alpha\n2  beta\n"  # 两空格 → 不动
+    assert _clean_read_result("1: x\n2: y\n") == "1: x\n2: y\n"           # 裸 N: 无包裹 → 不剥
+    # 假阳回归(锁"起手判定"):cc 形(tab 行号)+ 正文里同时含 <path>/<type>file</type>/<content>
+    # 三字面(读一个讲 opencode read 格式的文档),但**不以 <path> 起手**(以行号起)→ 不当
+    # opencode 形,走 cc 路只剥 tab,三字面正文全保留、不被截断吃掉。
+    cc_doc = ("1\tintro line\n"
+              "2\tsee <path>/x</path><type>file</type><content>c</content> below\n")
+    assert _clean_read_result(cc_doc) == ("intro line\n"
+                                          "see <path>/x</path><type>file</type><content>c</content> below\n")
 
 def test_name_map_lives_in_transcript():
     assert _NAME_MAP["read"] == "Read"

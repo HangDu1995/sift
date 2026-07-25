@@ -5,9 +5,9 @@
 (``message.info`` 含 role/agent),part 的 ``state`` 一体含 input+output。
 
 **走 canonical 重建路径**(与 cc / structured 同一重建器,非平行派):``_records_from_opencode``
-把 export 归一成 cc-record 形(工具名小写归大写、camelCase 字段映回 snake_case、read 输出
-剥 XML 包裹),再喂共享重建器 ``_digest_from_records``。Read/Write/Edit/MultiEdit 重建 +
-demoted/unreconstructed 推导自动获得,与 cc 同路径、产出等价(见
+把 export 归一成 cc-record 形(工具名小写归大写、camelCase 字段映回 snake_case),再喂共享
+重建器 ``_digest_from_records``(read 结果的 XML 包裹/``N: `` 行号清洗也由重建器统一做)。
+Read/Write/Edit/MultiEdit 重建 + demoted/unreconstructed 推导自动获得,与 cc 同路径、产出等价(见
 ``test_cc_opencode_digest_symmetric``)。parts 嵌在 message → 单趟,不用像 cc 那样按
 tool_use_id 两趟关联(更简单)。
 
@@ -17,7 +17,6 @@ tool_use_id 两趟关联(更简单)。
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 from skill_eval.evals.transcript import (
@@ -59,9 +58,9 @@ def load_opencode_session(path: Path) -> dict:
 def build_digest_from_opencode(path: Path, root: str | None = None) -> SessionDigest:
     """解析 opencode export 单 session → SessionDigest(薄封装,与 cc build_digest 同形)。
 
-    路径:``_records_from_opencode`` 把 opencode export 归一成 cc-record 形(字段映射 +
-    read XML 包裹剥离)→ 共享重建器 ``_digest_from_records`` 走 cc 同款重建。Read/Write/
-    Edit/MultiEdit 重建、demoted/unreconstructed 推导都自动获得(opencode 侧零重复实现)。
+    路径:``_records_from_opencode`` 把 opencode export 归一成 cc-record 形(字段映射)→
+    共享重建器 ``_digest_from_records`` 走 cc 同款重建(read XML 包裹/行号清洗由重建器统一做)。
+    Read/Write/Edit/MultiEdit 重建、demoted/unreconstructed 推导都自动获得(opencode 侧零重复实现)。
 
     ``skill_used`` 取 ``info.agent``:opencode session 无 ``Skill`` tool_use(它的 skill 在
     ``info.agent``),共享重建器只从 ``Skill`` tool_use 抽 → 抽不到 → 这里补回。
@@ -130,24 +129,6 @@ def _map_opencode_input(name: str, inp: dict) -> dict:
     return out
 
 
-_OC_LINE_NUM_RE = re.compile(r"^[ \t]*\d+:[ \t]?", re.MULTILINE)
-
-
-def _clean_opencode_read_output(text: str) -> str:
-    """opencode read 的 output(真 export / SQLite 里如此存储):
-    ``<path>…</path>\\n<type>file</type>\\n<content>\\nN: line\\n…</content>`` —— 剥
-    ``<content>`` 包裹 + 去 opencode 的 ``N: `` 行号(冒号空格;cc ``_strip_line_numbers``
-    认 tab 不认冒号,这里补)+ 去包裹后前导换行。裸内容(无包裹/无行号)原样返回
-    (对 bare fixture 与 cc 无害)。正则用 ``[ \\t]`` 不用 ``\\s`` 以免跨行吃换行。"""
-    if "<content>" in text and "</content>" in text:
-        i = text.find("<content>") + len("<content>")
-        j = text.rfind("</content>")
-        if 0 <= i <= j:
-            text = text[i:j]
-    text = _OC_LINE_NUM_RE.sub("", text)
-    return text.lstrip("\n")
-
-
 def _records_from_opencode(path: Path) -> list[dict]:
     """opencode export JSON → cc-record 形 list(镜像 structured.load_structured_records,
     直接喂 _digest_from_records)。parts 嵌在 message → 单趟;input/output 在 state 一体。"""
@@ -169,9 +150,7 @@ def _records_from_opencode(path: Path) -> list[dict]:
                 state = p.get("state") or {}
                 inp = state.get("input") or {}
                 name = _norm_tool((p.get("tool") or "").lower() or "")
-                out_text = state.get("output") or ""
-                if name == "Read":
-                    out_text = _clean_opencode_read_output(out_text)
+                out_text = state.get("output") or ""   # 原样;read 的 XML 包裹/行号清洗归共享重建器
                 blocks.append({"type": "tool_use", "id": tid, "name": name,
                                "input": _map_opencode_input(name, inp)})
                 results.append((tid, out_text))

@@ -626,7 +626,7 @@ tool_use / tool_result         {info, messages, parts}          {role, tool_call
 分两条记录，靠 tool_use_id 连   tool 的 input+output 在一个 part
        │                              │                                │
   _records_from_cc           _records_from_opencode          load_structured_records
-  (近恒等)                   (转换：见下表四件事)             (工具名归一)
+  (近恒等)                   (转换：见下表三件事)             (工具名归一)
        │                              │                                │
        └─────────────► list[cc-record 形] ◄─────────────────────────────┘
                          （统一中间表示 / canonical）
@@ -658,20 +658,39 @@ tool_use / tool_result         {info, messages, parts}          {role, tool_call
 
 **为什么是这个形状**：cc-record 形（`{message:{role, content:[块]}, parent_tool_use_id}`）是仓库里早就有的 canonical 中间表示——结构化输入 importer 一直在用（把各种格式归一成它再喂重建器）。cc 近乎恒等（它本来就是这形状）；opencode 一度是唯一没接上、自己 inline 了一份弱化重建的（只 read/write/bash，无 edit 重建、无 unreconstructed 告警——技术债）。修法不是推倒重来，而是让 opencode 也走那条已验证的路（`structured.py` 是现成模板）。
 
-opencode 的转换器（`_records_from_opencode`）做四件事抹平格式差异：
+opencode 的转换器（`_records_from_opencode`）做三件事抹平格式差异：
 
 | opencode 的样子 | 转成 cc-record 形 |
 |---|---|
 | 工具名小写 `read`/`write`/`edit` | 归一大写 `Read`/`Write`/`Edit`（`_norm_tool`，共享映射表）|
 | 字段 camelCase `filePath`/`oldString`/`newString`/`replaceAll` | 映回 snake_case `file_path`/`old_string`/...（`_map_opencode_input`）|
-| read 输出带 `<content>` 包裹 + `N: ` 冒号行号 | 剥干净（`_clean_opencode_read_output`——真 opencode 导出/库里 read 就存成这样，不剥会污染 input_files 内容、还会让多行 edit 的 old_string 匹配不上而误判不可重建）|
 | tool 的 input+output 同在一个 part | 拆成 tool_use 块 + 尾随 tool_result 块，合成 tool_use_id（凑成 cc 的两趟关联形态）|
 
-抹平之后，Read/Write/Edit/MultiEdit 重建 + demoted/unreconstructed 推导对三种来源完全一致。**一个例外**：opencode session 没有 `Skill` tool_use（它的 skill 标识在 `info.agent`），所以 `skill_used` 由 opencode 侧从 `info.agent` 补回（重建器只从 `Skill` tool_use 抽，抽不到）。
+**read 输出的清洗不归转换器、归共享重建器**：真 opencode 导出 / 库里 read 存成 `<path>…</path>\n<type>file</type>\n<content>\nN: line…</content>`（带 XML 包裹 + `N: ` 冒号行号），不剥会污染 `input_files` 内容、还会让多行 edit 的 `old_string` 匹配不上而误判不可重建。这步清洗（`_digest_from_records` 里的 `_clean_read_result`）按输出**以 `<path>` 起手** + `<content>` 包裹触发（opencode read 恒以 `<path>` 起手、cc 恒以 `\d+\t` 起手，首字符就分化，比"含某字面"稳、假阳趋近零，且不绑 `<type>` 值）——**三种来源都走同一个**，所以结构化输入（insight 等）直喂这种 opencode 形 read 也自动洗净；cc / 裸内容（不以 `<path>` 起手）只剥自己的 `\d+\t` 行号，正文里合法的 `N: ` 文本、乃至含 `<content>`/`<path>` 字面的文件正文都不误伤。
+
+抹平之后，Read/Write/Edit/MultiEdit 重建 + demoted/unreconstructed 推导（含上面的 read 清洗）对三种来源完全一致。**一个例外**：opencode session 没有 `Skill` tool_use（它的 skill 标识在 `info.agent`），所以 `skill_used` 由 opencode 侧从 `info.agent` 补回（重建器只从 `Skill` tool_use 抽，抽不到）。
 
 **多 skill 切分**也在归一之后口径统一：cc 按 `Skill` tool_use 切（父子作用域），opencode 按 per-message `agent` 切连续段（扁平，在转换前切原始 session）。切完每段各自重建 → 各自对账。
 
 > **对 audit 判定无影响**：重建出的 `produced_files`/`input_files` 内容、`unreconstructed` 这些字段，audit 其实**不读**——audit 只读 `tool_trace`（程序匹配，大小写不敏感）+ `transcript_text`（LLM 语义判）+ `user_turns`（场景）。所以 opencode 接到共享路之后 digest 更完整（edit 过的文件也重建、内容干净、不可重建的会告警），但 audit 的 verdict 不受影响——变的是 digest 的"保真度"，不是判定结果。
+
+**结构化输入（structured records）——给外部 producer 的通用入口**
+
+上面三种来源里，cc 和 opencode 各绑一种原生格式（cc `.jsonl`、opencode export `.json`）。**结构化输入**是第三条路：一个**故意做"友好"的通用 JSON 格式**，给任何**已经把会话归一成 turn + 工具调用**的外部系统用——它不必伪造 cc 的 jsonl、也不必伪造 opencode 的 `{info,messages,parts}`。形状（顶层 `format == "skill-eval-records"` 作识别，跟 opencode 的 `{info,messages}` 区分）：
+
+```json
+{"format": "skill-eval-records",
+ "records": [
+   {"role": "user", "text": "..."},
+   {"role": "assistant", "agent": "...", "parent_tool_use_id": null, "text": "...",
+    "tool_calls": [{"name": "skill", "input": {"name": "x"}, "result": "..."},
+                   {"name": "read",  "input": {"file_path": "..."}, "result": "..."}]}
+ ]}
+```
+
+**它最通用、最不绑任何框架**：cc 绑 Claude Code、opencode 绑 opencode export，结构化输入只要求"有 turn + 工具调用"——任何 agent 框架 / 观测平台 / 自建 harness / 别的会话存储（像 insight 那样把原生格式转成自己 schema 的）都能吐。insight 是第一个用它的实例，但**不专属 insight**：producer 不用拼 cc 的 tool_use / tool_result 拆分、不用管 `Skill` 大小写、不用管 read 输出的 `<content>` 包裹——这些归一全由 skill-eval 这边做（`load_structured_records` 展开成 cc-record 形；read 清洗、Edit/MultiEdit 重建都走共享重建器），producer 只管按 turn 吐真实数据。事实上 canonical 重构就是把 opencode **照着结构化输入这条已验证的路**接上共享重建器的（`structured.py` 是现成模板），结构化输入是三者里的参照系，不是为哪家定做的小门。
+
+**对接要点**（给想接的 producer）：每个 turn 一条 record；工具调用放 `tool_calls`（`name` 用原始小写即可，skill-eval 归一）；结果放同一条 `tool_calls[].result`（不必另拆 tool_result 消息，skill-eval 自动回流成 cc 两趟形态）；skill 调用参数键用 `input.name` 或 `input.skill` 都行（reader 归一到 cc 认的 `input.skill`）。
 
 ### 7.8 这一层的边界：fixture 下边际价值低，真实 transcript 下价值高
 

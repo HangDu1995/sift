@@ -335,19 +335,6 @@ def test_cc_opencode_digest_symmetric(tmp_path):
     assert [t.name for t in d_cc.tool_trace] == [t.name for t in d_oc.tool_trace]
 
 
-def test_clean_opencode_read_output():
-    """_clean_opencode_read_output:剥真 opencode read 格式(<path>/<type>/<content> 包裹
-    + N: 冒号空格行号 + 前导换行);裸内容(无冒号行号)原样。"""
-    from skill_eval.evals.opencode import _clean_opencode_read_output
-    raw = ("<path>/p/app.py</path>\n<type>file</type>\n<content>\n"
-           "1: alpha\n2: beta\n3: gamma\n</content>")
-    assert _clean_opencode_read_output(raw) == "alpha\nbeta\ngamma\n"
-    # 裸内容(两空格行号,无冒号)→ 不动(现有 fixture 形态)
-    assert _clean_opencode_read_output("1  alpha\n2  beta\n") == "1  alpha\n2  beta\n"
-    # 无包裹但有 N: 行号 → 仍剥行号
-    assert _clean_opencode_read_output("1: x\n2: y\n") == "x\ny\n"
-
-
 def test_opencode_real_format_read_cleaned_and_edit_reconstructs(tmp_path):
     """真 opencode read 格式(<content> 包裹 + N: 冒号空格行号)→ (1) 只读文件入 input_files
     内容干净(无包裹、无 N:);(2) 多行 edit 命中(reviewer M1:修复前行号未剥,'alpha\\nbeta'

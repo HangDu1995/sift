@@ -8,9 +8,12 @@
 - cc —— ``_records_from_cc``:读 JSONL,近恒等产生 cc-record。
 - structured —— ``structured.load_structured_records``:结构化 JSON → cc-record(工具名归一)。
 - opencode —— ``opencode._records_from_opencode``:opencode export → cc-record(工具名归一 +
-  camelCase→snake_case 字段映射 + read 输出剥 ``<content>``/``N: `` 格式 + 合成 tool_use_id)。
+  camelCase→snake_case 字段映射 + 合成 tool_use_id)。
 
 抹平格式差异后,Read/Write/Edit/MultiEdit 重建 + demoted/unreconstructed 推导对三源一致。
+Read 结果的 opencode 形清洗(剥 ``<content>`` 包裹 + ``N: `` 行号)也归本模块 ``_clean_read_result``、
+在重建器里按 ``<content>`` 标记触发——structured(insight 等)直喂 opencode 形 read 也自动洗净,
+cc / 裸内容不受 ``N: `` 正则误伤。
 cc 对外入口 ``build_digest`` = ``_digest_from_records(_records_from_cc(path))``(薄封装)。
 """
 from __future__ import annotations
@@ -59,6 +62,38 @@ class SessionDigest(BaseModel):
 
 def _strip_line_numbers(text: str) -> str:
     return _LINE_NUM_RE.sub("", text)
+
+
+# opencode / insight 实存的 read 输出行号形:"N: "(冒号空格;cc 是 "\d+\t" 见 _LINE_NUM_RE)。
+# 用 [ \t] 不用 \s,以免跨行吃换行。归本模块:_clean_read_result 按 <path> 起手 + <content> 包裹触发。
+_OC_LINE_NUM_RE = re.compile(r"^[ \t]*\d+:[ \t]?", re.MULTILINE)
+
+
+def _clean_read_result(text: str) -> str:
+    """归一 Read 工具结果到干净文件内容(三源通用,canonical 重建器 ``_digest_from_records`` 调用)。
+
+    按输出**起手** + ``<content>`` 包裹区分格式:opencode read 恒以 ``<path>`` 起手、cc read
+    恒以行号 ``\\d+\\t`` 起手——首字符就分化,比"任意位置含某字面"稳得多:
+    - opencode 形(``<path>…</path>\\n<type>…</type>\\n<content>…</content>`` + ``N: `` 行号)→
+      剥 ``<content>`` 取内文 + 去 ``N: `` 行号 + 去前导换行;
+    - cc 形(``\\d+\\t`` 行号)或裸内容 → 只去 cc tab 行号(``_strip_line_numbers``)。
+
+    靠"``<path>`` 起手"识别 opencode,cc / 干净内容不会被 ``N: `` 正则误伤——cc 正文里合法的
+    "1: ..." 文本、乃至正文含 ``<content>``/``<path>`` 字面的文件都保留(只要不以 ``<path>``
+    起手)。structured(insight 等)直喂 opencode 形 read,经此与 opencode 原生路等价;裸 ``N:``
+    (无包裹)走 cc 路保留。
+
+    格式耦合(已知局限):判定绑 opencode ``<path>`` 起手这一字面。根因是 structured 路径可能
+    喂 opencode 形 read、共享层无法靠来源判定只能嗅探内容——彻底解耦要给 canonical record 加
+    来源标记位(大 refactor),opencode 无改格式迹象前不值,留心。
+    """
+    if text.startswith("<path>") and "<content>" in text and "</content>" in text:
+        i = text.find("<content>") + len("<content>")
+        j = text.rfind("</content>")
+        if 0 <= i <= j:
+            text = text[i:j]
+        return _OC_LINE_NUM_RE.sub("", text).lstrip("\n")
+    return _strip_line_numbers(text)
 
 
 def _result_text(result_content) -> str:
@@ -214,7 +249,7 @@ def _digest_from_records(records: list[dict], root: str | None = None) -> Sessio
                 fp = inp.get("file_path", "")
                 remember(fp)
                 if fp and fp not in reads:
-                    reads[fp] = _strip_line_numbers(id2result.get(tid, ""))
+                    reads[fp] = _clean_read_result(id2result.get(tid, ""))
                     read_order.append(fp)
                 if fp and fp not in files:
                     files[fp] = reads[fp]
