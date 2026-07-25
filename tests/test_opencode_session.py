@@ -41,8 +41,9 @@ def test_build_digest_from_opencode_shape():
     assert "E-AUTH-001" in d.input_files[0].content
     # 无 write → produced_files 空(镜像 cc 没写报告)
     assert d.produced_files == []
-    # tool_trace 有 read(小写)
-    assert any(tc.name == "read" for tc in d.tool_trace)
+    # tool_trace 有 Read(经 _records_from_opencode 的 _norm_tool 归一为 cc 形大写,
+    # 与 cc build_digest 同款;旧 inline 重建保小写,接共享重建器后统一)
+    assert any(tc.name.lower() == "read" for tc in d.tool_trace)
     # transcript_text 含编造的 E-FAKE-999
     assert "E-FAKE-999" in d.transcript_text
 
@@ -68,7 +69,7 @@ def test_rebuild_dispatches_opencode():
     from skill_eval.audit.rebuild import rebuild
     tool_trace, text, digest = rebuild(_LEA_OC)
     assert digest.skill_used == "log-error-analyzer"  # 走了 opencode 分支
-    assert any(tc.name == "read" for tc in tool_trace)
+    assert any(tc.name.lower() == "read" for tc in tool_trace)
     assert "E-FAKE-999" in text
 
 
@@ -143,7 +144,7 @@ def test_slice_opencode_purity_and_skill_used():
         p.write_text(json.dumps(lea0, ensure_ascii=False), encoding="utf-8")
         d = build_digest_from_opencode(p)
         assert d.user_turns
-        assert any(tc.name == "read" for tc in d.tool_trace)
+        assert any(tc.name.lower() == "read" for tc in d.tool_trace)
 
 
 # 真 `opencode export` 产出的会话(本地 /tmp/oc_export.json,缺席则 skip)。

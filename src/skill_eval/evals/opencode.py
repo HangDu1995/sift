@@ -17,11 +17,8 @@ import json
 from pathlib import Path
 
 from skill_eval.evals.transcript import (
-    SessionDigest, FileContent, Command,
-    _strip_line_numbers, _detect_root, _rel, _BASH_WRITE_RE,
-    _NAME_MAP, _norm_tool,
+    SessionDigest, _digest_from_records, _norm_tool,
 )
-from skill_eval.models import ToolCallRecord
 
 
 def is_opencode_session(path: Path) -> bool:
@@ -55,97 +52,22 @@ def load_opencode_session(path: Path) -> dict:
     return {"info": data.get("info") or {}, "messages": msgs}
 
 
-def _file_path(inp: dict) -> str:
-    """opencode 字段名容错:filePath / file_path / path 都试(版本差异)。"""
-    return inp.get("filePath") or inp.get("file_path") or inp.get("path") or ""
-
-
 def build_digest_from_opencode(path: Path, root: str | None = None) -> SessionDigest:
-    """解析 opencode export 单 session → SessionDigest(重建逻辑镜像 cc build_digest)。
+    """解析 opencode export 单 session → SessionDigest(薄封装,与 cc build_digest 同形)。
 
-    假定 tool part 的 ``state.output`` / ``state.input.content`` 为字符串(export 文本输出
-    均如此);若某版本存 dict/list,read/bash 分支会 TypeError —— 届时 guard,v1 不预判。
+    路径:``_records_from_opencode`` 把 opencode export 归一成 cc-record 形(字段映射 +
+    read XML 包裹剥离)→ 共享重建器 ``_digest_from_records`` 走 cc 同款重建。Read/Write/
+    Edit/MultiEdit 重建、demoted/unreconstructed 推导都自动获得(opencode 侧零重复实现)。
 
-    注:opencode read 的 output 可能带 ``<path>...<content>...</content>`` XML 包裹(真 export
-    如此),v1 原样保留(内容在、audit 可用);手写 fixture 用裸内容以与 cc 逐字节对照。
+    ``skill_used`` 取 ``info.agent``:opencode session 无 ``Skill`` tool_use(它的 skill 在
+    ``info.agent``),共享重建器只从 ``Skill`` tool_use 抽 → 抽不到 → 这里补回。
     """
     sess = load_opencode_session(path)
-    info = sess["info"]
-
-    user_turns: list[str] = []
-    reads: dict[str, str] = {}            # path -> stripped initial content
-    read_order: list[str] = []
-    files: dict[str, str] = {}            # path -> 当前重建状态
-    written: set[str] = set()
-    commands: list[Command] = []
-    all_paths: list[str] = []
-    tool_trace: list[ToolCallRecord] = []
-    transcript_text_parts: list[str] = []
-
-    def remember(p: str) -> None:
-        if p and p not in all_paths:
-            all_paths.append(p)
-
-    for m in sess["messages"]:
-        mi = m.get("info") or {}
-        role = mi.get("role")
-        for p in m.get("parts") or []:
-            ptype = p.get("type")
-            if ptype == "text":
-                t = p.get("text", "")
-                if role == "user":
-                    if t and not t.startswith("<"):
-                        user_turns.append(t)
-                elif role == "assistant" and t:
-                    transcript_text_parts.append(t)
-            elif ptype == "tool":
-                tool = (p.get("tool") or "").lower()
-                state = p.get("state") or {}
-                inp = state.get("input") or {}
-                tool_trace.append(ToolCallRecord(
-                    name=tool,
-                    input_summary=json.dumps(inp, ensure_ascii=False)[:200],
-                ))
-                if tool == "read":
-                    fp = _file_path(inp)
-                    remember(fp)
-                    out = state.get("output") or ""
-                    if fp and fp not in reads:
-                        reads[fp] = _strip_line_numbers(out)
-                        read_order.append(fp)
-                    if fp and fp not in files:
-                        files[fp] = reads[fp]
-                elif tool == "write":
-                    fp = _file_path(inp)
-                    remember(fp)
-                    if fp:
-                        files[fp] = inp.get("content", "")
-                        written.add(fp)
-                elif tool == "bash":
-                    cmd = inp.get("command", "")
-                    commands.append(Command(cmd=cmd, stdout=(state.get("output") or "")[:2000]))
-                    for mm in _BASH_WRITE_RE.finditer(cmd):
-                        tgt = (mm.group(1) or "").strip("'\"")
-                        if tgt:
-                            remember(tgt)
-                # edit/glob/grep/todowrite/webfetch/task:v1 只记 tool_trace,不重建
-
-    if root is None:
-        root = _detect_root(all_paths)
-    produced = [FileContent(path=_rel(p, root), content=files.get(p, ""))
-                for p in sorted(written)]
-    inputs = [FileContent(path=_rel(p, root), content=reads[p])
-              for p in read_order if p not in written]
-
-    return SessionDigest(
-        skill_used=info.get("agent"),
-        user_turns=user_turns,
-        input_files=inputs,
-        produced_files=produced,
-        commands=commands,
-        tool_trace=tool_trace,
-        transcript_text="\n".join(transcript_text_parts),
-    )
+    d = _digest_from_records(_records_from_opencode(path), root)
+    agent = (sess.get("info") or {}).get("agent")
+    if agent:
+        d.skill_used = agent
+    return d
 
 
 def slice_opencode_by_agent(path: Path, target_agent: str) -> list[dict]:
