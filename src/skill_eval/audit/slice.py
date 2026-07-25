@@ -1,7 +1,10 @@
-"""scope-aware 切片器:把多 skill transcript 按 Skill 工具调用切成单 skill 子 transcript 段。
+"""按声明单元(skill 或 agent)切 transcript 段。
 
-归段:每条 record 按 parent_tool_use_id 归 agent 作用域(主/某子 agent);作用域内
-last-invoked-owns(每个 Skill 调用起段,到同作用域下一个 Skill 调用或作用域结束)。
+归段(target 单元的执行段 = 两种归属的并集):
+  - Skill 调用:每条 record 按 parent_tool_use_id 归作用域(主/某子 agent);作用域内
+    last-invoked-owns(每个 Skill 调用起段,到同作用域下一个 Skill 调用或作用域结束)。
+  - agent 归属:record.agent == target 的连续 run(被 dispatch 的 agent 的执行段)。
+dual-nature(skill + agent 同名):被 agent-span 完全包含的 skill-span 吸收掉,免双计。
 判定层(rebuild/judge/aggregate)不 import 本模块——本模块只产 record 段列表。
 """
 from __future__ import annotations
@@ -79,12 +82,16 @@ def invoked_skills(transcript_path: Path) -> list[str]:
 
 
 def slice_transcript_by_skill(transcript_path: Path, target_skill: str) -> list[list[dict]]:
-    """scope-aware 切 target_skill 的段。target 从未被调用→返回 []。
+    """切 target 单元的段(skill 或 agent 声明,按单元名)。target 从未被调用→返回 []。
 
-    两趟扫描:
-      1. 找出所有 Agent tool_use id(子 agent 作用域标记)。
-      2. 按 parent_tool_use_id 归作用域;作用域内 last-invoked-owns。
-         子 agent 作用域在 Agent tool_result 处结束;主作用域到 transcript 末。
+    target 的段 = 两种归属的并集:
+      1. Skill 调用:scope-aware last-invoked-owns(每个 Skill(target) 调用起段,到同作用域
+         下一个 Skill 调用或作用域结束),按 parent_tool_use_id 归作用域。主作用域的 Agent
+         tool_result 触发 depth-1 closure(子 agent 作用域结束)。
+      2. agent 归属:record.agent == target 的连续 run——被 dispatch 的 agent(无 Skill 调用
+         锚点,如 developer)靠此切其执行段。insight 给子 agent turn 吐 agent=agentName,
+         structured reader(``structured.py``)透传到 cc-record。
+    dual-nature(skill + agent 同名):被 agent-span 完全包含的 skill-span 吸收掉,免双计。
     """
     records = _records(transcript_path)
     if not records:
@@ -94,11 +101,11 @@ def slice_transcript_by_skill(transcript_path: Path, target_skill: str) -> list[
 
     # 作用域内状态:active = 当前生效 skill 名;cur = 当前段的 record 下标列表。
     scope_state: dict[str | None, dict] = {}
-    span_index_lists: list[list[int]] = []  # 每段 = record 下标列表
+    skill_spans: list[list[int]] = []  # Skill 调用切出的段(每段 = record 下标列表)
 
     def _flush(state: dict) -> None:
         if state.get("active") == target_skill and state.get("cur"):
-            span_index_lists.append(state["cur"])
+            skill_spans.append(state["cur"])
 
     for i, rec in enumerate(records):
         scope = _scope_of(rec)
@@ -130,12 +137,28 @@ def slice_transcript_by_skill(transcript_path: Path, target_skill: str) -> list[
                         sub["active"] = None
                         sub["cur"] = []
 
-    # transcript 末:刷掉所有仍活跃的段
+    # transcript 末:刷掉所有仍活跃的 skill 段
     for state in scope_state.values():
         _flush(state)
 
-    spans: list[list[dict]] = []
-    for indices in span_index_lists:
-        spans.append([records[k] for k in indices])
+    # agent 归属段:record.agent == target 的连续 run(被 dispatch 的 agent 的执行段)。
+    # 纯 agent(无 Skill 调用锚点,如 developer)靠此切;insight 给子 agent turn 吐
+    # agent=agentName,structured reader 透传到 cc-record 的 agent 字段。
+    agent_spans: list[list[int]] = []
+    cur: list[int] = []
+    for i, rec in enumerate(records):
+        if rec.get("agent") == target_skill:
+            cur.append(i)
+        elif cur:
+            agent_spans.append(cur)
+            cur = []
+    if cur:
+        agent_spans.append(cur)
 
-    return spans
+    # dual-nature(skill + agent 同名):被 agent-span 完全包含的 skill-span 吸收掉,
+    # 否则那段 record 在 skill-span 和 agent-span 各出现一次 → 双计。跨作用域的 skill-span
+    # (record 集合不同)不会被误吸收(子集判定不成立)。
+    agent_sets = [set(s) for s in agent_spans]
+    kept_skill = [s for s in skill_spans if not any(set(s) <= a for a in agent_sets)]
+
+    return [[records[k] for k in span] for span in kept_skill + agent_spans]

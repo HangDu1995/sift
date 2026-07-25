@@ -12,15 +12,14 @@ producer(insight 等)按 turn 吐::
      ]}
 
 producer 不必拼 cc-jsonl 的 tool_use / tool_result 拆分、不必管 ``Skill`` 大小写 ——
-本模块展开成 cc 记录(``{message:{role,content}, parent_tool_use_id}``),
-``build_digest`` / ``slice_transcript_by_skill`` / ``audit`` 全程零改动。
+本模块展开成 cc 记录(``{message:{role,content}, parent_tool_use_id[, agent]}``),
+``build_digest`` / ``audit`` 零改动;``slice_transcript_by_skill`` 读 ``agent`` 做 agent 归属切。
 
-**``agent`` 字段当前不消费**:producer(insight 等)虽按 turn 吐 ``agent``,但本 reader 不读、
-slicer 不用 —— structured 走 ``--by-skill`` 的 Skill-based 切(``last-invoked-owns`` 按 ``skill``
-调用切段),不按 agent 切。双方 v1 默契:producer 先吐着占位(``parent_tool_use_id`` 恒 null、
-子 agent 作用域细化留作后续),skill-eval 暂忽略。``agent`` 只够做扁平 per-agent 段(无
-parent/child 信号,非真子作用域);待"无 Skill tool_use、需 per-agent 切分"的真消费者出现,再
-读它 + 仿 ``slice_opencode_by_agent`` 写 ``slice_structured_by_agent``(YAGNI,当前不接)。
+**``agent`` 字段透传到 cc-record**:producer(insight 等)按 turn 吐 ``agent``(= 该 turn 归属
+的 agent 名),本 reader 把它挂到每条展开记录(主消息 + tool_result 回流记录都带)。切片器
+``slice_transcript_by_skill`` 据此做 agent 归属切分:声明单元名既匹配 ``Skill`` 调用、也匹配
+``agent`` 字段 → 支持审"被 dispatch 的 agent"(无 Skill 调用的纯 agent,如 developer)。之前
+v1 不消费(commit fdad6bf 标注的默契)是因还没有 per-agent 切分的消费者;agent-audit 接通即消费。
 
 识别:顶层 dict ``format == "skill-eval-records"``(与 opencode 的 ``{info,messages}`` 区分)。
 设计动机见 transcript-driven / 结构化输入;此处只做纯展开,无 LLM。
@@ -46,6 +45,14 @@ def is_structured_records(path: Path) -> bool:
     return isinstance(data, dict) and data.get("format") == _FORMAT
 
 
+def _rec(base: dict, agent) -> dict:
+    """cc-record 带可选 ``agent``:有则挂上(切片器按 agent 归属切 agent 段),无则不挂(免每条都
+    带个 null)。``agent`` = 该 turn 归属的 agent 名(insight 的 agentName),producer 吐、reader 透传。"""
+    if agent:
+        base["agent"] = agent
+    return base
+
+
 def load_structured_records(path: Path) -> list[dict]:
     """结构化 JSON → cc 记录形列表(可直接喂 ``_digest_from_records`` 或写 jsonl 给 slice)。
 
@@ -59,6 +66,7 @@ def load_structured_records(path: Path) -> list[dict]:
     for rec in data.get("records") or []:
         role = rec.get("role") or "assistant"
         ptid = rec.get("parent_tool_use_id")
+        agent = rec.get("agent")
         blocks: list[dict] = []
         results: list[tuple[str, object]] = []
         text = rec.get("text")
@@ -76,8 +84,8 @@ def load_structured_records(path: Path) -> list[dict]:
             blocks.append({"type": "tool_use", "id": tid, "name": name, "input": inp})
             if tc.get("result") is not None:
                 results.append((tid, tc.get("result")))
-        out.append({"message": {"role": role, "content": blocks}, "parent_tool_use_id": ptid})
+        out.append(_rec({"message": {"role": role, "content": blocks}, "parent_tool_use_id": ptid}, agent))
         if results:
             rblocks = [{"type": "tool_result", "tool_use_id": tid, "content": r} for tid, r in results]
-            out.append({"message": {"role": "user", "content": rblocks}, "parent_tool_use_id": ptid})
+            out.append(_rec({"message": {"role": "user", "content": rblocks}, "parent_tool_use_id": ptid}, agent))
     return out

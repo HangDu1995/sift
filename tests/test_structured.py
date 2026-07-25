@@ -151,6 +151,26 @@ def test_cc_format_read_not_overcleaned(tmp_path):
     assert "1: stays" in content and "2: also stays" in content   # 冒号文本没被误删
 
 
+def test_structured_passes_agent_through(tmp_path):
+    # agent 字段透传:insight buildStructuredRecords 给子 agent turn 设 agent=agentName,
+    # 切片器要据此做 agent 归属切分(见 test_slice_isolates_subagent_scope_from_main 的姊妹
+    # agent 切分用例)。reader 必须把它带到 cc-record 形。structured.py 模块 docstring 的 v1
+    # 默契(commit fdad6bf)正写明:"待需 per-agent 切分的真消费者出现,再读 agent"——
+    # agent-audit 即该消费者。
+    rec = {
+        "format": "skill-eval-records",
+        "records": [
+            {"role": "assistant", "agent": "developer", "parent_tool_use_id": "sub-1",
+             "text": "干活",
+             "tool_calls": [{"name": "read", "input": {"file_path": "x.py"}, "result": "1\tos"}]},
+        ],
+    }
+    recs = load_structured_records(_write(tmp_path, rec))
+    assert recs[0].get("agent") == "developer"          # 主消息带 agent
+    assert len(recs) == 2                                # result 在 → 多一条 tool_result 回流记录
+    assert recs[1].get("agent") == "developer"          # 回流记录也带 agent(同 turn,归属一致)
+
+
 def test_slice_isolates_subagent_scope_from_main(tmp_path):
     # scope-aware 切段守卫:target skill 同时在主 scope 和子 agent scope 被调用时,切片器按
     # parent_tool_use_id 归两段独立段——子 agent 段不含主 scope 噪声,反之亦然。这是 insight
@@ -189,4 +209,52 @@ def test_slice_isolates_subagent_scope_from_main(tmp_path):
                  if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Read"]
     assert "main_noise.py" not in sub_reads
     assert "sub_work.py" in sub_reads
+
+
+def test_slice_by_agent_attribute_pure_agent(tmp_path):
+    # 纯 agent(无 Skill tool_use,如 developer):切片器按 agent 字段归段——agent-audit 核心。
+    # 被 dispatch 的 agent 没有 Skill 调用锚点,靠 agent 归属切其执行段。
+    from skill_eval.audit.slice import slice_transcript_by_skill
+    rec = {
+        "format": "skill-eval-records",
+        "records": [
+            {"role": "user", "text": "main 起手"},
+            {"role": "assistant", "agent": "developer", "parent_tool_use_id": "sub-1",
+             "tool_calls": [{"name": "read", "input": {"file_path": "a.py"}}]},
+            {"role": "assistant", "agent": "developer", "parent_tool_use_id": "sub-1",
+             "tool_calls": [{"name": "bash", "input": {"command": "./build.sh"}}]},
+            {"role": "assistant", "text": "main 收尾"},
+        ],
+    }
+    recs = load_structured_records(_write(tmp_path, rec))
+    jsonl = tmp_path / "x.jsonl"
+    jsonl.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs), encoding="utf-8")
+    segs = slice_transcript_by_skill(jsonl, "developer")
+    assert len(segs) == 1                       # developer 执行 = 1 段
+    assert {r.get("agent") for r in segs[0]} == {"developer"}   # 段内纯 developer,main 噪声不混
+    assert len(segs[0]) == 2                     # read + bash 两条 developer record
+
+
+def test_slice_dual_nature_agent_absorbs_skill_span(tmp_path):
+    # dual-nature:agent X 的 run 内又 invoke 了 Skill(X) → 产生 skill-span(被含于 agent-span)
+    # 和 agent-span(整个 run)。应吸收 skill-span,只返 1 段(整个 run,含 invoke 前的 record),
+    # 不双计 record。证明返的是 agent-span 而非 skill-span(后者只从 Skill 调用起,会漏 pre.py)。
+    from skill_eval.audit.slice import slice_transcript_by_skill
+    rec = {
+        "format": "skill-eval-records",
+        "records": [
+            {"role": "assistant", "agent": "X", "parent_tool_use_id": "sub-1",
+             "tool_calls": [{"name": "read", "input": {"file_path": "pre.py"}}]},
+            {"role": "assistant", "agent": "X", "parent_tool_use_id": "sub-1",
+             "tool_calls": [{"name": "skill", "input": {"name": "X"}}]},
+            {"role": "assistant", "agent": "X", "parent_tool_use_id": "sub-1",
+             "tool_calls": [{"name": "bash", "input": {"command": "run.sh"}}]},
+        ],
+    }
+    recs = load_structured_records(_write(tmp_path, rec))
+    jsonl = tmp_path / "x.jsonl"
+    jsonl.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs), encoding="utf-8")
+    segs = slice_transcript_by_skill(jsonl, "X")
+    assert len(segs) == 1                        # 不是 2(skill-span 被吸收)
+    assert len(segs[0]) == 3                     # 整个 run(pre + invoke + post)
 
