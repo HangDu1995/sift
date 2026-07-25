@@ -245,3 +245,46 @@ def test_records_from_opencode_edit_field_mapping(tmp_path):
     tu = next(b for b in asst["message"]["content"] if b["type"] == "tool_use")
     assert tu["name"] == "Edit"
     assert tu["input"] == {"file_path": "/p/a.py", "old_string": "x", "new_string": "y", "replace_all": True}
+
+
+def test_opencode_edit_reconstructs(tmp_path):
+    """read→edit 命中 → 经 canonical 重建器产出 edit 后内容(opencode Task 3-4 落地能力验证)。
+
+    旧 opencode 路径只有 read/write/bash,edit 不重建;接共享重建器后应自动获得。
+    本测端到端验证:read 拿到 base → edit 把 beta→BETA → produced_files 含 BETA。
+    """
+    base = "1  alpha\n2  beta\n"
+    sess = {"info": {"agent": "x", "time": {"created": 1}}, "messages": [
+        {"info": {"role": "user"}, "parts": [{"type": "text", "text": "edit it"}]},
+        {"info": {"role": "assistant"}, "parts": [
+            {"type": "text", "text": "ok"},
+            {"type": "tool", "tool": "read",
+             "state": {"input": {"filePath": "/p/a.py"}, "output": base}},
+            {"type": "tool", "tool": "edit",
+             "state": {"input": {"filePath": "/p/a.py", "oldString": "beta", "newString": "BETA"},
+                       "output": "ok"}}]}]}
+    p = tmp_path / "e.json"; p.write_text(json.dumps(sess))
+    d = build_digest_from_opencode(p)
+    # edit 命中 base → produced_files 含 edit 后内容
+    assert any("BETA" in f.content for f in d.produced_files)
+    # 不应残留未 edit 的 base 副本(有 beta\n 且无 BETA 的 produced_file 即残留)
+    assert not any("beta\n" in f.content and "BETA" not in f.content for f in d.produced_files)
+
+
+def test_opencode_edit_missing_old_demotes(tmp_path):
+    """edit oldString 在 read base 里找不到 → demoted → 进 unreconstructed(此前 opencode 无此能力)。
+
+    验证共享重建器的 demote 推理在 opencode 路径上端到端工作。
+    """
+    sess = {"info": {"agent": "x", "time": {"created": 1}}, "messages": [
+        {"info": {"role": "user"}, "parts": [{"type": "text", "text": "edit"}]},
+        {"info": {"role": "assistant"}, "parts": [
+            {"type": "tool", "tool": "read",
+             "state": {"input": {"filePath": "/p/a.py"}, "output": "1  alpha\n"}},
+            {"type": "tool", "tool": "edit",
+             "state": {"input": {"filePath": "/p/a.py", "oldString": "GHOST", "newString": "x"},
+                       "output": "ok"}}]}]}
+    p = tmp_path / "g.json"; p.write_text(json.dumps(sess))
+    d = build_digest_from_opencode(p)
+    # oldString 不在 base → demoted → 进 unreconstructed
+    assert any("a.py" in u for u in d.unreconstructed)
