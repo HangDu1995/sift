@@ -7,6 +7,14 @@
 auditor 读 ``part.text`` 判遵循性);opencode schema 变是 opencode 的事,skill-eval 不背
 SQLite 解析(与 b9ef5be「用真格式、不重造 export」决议一致)。
 
+**实证(2026-07-25 探 ``~/.local/share/opencode/opencode.db``)**:库是**事件溯源**结构 ——
+单表 ``event(id, aggregate_id, seq, type, data)``,按 ``aggregate_id``(=session)+ ``seq``
+重放 6 种带版本后缀(``.1``)的内部事件(``message.part.updated`` / ``message.updated`` /
+``session.*`` 等,单 session ~284 事件、part 增量更新要按 part_id 取末态)才能拼出 session。
+直读 = 自己实现事件重放 + 绑 opencode 内部版本化 schema,维护锚重;且 read 输出在**源存储**
+里就是 ``<content>``+``N: `` 格式(与 export 同),直读也绕不开清洗(见 ``opencode._clean_opencode_read_output``)。
+唯一好处(无 opencode CLI 读别处拷来的 .db)场景窄,不值。
+
 opencode ``export`` 无 ``--db`` 参数,但 opencode 认 ``XDG_DATA_HOME``(db 放
 ``$XDG_DATA_HOME/opencode/opencode.db``)→ 设该变量即可隔离指向任意 .db、不碰本机真库。
 

@@ -1,5 +1,18 @@
-"""Transcript -> SessionDigest: 把 Claude Code session JSONL 解析成结构化 digest。
-纯解析,无 LLM。供 transcript-driven eval 生成使用。"""
+"""Transcript → SessionDigest:把会话 transcript 解析成结构化 digest。纯解析,无 LLM。
+
+**canonical 重建路径的归宿**:本模块持有共享重建器 ``_digest_from_records`` + 工具名归一表
+``_NAME_MAP``/``_norm_tool``。三种 transcript importer 都先归一到 **cc-record 形**
+(``{message:{role, content:[block]}, parent_tool_use_id}`` —— 仓库的 canonical 中间表示),
+再喂同一个重建器,重建逻辑单处定义、三源一致:
+
+- cc —— ``_records_from_cc``:读 JSONL,近恒等产生 cc-record。
+- structured —— ``structured.load_structured_records``:结构化 JSON → cc-record(工具名归一)。
+- opencode —— ``opencode._records_from_opencode``:opencode export → cc-record(工具名归一 +
+  camelCase→snake_case 字段映射 + read 输出剥 ``<content>``/``N: `` 格式 + 合成 tool_use_id)。
+
+抹平格式差异后,Read/Write/Edit/MultiEdit 重建 + demoted/unreconstructed 推导对三源一致。
+cc 对外入口 ``build_digest`` = ``_digest_from_records(_records_from_cc(path))``(薄封装)。
+"""
 from __future__ import annotations
 
 import json

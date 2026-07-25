@@ -286,7 +286,7 @@ skill-eval audit /path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
 skill-eval audit /path/to/skill/ --transcript opencode-session.json
 ```
 
-> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`（逐行 JSON 记录，含 `Skill`/`Read`/`Write`/`Bash` tool_use）；opencode session `.json`（`opencode export <sessionID>` 的产出，顶层 `info`/`messages`，parts 嵌在 message 里、role/agent 在 `message.info`）。两者重建成同一 `SessionDigest` 再对账。生产导出：`opencode session list` 找 id → `opencode export <id> > session.json`（`--sanitize` 可脱敏分享）。**拿到一个 opencode `.db` 文件**(别处拷来的库):直接 `audit --db handed.db` —— 内部自动 list/export/audit(单 session 自动选,多个列出让你挑;底层 = XDG 隔离 + `opencode export`,完整见 reference audit 段)。run 产的 transcript 默认 cc 格式（`.jsonl`）；给 `--executor opencode` 时产 opencode 格式（`.json`）。
+> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`（逐行 JSON 记录，含 `Skill`/`Read`/`Write`/`Bash` tool_use）；opencode session `.json`（`opencode export <sessionID>` 的产出，顶层 `info`/`messages`，parts 嵌在 message 里、role/agent 在 `message.info`）。两者重建成同一 `SessionDigest` 再对账(经同一条 canonical 重建路径:归一到 cc-record 形 → 共享重建器,三源一致,见 handbook §7.7)。生产导出：`opencode session list` 找 id → `opencode export <id> > session.json`（`--sanitize` 可脱敏分享）。**拿到一个 opencode `.db` 文件**(别处拷来的库):直接 `audit --db handed.db` —— 内部自动 list/export/audit(单 session 自动选,多个列出让你挑;底层 = XDG 隔离 + `opencode export`,完整见 reference audit 段)。run 产的 transcript 默认 cc 格式（`.jsonl`）；给 `--executor opencode` 时产 opencode 格式（`.json`）。
 
 | 参数 | 默认 | 说明 |
 |---|---|---|

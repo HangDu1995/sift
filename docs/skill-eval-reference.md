@@ -303,7 +303,7 @@ skill-eval audit path/to/skill/ --transcript opencode-session.json
 skill-eval audit path/to/skill/ --db opencode.db
 ```
 
-> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`(逐行 JSON 记录,含 `Skill`/`Read`/`Write`/`Bash` tool_use);opencode session `.json`(`opencode export <sessionID>` 的产出,顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`)。两者重建成同一 `SessionDigest` 再对账;`--by-skill` cc 按 `Skill` tool_use 切分、opencode 按 per-message `agent` 切分(扁平,无 cc 父子作用域)。`run --task` 两种执行器都支持(默认 `cc` 产 `.jsonl`,`--executor opencode` 产 `.json`),run 产的 transcript 直接喂 audit 即可。生产导出 opencode 会话喂 audit:`opencode session list` 找 id → `opencode export <id> > session.json`(**导原文**,audit 靠 part.text 判遵循性;`--sanitize` 仅用于对外分享脱敏版,脱敏后别喂 audit)→ `skill-eval audit --transcript session.json`。
+> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`(逐行 JSON 记录,含 `Skill`/`Read`/`Write`/`Bash` tool_use);opencode session `.json`(`opencode export <sessionID>` 的产出,顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`)。两者重建成同一 `SessionDigest` 再对账(经同一条 canonical 重建路径:归一到 cc-record 形 → 共享 `_digest_from_records`,三源重建逻辑单处定义,见 handbook §7.7);`--by-skill` cc 按 `Skill` tool_use 切分、opencode 按 per-message `agent` 切分(扁平,无 cc 父子作用域)。`run --task` 两种执行器都支持(默认 `cc` 产 `.jsonl`,`--executor opencode` 产 `.json`),run 产的 transcript 直接喂 audit 即可。生产导出 opencode 会话喂 audit:`opencode session list` 找 id → `opencode export <id> > session.json`(**导原文**,audit 靠 part.text 判遵循性;`--sanitize` 仅用于对外分享脱敏版,脱敏后别喂 audit)→ `skill-eval audit --transcript session.json`。
 
 > **拿到一个 opencode `.db` 文件,一行进 audit**(别人/别处拷来的库,不是你本机默认库):直接用 `--db`,skill-eval 内部把 list/export/audit 全包了(隔离 `XDG_DATA_HOME` 指向那个 .db、**不碰本机真库**;需 opencode CLI 在 PATH):
 > ```bash

@@ -615,7 +615,65 @@ audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md �
 - **derived_from_transcript（反推）**：findings 里 `derived_from_transcript: true` 的不是从 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（**只增不减** = 只新增 finding，不会替换或删掉从 SKILL.md 抽出来的指令）。**目前只补一类**：transcript 里 agent 真实 Read 过的输入/参考文件 → 各补一条"读取 \<path\>"（REFERENCE_USAGE，构造上即命中 → PASS，不膨胀 fail）。另外两类不反推——工具调用反推（`required_tools`，Bash 命令分不清业务专用还是通用）和产物文件反推（`required_outputs`，历史 trace 的产物未必还在盘，且"产出文件检查"属评分断言、不属遵循性指令），因为映射不干净、容易误判。
 - **别只数 fail**：每条 finding 带序号。**来源徽章**显示这条 finding 是从哪个 / 哪些 `InstructionSource` 抽出来的（CONSTRAINT / ANTI_FABRICATION / HEADING_STEP / TOOL_REQUIREMENT / REFERENCE_USAGE / OUTPUT_FORMAT）。当同一句 SKILL.md 文本同时匹配多个抽取模式（如同句既是约束、又是反捏造）、且同 transcript 同 verdict 时，会**合并成一条**，徽章就显示两个来源（如 `CONSTRAINT + ANTI_FABRICATION`）——证明同文重复已去重、没有虚增 fail。而同一行为跨两条**不同**规则（如没读某 reference 同时违反"条件性"+"步骤"两条）仍会是两条，但互标"↔ 同源违规 #N"。所以 fail 条数可能 > 真实问题数，逐条看 evidence 对照"哪个行为"，别数条数。
 
-### 7.7 这一层的边界：fixture 下边际价值低，真实 transcript 下价值高
+### 7.7 transcript 怎么变成可对账的 digest：三种来源同一条重建路
+
+audit 对账前，先得把 transcript **重建**成一个结构化 digest——把"模型读了哪些文件、写了什么、改了什么、调了哪些工具"从原始会话记录里还原出来。这里有个关键架构：**cc 会话、opencode 会话、结构化输入三种来源，归一到同一种中间表示，再走同一个重建器**，所以重建逻辑只维护一份。
+
+```
+cc session (.jsonl)            opencode session (.json)         结构化 records (.json)
+逐行 JSON record               opencode export                  friendly JSON
+tool_use / tool_result         {info, messages, parts}          {role, tool_calls}
+分两条记录，靠 tool_use_id 连   tool 的 input+output 在一个 part
+       │                              │                                │
+  _records_from_cc           _records_from_opencode          load_structured_records
+  (近恒等)                   (转换：见下表四件事)             (工具名归一)
+       │                              │                                │
+       └─────────────► list[cc-record 形] ◄─────────────────────────────┘
+                         （统一中间表示 / canonical）
+                                 │
+                                 ▼
+                     _digest_from_records（共享重建器，单处定义）
+                     · pass1：tool_use_id → result 映射
+                     · pass2：按序演进文件状态
+                         Read → 初始内容；Write → 覆盖；
+                         Edit/MultiEdit → old→new 替换（找不到 → demoted）；
+                         Bash → 记命令 + bash_touched
+                     · 收 tool_trace / user_turns / transcript_text
+                                 │
+                                 ▼
+                          SessionDigest
+                                 │
+                                 ▼   ← opencode 特例：skill_used 从 info.agent 补回
+                                     （它没 Skill tool_use，重建器抽不到 → opencode 侧补）
+                                 │
+                                 ▼
+                   TranscriptAuditor.audit()（对账）
+                   · 多 skill 会话已先切分 → 每段各自重建、audit 跨段聚合
+                     （cc 按 Skill tool_use；opencode 按 agent，切原始 session）
+                   · 从 SKILL.md 提指令（6 类 → 4 类，见 §7.2）
+                   · 每条指令：命中 tool_trace → PASS（程序，不调 LLM）；
+                                否则 → LLM 语义判（transcript_text）
+                   · 五态 verdict（见 §7.3），跨 transcript 聚合违规率
+```
+
+**为什么是这个形状**：cc-record 形（`{message:{role, content:[块]}, parent_tool_use_id}`）是仓库里早就有的 canonical 中间表示——结构化输入 importer 一直在用（把各种格式归一成它再喂重建器）。cc 近乎恒等（它本来就是这形状）；opencode 一度是唯一没接上、自己 inline 了一份弱化重建的（只 read/write/bash，无 edit 重建、无 unreconstructed 告警——技术债）。修法不是推倒重来，而是让 opencode 也走那条已验证的路（`structured.py` 是现成模板）。
+
+opencode 的转换器（`_records_from_opencode`）做四件事抹平格式差异：
+
+| opencode 的样子 | 转成 cc-record 形 |
+|---|---|
+| 工具名小写 `read`/`write`/`edit` | 归一大写 `Read`/`Write`/`Edit`（`_norm_tool`，共享映射表）|
+| 字段 camelCase `filePath`/`oldString`/`newString`/`replaceAll` | 映回 snake_case `file_path`/`old_string`/...（`_map_opencode_input`）|
+| read 输出带 `<content>` 包裹 + `N: ` 冒号行号 | 剥干净（`_clean_opencode_read_output`——真 opencode 导出/库里 read 就存成这样，不剥会污染 input_files 内容、还会让多行 edit 的 old_string 匹配不上而误判不可重建）|
+| tool 的 input+output 同在一个 part | 拆成 tool_use 块 + 尾随 tool_result 块，合成 tool_use_id（凑成 cc 的两趟关联形态）|
+
+抹平之后，Read/Write/Edit/MultiEdit 重建 + demoted/unreconstructed 推导对三种来源完全一致。**一个例外**：opencode session 没有 `Skill` tool_use（它的 skill 标识在 `info.agent`），所以 `skill_used` 由 opencode 侧从 `info.agent` 补回（重建器只从 `Skill` tool_use 抽，抽不到）。
+
+**多 skill 切分**也在归一之后口径统一：cc 按 `Skill` tool_use 切（父子作用域），opencode 按 per-message `agent` 切连续段（扁平，在转换前切原始 session）。切完每段各自重建 → 各自对账。
+
+> **对 audit 判定无影响**：重建出的 `produced_files`/`input_files` 内容、`unreconstructed` 这些字段，audit 其实**不读**——audit 只读 `tool_trace`（程序匹配，大小写不敏感）+ `transcript_text`（LLM 语义判）+ `user_turns`（场景）。所以 opencode 接到共享路之后 digest 更完整（edit 过的文件也重建、内容干净、不可重建的会告警），但 audit 的 verdict 不受影响——变的是 digest 的"保真度"，不是判定结果。
+
+### 7.8 这一层的边界：fixture 下边际价值低，真实 transcript 下价值高
 
 诚实说，遵循性在不同路径下价值差别很大：
 
@@ -624,9 +682,9 @@ audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md �
 
 所以：做 fixture A/B 评测，别对 compliance 的数字过度解读（尤其 N/A 多时，先想 extractor 误抽）；要评估 skill 的真实遵循质量，拿真实会话跑 audit。
 
-### 7.8 逐条判别：某条 FAIL 是工具噪声还是 skill 问题
+### 7.9 逐条判别：某条 FAIL 是工具噪声还是 skill 问题
 
-fixture 下遵循性的 FAIL 混着工具噪声和真 skill 问题（见 7.7）。报告现在给每条 FAIL **自动标**一个启发式判别（per-run findings、整体汇总 by_instruction、单次 audit-report 的违规表都带徽章 + hover 理由）：
+fixture 下遵循性的 FAIL 混着工具噪声和真 skill 问题（见 7.8）。报告现在给每条 FAIL **自动标**一个启发式判别（per-run findings、整体汇总 by_instruction、单次 audit-report 的违规表都带徽章 + hover 理由）：
 
 | `noise_label` | 含义 | 典型信号（命中即标）|
 |---|---|---|
