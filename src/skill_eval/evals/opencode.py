@@ -19,6 +19,7 @@ from pathlib import Path
 from skill_eval.evals.transcript import (
     SessionDigest, FileContent, Command,
     _strip_line_numbers, _detect_root, _rel, _BASH_WRITE_RE,
+    _NAME_MAP, _norm_tool,
 )
 from skill_eval.models import ToolCallRecord
 
@@ -179,3 +180,70 @@ def slice_opencode_by_agent(path: Path, target_agent: str) -> list[dict]:
             _flush()
     _flush()
     return segments
+
+
+def _map_opencode_input(name: str, inp: dict) -> dict:
+    """opencode camelCase → cc snake_case(文件操作工具)。其余原样。"""
+    if name not in {"Read", "Write", "Edit"}:
+        return dict(inp)
+    out = dict(inp)
+    fp = out.get("filePath") or out.get("file_path") or out.get("path")
+    if fp is not None:
+        out.pop("filePath", None); out.pop("path", None)
+        out.setdefault("file_path", fp)
+    if name == "Edit":
+        if out.get("oldString") is not None:
+            out["old_string"] = out.pop("oldString")
+        new = out.pop("newString", None)
+        if new is None:
+            new = out.pop("content", None)   # opencode 接受 content 作 newString 回退
+        if new is not None:
+            out["new_string"] = new
+        if out.get("replaceAll") is not None:
+            out["replace_all"] = out.pop("replaceAll")
+    return out
+
+
+def _strip_read_wrap(text: str) -> str:
+    """opencode read output 可能带 <…><content>BODY</content></…> 包裹;有则取 BODY,
+    无则原样(防御,对 bare fixture 与 cc 无害)。"""
+    if "<content>" in text and "</content>" in text:
+        i = text.find("<content>") + len("<content>")
+        j = text.rfind("</content>")
+        if 0 <= i <= j:
+            return text[i:j]
+    return text
+
+
+def _records_from_opencode(path: Path) -> list[dict]:
+    """opencode export JSON → cc-record 形 list(镜像 structured.load_structured_records,
+    直接喂 _digest_from_records)。parts 嵌在 message → 单趟;input/output 在 state 一体。"""
+    sess = load_opencode_session(path)
+    out: list[dict] = []
+    counter = 0
+    for m in sess["messages"]:
+        role = (m.get("info") or {}).get("role") or "assistant"
+        blocks: list[dict] = []
+        results: list[tuple[str, str]] = []
+        for p in m.get("parts") or []:
+            if p.get("type") == "text":
+                t = p.get("text", "")
+                if t:
+                    blocks.append({"type": "text", "text": t})
+            elif p.get("type") == "tool":
+                counter += 1
+                tid = f"tu_{counter}"
+                state = p.get("state") or {}
+                inp = state.get("input") or {}
+                name = _norm_tool((p.get("tool") or "").lower() or "")
+                out_text = state.get("output") or ""
+                if name == "Read":
+                    out_text = _strip_read_wrap(out_text)
+                blocks.append({"type": "tool_use", "id": tid, "name": name,
+                               "input": _map_opencode_input(name, inp)})
+                results.append((tid, out_text))
+        out.append({"message": {"role": role, "content": blocks}, "parent_tool_use_id": None})
+        if results:
+            rblocks = [{"type": "tool_result", "tool_use_id": tid, "content": r} for tid, r in results]
+            out.append({"message": {"role": "user", "content": rblocks}, "parent_tool_use_id": None})
+    return out

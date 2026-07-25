@@ -1,10 +1,12 @@
 """opencode session(JSON)→ SessionDigest + agent 切分 单测。"""
 from __future__ import annotations
+import json
 from pathlib import Path
 import pytest
 
 from skill_eval.evals.opencode import (
     is_opencode_session, load_opencode_session, build_digest_from_opencode,
+    _records_from_opencode,
 )
 from skill_eval.evals.transcript import build_digest
 
@@ -198,3 +200,47 @@ def test_real_opencode_db_export_consumed():
         assert d.tool_trace or d.transcript_text or d.user_turns
     finally:
         p.unlink(missing_ok=True)
+
+
+def _oc_session(parts_user, parts_asst):
+    """造最小 opencode export 形 session JSON。"""
+    return {"info": {"agent": "log-error-analyzer", "time": {"created": 1}},
+            "messages": [{"info": {"role": "user"}, "parts": parts_user},
+                         {"info": {"role": "assistant"}, "parts": parts_asst}]}
+
+
+def test_records_from_opencode_basic_shape(tmp_path):
+    sess = _oc_session(
+        [{"type": "text", "text": "do it"}],
+        [{"type": "text", "text": "thinking"},
+         {"type": "tool", "tool": "read",
+          "state": {"input": {"filePath": "/p/a.py"}, "output": "1  hello\n2  world"}}])
+    p = tmp_path / "s.json"; p.write_text(json.dumps(sess))
+    recs = _records_from_opencode(p)
+    # 形:recs[0]=user prompt(text 保留,喂 _digest_from_records 抽 user_turns,
+    #     与 cc 路径经 _records_from_cc 保留 user 消息对齐→digest 等价),
+    #     recs[1]=assistant(text+tool_use), recs[2]=user(tool_result)
+    assert recs[0]["message"]["role"] == "user"
+    assert recs[1]["message"]["role"] == "assistant"
+    types = [b["type"] for b in recs[1]["message"]["content"]]
+    assert types == ["text", "tool_use"]
+    tu = next(b for b in recs[1]["message"]["content"] if b["type"] == "tool_use")
+    assert tu["name"] == "Read"                       # 小写归大写
+    assert tu["input"]["file_path"] == "/p/a.py"      # filePath → file_path
+    assert recs[2]["message"]["role"] == "user"
+    tr = next(b for b in recs[2]["message"]["content"] if b["type"] == "tool_result")
+    assert "hello" in tr["content"]
+
+
+def test_records_from_opencode_edit_field_mapping(tmp_path):
+    sess = _oc_session([{"type": "text", "text": "go"}],
+        [{"type": "tool", "tool": "edit",
+          "state": {"input": {"filePath": "/p/a.py", "oldString": "x", "newString": "y", "replaceAll": True},
+                    "output": "ok"}}])
+    p = tmp_path / "e.json"; p.write_text(json.dumps(sess))
+    recs = _records_from_opencode(p)
+    # recs[0]=user prompt; recs[1]=assistant(tool_use)
+    asst = next(r for r in recs if r["message"]["role"] == "assistant")
+    tu = next(b for b in asst["message"]["content"] if b["type"] == "tool_use")
+    assert tu["name"] == "Edit"
+    assert tu["input"] == {"file_path": "/p/a.py", "old_string": "x", "new_string": "y", "replace_all": True}
