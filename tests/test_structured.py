@@ -150,3 +150,43 @@ def test_cc_format_read_not_overcleaned(tmp_path):
     content = digest.input_files[0].content
     assert "1: stays" in content and "2: also stays" in content   # 冒号文本没被误删
 
+
+def test_slice_isolates_subagent_scope_from_main(tmp_path):
+    # scope-aware 切段守卫:target skill 同时在主 scope 和子 agent scope 被调用时,切片器按
+    # parent_tool_use_id 归两段独立段——子 agent 段不含主 scope 噪声,反之亦然。这是 insight
+    # buildStructuredRecords 给子 agent turn 填 parent_tool_use_id(=subagentSessionId)的目的:
+    # 恒 null 时所有 record 同属主 scope,主 scope 噪声混进 skill 段(last-invoked-owns 污染)。
+    # 此测试锁 skill-eval 侧契约:parent_tool_use_id 必须被 structured reader 透传、slice 据此归段。
+    from skill_eval.audit.slice import slice_transcript_by_skill
+    rec = {
+        "format": "skill-eval-records",
+        "records": [
+            # 主 scope:invoke X + 主 scope 噪声 read(不该进子 agent 段)
+            {"role": "assistant", "parent_tool_use_id": None, "tool_calls": [
+                {"name": "skill", "input": {"name": "X"}},
+                {"name": "read", "input": {"file_path": "main_noise.py"}},
+            ]},
+            # 子 agent scope:invoke X + 子 agent 自己的 read
+            {"role": "assistant", "parent_tool_use_id": "sub-1", "tool_calls": [
+                {"name": "skill", "input": {"name": "X"}},
+                {"name": "read", "input": {"file_path": "sub_work.py"}},
+            ]},
+        ],
+    }
+    recs = load_structured_records(_write(tmp_path, rec))
+    jsonl = tmp_path / "expanded.jsonl"
+    jsonl.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs), encoding="utf-8")
+    segs = slice_transcript_by_skill(jsonl, "X")
+    assert len(segs) == 2                                          # 主、子各一段
+    seg_scopes = [sorted({r.get("parent_tool_use_id") for r in seg}) for seg in segs]
+    assert [None] in seg_scopes                                    # 一段纯主 scope
+    assert ["sub-1"] in seg_scopes                                 # 一段纯子 agent scope
+    assert all(len(s) == 1 for s in seg_scopes)                    # 无段混 scope(噪声不泄)
+    # 子 agent 段里不含主 scope 的 read(main_noise),只含自己的 sub_work
+    sub_seg = next(s for s in segs if all(r.get("parent_tool_use_id") == "sub-1" for r in s))
+    sub_reads = [b.get("input", {}).get("file_path")
+                 for r in sub_seg for b in (r.get("message", {}).get("content") or [])
+                 if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Read"]
+    assert "main_noise.py" not in sub_reads
+    assert "sub_work.py" in sub_reads
+
