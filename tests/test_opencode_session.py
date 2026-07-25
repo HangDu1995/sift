@@ -288,3 +288,46 @@ def test_opencode_edit_missing_old_demotes(tmp_path):
     d = build_digest_from_opencode(p)
     # oldString 不在 base → demoted → 进 unreconstructed
     assert any("a.py" in u for u in d.unreconstructed)
+
+
+def test_cc_opencode_digest_symmetric(tmp_path):
+    """同一组工具调用(read /p/a.py → write /p/b.py),cc-record 形与 opencode 形
+    经同一重建器 _digest_from_records → 重建相关字段等价(canonical 路径一致性)。"""
+    from skill_eval.evals.transcript import _digest_from_records
+    from skill_eval.evals.opencode import build_digest_from_opencode
+
+    # —— cc-record 形:直接构造 records 喂重建器 ——
+    cc_records = [
+        {"message": {"role": "user", "content": [{"type": "text", "text": "go"}]}, "parent_tool_use_id": None},
+        {"message": {"role": "assistant", "content": [
+            {"type": "text", "text": "ok"},
+            {"type": "tool_use", "id": "tu_1", "name": "Read", "input": {"file_path": "/p/a.py"}}]}, "parent_tool_use_id": None},
+        {"message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "tu_1", "content": "1  hi\n"}]}, "parent_tool_use_id": None},
+        {"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "tu_2", "name": "Write", "input": {"file_path": "/p/b.py", "content": "out\n"}}]}, "parent_tool_use_id": None},
+    ]
+    d_cc = _digest_from_records(cc_records)
+
+    # —— opencode 形:造 export JSON 喂 build_digest_from_opencode(内部转 records 再喂同一重建器)——
+    sess = {"info": {"agent": "x", "time": {"created": 1}}, "messages": [
+        {"info": {"role": "user"}, "parts": [{"type": "text", "text": "go"}]},
+        {"info": {"role": "assistant"}, "parts": [
+            {"type": "text", "text": "ok"},
+            {"type": "tool", "tool": "read",
+             "state": {"input": {"filePath": "/p/a.py"}, "output": "1  hi\n"}},
+            {"type": "tool", "tool": "write",
+             "state": {"input": {"filePath": "/p/b.py", "content": "out\n"}, "output": "wrote"}}]}]}
+    p = tmp_path / "sym.json"; p.write_text(json.dumps(sess))
+    d_oc = build_digest_from_opencode(p)
+
+    # 重建相关字段等价(canonical 路径一致性)
+    assert [f.path for f in d_cc.produced_files] == [f.path for f in d_oc.produced_files]
+    assert [f.content for f in d_cc.produced_files] == [f.content for f in d_oc.produced_files]
+    assert [f.path for f in d_cc.input_files] == [f.path for f in d_oc.input_files]
+    assert [f.content for f in d_cc.input_files] == [f.content for f in d_oc.input_files]
+    assert d_cc.user_turns == d_oc.user_turns
+    assert d_cc.unreconstructed == d_oc.unreconstructed
+    assert [c.cmd for c in d_cc.commands] == [c.cmd for c in d_oc.commands]
+    # tool_trace 工具名序列等价(两边都经 _norm_tool 归一)
+    assert [t.name for t in d_cc.tool_trace] == [t.name for t in d_oc.tool_trace]
