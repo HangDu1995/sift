@@ -3,7 +3,7 @@
 import json
 
 from skill_eval.evals.structured import is_structured_records, load_structured_records
-from skill_eval.evals.transcript import _digest_from_cc_records
+from skill_eval.evals.transcript import _digest_from_records
 
 
 def _write(tmp_path, obj, name="s.json"):
@@ -69,7 +69,7 @@ def test_tool_results_emitted_as_user_record_with_matching_ids(tmp_path):
 
 def test_digest_from_structured_records(tmp_path):
     recs = load_structured_records(_write(tmp_path, FRIENDLY))
-    digest = _digest_from_cc_records(recs)
+    digest = _digest_from_records(recs)
     assert digest.skill_used == "ascendc-crash-debug"
     trace_names = [t.name for t in digest.tool_trace]
     assert "Skill" in trace_names and "Read" in trace_names

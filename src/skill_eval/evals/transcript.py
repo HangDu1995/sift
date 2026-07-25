@@ -83,7 +83,7 @@ def _rel(path: str, root: str) -> str:
 
 # 工具名归一表:producer(opencode / insight 等)多用小写,cc digest 的分支认大写。
 # 未命中的名字原样透传(只进 tool_trace,不影响重建)。
-# 归属本模块(canonical 重建器 _digest_from_cc_records 所在),各 importer 共用一份。
+# 归属本模块(canonical 重建器 _digest_from_records 所在),各 importer 共用一份。
 _NAME_MAP = {
     "skill": "Skill",
     "read": "Read",
@@ -103,7 +103,7 @@ def _records_from_cc(transcript_path: Path) -> list[dict]:
 
     canonical 记录 = cc 记录形（``{message, parent_tool_use_id?}``）。抽出来供
     canonical 路径复用：cc importer 近乎恒等；opencode / insight importer 归一成
-    同形 record，再喂 ``_digest_from_cc_records``。与 ``audit/slice.py`` 的 ``_records`` 同形。
+    同形 record，再喂 ``_digest_from_records``。与 ``audit/slice.py`` 的 ``_records`` 同形。
     """
     records: list[dict] = []
     with open(transcript_path, encoding="utf-8") as f:
@@ -118,7 +118,7 @@ def _records_from_cc(transcript_path: Path) -> list[dict]:
     return records
 
 
-def _digest_from_cc_records(records: list[dict], root: str | None = None) -> SessionDigest:
+def _digest_from_records(records: list[dict], root: str | None = None) -> SessionDigest:
     """cc 记录列表（canonical 记录形）→ SessionDigest。纯内存、不读文件。
 
     从 ``build_digest`` 抽出，使「读文件」与「records→digest」分离：canonical
@@ -273,7 +273,7 @@ def _digest_from_cc_records(records: list[dict], root: str | None = None) -> Ses
 def build_digest(transcript_path: Path, root: str | None = None) -> SessionDigest:
     """Claude Code session JSONL → SessionDigest（读文件 → cc 记录 → digest）。
 
-    薄封装：``_records_from_cc`` 读文件成 cc 记录（canonical 记录形），``_digest_from_cc_records``
-    重建。拆分后各 importer（cc / opencode / insight）产 records 统一走 ``_digest_from_cc_records``。
+    薄封装：``_records_from_cc`` 读文件成 cc 记录（canonical 记录形），``_digest_from_records``
+    重建。拆分后各 importer（cc / opencode / insight）产 records 统一走 ``_digest_from_records``。
     """
-    return _digest_from_cc_records(_records_from_cc(transcript_path), root)
+    return _digest_from_records(_records_from_cc(transcript_path), root)

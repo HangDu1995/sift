@@ -40,7 +40,7 @@ def is_structured_records(path: Path) -> bool:
 
 
 def load_structured_records(path: Path) -> list[dict]:
-    """结构化 JSON → cc 记录形列表(可直接喂 ``_digest_from_cc_records`` 或写 jsonl 给 slice)。
+    """结构化 JSON → cc 记录形列表(可直接喂 ``_digest_from_records`` 或写 jsonl 给 slice)。
 
     每个 friendly record 展开为:一条主消息(text + tool_use 块);若有 result,
     再跟一条 user 消息装 tool_result(按 tool_use_id 回流,cc digest pass1 只从 user 收)。

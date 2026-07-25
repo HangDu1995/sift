@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 from skill_eval.evals.transcript import build_digest, SessionDigest, _strip_line_numbers, FileContent, Command, _NAME_MAP, _norm_tool
+from skill_eval.evals.transcript import _digest_from_records
 from skill_eval.models import ToolCallRecord
 
 def _write_jsonl(tmp_path: Path, records: list) -> Path:
@@ -204,3 +205,8 @@ def test_tool_trace_collects_multiple_distinct_unbranched_tools(tmp_path):
     ]
     d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
     assert [t.name for t in d.tool_trace] == ["Glob", "Grep", "WebSearch"]
+
+def test_records_reconstructor_importable():
+    # 空记录 → 空 digest,不崩
+    d = _digest_from_records([])
+    assert d.user_turns == [] and d.tool_trace == []
