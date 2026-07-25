@@ -14,7 +14,9 @@ from skill_eval.models import (
 
 # 中文关键词 — extractor 独用(单模块词表留原处);反捏造词已移至 skill_eval.i18n 共享(P2-13)。
 _CONSTRAINT_KEYWORDS_CN: tuple[str, ...] = ("禁止", "严禁", "不得", "不应", "不可", "必须")
-_TOOL_VERBS_CN: tuple[str, ...] = ("运行", "执行", "调用", "启动")
+# 跑/使用 是 agent 定义里引出脚本/工具的高频动词(st-verifier「跑 coverage_audit.py」、
+# developer「使用 Bash/Write/Edit 工具」),原表缺 → 这些 TOOL_REQUIREMENT 全漏。
+_TOOL_VERBS_CN: tuple[str, ...] = ("运行", "执行", "调用", "启动", "跑", "使用")
 # TOOL_REQUIREMENT 停用词:"动词(use/run/...)+ 这些词"构成的 match 不是真工具名。
 # audit 实测 "use when" / "run concurrently" 被抽成 tool_name="when"/"concurrently",
 # LLM 判"该用工具 when 但没用"→ 假 FAIL。跨 104 skill 验证 0 假阴性(删的全是碎片,
@@ -97,7 +99,12 @@ class InstructionExtractor:
         # 复合词假阳性(运行=runtime 非动词 run)。对齐上面注释的设计本意。
         patterns = [
             re.compile(r"(?:run|execute|use|call|invoke)\s+(?:the\s+)?([A-Za-z][\w\-\.]*)", re.IGNORECASE),
-            re.compile(rf"(?:{'|'.join(_TOOL_VERBS_CN)})\s*([A-Za-z][\w\-\.]*)"),
+            # 动词后允许任意反引号/星号序列 + 可选 ``./`` 再取工具名:markdown 习惯把工具名/脚本名
+            # 用反引号或粗体包(`` `Grep` `` / `` `parse_result.py` `` / `` **`shape_audit.py`** ``),
+            # 脚本常带 ``./`` 前缀(`` `./build.sh` ``)。原 ``\s*`` 后直接要求 ASCII 字母,这些包裹+点
+            # 挡住 → 全漏。tool_name 取名字部分(不含 ``./``),match_tool_call 第 3 条按词边界命中
+            # input_summary 里的 "./build.sh"。`` [`*]* `` 只吃反引号/星号(纯 markdown 包裹,不入工具名)。
+            re.compile(rf"(?:{'|'.join(_TOOL_VERBS_CN)})\s*[`*]*(?:\./)?([A-Za-z][\w\-\.]*)"),
         ]
         for pattern in patterns:
             for match in pattern.finditer(text):

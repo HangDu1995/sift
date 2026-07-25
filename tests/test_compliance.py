@@ -286,6 +286,59 @@ class TestInstructionExtractorChinese:
         assert any(n and "check_env" in n for n in names), names
         assert any(n and "get_npu_arch" in n for n in names), names
 
+    def test_tool_requirement_cn_verb_pao(self):
+        """「跑 X」是 agent 定义里最常见的脚本调用动词(st-verifier: 跑 coverage_audit.py /
+        跑 parse_result.py),但 _TOOL_VERBS_CN 原只有 运行/执行/调用/启动 → 全漏。补「跑」。
+        抽出的 tool_name 经 match_tool_call 第 3 条(命令词查 input_summary)能命中 Bash 调用,
+        不会假 FAIL(tc.name 是 Bash,靠 input_summary 里该命令词命中)。"""
+        ext = InstructionExtractor()
+        body = "跑 parse_result.py 判全绿;跑 coverage_audit.py 重算覆盖。"
+        tools = [c for c in ext.extract(body) if c.source == InstructionSource.TOOL_REQUIREMENT]
+        names = [c.params.get("tool_name") for c in tools]
+        assert any("parse_result" in n for n in names), names
+        assert any("coverage_audit" in n for n in names), names
+
+    def test_tool_requirement_cn_verb_shiyong(self):
+        """「使用 X」引出真工具(developer: 使用 Bash / Write / Edit 工具)——补「使用」,
+        tool_name 命中 tc.name(Grep/Bash 等,match_tool_call 第 1 条)。"""
+        ext = InstructionExtractor()
+        body = "使用 Grep 搜索残留;使用 Bash 编译。"
+        tools = [c for c in ext.extract(body) if c.source == InstructionSource.TOOL_REQUIREMENT]
+        names = [c.params.get("tool_name") for c in tools]
+        assert any(n and n.lower().startswith("grep") for n in names), names
+        assert any(n and n.lower() == "bash" for n in names), names
+
+    def test_tool_requirement_cn_backtick_wrapped(self):
+        """markdown 把工具名用反引号包:`Grep` / `parse_result.py`。原正则动词后直接要求
+        ASCII 字母,反引号挡住 → 全漏。动词后允许可选反引号再取工具名。"""
+        ext = InstructionExtractor()
+        body = "使用 `Grep` 搜索残留;跑 `parse_result.py` 判全绿。"
+        tools = [c for c in ext.extract(body) if c.source == InstructionSource.TOOL_REQUIREMENT]
+        names = [c.params.get("tool_name") for c in tools]
+        assert any(n and n.lower().startswith("grep") for n in names), names
+        assert any("parse_result" in n for n in names), names
+
+    def test_tool_requirement_cn_dot_slash_script(self):
+        """`./build.sh` / `./run.sh` 这类带 ./ 前缀的脚本(developer: 执行 `./build.sh`)。
+        原正则要求字母起头,反引号+点挡住 → 漏。动词后允许可选反引号 + 可选 ./ 再取名字部分
+        (tool_name=build.sh,不含 ./;match_tool_call 第 3 条词边界命中 "./build.sh")。"""
+        ext = InstructionExtractor()
+        body = "执行 `./build.sh` 编译;进入目录执行 `./run.sh` 测试。"
+        tools = [c for c in ext.extract(body) if c.source == InstructionSource.TOOL_REQUIREMENT]
+        names = [c.params.get("tool_name") for c in tools]
+        assert any("build.sh" in n for n in names), names
+        assert any("run.sh" in n for n in names), names
+
+    def test_tool_requirement_cn_bold_wrapped(self):
+        """markdown 粗体包工具名:跑 **`shape_audit.py`**(st-verifier 实存形态,`**` + 反引号
+        双层包裹)。单反引号跳过不够,动词后得允许任意反引号/星号序列再取工具名。"""
+        ext = InstructionExtractor()
+        body = "还必须跑 **`shape_audit.py`** 核对;使用 **Grep** 搜索。"
+        tools = [c for c in ext.extract(body) if c.source == InstructionSource.TOOL_REQUIREMENT]
+        names = [c.params.get("tool_name") for c in tools]
+        assert any("shape_audit" in n for n in names), names
+        assert any(n and n.lower().startswith("grep") for n in names), names
+
     def test_constraint_cn_rejects_buke_compound(self):
         """「不可用/不可见」是普通词(unavailable/invisible),非禁止性约束,误命中会抽出
         「不可用时的回退方案见 X」这种路由提示(env-check 实测)。但「不可遗漏关键步骤」
