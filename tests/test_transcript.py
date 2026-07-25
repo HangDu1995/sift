@@ -1,7 +1,7 @@
 # tests/test_transcript.py
 import json
 from pathlib import Path
-from skill_eval.evals.transcript import build_digest, SessionDigest, _strip_line_numbers, FileContent, Command
+from skill_eval.evals.transcript import build_digest, SessionDigest, _strip_line_numbers, FileContent, Command, _NAME_MAP, _norm_tool
 from skill_eval.models import ToolCallRecord
 
 def _write_jsonl(tmp_path: Path, records: list) -> Path:
@@ -15,6 +15,12 @@ def _user(text: str) -> dict:
 def test_strip_line_numbers():
     raw = "1\talpha\n2\tbeta\n"
     assert _strip_line_numbers(raw) == "alpha\nbeta\n"
+
+def test_name_map_lives_in_transcript():
+    assert _NAME_MAP["read"] == "Read"
+    assert _NAME_MAP["multiedit"] == "MultiEdit"
+    assert _norm_tool("EDIT") == "Edit"
+    assert _norm_tool("unknowntool") == "unknowntool"  # 未命中原样透传
 
 def test_user_turns_extracted_and_noise_skipped(tmp_path):
     recs = [

@@ -23,18 +23,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-_FORMAT = "skill-eval-records"
+from skill_eval.evals.transcript import _norm_tool
 
-# producer 多用小写工具名(opencode / insight 形);cc digest 的分支认大写 → 归一。
-# 未命中的名字原样透传(只进 tool_trace,不影响重建)。
-_NAME_MAP = {
-    "skill": "Skill",
-    "read": "Read",
-    "write": "Write",
-    "edit": "Edit",
-    "multiedit": "MultiEdit",
-    "bash": "Bash",
-}
+_FORMAT = "skill-eval-records"
 
 
 def is_structured_records(path: Path) -> bool:
@@ -46,10 +37,6 @@ def is_structured_records(path: Path) -> bool:
     except (json.JSONDecodeError, OSError):
         return False
     return isinstance(data, dict) and data.get("format") == _FORMAT
-
-
-def _norm_tool(name: str) -> str:
-    return _NAME_MAP.get((name or "").lower(), name or "")
 
 
 def load_structured_records(path: Path) -> list[dict]:

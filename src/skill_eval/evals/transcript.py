@@ -81,6 +81,23 @@ def _rel(path: str, root: str) -> str:
         return path
 
 
+# 工具名归一表:producer(opencode / insight 等)多用小写,cc digest 的分支认大写。
+# 未命中的名字原样透传(只进 tool_trace,不影响重建)。
+# 归属本模块(canonical 重建器 _digest_from_cc_records 所在),各 importer 共用一份。
+_NAME_MAP = {
+    "skill": "Skill",
+    "read": "Read",
+    "write": "Write",
+    "edit": "Edit",
+    "multiedit": "MultiEdit",
+    "bash": "Bash",
+}
+
+
+def _norm_tool(name: str) -> str:
+    return _NAME_MAP.get((name or "").lower(), name or "")
+
+
 def _records_from_cc(transcript_path: Path) -> list[dict]:
     """读 Claude Code session JSONL → record 列表（跳过空行 / 坏 JSON 行）。
 
