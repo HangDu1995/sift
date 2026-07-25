@@ -1,6 +1,7 @@
 """opencode session(JSON)→ SessionDigest + agent 切分 单测。"""
 from __future__ import annotations
 import json
+import re
 from pathlib import Path
 import pytest
 
@@ -332,3 +333,54 @@ def test_cc_opencode_digest_symmetric(tmp_path):
     assert [c.cmd for c in d_cc.commands] == [c.cmd for c in d_oc.commands]
     # tool_trace 工具名序列等价(两边都经 _norm_tool 归一)
     assert [t.name for t in d_cc.tool_trace] == [t.name for t in d_oc.tool_trace]
+
+
+def test_clean_opencode_read_output():
+    """_clean_opencode_read_output:剥真 opencode read 格式(<path>/<type>/<content> 包裹
+    + N: 冒号空格行号 + 前导换行);裸内容(无冒号行号)原样。"""
+    from skill_eval.evals.opencode import _clean_opencode_read_output
+    raw = ("<path>/p/app.py</path>\n<type>file</type>\n<content>\n"
+           "1: alpha\n2: beta\n3: gamma\n</content>")
+    assert _clean_opencode_read_output(raw) == "alpha\nbeta\ngamma\n"
+    # 裸内容(两空格行号,无冒号)→ 不动(现有 fixture 形态)
+    assert _clean_opencode_read_output("1  alpha\n2  beta\n") == "1  alpha\n2  beta\n"
+    # 无包裹但有 N: 行号 → 仍剥行号
+    assert _clean_opencode_read_output("1: x\n2: y\n") == "x\ny\n"
+
+
+def test_opencode_real_format_read_cleaned_and_edit_reconstructs(tmp_path):
+    """真 opencode read 格式(<content> 包裹 + N: 冒号空格行号)→ (1) 只读文件入 input_files
+    内容干净(无包裹、无 N:);(2) 多行 edit 命中(reviewer M1:修复前行号未剥,'alpha\\nbeta'
+    在 '1: alpha\\n2: beta' 里找不到 → edit demote)。"""
+    from skill_eval.evals.opencode import build_digest_from_opencode
+    def _read_out(body_lines):
+        return ("<path>/p/f</path>\n<type>file</type>\n<content>\n"
+                + "\n".join(f"{i}: {ln}" for i, ln in enumerate(body_lines, 1)) + "\n</content>")
+    sess = {"info": {"agent": "x", "time": {"created": 1}}, "messages": [
+        {"info": {"role": "user"}, "parts": [{"type": "text", "text": "go"}]},
+        {"info": {"role": "assistant"}, "parts": [
+            {"type": "text", "text": "ok"},
+            # 只读 → 入 input_files,验内容干净
+            {"type": "tool", "tool": "read",
+             "state": {"input": {"filePath": "/p/notes.md"},
+                       "output": _read_out(["alpha", "beta", "gamma"])}},
+            # 读 + 多行 edit → 验 edit 命中(修复前 demote)
+            {"type": "tool", "tool": "read",
+             "state": {"input": {"filePath": "/p/app.py"},
+                       "output": _read_out(["alpha", "beta", "gamma"])}},
+            {"type": "tool", "tool": "edit",
+             "state": {"input": {"filePath": "/p/app.py",
+                                 "oldString": "alpha\nbeta", "newString": "ALPHA\nBETA"},
+                       "output": "ok"}}]}]}
+    p = tmp_path / "real.json"; p.write_text(json.dumps(sess))
+    d = build_digest_from_opencode(p)
+    # (1) 只读的 notes.md 入 input_files,内容干净
+    notes = next((f for f in d.input_files if f.path.endswith("notes.md")), None)
+    assert notes is not None, f"notes.md 应在 input_files;got {[f.path for f in d.input_files]}"
+    assert "<content>" not in notes.content and "<path>" not in notes.content
+    assert not any(re.match(r"^[ \t]*\d+:[ \t]", ln) for ln in notes.content.split("\n")), "N: 行号未剥"
+    assert notes.content == "alpha\nbeta\ngamma\n"
+    # (2) app.py 多行 edit 命中 → produced_files 含替换后内容(修复前 demote)
+    assert any("ALPHA" in f.content and "BETA" in f.content for f in d.produced_files), \
+        f"多行 edit 应重建(M1 回归);produced={[f.path for f in d.produced_files]} unrecon={d.unreconstructed}"
+    assert not any("app.py" in u for u in d.unreconstructed), "edit 不该 demote"

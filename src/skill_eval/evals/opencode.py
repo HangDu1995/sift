@@ -17,6 +17,7 @@ tool_use_id 两趟关联(更简单)。
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from skill_eval.evals.transcript import (
@@ -129,15 +130,22 @@ def _map_opencode_input(name: str, inp: dict) -> dict:
     return out
 
 
-def _strip_read_wrap(text: str) -> str:
-    """opencode read output 可能带 <…><content>BODY</content></…> 包裹;有则取 BODY,
-    无则原样(防御,对 bare fixture 与 cc 无害)。"""
+_OC_LINE_NUM_RE = re.compile(r"^[ \t]*\d+:[ \t]?", re.MULTILINE)
+
+
+def _clean_opencode_read_output(text: str) -> str:
+    """opencode read 的 output(真 export / SQLite 里如此存储):
+    ``<path>…</path>\\n<type>file</type>\\n<content>\\nN: line\\n…</content>`` —— 剥
+    ``<content>`` 包裹 + 去 opencode 的 ``N: `` 行号(冒号空格;cc ``_strip_line_numbers``
+    认 tab 不认冒号,这里补)+ 去包裹后前导换行。裸内容(无包裹/无行号)原样返回
+    (对 bare fixture 与 cc 无害)。正则用 ``[ \\t]`` 不用 ``\\s`` 以免跨行吃换行。"""
     if "<content>" in text and "</content>" in text:
         i = text.find("<content>") + len("<content>")
         j = text.rfind("</content>")
         if 0 <= i <= j:
-            return text[i:j]
-    return text
+            text = text[i:j]
+    text = _OC_LINE_NUM_RE.sub("", text)
+    return text.lstrip("\n")
 
 
 def _records_from_opencode(path: Path) -> list[dict]:
@@ -163,7 +171,7 @@ def _records_from_opencode(path: Path) -> list[dict]:
                 name = _norm_tool((p.get("tool") or "").lower() or "")
                 out_text = state.get("output") or ""
                 if name == "Read":
-                    out_text = _strip_read_wrap(out_text)
+                    out_text = _clean_opencode_read_output(out_text)
                 blocks.append({"type": "tool_use", "id": tid, "name": name,
                                "input": _map_opencode_input(name, inp)})
                 results.append((tid, out_text))
