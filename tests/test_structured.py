@@ -77,6 +77,31 @@ def test_digest_from_structured_records(tmp_path):
     assert any("import os" in f.content for f in digest.input_files)
 
 
+def test_digest_from_structured_records_without_result(tmp_path):
+    # insight 的 audit 桥接(buildStructuredRecords)为省 payload **不回传 tool 结果**
+    # (resultJson 常达 10MB+,audit 判定不读——auditor 只取 user_turns/tool_trace/transcript_text,
+    # derive_declarations 只读 input_files 的 path)。守卫:缺 result 的结构化 records 仍能产出
+    # audit 真正消费的字段——skill_used / tool_trace / input_files 的 **path**(Read 的 file_path
+    # 输入恢复,非靠 result)。仅文件内容空,audit 不读内容、无碍。
+    no_result = {
+        "format": "skill-eval-records",
+        "records": [
+            {"role": "user", "text": "分析 x.py 的崩溃"},
+            {"role": "assistant", "agent": "kernel-developer", "parent_tool_use_id": None,
+             "text": "调用 skill 排查",
+             "tool_calls": [
+                 {"name": "skill", "input": {"name": "ascendc-crash-debug"}},
+                 {"name": "read", "input": {"file_path": "src/x.py"}},
+             ]},
+        ],
+    }
+    digest = _digest_from_records(load_structured_records(_write(tmp_path, no_result)))
+    assert digest.skill_used == "ascendc-crash-debug"               # scene / by-skill 分段用
+    assert [t.name for t in digest.tool_trace] == ["Skill", "Read"]  # tool_trace 用
+    assert [f.path for f in digest.input_files] == ["x.py"]          # derive_declarations 读 path
+    assert all(f.content == "" for f in digest.input_files)          # 内容空(无 result),audit 不读
+
+
 def test_slice_finds_skill_segment(tmp_path):
     from skill_eval.audit.slice import slice_transcript_by_skill
     recs = load_structured_records(_write(tmp_path, FRIENDLY))

@@ -690,7 +690,9 @@ opencode 的转换器（`_records_from_opencode`）做三件事抹平格式差�
 
 **它最通用、最不绑任何框架**：cc 绑 Claude Code、opencode 绑 opencode export，结构化输入只要求"有 turn + 工具调用"——任何 agent 框架 / 观测平台 / 自建 harness / 别的会话存储（像 insight 那样把原生格式转成自己 schema 的）都能吐。insight 是第一个用它的实例，但**不专属 insight**：producer 不用拼 cc 的 tool_use / tool_result 拆分、不用管 `Skill` 大小写、不用管 read 输出的 `<content>` 包裹——这些归一全由 skill-eval 这边做（`load_structured_records` 展开成 cc-record 形；read 清洗、Edit/MultiEdit 重建都走共享重建器），producer 只管按 turn 吐真实数据。事实上 canonical 重构就是把 opencode **照着结构化输入这条已验证的路**接上共享重建器的（`structured.py` 是现成模板），结构化输入是三者里的参照系，不是为哪家定做的小门。
 
-**对接要点**（给想接的 producer）：每个 turn 一条 record；工具调用放 `tool_calls`（`name` 用原始小写即可，skill-eval 归一）；结果放同一条 `tool_calls[].result`（不必另拆 tool_result 消息，skill-eval 自动回流成 cc 两趟形态）；skill 调用参数键用 `input.name` 或 `input.skill` 都行（reader 归一到 cc 认的 `input.skill`）。
+**对接要点**（给想接的 producer）：每个 turn 一条 record；工具调用放 `tool_calls`（`name` 用原始小写即可，skill-eval 归一）；skill 调用参数键用 `input.name` 或 `input.skill` 都行（reader 归一到 cc 认的 `input.skill`）。
+
+**`tool_calls[].result` 是可选的——做对账(audit)的 producer 建议不传**：`result`（工具返回值，如 Read 整个文件、skill 正文、大段命令输出）在真实 session 里常达 10MB+，而 **audit 的判定根本不读它**——auditor 只取 `digest.user_turns`(场景)+ `tool_trace`(工具调用的**输入**)+ `transcript_text`(assistant 文本)，三项都不含工具结果；连"反推指令"(`derive_declarations`)也只读 `input_files` 的 **路径**(路径来自 Read 的 `file_path` **输入**，不靠 result)。所以全量回传 `result` 是纯死重量：会让 `--transcript` 的 session.json 撑到 20MB+，序列化 / 落盘 / skill-eval 解析全慢。insight 的 audit 桥接因此**不传 `result`**（payload 实测 18MB→7MB，砍掉 10MB+ 的 resultJson）。reader 对缺 `result` 的 tool_call 本就容错（不产 tool_result 块，`input_files` 内容空但路径在、tool_trace 完整），对账 verdict 不变。仅在需要重建文件**内容**(produced_files 还原、非对账)时才传 `result`。
 
 ### 7.8 这一层的边界：fixture 下边际价值低，真实 transcript 下价值高
 
