@@ -2,17 +2,18 @@
 
 [![CI](https://github.com/guixu-labs/skill-eval/actions/workflows/ci.yml/badge.svg)](https://github.com/guixu-labs/skill-eval/actions/workflows/ci.yml)
 
-自动评测 [Claude Code Skill](https://github.com/anthropics/skill-creator) 的 CLI——三层质量保障（评分 / 遵循性 / 校准）+ 盲比较 + post-hoc 门禁，CI 就绪。
+自动评测 [Claude Code Skill](https://github.com/anthropics/skills) 的 CLI——三层质量保障（评分 / 遵循性 / 校准）+ 盲比较 + post-hoc 门禁，CI 就绪。
 
-与 skill-creator 对比，skill-eval 的核心差异：
+脱胎于 [skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator)——交互式 meta-skill，Claude 加载它对话式建/测 skill。两者**共享评测血脉**（A/B 对照、LLM grader、盲比较、benchmark、review UI 都源自那里），**互补而非替代**：skill-creator 适合探索期人盯着迭代，skill-eval 把它延展到成熟期的工程化 CI。skill-eval 独有：
 
-- **程序化断言** — 确定性验证（文件是否存在、内容是否匹配），零 LLM 成本，不可作弊
-- **盲比较** — 同一 LLM 盲评两份产出（with/without 或 v1/v2），相对判断消阅卷噪声
-- **遵循性检查** — 验证 Claude 是否真的按 SKILL.md 指令执行了，而不只是输出看起来对
-- **校准** — 单次执行的结果×过程 coherence 判决：打分（结果）与遵循性（过程）协不协调，给出 5 态判决（可信/高分存疑/可修复/技能失效/过程未知）
-- **双率** — 客观（programmatic）与主观（llm）分开报，干净信号不被 LLM 噪声污染
-- **post-hoc 门禁** — `gate` 命令对 benchmark 出 PASS/FAIL 判决，exit code 直接驱动 CI
-- **CI 就绪** — `--format json` + exit code，合入 CI pipeline
+- **确定性 programmatic 断言 + 双率** — 文件存在 / 内容匹配等零 LLM、不可作弊的客观判定，与 LLM 判定分开报，干净信号不被阅卷噪声污染
+- **遵循性 compliance** — 对账执行过程是否真按 SKILL.md 指令走了，不只看输出对不对
+- **校准 calibration** — 结果×过程 coherence：输出对了但过程违反硬性规则 → 高分存疑（5 态判决）
+- **post-hoc 门禁 + CI** — `gate` 独立命令出 PASS/FAIL，exit code 驱动 CI；`--format json` 合入 pipeline
+- **真实 transcript 审计 audit** — 把生产会话 transcript（cc / opencode 双源）与 SKILL.md 逐条对账；多 transcript 聚合可反推 skill 设计本身有没有问题
+- **路径1 真任务 + 批量** — `--task/--cwd` spawn 真任务（cc / opencode 双执行器）；`batch` DAG 调度多 skill
+- **静态分析 + 安全审查** — 11 项 SKILL.md 体检 + 密钥 / prompt 注入 / 危险命令扫描
+- **基准题集冻结** — `freeze` 不可变签名 + skill_name 校验，跨 run / CI 复用同一份题
 
 > 第一次接触想系统了解每个功能的设计与用法，读 [使用手册](docs/skill-eval-handbook.md)（深入浅出，概念优先）；完整命令参数、字段定义、JSON schema 查 [参考手册](docs/skill-eval-reference.md)；方法论依据见 [方法论溯源](docs/skill-eval-principles.md)。
 

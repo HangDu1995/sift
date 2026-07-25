@@ -32,6 +32,9 @@ batch-workspace*/
 .venv/
 venv/
 
+# uv(项目用 pip/setuptools,不用 uv;uv.lock 若被误生成则忽略)
+uv.lock
+
 test-results/
 dist/
 build/

@@ -21,6 +21,8 @@ skill-creator（位于 `/Users/layne/codes/skills/skills/skill-creator`）是 Cl
 
 **关键设计决策**：所有 JSON 输出字段名严格保持与 skill-creator 兼容。
 
+> **形态与演进**：skill-creator 是 Claude Code 的**交互式 meta-skill**（对话式建/测 skill、人评审迭代），不是 CLI。skill-eval 2026-04 从它移植评测脚本并改造成结构化 CLI 后，两者同期各自演化——skill-creator 在 2.0（2026-01）已具备成熟 Eval（A/B 对照、benchmark、盲比较、review UI、4 模式 Create/Eval/Improve/Benchmark），skill-eval 则往 CI / 批量 / 过程审计 / 客观门禁方向独立扩展。故 skill-eval 的价值不在"skill-creator 不能评测"（它能），而在**形态互补**：探索期对话式 vs 成熟期工程化 CLI。
+
 ---
 
 ## 2. 来自 skill-benchmark 的静态分析规则
@@ -95,6 +97,21 @@ skill-eval 在此基础上新增了批量评估、结果×过程 coherence 校�
 
 **理论**：关注点分离 + 12-Factor App 配置外置原则。框架代码零硬编码——所有领域知识通过 `eval-config.yaml` 注入。
 
+### 5.6 工程化扩展（2026-05 起）
+
+三层架构之外，skill-eval 在 2026-05 后陆续新增的能力（均为 skill-eval 原创；静态分析 / 安全审查来源见 §2 / §3）：
+
+| 能力 | 来源 | 解决的问题 |
+|------|------|-----------|
+| **确定性 programmatic 断言 + 双率** | 原创 | skill-creator 只有 LLM grader 单率；skill-eval 拆出零 LLM、不可作弊的客观判定（`FILE_EXISTS` / `TOOL_CALLED` 等）与 LLM 判定分开报 |
+| **post-hoc 门禁 + CI** | 原创 | skill-creator 交互式、无 exit code / 无 CI；skill-eval `gate` 出 PASS/FAIL，exit code 驱动 pipeline |
+| **路径2 audit** | 原创 | 真实会话 transcript 与 SKILL.md 对账（cc / opencode 双源），skill-creator 只跑自生成测试、无生产对账 |
+| **路径1 真任务模式** | 原创 | `--task/--cwd` spawn 真任务 + 双执行器（cc / opencode） |
+| **基准题集 freeze** | 原创 | 不可变签名 + skill_name 校验，跨 run / CI 同卷（skill-creator 的 evals.json 可复用但无冻结） |
+| **refine + per-SKILL hash 缓存** | 原创 | LLM 精筛 extractor 误抽的伪指令（教程示例被当指令），按 SKILL.md hash 缓存 |
+| **FAIL 噪声判别** | 原创 | 区分"工具噪声 / 疑似 skill 问题 / 待确认"，避免读者误把工具噪声当 skill 缺陷 |
+| **结构化 records transcript** | 原创 | canonical 三源统一（cc / structured / opencode），供 audit 消费外部 producer |
+
 ---
 
 ## 6. 可信评测的六个支柱
@@ -117,4 +134,4 @@ skill-eval 在此基础上新增了批量评估、结果×过程 coherence 校�
 - Dijkstra, E.W. "On the Role of Scientific Thought" (1974)
 - Wiggins, A. *The Twelve-Factor App* (2011), Factor III: Config
 - Anthropic: [Evals Best Practices](https://docs.anthropic.com/en/docs/build-with-claude/evaluations)
-- Anthropic: [skill-creator skill](https://github.com/anthropic/skills/tree/main/skills/skill-creator) — 盲比较 comparator / rubric 评分设计来源（`agents/comparator.md`）
+- Anthropic: [skill-creator skill](https://github.com/anthropics/skills/tree/main/skills/skill-creator) — 盲比较 comparator / rubric 评分设计来源（`agents/comparator.md`）
