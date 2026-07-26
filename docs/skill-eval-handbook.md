@@ -255,7 +255,7 @@ skill-eval init path/to/skill/ --from-transcript session.jsonl  # 从真实会�
 
 `init` 有三种生成模式，按优先级自动选择：
 
-1. **`--from-transcript`（从真实会话挖）**：读一段真实 session transcript，重建当时的输入文件/命令/产物，挖出真实场景的 eval。其中有一条是**逐字节真挖**——直接还原会话里真实执行的任务，fixture 就是 agent 当时 Read 的真实文件内容；此外 LLM 还会基于这段会话再生成若干变体题。为防 LLM 臆造文件名，生成结果过一道**反幻觉闭集约束**：允许引用的文件被限定在一个闭集里（transcript 实际出现的输入/产物文件 + SKILL 声明的产物），引用闭集外文件的断言和 fixture 会被确定性后处理丢弃并打 `review:fixture-not-in-manifest` / `review:dropped-assertions` flag——这样生成的题不会冒出会话里根本不存在的文件。如果 transcript 里调了多个 skill，加 `--by-skill` 只挖本 skill 被调用期间的段（否则会串味，终端会警告）。
+1. **`--from-transcript`（从真实会话挖）**：读一段真实 session transcript，重建当时的输入文件/命令/产物，挖出真实场景的 eval。其中有一条是**逐字节真挖**——直接还原会话里真实执行的任务，fixture 就是 agent 当时 Read 的真实文件内容；此外 LLM 还会基于这段会话再生成若干变体题。为防 LLM 臆造文件名，生成结果过一道**反幻觉闭集约束**：允许引用的文件被限定在一个闭集里（transcript 实际出现的输入/产物文件 + SKILL 声明的产物），引用闭集外文件的断言和 fixture 会被确定性后处理丢弃并打 `review:fixture-not-in-manifest` / `review:dropped-assertions` flag——这样生成的题不会冒出会话里根本不存在的文件。如果 transcript 里调了多个 skill，加 `--kind skill` 只挖本 skill 被调用期间的段（否则会串味，终端会警告）。
 2. **`--generate-prompts`（LLM 生成，默认开）**：LLM 读 SKILL.md 自动出 L1/L2 题，并尝试推导程序化断言。
 3. **`--no-generate-prompts`（纯模板，不调 LLM）**：不调 LLM，纯规则从 SKILL.md 结构推导——把正文按 `##` 二级标题切成若干段，每段出一道 eval：prompt 由标题 + 描述里检测到的动作词拼成（如 `Convert a task related to <段> — …`），`expectations` 从段里的列表项（`-` / `*` / `1.`）逐条转成预期语句，`expected_output` 形如 `Successfully complete the <段> workflow (N steps)`。**"模板"不是磁盘文件**，而是 `evals/generator.py` 里的一套确定性推导规则（`_derive_prompt` / `_derive_expectations` / `_derive_assertions`）；唯一可配的"模板"是配置文件里按 domain 注入的领域断言（`domain_templates`）。**产出的不全是程序断言**——主体是 `expectations`（LLM 判的文本预期），程序断言（`FILE_EXISTS` / `CONTAINS_PATTERN` 等）只是从代码块 / import / 领域模板**抽得到才补**，纯规则类 skill 可能零断言。
 
@@ -601,7 +601,7 @@ audit 是**对账**，不是单看 transcript——背后有个根本前提：**
 ```bash
 skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out/
 skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl   # 多 transcript 聚合
-skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
+skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --kind skill
 skill-eval audit path/to/skill/ --transcript opencode-session.json          # opencode session(.json)
 ```
 
@@ -611,7 +611,7 @@ audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md �
 
 几个关键点：
 
-- **`--by-skill`**：transcript 里调了多个 skill 时，默认会把整段会话不区分是哪个 skill 干的、混在一起判（其他 skill 的行为会混进本 skill 的对账）。加 `--by-skill` 后切成若干单 skill 子段，只对账本 skill 的段。**cc** 按 `Skill` 工具调用切分(两条固有限制:① skill 无"返回"信号,"调 A→调 B→不重调 A 接着干 A"那段归 B(不可测);② 委派子 skill 折进来审(inclusive)需声明、暂不支持);**opencode** 无 `Skill` tool_use,按 per-message `agent` 字段切连续同 agent 段(扁平,无 cc 父子作用域——子 agent / `task` 工具就是另一段 agent run)。
+- **`--kind {skill,agent}`**：transcript 里调了多个 skill / dispatch 了多个 agent 时，默认会把整段会话不区分是谁干的、混在一起判（别的单元的行为混进本单元的对账）。加 `--kind` 后切成本单元被调用/被 dispatch 期间的段，只对账这些段。**kind 选锚点、不并集**：`--kind skill` 按 `Skill` 工具调用切(cc;两条固有限制:① skill 无"返回"信号,"调 A→调 B→不重调 A 接着干 A"那段归 B(不可测);② 委派子 skill 折进来审(inclusive)需声明、暂不支持);`--kind agent` 按 `agent` 归属字段切(被 dispatch 的 agent 的执行段,如 developer)。同名既是 skill 又是 agent(dual-nature,两份不同声明)时,kind 明确审哪一面、各切各的、不串味。**opencode** 单锚点(无 `Skill` tool_use,skill 在 per-message `agent` 字段),kind 对它无意义、照常按 agent 字段切连续同 agent 段(扁平,无 cc 父子作用域——子 agent / `task` 工具就是另一段 agent run)。
 - **derived_from_transcript（反推）**：findings 里 `derived_from_transcript: true` 的不是从 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（**只增不减** = 只新增 finding，不会替换或删掉从 SKILL.md 抽出来的指令）。**目前只补一类**：transcript 里 agent 真实 Read 过的输入/参考文件 → 各补一条"读取 \<path\>"（REFERENCE_USAGE，构造上即命中 → PASS，不膨胀 fail）。另外两类不反推——工具调用反推（`required_tools`，Bash 命令分不清业务专用还是通用）和产物文件反推（`required_outputs`，历史 trace 的产物未必还在盘，且"产出文件检查"属评分断言、不属遵循性指令），因为映射不干净、容易误判。
 - **别只数 fail**：每条 finding 带序号。**来源徽章**显示这条 finding 是从哪个 / 哪些 `InstructionSource` 抽出来的（CONSTRAINT / ANTI_FABRICATION / HEADING_STEP / TOOL_REQUIREMENT / REFERENCE_USAGE / OUTPUT_FORMAT）。当同一句 SKILL.md 文本同时匹配多个抽取模式（如同句既是约束、又是反捏造）、且同 transcript 同 verdict 时，会**合并成一条**，徽章就显示两个来源（如 `CONSTRAINT + ANTI_FABRICATION`）——证明同文重复已去重、没有虚增 fail。而同一行为跨两条**不同**规则（如没读某 reference 同时违反"条件性"+"步骤"两条）仍会是两条，但互标"↔ 同源违规 #N"。所以 fail 条数可能 > 真实问题数，逐条看 evidence 对照"哪个行为"，别数条数。
 
@@ -692,7 +692,7 @@ opencode 的转换器（`_records_from_opencode`）做三件事抹平格式差�
 
 **对接要点**（给想接的 producer）：每个 turn 一条 record；工具调用放 `tool_calls`（`name` 用原始小写即可，skill-eval 归一）；skill 调用参数键用 `input.name` 或 `input.skill` 都行（reader 归一到 cc 认的 `input.skill`）；`parent_tool_use_id` 是**作用域标记**——主 turn 填 `null`，子 agent 里跑的 turn 填该子 agent 的稳定 id（insight 用 `subagentSessionId`，缺则 `parentExecutionId`）。
 
-**`parent_tool_use_id` 决定多 skill 切段的作用域归并**：`--by-skill` 的切片器（`slice.py:_scope_of`）按它把 record 归作用域——`null` = 主，其他值 = 某子 agent 的独立作用域；作用域内 last-invoked-owns（每个 `Skill` 调用起段，到同作用域下一个 `Skill` 调用或作用域结束）。**子 agent 里调用过 skill 的 session 必须填它**：若子 agent turn 也填 `null`，它们会和主 turn 挤进同一个主作用域，主作用域的噪声（别的工具调用 / 别的 skill）就按 last-invoked-owns 混进本 skill 的段 → 假证据（实测跨 scope 噪声 40%+）。填对之后，子 agent 的 skill 段被干净隔离进自己的作用域。零嵌套（子 agent 不再派生子 agent）数据下这是充分的：切片器的 depth-1 closure（靠 `Agent` tool_use 配对 tool_result）在结构化输入没合成 `Agent` 块时是 no-op，归段只靠 `parent_tool_use_id`——所以 producer **不必伪造 `Agent` tool_use**，把 scope id 填对即可。守卫测试：`test_structured.py::test_slice_isolates_subagent_scope_from_main`。
+**`parent_tool_use_id` 决定多 skill 切段的作用域归并**：`--kind skill` 的切片器（`slice.py:_scope_of`）按它把 record 归作用域——`null` = 主，其他值 = 某子 agent 的独立作用域；作用域内 last-invoked-owns（每个 `Skill` 调用起段，到同作用域下一个 `Skill` 调用或作用域结束）。**子 agent 里调用过 skill 的 session 必须填它**：若子 agent turn 也填 `null`，它们会和主 turn 挤进同一个主作用域，主作用域的噪声（别的工具调用 / 别的 skill）就按 last-invoked-owns 混进本 skill 的段 → 假证据（实测跨 scope 噪声 40%+）。填对之后，子 agent 的 skill 段被干净隔离进自己的作用域。零嵌套（子 agent 不再派生子 agent）数据下这是充分的：切片器的 depth-1 closure（靠 `Agent` tool_use 配对 tool_result）在结构化输入没合成 `Agent` 块时是 no-op，归段只靠 `parent_tool_use_id`——所以 producer **不必伪造 `Agent` tool_use**，把 scope id 填对即可。守卫测试：`test_structured.py::test_slice_isolates_subagent_scope_from_main`。
 
 **`tool_calls[].result` 是可选的——做对账(audit)的 producer 建议不传**：`result`（工具返回值，如 Read 整个文件、skill 正文、大段命令输出）在真实 session 里常达 10MB+，而 **audit 的判定根本不读它**——auditor 只取 `digest.user_turns`(场景)+ `tool_trace`(工具调用的**输入**)+ `transcript_text`(assistant 文本)，三项都不含工具结果；连"反推指令"(`derive_declarations`)也只读 `input_files` 的 **路径**(路径来自 Read 的 `file_path` **输入**，不靠 result)。所以全量回传 `result` 是纯死重量：会让 `--transcript` 的 session.json 撑到 20MB+，序列化 / 落盘 / skill-eval 解析全慢。insight 的 audit 桥接因此**不传 `result`**（payload 实测 18MB→7MB，砍掉 10MB+ 的 resultJson）。reader 对缺 `result` 的 tool_call 本就容错（不产 tool_result 块，`input_files` 内容空但路径在、tool_trace 完整），对账 verdict 不变。仅在需要重建文件**内容**(produced_files 还原、非对账)时才传 `result`。
 

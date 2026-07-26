@@ -87,10 +87,10 @@ skill-eval init path/to/skill/ --from-transcript session.jsonl  # 从真实会�
 | `--model` | 默认 | LLM 模型 |
 | `--num-evals` | 无 | 最多生成的 eval case 数量 |
 | `--from-transcript` | 无 | 从真实 session transcript 挖 evals（加料 SKILL.md，非替代） |
-| `--by-skill` | off | transcript 含多个 skill 时只挖本 skill 被调用期间段（按 Skill 调用切分，同 audit）；不传 + 检测到多 skill → 警告 |
+| `--kind` | (无) | `skill`\|`agent`：只挖本 skill/agent 被调用/被 dispatch 期间段（同 audit --kind）；不传 + 检测到多 skill → 警告 |
 | `--timeout` | 600 | LLM 调用超时秒数（mining 是单次大 prompt；撞超时 → degraded fallback） |
 
-`--from-transcript` 解析 session transcript（模型、user turns、用到的 skill），重建 input_files / commands / produced_files，生成带结构化 assertions 的 eval。若 LLM 失败降级为 fallback eval，会带 `degraded:*` flag 并在终端告警（不再静默）。多 skill transcript 不传 `--by-skill` 时会把全部当本 skill 挖（可能串味）→ 终端告警，建议加 `--by-skill` 只挖本 skill 段。
+`--from-transcript` 解析 session transcript（模型、user turns、用到的 skill），重建 input_files / commands / produced_files，生成带结构化 assertions 的 eval。若 LLM 失败降级为 fallback eval，会带 `degraded:*` flag 并在终端告警（不再静默）。多 skill transcript 不传 `--kind` 时会把全部当本 skill 挖（可能串味）→ 终端告警，建议加 `--kind skill` 只挖本 skill 段。
 
 ### `add` — 追加评测用例
 
@@ -286,7 +286,7 @@ skill-eval gate output/benchmark.json --no-programmatic-guard --min-win-rate 0.6
 
 把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。**不 re-run**，直接对账历史执行（与 fixture compliance 互补）。支持多 transcript 指令级聚合。
 
-> 想拿现成材料试手 + 对照预期结果：自带 3 个 audit 示例（合成违规 transcript，预期该抓的违规已逐条列明）+ 1 个 multi-skill-demo（演示 `--by-skill` 在一条多 skill transcript 里只对账一个 skill），见 [example-skills/README.md](../fixtures/example-skills/README.md)。
+> 想拿现成材料试手 + 对照预期结果：自带 3 个 audit 示例（合成违规 transcript，预期该抓的违规已逐条列明）+ 1 个 multi-skill-demo（演示 `--kind skill` 在一条多 skill transcript 里只对账一个 skill），见 [example-skills/README.md](../fixtures/example-skills/README.md)。
 
 > 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行——`[条件性/禁令/步骤] 判定 N 条…` → `[条件性/禁令/步骤] 完成 ⏱ Xs`（类别名打头括号化；指令 >10 条分批时才显 `批 k/总`，单批不显）。**两种失败都会先自动重试（最多 2 次）再兜底**：① 调用失败（超时 / 退出码 / 限流）；② 调用成功但整批 0 条解析成功（LLM 输出畸形/截断，原是看着"完成"却全 N/A 的静默盲点）——都大概率瞬态、重试常能救回。重试打 `重试 n/2…`，耗尽才 `重试耗尽 → 全兜底 N/A`（audit 汇总"未判定"警告提示重跑）。看到 `[条件性/禁令/步骤] …` 滚动就是在跑，别误以为卡死。
 
@@ -296,14 +296,14 @@ skill-eval gate output/benchmark.json --no-programmatic-guard --min-win-rate 0.6
 skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out/
 skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl --format json
 # transcript 里用了多个 skill,只对账本 skill 被调用的段(按 Skill 工具调用切分):
-skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
+skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --kind skill
 # opencode 跑出的 session(`opencode export <sessionID>` 导出,顶层 info/messages、parts 嵌在 message 里):
 skill-eval audit path/to/skill/ --transcript opencode-session.json
 # 直接给 opencode .db 文件(内部自动 list/export/audit;单 session 自动选,多个列出让你挑):
 skill-eval audit path/to/skill/ --db opencode.db
 ```
 
-> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`(逐行 JSON 记录,含 `Skill`/`Read`/`Write`/`Bash` tool_use);opencode session `.json`(`opencode export <sessionID>` 的产出,顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`)。两者重建成同一 `SessionDigest` 再对账(经同一条 canonical 重建路径:归一到 cc-record 形 → 共享 `_digest_from_records`,三源重建逻辑单处定义,见 handbook §7.7);`--by-skill` cc 按 `Skill` tool_use 切分、opencode 按 per-message `agent` 切分(扁平,无 cc 父子作用域)。`run --task` 两种执行器都支持(默认 `cc` 产 `.jsonl`,`--executor opencode` 产 `.json`),run 产的 transcript 直接喂 audit 即可。生产导出 opencode 会话喂 audit:`opencode session list` 找 id → `opencode export <id> > session.json`(**导原文**,audit 靠 part.text 判遵循性;`--sanitize` 仅用于对外分享脱敏版,脱敏后别喂 audit)→ `skill-eval audit --transcript session.json`。
+> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`(逐行 JSON 记录,含 `Skill`/`Read`/`Write`/`Bash` tool_use);opencode session `.json`(`opencode export <sessionID>` 的产出,顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`)。两者重建成同一 `SessionDigest` 再对账(经同一条 canonical 重建路径:归一到 cc-record 形 → 共享 `_digest_from_records`,三源重建逻辑单处定义,见 handbook §7.7);`--kind` 选锚点(`skill` 按 `Skill` tool_use、`agent` 按 `agent` 归属);opencode 单锚点,按 per-message `agent` 切分(扁平,无 cc 父子作用域,kind 无意义)。`run --task` 两种执行器都支持(默认 `cc` 产 `.jsonl`,`--executor opencode` 产 `.json`),run 产的 transcript 直接喂 audit 即可。生产导出 opencode 会话喂 audit:`opencode session list` 找 id → `opencode export <id> > session.json`(**导原文**,audit 靠 part.text 判遵循性;`--sanitize` 仅用于对外分享脱敏版,脱敏后别喂 audit)→ `skill-eval audit --transcript session.json`。
 
 > **拿到一个 opencode `.db` 文件,一行进 audit**(别人/别处拷来的库,不是你本机默认库):直接用 `--db`,skill-eval 内部把 list/export/audit 全包了(隔离 `XDG_DATA_HOME` 指向那个 .db、**不碰本机真库**;需 opencode CLI 在 PATH):
 > ```bash
@@ -329,14 +329,14 @@ skill-eval audit path/to/skill/ --db opencode.db
 | `--transcript` | — | 真实会话 transcript（cc `.jsonl` 或 opencode session `.json`，按格式自动分派；**可重复**，多 transcript 聚合)。与 `--db` 二选一,都不给 → exit 2 |
 | `--db` | — | opencode `.db` 文件:内部自动 list/export/audit(隔离 `XDG_DATA_HOME`、不碰本机真库;需 opencode CLI)。与 `--transcript` 互斥 |
 | `--session` | — | `--db` 下指定 session id;不给则单 session 自动选、多个列出让你挑了重跑(仅搭 `--db`) |
-| `--by-skill` | 关闭 | transcript 里调了多个 skill/agent 时，只对账本 skill 被调用的段（cc 按 `Skill` 工具调用切分；opencode 按 per-message `agent` 字段切分，见下） |
+| `--kind` | (无) | `skill`\|`agent`：切本 skill/agent 被调用/被 dispatch 期间段（`skill` 按 `Skill` 调用切；`agent` 按 `agent` 归属切；opencode 单锚点按 per-message `agent` 切，见下） |
 | `--refine-instructions` | 开启 | 判定前 LLM 精筛（默认开，`--no-refine-instructions` 关）：砍掉 extractor 误抽的示例/占位伪指令（精度>召回，per-SKILL 缓存，见下） |
 | `--output` / `-o` | ./output | 输出目录 |
 | `--model` | 默认 | 语义判定 LLM |
 | `--format` | table | table / json |
 | `--open` | 关闭 | 生成后浏览器打开 `audit-report.html` |
 
-> **`--by-skill`：多 skill transcript 只对账一个 skill**。transcript 里调了多个 skill 时，默认会把整段当一个袋子判（其他 skill 的行为会混进报告）。加 `--by-skill` 后，按 transcript 里的 `Skill` 工具调用切成若干单 skill 子 transcript，只对账 `<skill_path>` 这个 skill 被调用期间的段。归段 **scope-aware**：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent（Agent 工具）是独立作用域，其记录带 `parent_tool_use_id`，子 agent 里用的 skill 切到 Agent 返回、**不污染主 agent 归属**；target 调多次 → 多段 → 多 transcript 聚合。**两条限制**：① skill 没有"返回"信号，所以"调 A → 调 B → 不重调 A 接着干 A"那段会归给 B（不可检测，解法是 agent 显式重调 A）；② 把委派子 skill 的段折进主 skill 审计（inclusive）需用户声明，暂不支持。该 skill 没在 transcript 里被调过 → 报错退出（exit 2），不静默跑空。
+> **`--kind {skill,agent}`：多单元 transcript 只对账一个声明**。transcript 里调了多个 skill / dispatch 了多个 agent 时，默认会把整段当一个袋子判（别的单元的行为混进报告）。加 `--kind` 后切成本单元被调用/被 dispatch 期间的段，只对账这些段。**kind 选锚点、不并集**：`--kind skill` 按 transcript 里的 `Skill` 工具调用切（归段 **scope-aware**：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent（Agent 工具）是独立作用域，其记录带 `parent_tool_use_id`，子 agent 里用的 skill 切到 Agent 返回、**不污染主 agent 归属**；target 调多次 → 多段 → 多 transcript 聚合）；`--kind agent` 按 `agent` 归属字段切（被 dispatch 的 agent 的执行段，如 developer）。同名既是 skill 又是 agent（dual-nature，两份不同声明）时，kind 明确审哪一面、各切各的、不串味。**两条限制（skill 面）**：① skill 没有"返回"信号，所以"调 A → 调 B → 不重调 A 接着干 A"那段会归给 B（不可检测，解法是 agent 显式重调 A）；② 把委派子 skill 的段折进主 skill 审计（inclusive）需用户声明，暂不支持。该单元没在 transcript 里以此锚点出现 → 报错退出（exit 2），不静默跑空。
 
 > **`--refine-instructions`：判定前精筛伪指令**。extractor 是纯正则（静态全抽 SKILL.md），会把教程型 skill 里的**示例文字 / 模板占位 / 描述性句子**误抽成"指令"——这些伪指令喂给判官只能出 N/A（无法对账）或偶发假 FAIL。开启（默认，`--no-refine-instructions` 关）后，audit 在 extract 后、判定前用 LLM 逐条分类"真实可检查指令 vs 示例/占位"，**只砍明确判为伪指令的**（精度 > 召回：判不准 / 没判成 / 调用失败一律保留，宁可留伪指令判 N/A，也不砍真指令）。per-skill 只精筛一次（多 transcript 共享），砍掉的条数和来源写进 report 顶部 warnings。OUTPUT_FORMAT（纯程序子串匹配，精筛无收益）不精筛。`run` 也支持（经 RunConfig 传给内部 audit）。**per-SKILL hash 缓存**：同 instructions + model + prompt 版本只 refine 一次，跨 audit() 调用复用（runner 每 eval×config×run 调一次 audit，缓存避免同 SKILL.md 反复 refine），存 `~/.cache/skill-eval/refine/`；指令内容 / model / prompt 版本变则失效重算。误砍率实测 0（4 结构差异 skill × 139 条，砍表头/占位/资源描述，留步骤/禁令/约束）。
 

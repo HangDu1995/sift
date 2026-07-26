@@ -162,7 +162,7 @@ skill-eval init /path/to/skill --no-generate-prompts            # 不调 LLM，�
 | `--generate-prompts` / `--no-generate-prompts` | 开 | 是否用 LLM 生成 L1 eval |
 | `--num-evals` | 无 | 最多生成的 eval 数 |
 | `--from-transcript` | 无 | 从真实 session 挖 eval（加料 SKILL.md，非替代） |
-| `--by-skill` | off | transcript 含多个 skill 时只挖本 skill 被调用期间段（按 Skill 调用切分，同 audit）；不传 + 检测到多 skill → 警告 |
+| `--kind` | (无) | `skill`|`agent`：只挖本 skill/agent 被调用/被 dispatch 期间段（同 audit --kind）；不传 + 检测到多 skill → 警告 |
 | `--model` | 默认 | LLM 模型 |
 | `--timeout` | 600 | LLM 调用超时秒数（mining 是单次大 prompt；撞超时 → degraded fallback） |
 
@@ -281,7 +281,7 @@ skill-eval gate out/iteration-1/benchmark.json --no-programmatic-guard --min-win
 skill-eval audit /path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out/
 skill-eval audit /path/to/skill/ --transcript a.jsonl --transcript b.jsonl --format json --open
 # transcript 里调了多个 skill,只对账本 skill 被调用的段:
-skill-eval audit /path/to/skill/ --transcript big-multi-skill.jsonl --by-skill
+skill-eval audit /path/to/skill/ --transcript big-multi-skill.jsonl --kind skill
 # opencode 跑出的 session(`opencode export <sessionID>` 导出,顶层 info/messages、parts 嵌在 message 里):
 skill-eval audit /path/to/skill/ --transcript opencode-session.json
 ```
@@ -291,15 +291,15 @@ skill-eval audit /path/to/skill/ --transcript opencode-session.json
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--transcript` | **必填** | 真实会话 transcript（cc `.jsonl` 或 opencode session `.json`，按格式自动分派；**可重复**，多 transcript 聚合） |
-| `--by-skill` | 关 | transcript 里调了多个 skill/agent 时，只对账本 skill 被调用的段（cc 按 `Skill` 工具调用切分；opencode 按 per-message `agent` 字段切分） |
+| `--kind` | (无) | `skill`|`agent`：切本 skill/agent 被调用/被 dispatch 期间段（`skill` 按 `Skill` 调用切；`agent` 按 `agent` 归属切；opencode 单锚点按 per-message `agent` 切） |
 | `--output` / `-o` | ./output | 输出目录 |
 | `--model` | 默认 | 语义判定 LLM |
 | `--format` | table | table / json |
 | `--open` | 关 | 生成后浏览器打开 audit-report.html |
 
-> **`--by-skill` 归段 scope-aware（cc）**：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent（Agent 工具）是独立作用域（记录带 `parent_tool_use_id`），子 agent 里用的 skill 切到 Agent 返回、不污染主 agent。target 调多次 → 多段 → 多 transcript 聚合。**两限制**：① skill 无"返回"信号，"调 A→B→不重调 A 接着干 A"那段归 B（不可测）；② 委派子 skill 折进主 skill（inclusive）需声明、暂不支持。该 skill 没在 transcript 里被调过 → exit 2。
+> **`--kind skill` 归段 scope-aware（cc）**：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent（Agent 工具）是独立作用域（记录带 `parent_tool_use_id`），子 agent 里用的 skill 切到 Agent 返回、不污染主 agent。target 调多次 → 多段 → 多 transcript 聚合。**两限制**：① skill 无"返回"信号，"调 A→B→不重调 A 接着干 A"那段归 B（不可测）；② 委派子 skill 折进主 skill（inclusive）需声明、暂不支持。该 skill 没在 transcript 里被调过 → exit 2。
 >
-> **opencode 的 `--by-skill`（扁平切分）**：opencode 无 `Skill` tool_use，skill = per-message `agent` 字段；按**连续同 agent 的 message** 切段（每次 agent 切换断段）。比 cc 简单但**扁平**——无 cc 的父子作用域（opencode 子 agent / `task` 工具就是另一段 agent run，不像 cc 能让主 span 跨子 agent 不断）。同一段切出后落盘成子 `.json`、再走 rebuild 对账。
+> **opencode 单锚点（`--kind` 对它无意义）**：opencode 无 `Skill` tool_use，skill = per-message `agent` 字段；按**连续同 agent 的 message** 切段（每次 agent 切换断段）。比 cc 简单但**扁平**——无 cc 的父子作用域（opencode 子 agent / `task` 工具就是另一段 agent run，不像 cc 能让主 span 跨子 agent 不断）。同一段切出后落盘成子 `.json`、再走 rebuild 对账。
 
 判定四类（条件性 / 禁令 / 步骤 / 输出格式），每条出**五态 verdict** + **method** 标（`PROGRAMMATIC` 程序对账 / `LLM` 语义判定）：`PASS` / `FAIL` / `N/A`（不适用，场景不触发）/ `UNRESOLVED`（没判成，LLM 失败/解析失败/未提及，可重跑）/ `INDETERMINATE`（判不准，证据真模糊，重跑无益）；输出格式是确定性子串匹配（`PROGRAMMATIC`，不调 LLM，只 PASS/FAIL）。**禁令判的角度反着来**——主动找违规、不判“遵守没”（如 `NEVER ...` / `不得编造`）。没判成报 UNRESOLVED + “建议重跑”警告、判不准报 INDETERMINATE + 占比告警，都不保守 FAIL（各类判法详表见 reference 的 audit 段）。产出 `audit-report.json` + `audit-report.html`（HTML always 写）。
 

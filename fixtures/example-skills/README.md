@@ -1,6 +1,6 @@
 # example-skills — 主力示例 skill
 
-4 个结构规整的示例 skill + 1 条多 skill `--by-skill` 切分 demo transcript,演示 skill-eval 的评测路径。**每个示例擅长的路径不同**(取决于自带 `evals.json` / `transcript` 与否),照下表选,照命令跑。
+4 个结构规整的示例 skill + 1 条多 skill `--kind skill` 切分 demo transcript,演示 skill-eval 的评测路径。**每个示例擅长的路径不同**(取决于自带 `evals.json` / `transcript` 与否),照下表选,照命令跑。
 
 ## 能力速查
 
@@ -114,12 +114,12 @@ skill-eval init fixtures/example-skills/release-checklist-zh/ \
 >
 > 典型计数 **pass≈11 / fail≈12 / na≈5**(total≈28)。这个 skill 故意复杂(7 步骤 + 代码块 + 示例列表),extractor 会把"示例当步骤、代码块当输出格式"抽成噪音,所以信噪比低于简单 skill、会出现少量假 FAIL;但真违规仍穿透噪音被抓。同样别钉精确条数,对照"上面这些违规是否都出现在 FAIL"即可。
 
-### multi-skill-demo(`--by-skill` 多 skill 切分对账)
+### multi-skill-demo(`--kind skill` 多 skill 切分对账)
 
-上面 4 个是**单 skill** 示例;这一个演示**多 skill 会话的 `--by-skill` 切分**(audit 对账 / mining 出卷都支持)。transcript 里交错调了 log-error-analyzer / code-review-auditor / release-checklist-zh(log-error-analyzer 调两次 + 一个子 agent 调 code-review-auditor),`--by-skill` 只取指定 skill 被调用期间的段。两份 transcript **结构相同、产物不同**:
+上面 4 个是**单 skill** 示例;这一个演示**多 skill 会话的 `--kind skill` 切分**(audit 对账 / mining 出卷都支持)。transcript 里交错调了 log-error-analyzer / code-review-auditor / release-checklist-zh(log-error-analyzer 调两次 + 一个子 agent 调 code-review-auditor),`--kind skill` 只取指定 skill 被调用期间的段。两份 transcript **结构相同、产物不同**:
 
-- `multi-skill.jsonl` —— **违规版**(各 skill 产物刻意缺字段/缺段),给 `audit --by-skill` 验切片纯度 + 各段独立抓违规。
-- `multi-skill-clean.jsonl` —— **好版本**(各 skill 产物正确),给 `init --from-transcript --by-skill` 演示多 skill 切分出卷(各 skill 挖各的干净考卷)。
+- `multi-skill.jsonl` —— **违规版**(各 skill 产物刻意缺字段/缺段),给 `audit --kind skill` 验切片纯度 + 各段独立抓违规。
+- `multi-skill-clean.jsonl` —— **好版本**(各 skill 产物正确),给 `init --from-transcript --kind skill` 演示多 skill 切分出卷(各 skill 挖各的干净考卷)。
 
 两份都由 `build_multi_skill.py` 确定性生成(重生成:`.venv/bin/python fixtures/example-skills/multi-skill-demo/build_multi_skill.py`)。
 
@@ -130,31 +130,31 @@ skill-eval init fixtures/example-skills/release-checklist-zh/ \
 ```bash
 # 只对账 log-error-analyzer 被调用的段(切出 2 段:主作用域两次调用,不含 src/CHANGELOG):
 skill-eval audit fixtures/example-skills/log-error-analyzer/ \
-  --transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --by-skill
+  --transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --kind skill
 # 换审 code-review-auditor(切出 2 段:主作用域 1 + 子 agent 里 1):
 skill-eval audit fixtures/example-skills/code-review-auditor/ \
-  --transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --by-skill
+  --transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --kind skill
 # release-checklist-zh(1 段):
 skill-eval audit fixtures/example-skills/release-checklist-zh/ \
-  --transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --by-skill
+  --transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --kind skill
 ```
 
 **opencode 版同样可审(`multi-skill.json`,切分按 per-message `agent`):**
 
 ```bash
 skill-eval audit fixtures/example-skills/log-error-analyzer/ \
-  --transcript fixtures/example-skills/multi-skill-demo/multi-skill.json --by-skill
+  --transcript fixtures/example-skills/multi-skill-demo/multi-skill.json --kind skill
 ```
 
 **mining 出卷(好版本 `multi-skill-clean.jsonl`)—— 各 skill 挖各的干净考卷:**
 
 ```bash
 skill-eval init fixtures/example-skills/log-error-analyzer/ \
-  --from-transcript fixtures/example-skills/multi-skill-demo/multi-skill-clean.jsonl --by-skill
-# 换挖 code-review-auditor / release-checklist-zh,同样加 --by-skill
+  --from-transcript fixtures/example-skills/multi-skill-demo/multi-skill-clean.jsonl --kind skill
+# 换挖 code-review-auditor / release-checklist-zh,同样加 --kind skill
 ```
 
-> **切分出卷零串味(实测)**:一份 `multi-skill-clean.jsonl`(3 skill 交错 + 子 agent 调 code-review),加 `--by-skill` 各挖各的、断言路径全是本 skill 自己的产物——log-error-analyzer → `error-report.json`(5 eval)、code-review-auditor → `review-report.json` / `src/orders.py`(5 eval)、release-checklist-zh → `CHANGELOG.md`(7 eval);**互不污染**(log 的考卷不提 review-report/CHANGELOG,反之亦然)。不传 `--by-skill` + 检测到多 skill 会警告(防把别 skill 活动当本 skill 挖)。
+> **切分出卷零串味(实测)**:一份 `multi-skill-clean.jsonl`(3 skill 交错 + 子 agent 调 code-review),加 `--kind skill` 各挖各的、断言路径全是本 skill 自己的产物——log-error-analyzer → `error-report.json`(5 eval)、code-review-auditor → `review-report.json` / `src/orders.py`(5 eval)、release-checklist-zh → `CHANGELOG.md`(7 eval);**互不污染**(log 的考卷不提 review-report/CHANGELOG,反之亦然)。不传 `--kind skill` + 检测到多 skill 会警告(防把别 skill 活动当本 skill 挖)。
 
 > **跑时的进度行 `对账 transcript i/N`**:N = 切片数 = 该 skill 在 transcript 里被调用的次数(log-error-analyzer / code-review-auditor = 2,release-checklist-zh = 1),i 是第几段;每段切片落盘在 `<输出目录>/slices/`(文件名形如 `multi-skill-log-error-analyzer-1-1.jsonl`),想看每段具体切了啥可直接打开。
 

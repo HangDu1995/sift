@@ -45,16 +45,16 @@ agent 声明已经物化成 `<name>/SKILL.md`(真实接入时,调用方把 agent
 # 审 test-runner(只切 test-runner 的执行段,不含 lint-reviewer 的)
 skill-eval audit fixtures/example-agents/test-runner/ \
   --transcript fixtures/example-agents/multi-agent-session.json \
-  --by-skill -o /tmp/test-runner-audit
+  --kind agent -o /tmp/test-runner-audit
 
 # 审 lint-reviewer
 skill-eval audit fixtures/example-agents/lint-reviewer/ \
   --transcript fixtures/example-agents/multi-agent-session.json \
-  --by-skill -o /tmp/lint-reviewer-audit
+  --kind agent -o /tmp/lint-reviewer-audit
 ```
 
-> `--by-skill` 对 agent 同样适用(语义已广义化为"按声明的单元名切",匹配 `Skill` 调用或
-> `agent` 归属)。详见 [docs/skill-eval-handbook.md](../../docs/skill-eval-handbook.md) §7.7。
+> 审 agent 用 `--kind agent`(按 `agent` 归属切段,区别于审 skill 的 `--kind skill` 按
+> `Skill` 调用切)。详见 [docs/skill-eval-handbook.md](../../docs/skill-eval-handbook.md) §7.7。
 
 ### 期望 verdict(混合 = 对账有信号)
 

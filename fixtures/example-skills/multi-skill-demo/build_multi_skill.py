@@ -6,9 +6,9 @@
 (log-error-analyzer 调两次 + 一个子 agent 调 code-review-auditor):
 
 - ``multi-skill.jsonl`` —— **违规版**(各 skill 产物刻意不完美:缺字段/缺段),给
-  ``audit --by-skill`` 验**切片纯度**(不串味)+ 各 skill 段独立抓违规。
+  ``audit --kind skill`` 验**切片纯度**(不串味)+ 各 skill 段独立抓违规。
 - ``multi-skill-clean.jsonl`` —— **好版本**(各 skill 产物正确),给 ``init --from-transcript
-  --by-skill`` 演示**多 skill 切分出卷**:每个 skill 各挖各的干净考卷。
+  --kind skill`` 演示**多 skill 切分出卷**:每个 skill 各挖各的干净考卷。
 
 两份**结构完全相同**(同 id 序列、同子 agent 作用域、同 distinct 文件路径),只产物内容
 不同(违规 vs 正确)——便于对照"同一次多 skill 会话,audit 抓违规 / mining 出题各取所需"。
