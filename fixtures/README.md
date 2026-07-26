@@ -7,12 +7,14 @@
 | 目录 | 是什么 | 演示什么 | 详细文档 |
 |---|---|---|---|
 | [example-skills/](example-skills/) | 4 个**结构规整**的主力示例 skill(中英) | 三条评测路径(analyze / vet / run / audit)的正面用法 | [example-skills/README.md](example-skills/README.md) · [docs/example-skill.md](../docs/example-skill.md) |
+| [example-agents/](example-agents/) | 2 个**域无关** agent 声明 + multi-agent session | `audit` 对 **agent**(被 dispatch 的)对账——按 `agent` 归属切段,与审 skill 同命令 | [example-agents/README.md](example-agents/README.md) |
 | [negative-skills/](negative-skills/) | 7 个**反面教材**(故意带缺陷) | vet / analyze / 静态检查如何识别各种 skill 缺陷 | [docs/DEMO.md 第二幕](../docs/DEMO.md) |
 | [test-skills/](test-skills/) | `data-pipeline`(3-skill DAG)+ `eval-config.yaml` 配置示例 | `batch` 多 skill 依赖编排评测 + config loader 配置加载机制 | [docs/DEMO.md](../docs/DEMO.md) |
 
 ## 一句话区分
 
 - 想看「**好 skill 长什么样、怎么评测**」→ `example-skills/`
+- 想看「**agent 怎么对账**(审被 dispatch 的 agent,与 skill 同命令)」→ `example-agents/`
 - 想看「**坏 skill 会被查出什么问题**」→ `negative-skills/`
 - 想看「**多个 skill 组成 pipeline 怎么 batch 评测**」→ `test-skills/data-pipeline/`
 

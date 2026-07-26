@@ -1,0 +1,39 @@
+{
+  "format": "skill-eval-records",
+  "records": [
+    {"role": "user", "text": "dispatch test-runner"},
+    {
+      "role": "assistant",
+      "agent": "test-runner",
+      "parent_tool_use_id": "sub-tr1",
+      "text": "跑全量测试 + 核查覆盖率 + 落报告",
+      "tool_calls": [
+        {"name": "bash", "input": {"command": "pytest"}},
+        {"name": "bash", "input": {"command": "pytest -x tests/"}},
+        {"name": "bash", "input": {"command": "pytest --cov"}},
+        {"name": "write", "input": {"file_path": "TEST_REPORT.md"}}
+      ]
+    },
+    {"role": "user", "text": "dispatch lint-reviewer"},
+    {
+      "role": "assistant",
+      "agent": "lint-reviewer",
+      "parent_tool_use_id": "sub-lr",
+      "text": "用统一入口跑 lint",
+      "tool_calls": [
+        {"name": "bash", "input": {"command": "./lint.sh"}},
+        {"name": "bash", "input": {"command": "ruff check src/"}}
+      ]
+    },
+    {"role": "user", "text": "re-dispatch test-runner"},
+    {
+      "role": "assistant",
+      "agent": "test-runner",
+      "parent_tool_use_id": "sub-tr2",
+      "text": "复查测试",
+      "tool_calls": [
+        {"name": "bash", "input": {"command": "pytest"}}
+      ]
+    }
+  ]
+}
