@@ -1,9 +1,9 @@
 # tests/test_opencode_cli.py
-"""audit CLI --by-skill 对 opencode session 的分派 + 子段写盘格式。
+"""audit CLI --kind skill 对 opencode session 的分派 + 子段写盘格式。
 
---by-skill 分支必须按 transcript 格式分派:
+--kind skill 分支必须按 transcript 格式分派:
 - opencode(.json)→ slice_opencode_by_agent 切段 + 写子 .json
-- cc(.jsonl)→ slice_transcript_by_skill + 写子 .jsonl(原逻辑不变)
+- cc(.jsonl)→ slice_transcript + 写子 .jsonl(原逻辑不变)
 
 子段透传 TranscriptAuditor(rebuild 再按各子段格式分派)。fake auditor 不真跑判定,
 只记录收到的 transcripts 列表 + 返回合法 AuditReport。
@@ -58,7 +58,7 @@ class _FakeAuditor:
 
 
 def test_audit_byskill_opencode_writes_json_slices(monkeypatch, tmp_path):
-    """opencode fixture --by-skill:切出的子段是 .json,且仍是合法 opencode session,透传 auditor。"""
+    """opencode fixture --kind skill:切出的子段是 .json,且仍是合法 opencode session,透传 auditor。"""
     fake = _FakeAuditor()
     monkeypatch.setattr(
         "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
@@ -71,7 +71,7 @@ def test_audit_byskill_opencode_writes_json_slices(monkeypatch, tmp_path):
     res = runner.invoke(
         app,
         ["audit", str(skill), "--transcript", str(multi),
-         "--by-skill", "-o", str(out)],
+         "--kind", "skill", "-o", str(out)],
     )
     assert res.exit_code == 0, res.output
 
@@ -87,7 +87,7 @@ def test_audit_byskill_opencode_writes_json_slices(monkeypatch, tmp_path):
 
 
 def test_audit_byskill_cc_still_writes_jsonl(monkeypatch, tmp_path):
-    """cc 路径不被破坏:--by-skill 仍写 .jsonl 子段。"""
+    """cc 路径不被破坏:--kind skill 仍写 .jsonl 子段。"""
     fake = _FakeAuditor()
     monkeypatch.setattr(
         "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
@@ -100,7 +100,7 @@ def test_audit_byskill_cc_still_writes_jsonl(monkeypatch, tmp_path):
     res = runner.invoke(
         app,
         ["audit", str(skill), "--transcript", str(multi_cc),
-         "--by-skill", "-o", str(out)],
+         "--kind", "skill", "-o", str(out)],
     )
     assert res.exit_code == 0, res.output
 

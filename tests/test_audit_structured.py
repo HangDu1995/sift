@@ -4,7 +4,7 @@
 mock TranscriptAuditor(不真跑 LLM),验证:
 - 结构化输入被展开成临时 cc-jsonl 喂给 auditor(不是原 .json);
 - 展开内容是 cc 记录形(skill 归一成 Skill / input.skill),非原 {format:...} 结构;
-- --by-skill 在展开后的记录上按 skill 切段(producer 不必手拼 cc-jsonl)。
+- --kind skill 在展开后的记录上按 skill 切段(producer 不必手拼 cc-jsonl)。
 """
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ class _CapturingAuditor:
 
 
 def test_structured_input_expanded_to_cc_jsonl(monkeypatch, tmp_path):
-    """无 --by-skill:结构化 JSON → 展开成临时 cc-jsonl 喂 auditor(非原 .json),
+    """无 --kind:结构化 JSON → 展开成临时 cc-jsonl 喂 auditor(非原 .json),
     内容是 cc 记录形(skill→Skill / input.skill),不再是 {format:...} 原结构。"""
     fake = _CapturingAuditor()
     monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake)
@@ -114,7 +114,7 @@ def test_structured_input_expanded_to_cc_jsonl(monkeypatch, tmp_path):
 
 
 def test_structured_input_with_by_skill_slices(monkeypatch, tmp_path):
-    """--by-skill:在展开后的记录上按 target 切段 —— producer 不必手拼 cc-jsonl 也能多 skill 切分。
+    """--kind skill:在展开后的记录上按 target 切段 —— producer 不必手拼 cc-jsonl 也能多 skill 切分。
 
     输入 skillA(+read A)、skillB(+read B);对 skillA 切:只含 A 的段、不含 B / skillB。
     """
@@ -130,7 +130,7 @@ def test_structured_input_with_by_skill_slices(monkeypatch, tmp_path):
     ])
     out = tmp_path / "out"
 
-    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "--by-skill", "-o", str(out)])
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "--kind", "skill", "-o", str(out)])
     assert r.exit_code == 0, r.output
 
     ts = fake.calls[0]["transcripts"]

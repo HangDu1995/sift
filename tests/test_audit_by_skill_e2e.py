@@ -1,5 +1,5 @@
 # tests/test_audit_by_skill_e2e.py
-"""audit --by-skill 端到端 CLI smoke:在 committed 多 skill fixture 上跑全管线(mock LLM)。
+"""audit --kind skill 端到端 CLI smoke:在 committed 多 skill fixture 上跑全管线(mock LLM)。
 
 与 ``test_audit_by_skill.py`` 的层次区别:那里 mock **整个 TranscriptAuditor**(只验 CLI
 接线 / 切片派发);这里只 mock ``call_claude``,**真跑 ``TranscriptAuditor.audit`` 全流程**
@@ -10,7 +10,7 @@
   - fixture 植入的"违规"非确定性——lea/cra 的输出要求是散文(extractor 只对代码块抽
     OUTPUT_FORMAT → 这俩零条);rcz 的 OUTPUT 检查对 assistant 措辞不对写入文件。故
     verdict 多为 LLM 辅助 / spurious,本测试不绑 FAIL/PASS 计数。
-  - 本测试验的是 --by-skill 本身保证的东西:切片**喂进**了 auditor、切片数 == 该 skill
+  - 本测试验的是 --kind skill 本身保证的东西:切片**喂进**了 auditor、切片数 == 该 skill
     被调次数、report.transcripts == 落盘切片、切片纯度(CRA 领域文件操作不串入 LEA 切片)。
 
 mock 设计照 ``test_audit_integration.py._make_fake``:fake 返回覆盖 0..59 的通用 JSON
@@ -83,7 +83,7 @@ def _make_fake() -> tuple:
 
 
 # ---------------------------------------------------------------------------
-# plumbing:三个 skill 各跑一遍 audit --by-skill 全管线
+# plumbing:三个 skill 各跑一遍 audit --kind skill 全管线
 # ---------------------------------------------------------------------------
 
 
@@ -111,7 +111,7 @@ def test_by_skill_e2e_plumbing(skill_name, monkeypatch, tmp_path) -> None:
         [
             "audit", str(skill_dir),
             "--transcript", str(FIXTURE_TRANSCRIPT),
-            "--by-skill", "-o", str(out),
+            "--kind", "skill", "-o", str(out),
         ],
     )
     assert r.exit_code == 0, r.output
@@ -156,7 +156,7 @@ def _file_ops_text(span_records: list[dict]) -> str:
     与 ``test_multi_skill_fixture.py._file_ops`` 同口径:**不抽 Agent tool_use**——
     Agent 的 prompt 字符串可能提及其他 skill 的文件(如主 agent 在 LEA 段里 dispatch
     子 agent 去 review src/orders.py),那是合法派发、非切片串味。切片纯度看的是**真实
-    文件操作**(Read/Write/Edit/Bash)是否跨 skill 串入,这才是 --by-skill 保证的属性。
+    文件操作**(Read/Write/Edit/Bash)是否跨 skill 串入,这才是 --kind skill 保证的属性。
     """
     parts: list[str] = []
     for rec in span_records:
@@ -173,7 +173,7 @@ def _file_ops_text(span_records: list[dict]) -> str:
 def test_lea_slices_no_cra_file_contamination(monkeypatch, tmp_path) -> None:
     """LEA 的 CLI 切片里不含 CRA 领域文件操作(src/payment.py / src/orders.py)。
 
-    这是 --by-skill 的核心保证(切片不串味)经**全 CLI 管线**的复验(对应
+    这是 --kind skill 的核心保证(切片不串味)经**全 CLI 管线**的复验(对应
     test_multi_skill_fixture.py 的纯度单测,但读的是 CLI 落盘的切片文件、走真 auditor)。
 
     注:src/orders.py 会出现在 LEA span2 的 **Agent tool_use prompt** 里(主 agent 在做
@@ -192,7 +192,7 @@ def test_lea_slices_no_cra_file_contamination(monkeypatch, tmp_path) -> None:
         [
             "audit", str(skill_dir),
             "--transcript", str(FIXTURE_TRANSCRIPT),
-            "--by-skill", "-o", str(out),
+            "--kind", "skill", "-o", str(out),
         ],
     )
     assert r.exit_code == 0, r.output

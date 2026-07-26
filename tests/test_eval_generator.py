@@ -428,7 +428,7 @@ def test_from_transcript_keeps_skill_output_assertion_on_violation_transcript(mo
 
 
 # ---------------------------------------------------------------------------
-# mining --by-skill:多 skill transcript 切分(平行 audit --by-skill)
+# mining --kind skill:多 skill transcript 切分(平行 audit --kind skill)
 # ---------------------------------------------------------------------------
 
 def _multi_skill_transcript(tmp_path: Path, target: str = "skillA", other: str = "skillB") -> Path:
@@ -457,8 +457,8 @@ def test_invoked_skills_lists_all_in_order(tmp_path: Path):
     assert invoked_skills(tp) == ["skillA", "skillB"]
 
 
-def test_from_transcript_by_skill_isolates_target_segment(monkeypatch, tmp_path: Path):
-    """--by-skill:只挖本 skill 段 → manifest 只含本 skill 文件,别 skill 的断言被 drop。
+def test_from_transcript_kind_isolates_target_segment(monkeypatch, tmp_path: Path):
+    """--kind skill:只挖本 skill 段 → manifest 只含本 skill 文件,别 skill 的断言被 drop。
     对照:不切分(默认)会把别 skill 文件也当本 skill → 串味(两者都留)。"""
     import json
     gen = EvalInitGenerator()
@@ -471,22 +471,22 @@ def test_from_transcript_by_skill_isolates_target_segment(monkeypatch, tmp_path:
                        {"name": "B", "type": "FILE_EXISTS", "params": {"filename": "skillB.json"}}],
         "fixtures": []}]})
     monkeypatch.setattr("skill_eval.evals.generator.call_claude", lambda *a, **k: fake)
-    # by_skill=True:只切 skillA 段 → skillA.json 留、skillB.json drop
-    es = gen.generate_from_transcript(sp, tp, by_skill=True)
+    # kind="skill":只切 skillA 段 → skillA.json 留、skillB.json drop
+    es = gen.generate_from_transcript(sp, tp, kind="skill")
     fns = [a.params.get("filename") for a in es.evals[0].assertions if a.type == AssertionType.FILE_EXISTS]
     assert "skillA.json" in fns and "skillB.json" not in fns
-    # 对照 by_skill=False:整份 transcript,skillB.json 也在 manifest → 留(串味)
-    es2 = gen.generate_from_transcript(sp, tp, by_skill=False)
+    # 对照 kind=None:整份 transcript,skillB.json 也在 manifest → 留(串味)
+    es2 = gen.generate_from_transcript(sp, tp, kind=None)
     fns2 = [a.params.get("filename") for a in es2.evals[0].assertions if a.type == AssertionType.FILE_EXISTS]
     assert "skillA.json" in fns2 and "skillB.json" in fns2
 
 
-def test_from_transcript_by_skill_target_never_invoked_raises(tmp_path: Path):
-    """--by-skill 但本 skill 从未在 transcript 被调用 → 明确报错(别静默挖空)。"""
+def test_from_transcript_kind_target_never_invoked_raises(tmp_path: Path):
+    """--kind skill 但本 skill 从未在 transcript 被调用 → 明确报错(别静默挖空)。"""
     from skill_eval.errors import SkillEvalError
     gen = EvalInitGenerator()
     sp = tmp_path / "skill"; sp.mkdir()
     (sp / "SKILL.md").write_text("---\nname: skillC\ndescription: d\n---\n# b\n", encoding="utf-8")
     tp = _multi_skill_transcript(tmp_path)  # 含 skillA + skillB,无 skillC
     with pytest.raises(SkillEvalError):
-        gen.generate_from_transcript(sp, tp, by_skill=True)
+        gen.generate_from_transcript(sp, tp, kind="skill")

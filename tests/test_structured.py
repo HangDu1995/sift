@@ -103,11 +103,11 @@ def test_digest_from_structured_records_without_result(tmp_path):
 
 
 def test_slice_finds_skill_segment(tmp_path):
-    from skill_eval.audit.slice import slice_transcript_by_skill
+    from skill_eval.audit.slice import slice_transcript
     recs = load_structured_records(_write(tmp_path, FRIENDLY))
     jsonl = tmp_path / "expanded.jsonl"
     jsonl.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs), encoding="utf-8")
-    segs = slice_transcript_by_skill(jsonl, "ascendc-crash-debug")
+    segs = slice_transcript(jsonl, "ascendc-crash-debug", "skill")
     assert len(segs) >= 1    # skill 被调用过 → 切得出段
 
 
@@ -177,7 +177,7 @@ def test_slice_isolates_subagent_scope_from_main(tmp_path):
     # buildStructuredRecords 给子 agent turn 填 parent_tool_use_id(=subagentSessionId)的目的:
     # 恒 null 时所有 record 同属主 scope,主 scope 噪声混进 skill 段(last-invoked-owns 污染)。
     # 此测试锁 skill-eval 侧契约:parent_tool_use_id 必须被 structured reader 透传、slice 据此归段。
-    from skill_eval.audit.slice import slice_transcript_by_skill
+    from skill_eval.audit.slice import slice_transcript
     rec = {
         "format": "skill-eval-records",
         "records": [
@@ -196,7 +196,7 @@ def test_slice_isolates_subagent_scope_from_main(tmp_path):
     recs = load_structured_records(_write(tmp_path, rec))
     jsonl = tmp_path / "expanded.jsonl"
     jsonl.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs), encoding="utf-8")
-    segs = slice_transcript_by_skill(jsonl, "X")
+    segs = slice_transcript(jsonl, "X", "skill")
     assert len(segs) == 2                                          # 主、子各一段
     seg_scopes = [sorted({r.get("parent_tool_use_id") for r in seg}) for seg in segs]
     assert [None] in seg_scopes                                    # 一段纯主 scope
@@ -214,7 +214,7 @@ def test_slice_isolates_subagent_scope_from_main(tmp_path):
 def test_slice_by_agent_attribute_pure_agent(tmp_path):
     # 纯 agent(无 Skill tool_use,如 developer):切片器按 agent 字段归段——agent-audit 核心。
     # 被 dispatch 的 agent 没有 Skill 调用锚点,靠 agent 归属切其执行段。
-    from skill_eval.audit.slice import slice_transcript_by_skill
+    from skill_eval.audit.slice import slice_transcript
     rec = {
         "format": "skill-eval-records",
         "records": [
@@ -229,17 +229,17 @@ def test_slice_by_agent_attribute_pure_agent(tmp_path):
     recs = load_structured_records(_write(tmp_path, rec))
     jsonl = tmp_path / "x.jsonl"
     jsonl.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs), encoding="utf-8")
-    segs = slice_transcript_by_skill(jsonl, "developer")
+    segs = slice_transcript(jsonl, "developer", "agent")
     assert len(segs) == 1                       # developer 执行 = 1 段
     assert {r.get("agent") for r in segs[0]} == {"developer"}   # 段内纯 developer,main 噪声不混
     assert len(segs[0]) == 2                     # read + bash 两条 developer record
 
 
-def test_slice_dual_nature_agent_absorbs_skill_span(tmp_path):
-    # dual-nature:agent X 的 run 内又 invoke 了 Skill(X) → 产生 skill-span(被含于 agent-span)
-    # 和 agent-span(整个 run)。应吸收 skill-span,只返 1 段(整个 run,含 invoke 前的 record),
-    # 不双计 record。证明返的是 agent-span 而非 skill-span(后者只从 Skill 调用起,会漏 pre.py)。
-    from skill_eval.audit.slice import slice_transcript_by_skill
+def test_slice_dual_nature_kind_picks_anchor(tmp_path):
+    # dual-nature:agent X 的 run 内又 invoke 了 Skill(X) → 同名既是 skill(Skill 调用)又是 agent
+    # (被 dispatch),两份不同声明。kind 分路、**不并集**:kind=agent 切整个 run(对 agent 声明),
+    # kind=skill 只切 Skill 调用起的段(对 skill 声明)。各审各的面,不串味。
+    from skill_eval.audit.slice import slice_transcript
     rec = {
         "format": "skill-eval-records",
         "records": [
@@ -254,7 +254,16 @@ def test_slice_dual_nature_agent_absorbs_skill_span(tmp_path):
     recs = load_structured_records(_write(tmp_path, rec))
     jsonl = tmp_path / "x.jsonl"
     jsonl.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs), encoding="utf-8")
-    segs = slice_transcript_by_skill(jsonl, "X")
-    assert len(segs) == 1                        # 不是 2(skill-span 被吸收)
-    assert len(segs[0]) == 3                     # 整个 run(pre + invoke + post)
+
+    # kind=agent:整个 run(pre + invoke + post)——对 agent 声明
+    agent_segs = slice_transcript(jsonl, "X", "agent")
+    assert len(agent_segs) == 1
+    assert len(agent_segs[0]) == 3
+    assert "pre.py" in json.dumps(agent_segs[0], ensure_ascii=False)   # agent run 含 invoke 前的活
+
+    # kind=skill:从 Skill(X) 调用起(invoke + post)——对 skill 声明,不含 invoke 前的 pre.py
+    skill_segs = slice_transcript(jsonl, "X", "skill")
+    assert len(skill_segs) == 1
+    assert len(skill_segs[0]) == 2                                     # invoke + bash,不含 pre.py 那条
+    assert "pre.py" not in json.dumps(skill_segs[0], ensure_ascii=False)
 

@@ -94,10 +94,12 @@ def audit(
     ),
     model: Optional[str] = typer.Option(None, "--model", help="语义判定 LLM"),
     refine_instructions: bool = typer.Option(True, "--refine-instructions/--no-refine-instructions", help="精筛(默认开):LLM 砍掉 extractor 误抽的示例/占位伪指令(audit 提精度,精度>召回);--no-refine-instructions 关闭"),
-    by_skill: bool = typer.Option(
-        False,
-        "--by-skill",
-        help="transcript 含多个 skill,只对账本 skill 被调用期间段(按 Skill 工具调用切分)",
+    kind: Optional[str] = typer.Option(
+        None,
+        "--kind",
+        help=("声明单元种类:切本 skill/agent 执行段(skill=按 Skill 调用切;agent=按 agent 归属切)。"
+              "不传=审整条 transcript。opencode transcript 单锚点(info.agent),kind 对它无意义、"
+              "照常按 agent 字段切"),
     ),
     format: str = typer.Option("table", "--format", help="table|json"),
     open_browser: bool = typer.Option(
@@ -121,6 +123,10 @@ def audit(
     try:
         name, _desc, _content, _frontmatter, body = parse_skill_md(skill_path)
 
+        if kind is not None and kind not in ("skill", "agent"):
+            console.print(f"[red]Error:[/red] --kind 只接受 skill / agent,收到 {kind!r}")
+            raise typer.Exit(code=2)
+
         out = output_dir or Path("output")
 
         # 输入源:--db 与 --transcript 互斥;--session 仅搭 --db;都不给 → exit 2。
@@ -137,13 +143,13 @@ def audit(
         transcript = transcript or []
         if db is not None:
             # --db 解析:list/选 session → export → 临时 json;多 session 在此 exit 2。
-            # 解析后 transcript = [临时 json],后续 by-skill/引擎照常走(opencode .json 经
+            # 解析后 transcript = [临时 json],后续 --kind/引擎照常走(opencode .json 经
             # rebuild 的 is_opencode_session 分派 → build_digest_from_opencode)。
             export_tmp = _audit_from_db(db, session)
             transcript = [export_tmp]
 
         # 结构化 records 输入(--transcript 指向 {format:"skill-eval-records"} 的 JSON):
-        # 展开成临时 cc-jsonl 替进去,后续 by-skill 切分 / rebuild 全按 cc 路径走,零改动。
+        # 展开成临时 cc-jsonl 替进去,后续 --kind 切分 / rebuild 全按 cc 路径走,零改动。
         # producer(insight 等)因此不必手拼 cc-jsonl(免 tool_use/tool_result 拆分、Skill 大小写)。
         if any(is_structured_records(tp) for tp in transcript):
             expanded: list[Path] = []
@@ -160,14 +166,14 @@ def audit(
                 expanded.append(Path(f.name))
             transcript = expanded
 
-        # --by-skill:transcript 含多个 skill/agent 时,切出本 skill 被调用期间的段,
-        # 每段写一个子段文件(.jsonl=cc / .json=opencode),再喂给 TranscriptAuditor
-        # (其已支持多 transcript 聚合)。子段格式按 transcript 格式分派,rebuild 再按
-        # 各子段格式分派 cc/opencode。
-        # 文件名带 transcript 级序号 ti:多个 --transcript 可能同名 stem(如各 run 的
-        # transcript.jsonl),仅靠内层 i 会碰撞 → 后者覆盖前者(静默丢数据)。
-        if by_skill:
-            from skill_eval.audit.slice import slice_transcript_by_skill
+        # --kind:切本声明单元被调用/被 dispatch 期间的段,每段写一个子段文件
+        # (.jsonl=cc / .json=opencode),再喂 TranscriptAuditor(已支持多 transcript 聚合)。
+        # 分派:transcript **格式**选切片器——opencode(单锚点 info.agent,无 Skill tool_use)
+        # → slice_opencode_by_agent(kind 对它无意义);cc/structured(双锚点)→ slice_transcript
+        # (kind 选 skill 调用锚点 / agent 归属锚点,不并集)。
+        # 文件名带 transcript 级序号 ti:多个 --transcript 可能同名 stem,仅靠内层 i 会碰撞 → 后者覆盖前者。
+        if kind:
+            from skill_eval.audit.slice import slice_transcript
             from skill_eval.evals.opencode import (
                 is_opencode_session,
                 slice_opencode_by_agent,
@@ -181,12 +187,12 @@ def audit(
                     for i, seg in enumerate(slice_opencode_by_agent(tp, name), 1):
                         segs.append((tp, ti, i, seg, True))
                 else:
-                    for i, seg in enumerate(slice_transcript_by_skill(tp, name), 1):
+                    for i, seg in enumerate(slice_transcript(tp, name, kind), 1):
                         segs.append((tp, ti, i, seg, False))
             if not segs:
                 console.print(
-                    f"[red]Error:[/red] skill '{name}' 未在此 transcript 中被调用"
-                    f"(--by-skill 无可对账)"
+                    f"[red]Error:[/red] '{name}' 未在此 transcript 中以 --kind {kind} 锚点出现"
+                    f"(无可对账段)"
                 )
                 raise typer.Exit(code=2)
             slice_dir = out / "slices"

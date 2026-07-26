@@ -18,7 +18,7 @@ def test_init_without_flag_calls_generate_with_llm(monkeypatch, tmp_path):
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
                         lambda self, sp: called.__setitem__("default", True) or _fake_evalset())
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript",
-                        lambda self, sp, tp, on_heartbeat=None, by_skill=False: called.__setitem__("transcript", True) or _fake_evalset())
+                        lambda self, sp, tp, on_heartbeat=None, kind=None: called.__setitem__("transcript", True) or _fake_evalset())
     sp = _skill_dir(tmp_path)
     r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
@@ -27,7 +27,7 @@ def test_init_without_flag_calls_generate_with_llm(monkeypatch, tmp_path):
 def test_init_with_from_transcript_routes(monkeypatch, tmp_path):
     called = {}
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript",
-                        lambda self, sp, tp, on_heartbeat=None, by_skill=False: called.__setitem__("tp", tp) or _fake_evalset())
+                        lambda self, sp, tp, on_heartbeat=None, kind=None: called.__setitem__("tp", tp) or _fake_evalset())
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
                         lambda self, sp: called.__setitem__("default", True) or _fake_evalset())
     sp = _skill_dir(tmp_path)
@@ -48,7 +48,7 @@ def test_init_warns_on_fallback_flag(monkeypatch, tmp_path):
     monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
                         lambda *a, **k: printed.append(str(a)))
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript",
-                        lambda self, sp, tp, on_heartbeat=None, by_skill=False: _fake_evalset_degraded())
+                        lambda self, sp, tp, on_heartbeat=None, kind=None: _fake_evalset_degraded())
     sp = _skill_dir(tmp_path)
     tp = tmp_path / "t.jsonl"; tp.write_text("{}", encoding="utf-8")
     r = runner.invoke(app, ["init", str(sp), "--from-transcript", str(tp), "-o", str(tmp_path / "out")])
@@ -61,7 +61,7 @@ def test_init_no_warning_without_fallback_flag(monkeypatch, tmp_path):
     monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
                         lambda *a, **k: printed.append(str(a)))
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript",
-                        lambda self, sp, tp, on_heartbeat=None, by_skill=False: _fake_evalset())
+                        lambda self, sp, tp, on_heartbeat=None, kind=None: _fake_evalset())
     sp = _skill_dir(tmp_path)
     tp = tmp_path / "t.jsonl"; tp.write_text("{}", encoding="utf-8")
     r = runner.invoke(app, ["init", str(sp), "--from-transcript", str(tp), "-o", str(tmp_path / "out")])
@@ -108,12 +108,12 @@ def test_init_threads_timeout_flag_to_generator(monkeypatch, tmp_path):
     assert captured.get("timeout") == 600, f"默认 timeout 应为 600: {captured}"
 
 
-def test_init_by_skill_threads_flag(monkeypatch, tmp_path):
-    """init --by-skill 接线:flag 须透到 generate_from_transcript(by_skill=True)。"""
+def test_init_kind_threads_flag(monkeypatch, tmp_path):
+    """init --kind skill 接线:flag 须透到 generate_from_transcript(kind="skill")。"""
     captured = {}
 
-    def fake(self, sp, tp, on_heartbeat=None, by_skill=False):
-        captured["by_skill"] = by_skill
+    def fake(self, sp, tp, on_heartbeat=None, kind=None):
+        captured["kind"] = kind
         return _fake_evalset()
 
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript", fake)
@@ -121,20 +121,20 @@ def test_init_by_skill_threads_flag(monkeypatch, tmp_path):
                         lambda self, sp: _fake_evalset())
     sp = _skill_dir(tmp_path)
     tp = tmp_path / "t.jsonl"; tp.write_text("{}", encoding="utf-8")
-    r = runner.invoke(app, ["init", str(sp), "--from-transcript", str(tp), "--by-skill",
+    r = runner.invoke(app, ["init", str(sp), "--from-transcript", str(tp), "--kind", "skill",
                             "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
-    assert captured.get("by_skill") is True, f"--by-skill 没透到 generator: {captured}"
+    assert captured.get("kind") == "skill", f"--kind 没透到 generator: {captured}"
 
 
-def test_init_warns_on_multiskill_without_by_skill(monkeypatch, tmp_path):
-    """多 skill transcript + 不传 --by-skill → 警告(防静默串味:把别 skill 活动当本 skill 挖)。"""
+def test_init_warns_on_multiskill_without_kind(monkeypatch, tmp_path):
+    """多 skill transcript + 不传 --kind → 警告(防静默串味:把别 skill 活动当本 skill 挖)。"""
     import json
     printed = []
     monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
                         lambda *a, **k: printed.append(str(a)))
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript",
-                        lambda self, sp, tp, on_heartbeat=None, by_skill=False: _fake_evalset())
+                        lambda self, sp, tp, on_heartbeat=None, kind=None: _fake_evalset())
     sp = _skill_dir(tmp_path)  # name "s"
     tp = tmp_path / "multi.jsonl"
     tp.write_text("\n".join(json.dumps(r) for r in [
@@ -150,13 +150,13 @@ def test_init_warns_on_multiskill_without_by_skill(monkeypatch, tmp_path):
 
 
 def test_init_no_warning_on_single_skill(monkeypatch, tmp_path):
-    """单 skill transcript + 不传 --by-skill → 不警告。"""
+    """单 skill transcript + 不传 --kind → 不警告。"""
     import json
     printed = []
     monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
                         lambda *a, **k: printed.append(str(a)))
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript",
-                        lambda self, sp, tp, on_heartbeat=None, by_skill=False: _fake_evalset())
+                        lambda self, sp, tp, on_heartbeat=None, kind=None: _fake_evalset())
     sp = _skill_dir(tmp_path)  # name "s"
     tp = tmp_path / "single.jsonl"
     tp.write_text("\n".join(json.dumps(r) for r in [

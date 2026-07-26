@@ -13,13 +13,15 @@ producer(insight 等)按 turn 吐::
 
 producer 不必拼 cc-jsonl 的 tool_use / tool_result 拆分、不必管 ``Skill`` 大小写 ——
 本模块展开成 cc 记录(``{message:{role,content}, parent_tool_use_id[, agent]}``),
-``build_digest`` / ``audit`` 零改动;``slice_transcript_by_skill`` 读 ``agent`` 做 agent 归属切。
+``build_digest`` / ``audit`` 零改动;``slice_transcript`` 按 ``--kind`` 选锚点切本单元段。
 
 **``agent`` 字段透传到 cc-record**:producer(insight 等)按 turn 吐 ``agent``(= 该 turn 归属
 的 agent 名),本 reader 把它挂到每条展开记录(主消息 + tool_result 回流记录都带)。切片器
-``slice_transcript_by_skill`` 据此做 agent 归属切分:声明单元名既匹配 ``Skill`` 调用、也匹配
-``agent`` 字段 → 支持审"被 dispatch 的 agent"(无 Skill 调用的纯 agent,如 developer)。之前
-v1 不消费(commit fdad6bf 标注的默契)是因还没有 per-agent 切分的消费者;agent-audit 接通即消费。
+``slice_transcript`` 的 ``kind="agent"`` 路据此切 agent 归属段——支持审"被 dispatch 的 agent"
+(无 Skill 调用的纯 agent,如 developer)。**kind 分路、不并集**:同名既是 skill 又是 agent
+(dual-nature,如 st-verifier)时,skill 面(``kind="skill"`` 按 Skill 调用切)与 agent 面
+(``kind="agent"``)各审各的声明正文,互不串味。之前 v1 不消费(commit fdad6bf 标注的默契)是因
+还没有 per-agent 切分的消费者;agent-audit 接通即消费。
 
 识别:顶层 dict ``format == "skill-eval-records"``(与 opencode 的 ``{info,messages}`` 区分)。
 设计动机见 transcript-driven / 结构化输入;此处只做纯展开,无 LLM。

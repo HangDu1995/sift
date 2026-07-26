@@ -61,7 +61,7 @@ def _run_capturing(monkeypatch, tmp_path, agent: str) -> _CapturingAuditor:
     monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake)
     out = tmp_path / f"out-{agent}"
     r = runner.invoke(app, ["audit", str(EX / agent), "--transcript", str(SESSION),
-                            "--by-skill", "-o", str(out)])
+                            "--kind", "agent", "-o", str(out)])
     assert r.exit_code == 0, r.output
     return fake
 
@@ -135,7 +135,7 @@ def test_audit_pipeline_runs_on_agent_example(tmp_path, monkeypatch):
     monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _fake_call_claude())
     out = tmp_path / "out"
     r = runner.invoke(app, ["audit", str(EX / "test-runner"), "--transcript", str(SESSION),
-                            "--by-skill", "-o", str(out)])
+                            "--kind", "agent", "-o", str(out)])
     assert r.exit_code == 0, r.output
 
     report = json.loads((out / "audit-report.json").read_text(encoding="utf-8"))
@@ -156,7 +156,7 @@ def test_full_audit_real_llm(tmp_path):
         pytest.skip("needs ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN for real LLM audit")
     out = tmp_path / "out-live"
     r = runner.invoke(app, ["audit", str(EX / "test-runner"), "--transcript", str(SESSION),
-                            "--by-skill", "-o", str(out)], catch_exceptions=False)
+                            "--kind", "agent", "-o", str(out)], catch_exceptions=False)
     assert r.exit_code == 0, r.output
     report = json.loads((out / "audit-report.json").read_text(encoding="utf-8"))
     summary = report.get("summary", {})

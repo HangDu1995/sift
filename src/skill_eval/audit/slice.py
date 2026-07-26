@@ -1,10 +1,18 @@
-"""按声明单元(skill 或 agent)切 transcript 段。
+"""按声明单元(skill 或 agent)切 cc/structured transcript 段——kind-parametric。
 
-归段(target 单元的执行段 = 两种归属的并集):
-  - Skill 调用:每条 record 按 parent_tool_use_id 归作用域(主/某子 agent);作用域内
-    last-invoked-owns(每个 Skill 调用起段,到同作用域下一个 Skill 调用或作用域结束)。
-  - agent 归属:record.agent == target 的连续 run(被 dispatch 的 agent 的执行段)。
-dual-nature(skill + agent 同名):被 agent-span 完全包含的 skill-span 吸收掉,免双计。
+两套锚点(由 kind 选其一,**不并集**):
+  - ``kind="skill"``:Skill 调用锚点。每条 record 按 parent_tool_use_id 归作用域(主/某子 agent);
+    作用域内 last-invoked-owns(每个 Skill 调用起段,到同作用域下一个 Skill 调用或作用域结束)。
+  - ``kind="agent"``:agent 归属锚点。record.agent == target 的连续 run(被 dispatch 的 agent 的执行段)。
+
+为什么必须按 kind 分路、不并集:一个名字可能既是 skill(被 Skill 调用)又是 agent(被 dispatch)、
+两份不同声明正文(dual-nature,如 cannbot 的 st-verifier——同名 skill 是参考材料、agent 是角色声明)。
+并集会把 agent 的执行段塞进 skill 正文的对账 → 对象错位。kind 让调用方明确审的是哪一面,各切各的。
+
+opencode session **不走本模块**(它无 Skill tool_use、单锚点 info.agent),见
+``evals/opencode.py`` 的 ``slice_opencode_by_agent``——opencode 上 skill/agent 都按 agent 字段切,
+kind 对它无意义(CLI 的 ``--kind`` 对 opencode transcript 是 no-op,照常按 agent 字段切)。
+
 判定层(rebuild/judge/aggregate)不 import 本模块——本模块只产 record 段列表。
 """
 from __future__ import annotations
@@ -71,7 +79,7 @@ def invoked_skills(transcript_path: Path) -> list[str]:
     """transcript 里被调用的所有 skill 名(剥命名空间前缀、去重、按首次出现顺序)。
 
     供多 skill 检测:init --from-transcript 不切分时,若 transcript 涉及多 skill 会串味
-    (把别 skill 的活动当本 skill 挖)→ CLI 层据此警告、建议 --by-skill。
+    (把别 skill 的活动当本 skill 挖)→ CLI 层据此警告、建议 --kind skill。
     """
     seen: list[str] = []
     for rec in _records(transcript_path):
@@ -81,30 +89,20 @@ def invoked_skills(transcript_path: Path) -> list[str]:
     return seen
 
 
-def slice_transcript_by_skill(transcript_path: Path, target_skill: str) -> list[list[dict]]:
-    """切 target 单元的段(skill 或 agent 声明,按单元名)。target 从未被调用→返回 []。
+def _slice_skill_invoke(records: list[dict], target: str) -> list[list[dict]]:
+    """kind='skill':按 Skill 调用切——scope-aware last-invoked-owns。
 
-    target 的段 = 两种归属的并集:
-      1. Skill 调用:scope-aware last-invoked-owns(每个 Skill(target) 调用起段,到同作用域
-         下一个 Skill 调用或作用域结束),按 parent_tool_use_id 归作用域。主作用域的 Agent
-         tool_result 触发 depth-1 closure(子 agent 作用域结束)。
-      2. agent 归属:record.agent == target 的连续 run——被 dispatch 的 agent(无 Skill 调用
-         锚点,如 developer)靠此切其执行段。insight 给子 agent turn 吐 agent=agentName,
-         structured reader(``structured.py``)透传到 cc-record。
-    dual-nature(skill + agent 同名):被 agent-span 完全包含的 skill-span 吸收掉,免双计。
+    每个 Skill(target) 调用起段,到同作用域下一个 Skill 调用或作用域结束;按 parent_tool_use_id
+    归作用域。主作用域的 Agent tool_result 触发 depth-1 closure(子 agent 作用域结束)。
     """
-    records = _records(transcript_path)
-    if not records:
-        return []
-
     agent_ids = _find_agent_ids(records)
 
     # 作用域内状态:active = 当前生效 skill 名;cur = 当前段的 record 下标列表。
     scope_state: dict[str | None, dict] = {}
-    skill_spans: list[list[int]] = []  # Skill 调用切出的段(每段 = record 下标列表)
+    skill_spans: list[list[int]] = []
 
     def _flush(state: dict) -> None:
-        if state.get("active") == target_skill and state.get("cur"):
+        if state.get("active") == target and state.get("cur"):
             skill_spans.append(state["cur"])
 
     for i, rec in enumerate(records):
@@ -114,14 +112,14 @@ def slice_transcript_by_skill(transcript_path: Path, target_skill: str) -> list[
         name = _skill_name_of(rec)
         if name is not None:
             # 同作用域新 Skill 调用:关掉当前 target 段(如有),再切 active
-            if state["active"] == target_skill and state["cur"]:
+            if state["active"] == target and state["cur"]:
                 _flush(state)
             state["active"] = name
-            state["cur"] = [i] if name == target_skill else []
+            state["cur"] = [i] if name == target else []
             continue
 
         # 非 Skill record:若当前作用域 active 是 target,归入段
-        if state["active"] == target_skill:
+        if state["active"] == target:
             state["cur"].append(i)
 
         # depth-1 closure only:主作用域里的 Agent tool_result 结束对应子 agent 作用域。
@@ -141,24 +139,42 @@ def slice_transcript_by_skill(transcript_path: Path, target_skill: str) -> list[
     for state in scope_state.values():
         _flush(state)
 
-    # agent 归属段:record.agent == target 的连续 run(被 dispatch 的 agent 的执行段)。
-    # 纯 agent(无 Skill 调用锚点,如 developer)靠此切;insight 给子 agent turn 吐
-    # agent=agentName,structured reader 透传到 cc-record 的 agent 字段。
+    return [[records[k] for k in span] for span in skill_spans]
+
+
+def _slice_agent(records: list[dict], target: str) -> list[list[dict]]:
+    """kind='agent':record.agent == target 的连续 run(被 dispatch 的 agent 的执行段)。
+
+    纯 agent(无 Skill 调用锚点,如 developer)靠此切;insight 给子 agent turn 吐 agent=agentName,
+    structured reader(``structured.py``)透传到 cc-record 的 agent 字段。
+    """
     agent_spans: list[list[int]] = []
     cur: list[int] = []
     for i, rec in enumerate(records):
-        if rec.get("agent") == target_skill:
+        if rec.get("agent") == target:
             cur.append(i)
         elif cur:
             agent_spans.append(cur)
             cur = []
     if cur:
         agent_spans.append(cur)
+    return [[records[k] for k in span] for span in agent_spans]
 
-    # dual-nature(skill + agent 同名):被 agent-span 完全包含的 skill-span 吸收掉,
-    # 否则那段 record 在 skill-span 和 agent-span 各出现一次 → 双计。跨作用域的 skill-span
-    # (record 集合不同)不会被误吸收(子集判定不成立)。
-    agent_sets = [set(s) for s in agent_spans]
-    kept_skill = [s for s in skill_spans if not any(set(s) <= a for a in agent_sets)]
 
-    return [[records[k] for k in span] for span in kept_skill + agent_spans]
+def slice_transcript(transcript_path: Path, target: str, kind: str) -> list[list[dict]]:
+    """切 target 声明单元的执行段,按 kind 选锚点(**不并集**,dual-nature 靠 kind 分路)。
+
+    - ``kind="skill"``:Skill 调用锚点(scope-aware last-invoked-owns;每个 Skill(target) 调用起段,
+      到同作用域下一个 Skill 调用或作用域结束)。
+    - ``kind="agent"``:agent 归属锚点(record.agent == target 的连续 run)。
+
+    target 从未以所选锚点出现 → 返回 []。
+    """
+    records = _records(transcript_path)
+    if not records:
+        return []
+    if kind == "skill":
+        return _slice_skill_invoke(records, target)
+    if kind == "agent":
+        return _slice_agent(records, target)
+    raise ValueError(f"kind 必须是 'skill' 或 'agent',收到 {kind!r}")

@@ -836,20 +836,20 @@ class EvalInitGenerator:
 
     def generate_from_transcript(self, skill_path: Path, transcript_path: Path,
                                  on_heartbeat: Callable[[str], None] | None = None,
-                                 by_skill: bool = False) -> EvalSet:
+                                 kind: str | None = None) -> EvalSet:
         from skill_eval.evals.transcript import build_digest
         if not Path(transcript_path).exists():
             raise SkillEvalError(f"transcript 文件不存在: {transcript_path}")
         name, description, _content, _frontmatter, body = parse_skill_md(skill_path)
         digest_path = transcript_path
-        if by_skill:
-            # 多 skill transcript:只取本 skill 被调用期间的段(scope-aware 切分,复用 audit),
-            # 拼成虚拟 transcript 再 build_digest → manifest 只含本 skill 文件,不串别 skill 的味。
-            from skill_eval.audit.slice import slice_transcript_by_skill
-            segments = slice_transcript_by_skill(transcript_path, name)
+        if kind:
+            # 多单元 transcript:只取本 skill/agent 被调用/被 dispatch 期间的段(kind 选锚点),
+            # 拼成虚拟 transcript 再 build_digest → manifest 只含本单元文件,不串别单元的味。
+            from skill_eval.audit.slice import slice_transcript
+            segments = slice_transcript(transcript_path, name, kind)
             if not segments:
                 raise SkillEvalError(
-                    f"skill「{name}」未在此 transcript 被调用,--by-skill 无可挖段")
+                    f"「{name}」未在此 transcript 以 --kind {kind} 锚点出现,无可挖段")
             import tempfile
             flat = [r for seg in segments for r in seg]
             tf = tempfile.NamedTemporaryFile(

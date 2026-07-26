@@ -1,8 +1,8 @@
 # tests/test_audit_by_skill.py
-"""audit --by-skill CLI 接线测试。
+"""audit --kind skill CLI 接线测试。
 
 mock TranscriptAuditor(不真跑 LLM/判定),验证:
-- ``--by-skill`` 把多 skill transcript 按 target skill 切段 → 每段写 jsonl → 喂 auditor
+- ``--kind skill`` 把多 skill transcript 按 target skill 切段 → 每段写 jsonl → 喂 auditor
 - skill 被调 N 次 → auditor 收到 N 个切片路径
 - 切片只含 target skill 段记录(他 skill 的记录不混入)
 - target 从未被调用 → exit 2 + 友好错误
@@ -106,7 +106,7 @@ class _FakeAuditor:
 
 
 def test_by_skill_slices_and_feeds_auditor(monkeypatch, tmp_path):
-    """--by-skill: skillA 被调 2 次 → auditor 收到 2 个切片,切片只含 A 段记录。
+    """--kind skill: skillA 被调 2 次 → auditor 收到 2 个切片,切片只含 A 段记录。
 
     transcript 里 skillA 调 2 次(各跟一条 Read A 文件)、skillB 调 1 次(跟 Read B 文件)。
     断言:auditor 收到 2 个切片路径;切片文件在磁盘上;每个切片含 A 的文件路径、不含 B 的。
@@ -130,7 +130,7 @@ def test_by_skill_slices_and_feeds_auditor(monkeypatch, tmp_path):
 
     r = runner.invoke(
         app,
-        ["audit", str(sp), "--transcript", str(tp), "--by-skill", "-o", str(out)],
+        ["audit", str(sp), "--transcript", str(tp), "--kind", "skill", "-o", str(out)],
     )
     assert r.exit_code == 0, r.output
 
@@ -161,7 +161,7 @@ def test_by_skill_slices_and_feeds_auditor(monkeypatch, tmp_path):
 
 
 def test_by_skill_never_invoked_exits_2(monkeypatch, tmp_path):
-    """--by-skill 但 target skill 从未被调用 → exit 2 + 友好错误(不喂 auditor)。"""
+    """--kind skill 但 target skill 从未被调用 → exit 2 + 友好错误(不喂 auditor)。"""
     fake = _FakeAuditor()
     monkeypatch.setattr(
         "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
@@ -178,7 +178,7 @@ def test_by_skill_never_invoked_exits_2(monkeypatch, tmp_path):
 
     r = runner.invoke(
         app,
-        ["audit", str(sp), "--transcript", str(tp), "--by-skill", "-o", str(out)],
+        ["audit", str(sp), "--transcript", str(tp), "--kind", "skill", "-o", str(out)],
     )
     assert r.exit_code == 2
     # 友好错误信息(走了 console.print,不是裸 traceback)
@@ -189,7 +189,7 @@ def test_by_skill_never_invoked_exits_2(monkeypatch, tmp_path):
 
 
 def test_by_skill_off_by_default(monkeypatch, tmp_path):
-    """不带 --by-skill:auditor 直接收到原始 transcript 路径(不切片)。"""
+    """不带 --kind:auditor 直接收到原始 transcript 路径(不切片)。"""
     fake = _FakeAuditor()
     monkeypatch.setattr(
         "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
@@ -250,7 +250,7 @@ def test_by_skill_multi_transcript_same_stem_no_collision(monkeypatch, tmp_path)
         ["audit", str(sp),
          "--transcript", str(tp1),
          "--transcript", str(tp2),
-         "--by-skill", "-o", str(out)],
+         "--kind", "skill", "-o", str(out)],
     )
     assert r.exit_code == 0, r.output
 

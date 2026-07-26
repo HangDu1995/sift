@@ -1,7 +1,11 @@
 # tests/test_slice.py
 import json
 from pathlib import Path
-from skill_eval.audit.slice import slice_transcript_by_skill
+from skill_eval.audit.slice import slice_transcript
+
+# 本文件全测 kind='skill'(按 Skill 调用切分);薄封装省得每处传 "skill"。
+def _slice_skill(path, name):
+    return slice_transcript(path, name, "skill")
 
 def _write(tmp_path: Path, recs: list) -> Path:
     p = tmp_path / "t.jsonl"
@@ -44,7 +48,7 @@ def test_namespaced_skill_name_stripped_to_match(tmp_path):
         _tool_use("r1", "Read", {"file_path": "app.log"}),
         _tool_result("r1", "ERR"),
     ]
-    spans = slice_transcript_by_skill(_write(tmp_path, recs), "log-error-analyzer")
+    spans = _slice_skill(_write(tmp_path, recs), "log-error-analyzer")
     assert len(spans) == 1                              # 剥掉 ops-team: 前缀后命中
     assert any("app.log" in json.dumps(r, ensure_ascii=False) for r in spans[0])
 
@@ -56,7 +60,7 @@ def test_single_main_skill_span_to_end(tmp_path):
         _tool_result("r1", "ERR boom"),
         _asst_text("classify + report"),
     ]
-    spans = slice_transcript_by_skill(_write(tmp_path, recs), "log-error-analyzer")
+    spans = _slice_skill(_write(tmp_path, recs), "log-error-analyzer")
     assert len(spans) == 1
     texts = [json.dumps(r, ensure_ascii=False) for r in spans[0]]
     assert any("log-error-analyzer" in t for t in texts)
@@ -75,7 +79,7 @@ def test_main_multi_skill_interleaved_no_cross_contamination(tmp_path):
         _skill("s4", "log-error-analyzer"),
         _tool_use("r4", "Read", {"file_path": "app2.log"}),
     ]
-    a = slice_transcript_by_skill(_write(tmp_path, recs), "log-error-analyzer")
+    a = _slice_skill(_write(tmp_path, recs), "log-error-analyzer")
     assert len(a) == 2
     a_texts = [json.dumps(r, ensure_ascii=False) for seg in a for r in seg]
     assert any("app.log" in t for t in a_texts) and any("app2.log" in t for t in a_texts)
@@ -89,13 +93,13 @@ def test_back_to_back_same_skill(tmp_path):
         _skill("s2", "log-error-analyzer"),
         _asst_text("second A work"),
     ]
-    spans = slice_transcript_by_skill(_write(tmp_path, recs), "log-error-analyzer")
+    spans = _slice_skill(_write(tmp_path, recs), "log-error-analyzer")
     assert len(spans) == 2
 
 
 def test_target_never_invoked_returns_empty(tmp_path):
     recs = [_skill("s1", "code-review-auditor"), _asst_text("x")]
-    assert slice_transcript_by_skill(_write(tmp_path, recs), "log-error-analyzer") == []
+    assert _slice_skill(_write(tmp_path, recs), "log-error-analyzer") == []
 
 
 def test_subagent_skill_scoped_to_return_no_main_pollution(tmp_path):
@@ -112,11 +116,11 @@ def test_subagent_skill_scoped_to_return_no_main_pollution(tmp_path):
         _tool_result(agent_id, "subagent done"),
         _tool_use("r2", "Read", {"file_path": "app2.log"}),
     ]
-    a = slice_transcript_by_skill(_write(tmp_path, recs), "log-error-analyzer")
+    a = _slice_skill(_write(tmp_path, recs), "log-error-analyzer")
     a_texts = [json.dumps(r, ensure_ascii=False) for seg in a for r in seg]
     assert any("app2.log" in t for t in a_texts)      # 返回后主 agent 仍归 A(不被 B 污染)
     assert not any("src/c.py" in t for t in a_texts)   # 子 agent 内部不进主段
-    b = slice_transcript_by_skill(_write(tmp_path, recs), "code-review-auditor")
+    b = _slice_skill(_write(tmp_path, recs), "code-review-auditor")
     assert len(b) == 1
     b_texts = [json.dumps(r, ensure_ascii=False) for r in b[0]]
     assert any("src/c.py" in t for t in b_texts)
@@ -142,14 +146,14 @@ def test_nested_subagent_depth2_skill_scoped(tmp_path):
     p = _write(tmp_path, recs)
 
     # (a) B 的 skill(code-review-auditor)段限定在 B 作用域
-    b_spans = slice_transcript_by_skill(p, "code-review-auditor")
+    b_spans = _slice_skill(p, "code-review-auditor")
     assert len(b_spans) == 1
     b_texts = [json.dumps(r, ensure_ascii=False) for r in b_spans[0]]
     assert any("src/c.py" in t for t in b_texts)
     assert all(r.get("parent_tool_use_id") == b_id for r in b_spans[0])
 
     # (b) B 的活不泄漏到 main/A:target=log-error-analyzer 不含 src/c.py / B analyze
-    a_spans = slice_transcript_by_skill(p, "log-error-analyzer")
+    a_spans = _slice_skill(p, "log-error-analyzer")
     a_texts = [json.dumps(r, ensure_ascii=False) for seg in a_spans for r in seg]
     assert not any("src/c.py" in t or "B analyze" in t for t in a_texts)
 
@@ -172,7 +176,7 @@ def test_same_skill_main_and_subagent_two_spans(tmp_path):
         _tool_use("r3", "Read", {"file_path": "app2.log"}),      # main 继续
     ]
     p = _write(tmp_path, recs)
-    spans = slice_transcript_by_skill(p, "log-error-analyzer")
+    spans = _slice_skill(p, "log-error-analyzer")
     assert len(spans) == 2
     # 按 parent_tool_use_id 区分主段 / 子段(不依赖 spans 顺序)
     main_span = next(s for s in spans if {r.get("parent_tool_use_id") for r in s} == {None})

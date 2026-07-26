@@ -23,9 +23,10 @@ def init(
         None, "--from-transcript",
         help="从真实 session transcript 挖 evals(加料 SKILL.md,非替代)",
     ),
-    by_skill: bool = typer.Option(
-        False, "--by-skill",
-        help="transcript 含多个 skill 时,只挖本 skill 被调用期间段(按 Skill 工具调用切分,同 audit --by-skill)",
+    kind: Optional[str] = typer.Option(
+        None, "--kind",
+        help="声明单元种类:只挖本 skill/agent 被调用/被 dispatch 期间段(skill=按 Skill 调用切;"
+             "agent=按 agent 归属切,同 audit --kind)",
     ),
     timeout: int = typer.Option(
         600, "--timeout",
@@ -43,19 +44,22 @@ def init(
         gen = EvalInitGenerator(model=model, timeout=timeout)
 
         if from_transcript:
-            if not by_skill:
+            if kind is not None and kind not in ("skill", "agent"):
+                console.print(f"[red]Error:[/red] --kind 只接受 skill / agent,收到 {kind!r}")
+                raise typer.Exit(code=2)
+            if not kind:
                 from skill_eval.audit.slice import invoked_skills
                 skills = invoked_skills(from_transcript)
                 if len(skills) > 1:
                     console.print(
                         f"[yellow]⚠️  transcript 涉及 {len(skills)} 个 skill"
                         f"({', '.join(skills)}),会把全部当本 skill 挖、可能串味;"
-                        f"加 --by-skill 只挖本 skill 被调用期间段。[/yellow]"
+                        f"加 --kind skill 只挖本 skill 被调用期间段。[/yellow]"
                     )
             console.print(f"Mining evals from transcript [bold]{from_transcript}[/bold]...")
             eval_set = gen.generate_from_transcript(
                 skill_path, from_transcript,
-                on_heartbeat=lambda m: console.print(m), by_skill=by_skill,
+                on_heartbeat=lambda m: console.print(m), kind=kind,
             )
         elif generate_prompts:
             console.print("Generating L1 unit-level evals with LLM...")

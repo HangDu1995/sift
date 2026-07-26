@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from skill_eval.audit.slice import slice_transcript_by_skill
+from skill_eval.audit.slice import slice_transcript
 from skill_eval.evals.transcript import build_digest
 
 FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "example-skills" / "multi-skill-demo" / "multi-skill.jsonl"
@@ -50,7 +50,7 @@ def _ops_text(ops: list[tuple[str, str]]) -> str:
 
 @pytest.fixture(scope="module")
 def spans_by_skill():
-    return {s: slice_transcript_by_skill(FIXTURE, s) for s in (LEA, CRA, RCZ)}
+    return {s: slice_transcript(FIXTURE, s, "skill") for s in (LEA, CRA, RCZ)}
 
 
 # ---- fixture 存在 + 与 builder 同步 ----------------------------------------
