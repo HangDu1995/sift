@@ -611,11 +611,33 @@ audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md �
 
 几个关键点：
 
-- **`--kind {skill,agent}`**：transcript 里调了多个 skill / dispatch 了多个 agent 时，默认会把整段会话不区分是谁干的、混在一起判（别的单元的行为混进本单元的对账）。加 `--kind` 后切成本单元被调用/被 dispatch 期间的段，只对账这些段。**kind 选锚点、不并集**：`--kind skill` 按 `Skill` 工具调用切(cc;两条固有限制:① skill 无"返回"信号,"调 A→调 B→不重调 A 接着干 A"那段归 B(不可测);② 委派子 skill 折进来审(inclusive)需声明、暂不支持);`--kind agent` 按 `agent` 归属字段切(被 dispatch 的 agent 的执行段,如 developer)。同名既是 skill 又是 agent(dual-nature,两份不同声明)时,kind 明确审哪一面、各切各的、不串味。**opencode** 单锚点(无 `Skill` tool_use,skill 在 per-message `agent` 字段),kind 对它无意义、照常按 agent 字段切连续同 agent 段(扁平,无 cc 父子作用域——子 agent / `task` 工具就是另一段 agent run)。
+- **`--kind {skill,agent}`**：transcript 里调了多个 skill / dispatch 了多个 agent 时，默认会把整段会话混在一起判（别的单元的行为混进本单元的对账）。加 `--kind` 切成本单元被调用/被 dispatch 期间的段，只对账这些段。`--kind skill` 按 `Skill` 工具调用切，两条固有限制：① skill 无"返回"信号，"调 A→调 B→不重调 A 接着干 A"那段归 B（不可测）；② 委派子 skill 折进来审（inclusive）需声明、暂不支持。**审 agent（`--kind agent`，被 dispatch 的 subagent）是独立能力、和 skill 路语义不同（扁平切、dual-nature 各审各的），见 §7.7**。opencode 单锚点（无 `Skill` tool_use），kind 对它无意义、照常按 per-message `agent` 字段切。
 - **derived_from_transcript（反推）**：findings 里 `derived_from_transcript: true` 的不是从 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（**只增不减** = 只新增 finding，不会替换或删掉从 SKILL.md 抽出来的指令）。**目前只补一类**：transcript 里 agent 真实 Read 过的输入/参考文件 → 各补一条"读取 \<path\>"（REFERENCE_USAGE，构造上即命中 → PASS，不膨胀 fail）。另外两类不反推——工具调用反推（`required_tools`，Bash 命令分不清业务专用还是通用）和产物文件反推（`required_outputs`，历史 trace 的产物未必还在盘，且"产出文件检查"属评分断言、不属遵循性指令），因为映射不干净、容易误判。
 - **别只数 fail**：每条 finding 带序号。**来源徽章**显示这条 finding 是从哪个 / 哪些 `InstructionSource` 抽出来的（CONSTRAINT / ANTI_FABRICATION / HEADING_STEP / TOOL_REQUIREMENT / REFERENCE_USAGE / OUTPUT_FORMAT）。当同一句 SKILL.md 文本同时匹配多个抽取模式（如同句既是约束、又是反捏造）、且同 transcript 同 verdict 时，会**合并成一条**，徽章就显示两个来源（如 `CONSTRAINT + ANTI_FABRICATION`）——证明同文重复已去重、没有虚增 fail。而同一行为跨两条**不同**规则（如没读某 reference 同时违反"条件性"+"步骤"两条）仍会是两条，但互标"↔ 同源违规 #N"。所以 fail 条数可能 > 真实问题数，逐条看 evidence 对照"哪个行为"，别数条数。
 
-### 7.7 transcript 怎么变成可对账的 digest：三种来源同一条重建路
+### 7.7 审 agent：对账被 dispatch 的 subagent
+
+audit 不只能审 skill，也能审**被 dispatch 的 subagent**——拿 subagent 的定义 .md 去验它在会话里有没有按定义执行。skill 对账审不了 subagent：skill 按 `Skill` 工具调用切，而 subagent 不是被 `Skill` 调用的、是被 `Agent`/`Task` 工具 dispatch 的，落不进 skill 的切段。agent 对账填的就是这个空白。
+
+**怎么用**：第一个参数给 agent 的定义目录（含 `SKILL.md`），加 `--kind agent`：
+
+```bash
+skill-eval audit path/to/test-runner/ --transcript session.json --kind agent   # 审被 dispatch 的 subagent（给 agent 定义目录）
+```
+
+切片器按 `record.agent == <name>` 切出该 agent 被 dispatch 期间的连续段，再对账它的 `SKILL.md` 指令。**name 契约**：agent .md frontmatter 的 `name` 要对上 transcript 里的 `agent` 字段（如 `name: test-runner` ↔ `record.agent == "test-runner"`）——对不上就切不到段、exit 2。
+
+**和 skill 对账的三处区别**：
+
+- **锚点不同**：skill 按 `Skill` 工具调用切（scope-aware last-invoked-owns）；agent 按 `agent` 归属字段切（dispatch 锚点，无 `Skill` 调用）。
+- **扁平切、无父子作用域**：agent 切片只看 `record.agent == target`、**不读 `parent_tool_use_id`**。target 的 run 里若嵌套了别的 agent 的 turn（A dispatch B 后 resume A，record 序 A…B…A），A 的 run 被 B 断成两段。这是 insight 数据模型的被迫选择（`buildStructuredRecords` 不合成 `Agent` tool_use、无「agent 名 → dispatch id」映射，无法像 skill 路那样按作用域归段）。**断段无害**：每段独立喂 auditor，findings 全量 pool 后按指令聚合，verdict 与合成 1 段等价。
+- **dual-nature 同名**：同一个名字既是 skill（被 `Skill` 调用）又是 agent（被 dispatch）时（如 cannbot 的 st-verifier），`--kind skill` 审 skill 那面、`--kind agent` 审 agent 那面，各切各的、不串味。**kind 选锚点、不并集**——并集会把 agent 执行段塞进 skill 正文对账、对象错位。
+
+现成示例：`fixtures/example-agents/`（test-runner / lint-reviewer，合成违规 transcript + 期望该抓的违规逐条列明），见 [example-agents/README.md](../fixtures/example-agents/README.md)。
+
+> opencode transcript 单锚点（无 `Skill` tool_use），`--kind` 对它无意义、照常按 per-message `agent` 字段切——cc 的 skill/agent 双锚点区分只对 cc / structured transcript 有意义。
+
+### 7.8 transcript 怎么变成可对账的 digest：三种来源同一条重建路
 
 audit 对账前，先得把 transcript **重建**成一个结构化 digest——把"模型读了哪些文件、写了什么、改了什么、调了哪些工具"从原始会话记录里还原出来。这里有个关键架构：**cc 会话、opencode 会话、结构化输入三种来源，归一到同一种中间表示，再走同一个重建器**，所以重建逻辑只维护一份。
 
@@ -696,7 +718,7 @@ opencode 的转换器（`_records_from_opencode`）做三件事抹平格式差�
 
 **`tool_calls[].result` 是可选的——做对账(audit)的 producer 建议不传**：`result`（工具返回值，如 Read 整个文件、skill 正文、大段命令输出）在真实 session 里常达 10MB+，而 **audit 的判定根本不读它**——auditor 只取 `digest.user_turns`(场景)+ `tool_trace`(工具调用的**输入**)+ `transcript_text`(assistant 文本)，三项都不含工具结果；连"反推指令"(`derive_declarations`)也只读 `input_files` 的 **路径**(路径来自 Read 的 `file_path` **输入**，不靠 result)。所以全量回传 `result` 是纯死重量：会让 `--transcript` 的 session.json 撑到 20MB+，序列化 / 落盘 / skill-eval 解析全慢。insight 的 audit 桥接因此**不传 `result`**（payload 实测 18MB→7MB，砍掉 10MB+ 的 resultJson）。reader 对缺 `result` 的 tool_call 本就容错（不产 tool_result 块，`input_files` 内容空但路径在、tool_trace 完整），对账 verdict 不变。仅在需要重建文件**内容**(produced_files 还原、非对账)时才传 `result`。
 
-### 7.8 这一层的边界：fixture 下边际价值低，真实 transcript 下价值高
+### 7.9 这一层的边界：fixture 下边际价值低，真实 transcript 下价值高
 
 诚实说，遵循性在不同路径下价值差别很大：
 
@@ -705,9 +727,9 @@ opencode 的转换器（`_records_from_opencode`）做三件事抹平格式差�
 
 所以：做 fixture A/B 评测，别对 compliance 的数字过度解读（尤其 N/A 多时，先想 extractor 误抽）；要评估 skill 的真实遵循质量，拿真实会话跑 audit。
 
-### 7.9 逐条判别：某条 FAIL 是工具噪声还是 skill 问题
+### 7.10 逐条判别：某条 FAIL 是工具噪声还是 skill 问题
 
-fixture 下遵循性的 FAIL 混着工具噪声和真 skill 问题（见 7.8）。报告现在给每条 FAIL **自动标**一个启发式判别（per-run findings、整体汇总 by_instruction、单次 audit-report 的违规表都带徽章 + hover 理由）：
+fixture 下遵循性的 FAIL 混着工具噪声和真 skill 问题（见 7.9）。报告现在给每条 FAIL **自动标**一个启发式判别（per-run findings、整体汇总 by_instruction、单次 audit-report 的违规表都带徽章 + hover 理由）：
 
 | `noise_label` | 含义 | 典型信号（命中即标）|
 |---|---|---|

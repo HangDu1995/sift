@@ -106,6 +106,7 @@ skill-eval 在此基础上新增了批量评估、结果×过程 coherence 校�
 | **确定性 programmatic 断言 + 双率** | 原创 | skill-creator 只有 LLM grader 单率；skill-eval 拆出零 LLM、不可作弊的客观判定（`FILE_EXISTS` / `TOOL_CALLED` 等）与 LLM 判定分开报 |
 | **post-hoc 门禁 + CI** | 原创 | skill-creator 交互式、无 exit code / 无 CI；skill-eval `gate` 出 PASS/FAIL，exit code 驱动 pipeline |
 | **路径2 audit** | 原创 | 真实会话 transcript 与 SKILL.md 对账（cc / opencode 双源），skill-creator 只跑自生成测试、无生产对账 |
+| **agent 对账（`--kind agent`）** | 原创 | 审被 dispatch 的 subagent（按 `agent` 归属字段切，非 Skill 调用锚点；扁平切、dual-nature 各审各的）—— audit 的 subagent 维度扩展 |
 | **路径1 真任务模式** | 原创 | `--task/--cwd` spawn 真任务 + 双执行器（cc / opencode） |
 | **基准题集 freeze** | 原创 | 不可变签名 + skill_name 校验，跨 run / CI 同卷（skill-creator 的 evals.json 可复用但无冻结） |
 | **refine + per-SKILL hash 缓存** | 原创 | LLM 精筛 extractor 误抽的伪指令（教程示例被当指令），按 SKILL.md hash 缓存 |

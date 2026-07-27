@@ -11,8 +11,8 @@
 - **校准 calibration** — 结果×过程 coherence：输出对了但过程违反硬性规则 → 高分存疑（5 态判决）
 - **post-hoc 门禁 + CI** — `gate` 独立命令出 PASS/FAIL，exit code 驱动 CI；`--format json` 合入 pipeline
 - **真实 transcript 审计 audit** — 把生产会话 transcript（cc / opencode 双源）与 SKILL.md 逐条对账；多 transcript 聚合可反推 skill 设计本身有没有问题
+- **agent 对账** — 把 audit 扩展到被 dispatch 的 subagent（`--kind agent`）：按 agent 归属字段切 transcript 对账，而非 Skill 调用锚点
 - **路径1 真任务 + 批量** — `--task/--cwd` spawn 真任务（cc / opencode 双执行器）；`batch` DAG 调度多 skill
-- **静态分析 + 安全审查** — 11 项 SKILL.md 体检 + 密钥 / prompt 注入 / 危险命令扫描
 - **基准题集冻结** — `freeze` 不可变签名 + skill_name 校验，跨 run / CI 复用同一份题
 
 > 第一次接触想系统了解每个功能的设计与用法，读 [使用手册](docs/skill-eval-handbook.md)（深入浅出，概念优先）；完整命令参数、字段定义、JSON schema 查 [参考手册](docs/skill-eval-reference.md)；方法论依据见 [方法论溯源](docs/skill-eval-principles.md)。
@@ -180,11 +180,13 @@ skill-eval gate output/benchmark.json --min-win-rate 0.5  # 加主观盲评阈�
 
 ### `audit` — 真实 transcript 对账
 
-把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。不 re-run，直接对账历史执行（支持多 transcript 聚合）。`--transcript` 吃 cc 会话 `.jsonl` 或 **opencode session `.json`**（`opencode export <sessionID>` 导出；按格式自动分派);或直接给 opencode **`.db` 文件**(`--db`,内部自动 list/export/audit,单 session 自动选、多个列出让你挑)。
+把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。不 re-run，直接对账历史执行（支持多 transcript 聚合）。对账对象既可是 **skill**（被 `Skill` 调用）也可是 **agent**（被 dispatch 的 subagent，`--kind agent`）。`--transcript` 吃 cc 会话 `.jsonl` 或 **opencode session `.json`**（`opencode export <sessionID>` 导出；按格式自动分派);或直接给 opencode **`.db` 文件**(`--db`,内部自动 list/export/audit,单 session 自动选、多个列出让你挑)。
 
 ```bash
 skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl
 skill-eval audit path/to/skill/ --transcript t.jsonl --refine-instructions  # 教程型 skill：砍 extractor 误抽的示例/占位伪指令
+skill-eval audit path/to/skill/ --transcript big-multi.jsonl --kind skill   # 多 skill 会话：只对账本 skill 被调用段
+skill-eval audit path/to/test-runner/ --transcript session.json --kind agent # 审被 dispatch 的 subagent（给 agent 定义目录）
 skill-eval audit path/to/skill/ --transcript opencode-session.json          # opencode 跑出的 session
 skill-eval audit path/to/skill/ --db opencode.db                            # 直接给 opencode .db(自动 list/export/audit)
 ```
