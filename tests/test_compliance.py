@@ -308,6 +308,42 @@ class TestInstructionExtractorChinese:
         assert any(n and n.lower().startswith("grep") for n in names), names
         assert any(n and n.lower() == "bash" for n in names), names
 
+    def test_tool_requirement_filters_format_protocol_words(self):
+        """格式/协议/标准名(JSON/YAML/XML/API/HTTP/SQL…)不是工具——动词 + 这些裸词构成的
+        match 是假 TOOL_REQUIREMENT。回归:agent/skill 定义高频「使用 JSON 格式」「使用 API 获取」
+        (cannbot-skills 实测活体命中),被 _TOOL_VERBS_CN(使用)抽成 tool_name=JSON/API,
+        下游 match_tool_call 条件3 `\\bJSON\\b` 非确定性命中(读过 config.json → 假 PASS;没读 →
+        假 FAIL「该用工具 JSON 但没用」)→ verdict 噪声。这些词在 skill-eval 工具世界
+        (Read/Write/Bash…)没一个是真工具,裸用一律停用。"""
+        ext = InstructionExtractor()
+        body = (
+            "使用 JSON 格式输出结果\n"   # JSON → 停用
+            "使用 API 获取数据\n"        # API → 停用
+            "使用 XML 拼接文档\n"        # XML → 停用
+            "使用 YAML 描述配置\n"       # YAML → 停用
+            "使用 SQL 查询\n"            # SQL → 停用
+            "使用 HTTP 检查状态\n"       # HTTP → 停用
+        )
+        tools = [c for c in ext.extract(body) if c.source == InstructionSource.TOOL_REQUIREMENT]
+        names = [c.params.get("tool_name") for c in tools]
+        assert names == [], names   # 格式/协议词全停用,不产 TOOL_REQUIREMENT
+
+    def test_tool_requirement_stopwords_dont_damage_hyphenated_or_cli(self):
+        """停用词只砍裸格式/协议词,不误伤含连字符的复合名或 CLI 工具名(边界守卫)。
+
+        抽取捕获最长 [A-Za-z][\\w\\-\\.]*:csv-parser/REST-client 整体抽出(不停用);psql 等
+        CLI 名本就不在停用表。证明扩停用词没把真工具/脚本名一起砍掉(SQL 砍、psql 留)。"""
+        ext = InstructionExtractor()
+        body = (
+            "使用 csv-parser 处理\n"     # csv-parser(含 -)→ 整体抽出,csv 停用不误伤
+            "使用 psql 查询\n"           # psql → CLI 名,抽出(SQL 停用不波及 psql)
+            "使用 REST-client 调用\n"    # REST-client(含 -)→ 整体抽出,REST 停用不误伤
+            "使用 Bash 执行\n"           # 真工具,抽出
+        )
+        tools = [c for c in ext.extract(body) if c.source == InstructionSource.TOOL_REQUIREMENT]
+        names = sorted((c.params.get("tool_name") or "").lower() for c in tools)
+        assert names == ["bash", "csv-parser", "psql", "rest-client"], names
+
     def test_tool_requirement_cn_backtick_wrapped(self):
         """markdown 把工具名用反引号包:`Grep` / `parse_result.py`。原正则动词后直接要求
         ASCII 字母,反引号挡住 → 全漏。动词后允许可选反引号再取工具名。"""

@@ -17,15 +17,24 @@ _CONSTRAINT_KEYWORDS_CN: tuple[str, ...] = ("禁止", "严禁", "不得", "不�
 # 跑/使用 是 agent 定义里引出脚本/工具的高频动词(st-verifier「跑 coverage_audit.py」、
 # developer「使用 Bash/Write/Edit 工具」),原表缺 → 这些 TOOL_REQUIREMENT 全漏。
 _TOOL_VERBS_CN: tuple[str, ...] = ("运行", "执行", "调用", "启动", "跑", "使用")
-# TOOL_REQUIREMENT 停用词:"动词(use/run/...)+ 这些词"构成的 match 不是真工具名。
-# audit 实测 "use when" / "run concurrently" 被抽成 tool_name="when"/"concurrently",
-# LLM 判"该用工具 when 但没用"→ 假 FAIL。跨 104 skill 验证 0 假阴性(删的全是碎片,
-# 真工具名含 -/. 或非常用词,如 npu-smi / check_env.sh,均不在表中)。
+# TOOL_REQUIREMENT 停用词:"动词(use/run/使用/…)+ 这些词"构成的 match 不是真工具名,滤掉。
+# 分两类(见各组行内注释):(a) 虚词/碎片——"use when"/"run concurrently" 被误抽(audit 实测
+# tool_name="when",LLM 判"该用工具 when 但没用"→ 假 FAIL;跨 104 skill 验证 0 假阴性);
+# (b) 格式/协议/标准名——「使用 JSON」「使用 API」(agent/skill 定义高频,cannbot-skills
+# 实测活体命中)被误抽,下游 match_tool_call 条件3 `\bJSON\b` 非确定性命中(读过 config.json
+# → 假 PASS;没读 → 假 FAIL)→ verdict 噪声。裸用一律停用;含连字符复合名(csv-parser)或
+# CLI 名(psql)整体抽出、不受影响(见 test_tool_requirement_stopwords_*)。
 _TOOL_STOPWORDS: frozenset[str] = frozenset({
+    # (a) 虚词/碎片:"动词 + 这些词"不是真工具名。
     "when", "and", "the", "a", "an", "full", "all", "this", "that", "it", "they",
     "you", "your", "their", "concurrently", "simultaneously", "together", "in",
     "on", "at", "to", "of", "for", "with", "by", "from", "both", "each", "some",
     "any", "more",
+    # (b) 格式/协议/标准名:裸用(「使用 JSON」「使用 API」)被误抽成工具名,但它们不是工具。
+    "json", "yaml", "xml", "html", "css", "csv", "tsv",
+    "api", "http", "https", "rest",
+    "sql",
+    "url", "uri",
 })
 
 
