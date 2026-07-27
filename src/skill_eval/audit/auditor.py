@@ -48,10 +48,11 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from skill_eval.audit.declare import derive_declarations
 from skill_eval.audit.rebuild import rebuild
@@ -94,6 +95,16 @@ _LLM_RETRY_DELAY = 3.0
 # 三个 LLM 判定器(条件性/禁令/步骤)并发上限。= 类别数 = 实测安全并发(1/2/3 档全 0 失败),
 # 既是全类别并发的最优值、又天然有界(再高也无更多类别可并发)。非魔法数、无需调参。
 _MAX_CONCURRENT = 3
+# **全局** LLM 调用(call_claude)并发上限——跨类别 + 同类多批统一争这个信号量。
+# audit 慢的根因是推理次数(每批 ~117s),旧实现每类内批次**串行** → 墙钟 = 最慢类批数 × 单批。
+# 现在同类多批也铺到本地池并发跑,信号量把全局在飞 call_claude 钉在 ≤ 本值,墙钟降到 ~单批。
+# =6:GLM 端点实测 6 路并发(中/小 prompt)0 次 529,且 _judge_batch_with_retry 的重试退避兜底
+# 瞬态限流(最坏多几条 UNRESOLVED,不崩)。再高收益递减且 529 风险升。
+_MAX_BATCH_CONCURRENT = 6
+# 全局信号量:_judge_batch_with_retry 在 call_claude 前后 acquire/release,把跨所有判定器、
+# 所有批次的在飞 LLM 调用钉在 ≤ _MAX_BATCH_CONCURRENT。模块级单例 → 三判定器各起的本地池
+# 线程争同一个,自然按负载自均衡(某类批次多就多吃份额,而非每类均分固定额度)。
+_LLM_SEMAPHORE = threading.Semaphore(_MAX_BATCH_CONCURRENT)
 
 # 进度回调类型:audit 每批 LLM 判定 40-257s,全程静默对用户极不友好。核心只 emit 字符串,
 # 由 CLI 层(传 console.print)/测试层(传 list.append)决定如何呈现,producer/consumer 分离。
@@ -107,7 +118,13 @@ def _emit(on_progress: ProgressFn | None, msg: str) -> None:
 
 
 # 重试耗尽标记:_judge_batch_with_retry 返回它时,调用方跳过写入、保留预置的全 N/A 兜底。
-_RETRY_EXHAUSTED = object()
+# 用独立单例类型(非裸 object()):mypy 可据 `parsed is _RETRY_EXHAUSTED` 把返回值 narrow
+# 成 list,免去调用方 enumerate(parsed) 的类型告精(_judge_batch_with_retry 返回 list | 本类型)。
+class _RetryExhaustedType:
+    __slots__ = ()
+
+
+_RETRY_EXHAUSTED = _RetryExhaustedType()
 
 
 def _judge_batch_with_retry(
@@ -121,8 +138,8 @@ def _judge_batch_with_retry(
     label: str,
     k: int,
     total: int,
-    is_unparsed: Callable[[object], bool],
-) -> object:
+    is_unparsed: Callable[[Any], bool],
+) -> list | _RetryExhaustedType:
     """call+parse 一个 LLM 批,RuntimeError 或整批 0 解析成功则重试(共用 _LLM_RETRY_MAX 预算)。
 
     合并两种"这批没拿到可用判定"的失败,共用同一份重试预算(不再为 0-解析另设次数):
@@ -145,7 +162,10 @@ def _judge_batch_with_retry(
         _emit(on_progress, f"  {prefix} 判定 {bn} 条…")
         t0 = time.monotonic()
         try:
-            result_text = call_claude(prompt, model=model, timeout=timeout, max_turns=1)
+            # 信号量门控全局在飞 call_claude ≤ _MAX_BATCH_CONCURRENT:跨类别 + 同类多批
+            # 统一争这一个。只圈住 call_claude(不圈 parse/重试 sleep),故重试退避不占槽。
+            with _LLM_SEMAPHORE:
+                result_text = call_claude(prompt, model=model, timeout=timeout, max_turns=1)
         except RuntimeError as exc:
             _emit(on_progress, f"  {prefix} 调用失败: {str(exc)[:120]}")
             continue
@@ -157,6 +177,63 @@ def _judge_batch_with_retry(
         return parsed
     _emit(on_progress, f"  {prefix} 重试耗尽 → 本批 {bn} 条全兜底 N/A")
     return _RETRY_EXHAUSTED
+
+
+def _run_batches_concurrent(
+    specs: list[tuple[int, int, int, str]],
+    parse_fn: Callable[[str, int], list],
+    model: str | None,
+    timeout: int,
+    on_progress: ProgressFn | None,
+    label: str,
+    total: int,
+    is_unparsed: Callable[[Any], bool],
+) -> list[tuple[int, list]]:
+    """把一类的所有 LLM 批次**并发**跑,返回 ``[(start, parsed)]``(仅成功批)。
+
+    旧实现每类内批次串行 → 一类 N 批 = N × 单批墙钟。本函数把同类的多批铺到本地
+    ``ThreadPoolExecutor`` 并发;全局在飞 ``call_claude`` 由 ``_LLM_SEMAPHORE``(在
+    ``_judge_batch_with_retry`` 内)钉在 ``_MAX_BATCH_CONCURRENT`` → 跨类别 + 同类多批
+    统一争这一个信号量、按负载自均衡。墙钟从「最慢类批数 × 单批」降到「~单批」。
+
+    - 单批(``len(specs) <= 1``)→ 串行,免池开销(也是多数小 skill 的常态)。
+    - 多批 → 本地池 ``max_workers=min(len(specs), _MAX_BATCH_CONCURRENT)``,``as_completed`` 回收。
+
+    **重试耗尽的批不进结果**:``_judge_batch_with_retry`` 返回 ``_RETRY_EXHAUSTED`` 时本函数
+    跳过该批(不产出 (start, parsed))→ 调用方 mask 对应区段保持预置的全 (None,"")/None
+    (audit 汇总"建议重跑"警告)。这样调用方无需判哨兵,拿到的 ``parsed`` 恒为 list(mypy 友好)。
+
+    每个 spec = ``(start, bn, k, prompt)``:``start`` = 该批在全量 candidates 的起始下标
+    (调用方据此 ``mask[start+j]`` 写回);``bn`` = 本批条数;``k`` = 批序号(进度显示);
+    ``prompt`` = 该批的完整 prompt。返回的 ``parsed`` 为对应批的解析结果列表。
+    """
+    out: list[tuple[int, list]] = []
+    if len(specs) <= 1:
+        for start, bn, k, prompt in specs:
+            parsed = _judge_batch_with_retry(
+                prompt, model, timeout, parse_fn, bn,
+                on_progress=on_progress, label=label, k=k, total=total,
+                is_unparsed=is_unparsed,
+            )
+            if not isinstance(parsed, _RetryExhaustedType):
+                out.append((start, parsed))
+        return out
+    workers = min(len(specs), _MAX_BATCH_CONCURRENT)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = {
+            pool.submit(
+                _judge_batch_with_retry, prompt, model, timeout, parse_fn, bn,
+                on_progress=on_progress, label=label, k=k, total=total,
+                is_unparsed=is_unparsed,
+            ): idx
+            for idx, (start, bn, k, prompt) in enumerate(specs)
+        }
+        for fut in as_completed(futs):
+            idx = futs[fut]
+            parsed = fut.result()
+            if not isinstance(parsed, _RetryExhaustedType):
+                out.append((specs[idx][0], parsed))
+    return out
 
 
 class TranscriptAuditor:
@@ -796,6 +873,9 @@ class TranscriptAuditor:
         n = len(candidates)
         mask: list[tuple[AuditVerdict | None, str]] = [(None, "")] * n
         total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
+        # 先攒齐所有批次的 prompt(build-only),再统一交 _run_batches_concurrent 并发跑
+        # (同类多批并发;全局在飞 call_claude 由 _LLM_SEMAPHORE 门控)。
+        specs: list[tuple[int, int, int, str]] = []
         for start in range(0, n, _MAX_LLM_IN_BATCH):
             batch = candidates[start:start + _MAX_LLM_IN_BATCH]
             bn = len(batch)
@@ -820,13 +900,11 @@ class TranscriptAuditor:
                 '{"index": 0, "applicable": true/false, "indeterminate": true(仅判不准时), '
                 '"reason": "indeterminate 时必填:具体矛盾/缺失的证据"}\n'
             )
-            parsed = _judge_batch_with_retry(
-                prompt, model, timeout, self._parse_applicable, bn,
-                on_progress=on_progress, label="条件性", k=k, total=total,
-                is_unparsed=lambda v: v[0] is None,
-            )
-            if parsed is _RETRY_EXHAUSTED:
-                continue  # 重试耗尽 → 保留 mask 预置的全 (None,"")(audit 汇总"建议重跑"警告)
+            specs.append((start, bn, k, prompt))
+        for start, parsed in _run_batches_concurrent(
+            specs, self._parse_applicable, model, timeout, on_progress,
+            "条件性", total, lambda v: v[0] is None,
+        ):
             for j, val in enumerate(parsed):
                 mask[start + j] = val  # 本地 j → 全量 start+j(批间 index 映射)
         return mask
@@ -931,6 +1009,8 @@ class TranscriptAuditor:
         n = len(candidates)
         mask: list[bool | None] = [None] * n
         total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
+        # 先攒齐所有批次的 prompt,再统一交 _run_batches_concurrent 并发跑(refine 多批也并发)。
+        specs: list[tuple[int, int, int, str]] = []
         for start in range(0, n, _MAX_LLM_IN_BATCH):
             batch = candidates[start:start + _MAX_LLM_IN_BATCH]
             bn = len(batch)
@@ -957,13 +1037,11 @@ class TranscriptAuditor:
                 '{"index": 0, "is_real": true/false, '
                 '"indeterminate": true(仅分不清时), "reason": "indeterminate 时必填"}\n'
             )
-            parsed = _judge_batch_with_retry(
-                prompt, model, timeout, self._parse_real, bn,
-                on_progress=on_progress, label="精筛", k=k, total=total,
-                is_unparsed=lambda v: v is None,
-            )
-            if parsed is _RETRY_EXHAUSTED:
-                continue  # 重试耗尽 → 保留 mask 预置的全 None(调用方全保留)
+            specs.append((start, bn, k, prompt))
+        for start, parsed in _run_batches_concurrent(
+            specs, self._parse_real, model, timeout, on_progress,
+            "精筛", total, lambda v: v is None,
+        ):
             for j, val in enumerate(parsed):
                 mask[start + j] = val
         return mask
@@ -1030,6 +1108,8 @@ class TranscriptAuditor:
         n = len(candidates)
         results: list[tuple[AuditVerdict | None, str]] = [(None, "")] * n
         total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
+        # 先攒齐所有批次的 prompt,再统一交 _run_batches_concurrent 并发跑(同类多批并发)。
+        specs: list[tuple[int, int, int, str]] = []
         for start in range(0, n, _MAX_LLM_IN_BATCH):
             batch = candidates[start:start + _MAX_LLM_IN_BATCH]
             bn = len(batch)
@@ -1053,13 +1133,11 @@ class TranscriptAuditor:
                 '{"index": 0, "violated": true/false, "indeterminate": true(仅判不准时), '
                 '"evidence": "中文简述为何违反/未违反/判不准(具体到证据)"}\n'
             )
-            parsed = _judge_batch_with_retry(
-                prompt, model, timeout, self._parse_prohibition, bn,
-                on_progress=on_progress, label="禁令", k=k, total=total,
-                is_unparsed=lambda v: v[0] is None,
-            )
-            if parsed is _RETRY_EXHAUSTED:
-                continue  # 重试耗尽 → 保留 results 预置的全 (None,"")(audit 汇总"建议重跑"警告)
+            specs.append((start, bn, k, prompt))
+        for start, parsed in _run_batches_concurrent(
+            specs, self._parse_prohibition, model, timeout, on_progress,
+            "禁令", total, lambda v: v[0] is None,
+        ):
             for j, val in enumerate(parsed):
                 results[start + j] = val  # 本地 j → 全量 start+j
         return results
@@ -1138,6 +1216,8 @@ class TranscriptAuditor:
         n = len(candidates)
         results: list[tuple[AuditVerdict | None, str]] = [(None, "")] * n
         total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
+        # 先攒齐所有批次的 prompt,再统一交 _run_batches_concurrent 并发跑(同类多批并发)。
+        specs: list[tuple[int, int, int, str]] = []
         for start in range(0, n, _MAX_LLM_IN_BATCH):
             batch = candidates[start:start + _MAX_LLM_IN_BATCH]
             bn = len(batch)
@@ -1172,13 +1252,11 @@ class TranscriptAuditor:
                 '{"index": 0, "verdict": "pass"|"fail"|"na"|"indeterminate", '
                 '"evidence": "中文简述(具体到证据)"}\n'
             )
-            parsed = _judge_batch_with_retry(
-                prompt, model, timeout, self._parse_step, bn,
-                on_progress=on_progress, label="步骤", k=k, total=total,
-                is_unparsed=lambda v: v[0] is None,
-            )
-            if parsed is _RETRY_EXHAUSTED:
-                continue  # 重试耗尽 → 保留 results 预置的全 (None,"")(audit 汇总"建议重跑"警告)
+            specs.append((start, bn, k, prompt))
+        for start, parsed in _run_batches_concurrent(
+            specs, self._parse_step, model, timeout, on_progress,
+            "步骤", total, lambda v: v[0] is None,
+        ):
             for j, val in enumerate(parsed):
                 results[start + j] = val  # 本地 j → 全量 start+j
         return results

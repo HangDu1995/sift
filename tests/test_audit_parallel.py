@@ -87,3 +87,36 @@ class TestParallelJudges:
             AuditCategory.STEP, AuditCategory.OUTPUT,
         }
         assert len(report.findings) >= 4
+
+    def test_within_category_batches_run_concurrently(self, tmp_path, monkeypatch) -> None:
+        """单类别多批也并发跑(桶内并发),不只跨类别并发。
+
+        25 步(HEADING_STEP 单桶)→ 3 批(10/10/5)。旧实现每类内批次**串行** →
+        max_concurrent==1;共享批池后同类的多批也并发 → ≥2。单类别是关键:排除跨类别
+        并发(cond/proh 空桶短路不调 LLM)的干扰,直证「桶内并发」这一新能力。
+
+        这是 audit 提速的核心:推理瓶颈下,把每类内串行的批次铺到有界池,墙钟从
+        「最慢类批数 × 单批」降到「~单批」(GLM 端点实测 6 路并发 0 失败)。
+        """
+        inflight = [0]
+        max_concurrent = [0]
+        lock = threading.Lock()
+
+        def fake(prompt, *a, **k):
+            with lock:
+                inflight[0] += 1
+                max_concurrent[0] = max(max_concurrent[0], inflight[0])
+            time.sleep(0.1)
+            with lock:
+                inflight[0] -= 1
+            return json.dumps([
+                {"index": i, "verdict": "pass", "evidence": "ok"} for i in range(30)
+            ])
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        body = "".join(f"{i}. Perform step {i} on the input carefully\n\n" for i in range(1, 26))
+        tp = _write_jsonl(
+            tmp_path / "u.jsonl", [{"message": {"role": "user", "content": "x"}}],
+        )
+        TranscriptAuditor().audit("s", body, [tp])
+        assert max_concurrent[0] >= 2  # 同类多批并发 → ≥2(旧实现串行 ==1,此断言失败)
