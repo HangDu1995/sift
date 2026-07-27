@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 from skill_eval.audit.auditor import TranscriptAuditor
-from skill_eval.models.audit_models import AuditCategory
+from skill_eval.models.audit_models import AuditCategory, AuditVerdict
 
 
 def _write_jsonl(path: Path, records: list[dict]) -> Path:
@@ -120,3 +120,62 @@ class TestParallelJudges:
         )
         TranscriptAuditor().audit("s", body, [tp])
         assert max_concurrent[0] >= 2  # 同类多批并发 → ≥2(旧实现串行 ==1,此断言失败)
+
+
+class TestExceptionIsolation:
+    """单批/单判定器抛未捕获异常时,audit 不崩、降级 UNRESOLVED(不击穿、不翻转真假)。
+
+    ``_judge_batch_with_retry`` 只 ``except RuntimeError``;非 RuntimeError(parse_fn 抛、
+    代码 bug、call_claude 包装成别的异常类型)会穿透到 ``fut.result()``。两处裸
+    ``fut.result()``(``_run_batches_concurrent`` as_completed + audit 主循环跨类)兜底前
+    会击穿整个 audit;兜底后单批/单类降级 UNRESOLVED、其余照常(宁少报不乱报 → 可重跑)。
+    """
+
+    def test_within_category_batch_exception_does_not_crash(self, tmp_path, monkeypatch) -> None:
+        """非 RuntimeError 穿透 ``_judge_batch_with_retry`` 的 except → 单批 future 异常。
+
+        兜底前:``fut.result()`` 击穿 ``_run_batches_concurrent`` → audit 崩;
+        兜底后:该批跳过(预置 None → UNRESOLVED),audit 不崩、该类全 UNRESOLVED。
+        """
+        def boom(*a, **k):
+            raise ValueError("simulated 非 RuntimeError 穿透")
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        body = "".join(
+            f"{i}. Perform step {i} on the input carefully\n\n" for i in range(1, 26)
+        )  # 25 条 step → 同类多批(走 _run_batches_concurrent 并发分支)
+        tp = _write_jsonl(
+            tmp_path / "u.jsonl", [{"message": {"role": "user", "content": "x"}}]
+        )
+        report = TranscriptAuditor().audit("s", body, [tp])
+        step_findings = [f for f in report.findings if f.category == AuditCategory.STEP]
+        assert step_findings, "step 类应有 finding(25 条指令)"
+        assert all(
+            f.verdict == AuditVerdict.UNRESOLVED for f in step_findings
+        ), "穿透的批应降级 UNRESOLVED,不是击穿崩"
+
+    def test_judge_exception_does_not_crash(self, tmp_path, monkeypatch) -> None:
+        """某 ``_judge_*`` 整体抛异常(内部 bug)→ audit 主循环兜底:该类每条 UNRESOLVED,其余类正常。
+
+        兜底前:``fut.result()`` 击穿 audit 主循环 → audit 崩;
+        兜底后:该类全 UNRESOLVED,其余类照常判定。
+        """
+        def boom(self, instructions, *a, **k):
+            raise RuntimeError("prohibition 判定器内部 bug")
+        monkeypatch.setattr(TranscriptAuditor, "_judge_prohibition", boom)
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude", lambda *a, **k: _ok_json()
+        )
+        tp = _write_jsonl(
+            tmp_path / "u.jsonl", [{"message": {"role": "user", "content": "x"}}]
+        )
+        report = TranscriptAuditor().audit("s", BODY, [tp])
+        proph = [f for f in report.findings if f.category == AuditCategory.PROHIBITION]
+        assert proph, "prohibition 类应有 finding(NEVER 指令)"
+        assert all(
+            f.verdict == AuditVerdict.UNRESOLVED for f in proph
+        ), "判定器异常应降级该类全 UNRESOLVED"
+        # 其余类不受牵连(有非 UNRESOLVED 的正常判定)
+        non_proph = [f for f in report.findings if f.category != AuditCategory.PROHIBITION]
+        assert any(
+            f.verdict != AuditVerdict.UNRESOLVED for f in non_proph
+        ), "其余类应正常判定,不被击穿连累"

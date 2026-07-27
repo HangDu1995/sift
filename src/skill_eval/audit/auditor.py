@@ -210,11 +210,17 @@ def _run_batches_concurrent(
     out: list[tuple[int, list]] = []
     if len(specs) <= 1:
         for start, bn, k, prompt in specs:
-            parsed = _judge_batch_with_retry(
-                prompt, model, timeout, parse_fn, bn,
-                on_progress=on_progress, label=label, k=k, total=total,
-                is_unparsed=is_unparsed,
-            )
+            try:
+                parsed = _judge_batch_with_retry(
+                    prompt, model, timeout, parse_fn, bn,
+                    on_progress=on_progress, label=label, k=k, total=total,
+                    is_unparsed=is_unparsed,
+                )
+            except Exception as exc:
+                # _judge_batch_with_retry 只 except RuntimeError;非 RuntimeError(parse_fn
+                # 抛、代码 bug)穿透时,该批兜底 N/A(保持调用方预置 None → UNRESOLVED),不击穿。
+                _emit(on_progress, f"  [{label}] 批 {k} 异常 → 兜底 N/A: {str(exc)[:120]}")
+                continue
             if not isinstance(parsed, _RetryExhaustedType):
                 out.append((start, parsed))
         return out
@@ -230,7 +236,13 @@ def _run_batches_concurrent(
         }
         for fut in as_completed(futs):
             idx = futs[fut]
-            parsed = fut.result()
+            try:
+                parsed = fut.result()
+            except Exception as exc:
+                # future 抛未捕获异常(同上,非 RuntimeError 穿透 _judge_batch_with_retry):
+                # 该批兜底 N/A(不写回 → 预置 None → UNRESOLVED),其余批照常,不击穿整池。
+                _emit(on_progress, f"  [{label}] 批 {specs[idx][2]} 异常 → 兜底 N/A: {str(exc)[:120]}")
+                continue
             if not isinstance(parsed, _RetryExhaustedType):
                 out.append((specs[idx][0], parsed))
     return out
@@ -392,9 +404,26 @@ class TranscriptAuditor:
                     tp.name, model, timeout, tool_trace=tool_trace, on_progress=on_progress,
                 )
                 findings: list[AuditFinding] = []
-                findings += fut_cond.result()
-                findings += fut_proh.result()
-                findings += fut_step.result()
+                # 三个判定器并发跑;单个整体抛异常(内部 bug,非 call_claude 的 RuntimeError
+                # —— 那已被 _judge_batch_with_retry 捕获)时兜底:该类每条指令 UNRESOLVED
+                # (复用 _make_unresolved_finding),不让指令"消失"也不击穿 audit。其余类照常。
+                for _fut, _label, _bucket, _cat in (
+                    (fut_cond, "条件性", buckets[AuditCategory.CONDITIONAL], AuditCategory.CONDITIONAL),
+                    (fut_proh, "禁令", buckets[AuditCategory.PROHIBITION], AuditCategory.PROHIBITION),
+                    (fut_step, "步骤", buckets[AuditCategory.STEP], AuditCategory.STEP),
+                ):
+                    try:
+                        findings += _fut.result()
+                    except Exception as exc:
+                        _emit(
+                            on_progress,
+                            f"  [{_label}] 判定器异常 → 该类 {len(_bucket)} 条兜底 UNRESOLVED: {str(exc)[:120]}",
+                        )
+                        for inst in _bucket:
+                            findings.append(self._make_unresolved_finding(
+                                inst, tp.name,
+                                f"{_label}判定器异常,未出判定 → 没判成", _cat,
+                            ))
             findings += self._judge_output(
                 buckets[AuditCategory.OUTPUT], transcript_text, tp.name
             )
