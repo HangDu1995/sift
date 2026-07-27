@@ -143,10 +143,23 @@ def _slice_skill_invoke(records: list[dict], target: str) -> list[list[dict]]:
 
 
 def _slice_agent(records: list[dict], target: str) -> list[list[dict]]:
-    """kind='agent':record.agent == target 的连续 run(被 dispatch 的 agent 的执行段)。
+    """kind='agent':record.agent == target 的**连续** run(被 dispatch 的 agent 的执行段)。
 
     纯 agent(无 Skill 调用锚点,如 developer)靠此切;insight 给子 agent turn 吐 agent=agentName,
     structured reader(``structured.py``)透传到 cc-record 的 agent 字段。
+
+    **扁平切、嵌套断段**(有意,非 bug;边界见 ``tests/test_slice.py`` 的 agent-kind 用例):
+
+    - 只按 ``agent == target`` 取连续 record,**不读 parent_tool_use_id**。target 的 run 中若嵌套
+      了别的 agent 的 turn(A dispatch B 后 resume A,record 序 A…B…A),A 的 run 被 B 那段断成
+      **两个 span**——每段仍是 A 的真实活动,只被 B 的 turn 隔开。
+    - 这是 insight 数据模型下的**被迫选择**:`buildStructuredRecords` 不合成 Agent tool_use(只给
+      turn 打 agent + parent_tool_use_id),故无「agent 名 → dispatch id」映射,无法像 skill 路
+      那样按作用域归段。可选优化:在 ``agent==target`` 的 record 里按 parent_tool_use_id groupby,
+      把同一次 dispatch 的 A-pre/A-post 合回一段——但**结果等价**(见下)。
+    - **断段无害**:每段写独立 slice 文件喂 auditor,findings 全量 pool 后 ``aggregate_by_instruction``
+      按指令聚合(``auditor.py``)。A 的真实活动照样全审、agent .md 声明又是外部常量,故 pool 后
+      的 verdict 与合成 1 段等价。
     """
     agent_spans: list[list[int]] = []
     cur: list[int] = []

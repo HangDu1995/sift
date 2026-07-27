@@ -3,9 +3,13 @@ import json
 from pathlib import Path
 from skill_eval.audit.slice import slice_transcript
 
-# 本文件全测 kind='skill'(按 Skill 调用切分);薄封装省得每处传 "skill"。
+# kind='skill'(按 Skill 调用切)与 kind='agent'(按 agent 归属切)各一组薄封装,省得每处传 kind。
 def _slice_skill(path, name):
     return slice_transcript(path, name, "skill")
+
+
+def _slice_agent(path, name):
+    return slice_transcript(path, name, "agent")
 
 def _write(tmp_path: Path, recs: list) -> Path:
     p = tmp_path / "t.jsonl"
@@ -35,6 +39,18 @@ def _agent(tid):
 def _in_sub(parent, rec):
     """给 record 打 parent_tool_use_id,归入子 agent 作用域。"""
     rec["parent_tool_use_id"] = parent
+    return rec
+
+
+def _ag(agent, text, parent=None):
+    """带 top-level agent 字段的 record(structured reader 展开后的 cc-record 形)。
+
+    agent 归属切分只读 rec.agent;parent(给 parent_tool_use_id)仅用于构造嵌套场景,
+    验证扁平切片器**不读** parent_tool_use_id。
+    """
+    rec: dict = {"agent": agent, "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
+    if parent is not None:
+        rec["parent_tool_use_id"] = parent
     return rec
 
 def test_namespaced_skill_name_stripped_to_match(tmp_path):
@@ -190,3 +206,54 @@ def test_same_skill_main_and_subagent_two_spans(tmp_path):
     sub_texts = [json.dumps(r, ensure_ascii=False) for r in sub_span]
     assert any("src/c.py" in t for t in sub_texts)
     assert not any("app.log" in t or "app2.log" in t for t in sub_texts)
+
+
+# ── agent-kind:按 agent 归属切(_slice_agent)。钉「扁平切、嵌套断段」行为 + 边界。 ──
+
+
+def test_agent_kind_never_dispatched_returns_empty(tmp_path):
+    """target 从未以 agent 字段出现 → [](audit 层 audit.py:192 据此 exit 2)。"""
+    recs = [_ag("developer", "干活"), _ag("reviewer", "审")]
+    assert _slice_agent(_write(tmp_path, recs), "ghost-agent") == []
+
+
+def test_agent_kind_interleaved_breaks_run_into_two_spans(tmp_path):
+    """扁平切、嵌套断段(钉 _slice_agent 核心行为):A 的 run 被 B 的 turn 隔开 → A 断成 2 段。
+
+    断段无害:每段写独立 slice 文件,auditor pool findings 后 aggregate_by_instruction,
+    verdict 与合成 1 段等价(见 _slice_agent docstring)。此处只钉切段行为本身。
+    """
+    recs = [
+        {"message": {"role": "user", "content": [{"type": "text", "text": "main 起手"}]}},  # 无 agent → 不进任何段
+        _ag("A", "A 第一次"),
+        _ag("B", "B 插进"),
+        _ag("A", "A 第二次"),
+    ]
+    p = _write(tmp_path, recs)
+
+    a = _slice_agent(p, "A")
+    assert len(a) == 2                                   # A 的 run 被 B 断成两段
+    assert "A 第一次" in json.dumps(a[0], ensure_ascii=False)
+    assert "A 第二次" in json.dumps(a[1], ensure_ascii=False)
+    assert "B 插进" not in json.dumps(a, ensure_ascii=False)     # B 的内容不泄进 A 的段
+    assert "main 起手" not in json.dumps(a, ensure_ascii=False)  # 无 agent 的 record 不进段
+
+    assert len(_slice_agent(p, "B")) == 1                # B 连续 → 1 段
+
+
+def test_agent_kind_nested_subagent_splits_outer_run(tmp_path):
+    """嵌套:A dispatch B 后 resume A(A-pre…[B]…A-post)。A-pre/A-post 虽共享 parent_tool_use_id,
+    扁平切片器不看 parent_tool_use_id,仍按连续性切 → A 断 2 段。钉「不读 parent_tool_use_id」。"""
+    pA, pB = "call_A", "call_B"
+    recs = [
+        _ag("A", "A-pre", parent=pA),
+        _ag("B", "B 嵌套", parent=pB),
+        _ag("A", "A-post", parent=pA),
+    ]
+    p = _write(tmp_path, recs)
+
+    a = _slice_agent(p, "A")
+    assert len(a) == 2                                   # 共享 pA 也被断开(扁平,不看 parent)
+    assert "A-pre" in json.dumps(a[0], ensure_ascii=False)
+    assert "A-post" in json.dumps(a[1], ensure_ascii=False)
+    assert "B 嵌套" not in json.dumps(a, ensure_ascii=False)
