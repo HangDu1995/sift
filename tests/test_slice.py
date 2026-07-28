@@ -257,3 +257,70 @@ def test_agent_kind_nested_subagent_splits_outer_run(tmp_path):
     assert "A-pre" in json.dumps(a[0], ensure_ascii=False)
     assert "A-post" in json.dumps(a[1], ensure_ascii=False)
     assert "B 嵌套" not in json.dumps(a, ensure_ascii=False)
+
+
+# ── root-kind:主作用域(顶层 agent)切(_slice_root)。 ──
+
+def _slice_root(path):
+    return slice_transcript(path, "", "root")   # target 忽略(root 不按名)
+
+
+def test_root_kind_returns_main_scope_excluding_subagent_inside(tmp_path):
+    """root = 主作用域全部 record;子 agent 内部(parent_tool_use_id≠None)排除。
+
+    主 agent 的 turn + 它发起的 Agent dispatch tool_use/tool_result(主作用域)全收;
+    子 agent 内部的 Read/文本(parent_tool_use_id=a_id)排除(那些归 kind=agent 单元)。
+    """
+    a_id = "call_agentA"
+    recs = [
+        _asst_text("MAIN_START"),                                 # 主
+        _tool_use("r1", "Read", {"file_path": "app.log"}),        # 主
+        _agent(a_id),                                             # 主(dispatch 调用,主作用域)
+        _in_sub(a_id, _tool_use("r2", "Read", {"file_path": "src/c.py"})),   # 子内部
+        _in_sub(a_id, _asst_text("SUB_MARKER")),                             # 子内部
+        _tool_result(a_id, "sub done"),                           # 主(dispatch 返回,主作用域)
+        _asst_text("MAIN_END"),                                   # 主
+    ]
+    spans = _slice_root(_write(tmp_path, recs))
+    assert len(spans) == 1
+    texts = json.dumps(spans[0], ensure_ascii=False)
+    # 主活动全在(含 dispatch 调用与返回——主 agent 的编排动作)
+    assert "MAIN_START" in texts and "app.log" in texts and "MAIN_END" in texts
+    assert "sub done" in texts
+    # 子 agent 内部排除
+    assert "SUB_MARKER" not in texts
+    assert "src/c.py" not in texts
+    # 段内 record 都在主作用域(parent_tool_use_id 为空)
+    assert all(_scope_of_clean(r) is None for r in spans[0])
+
+
+def _scope_of_clean(rec):
+    ptid = rec.get("parent_tool_use_id")
+    return ptid if ptid else None
+
+
+def test_root_kind_single_span_despite_subagent_interleaving(tmp_path):
+    """主 record 物理上被子 agent 夹断 → root 仍单 span(过滤后连贯),非断段。"""
+    a_id = "call_agentA"
+    recs = [
+        _asst_text("MAIN_A"),
+        _agent(a_id),
+        _in_sub(a_id, _asst_text("SUB_ONLY")),
+        _tool_result(a_id, "done"),
+        _asst_text("MAIN_B"),   # 主,物理上在子 agent 之后
+    ]
+    spans = _slice_root(_write(tmp_path, recs))
+    assert len(spans) == 1                       # 单 span(非断段,区别于 _slice_agent)
+    texts = json.dumps(spans[0], ensure_ascii=False)
+    assert "MAIN_A" in texts and "MAIN_B" in texts
+    assert "SUB_ONLY" not in texts
+
+
+def test_root_kind_all_subagent_returns_empty(tmp_path):
+    """全部 record 都在子 agent 作用域(无主作用域)→ [](防御;现实不会发生)。"""
+    a_id = "call_agentA"
+    recs = [
+        _in_sub(a_id, _asst_text("only sub")),
+        _in_sub(a_id, _tool_use("r1", "Read", {"file_path": "x"})),
+    ]
+    assert _slice_root(_write(tmp_path, recs)) == []

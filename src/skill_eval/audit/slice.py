@@ -1,6 +1,10 @@
-"""按声明单元(skill 或 agent)切 cc/structured transcript 段——kind-parametric。
+"""按声明单元(skill / agent / root)切 cc/structured transcript 段——kind-parametric。
 
-两套锚点(由 kind 选其一,**不并集**):
+三套锚点(由 kind 选其一,**不并集**):
+  - ``kind="root"``:顶层作用域锚点。target 忽略——主作用域全部 record(parent_tool_use_id
+    为空),单 span。主 agent 自己的 turn + 它发起的 Agent dispatch tool_use/tool_result(都在
+    主作用域);子 agent 内部(parent_tool_use_id 指向某 Agent 调用)排除,归各自 ``kind="agent"``
+    单元。审主 agent / 编排者打底(其声明常是 workflow 级 SKILL.md)。
   - ``kind="skill"``:Skill 调用锚点。每条 record 按 parent_tool_use_id 归作用域(主/某子 agent);
     作用域内 last-invoked-owns(每个 Skill 调用起段,到同作用域下一个 Skill 调用或作用域结束)。
   - ``kind="agent"``:agent 归属锚点。record.agent == target 的连续 run(被 dispatch 的 agent 的执行段)。
@@ -174,20 +178,40 @@ def _slice_agent(records: list[dict], target: str) -> list[list[dict]]:
     return [[records[k] for k in span] for span in agent_spans]
 
 
+def _slice_root(records: list[dict]) -> list[list[dict]]:
+    """kind='root':主作用域全部 record(parent_tool_use_id 为空),单 span。
+
+    root = 顶层 agent 的完整执行流:主 agent 自己的 turn + 它发起的 Agent dispatch
+    tool_use / tool_result(都在主作用域),**不含**子 agent 内部 record(那些
+    parent_tool_use_id 指向某 Agent 调用,归各自 ``kind="agent"`` 单元审)。
+
+    语义:审主 agent 的**编排**——它 dispatch 了谁、何时、怎么接返回,而非子 agent 干了啥。
+    单 span:主 record 在原序列里可能被子 agent record 物理夹断,但过滤后是连贯的主执行流,
+    作为一个 span 喂 auditor(区别于 ``_slice_agent`` 的同名 run 断段)。
+
+    主作用域一定非空(至少起头 user turn 在主);防御性:全子 agent → [](audit 层 exit 2)。
+    """
+    root_recs = [r for r in records if _scope_of(r) is None]
+    return [root_recs] if root_recs else []
+
+
 def slice_transcript(transcript_path: Path, target: str, kind: str) -> list[list[dict]]:
     """切 target 声明单元的执行段,按 kind 选锚点(**不并集**,dual-nature 靠 kind 分路)。
 
+    - ``kind="root"``:顶层作用域(parent_tool_use_id 为空的全部 record,单 span;target 忽略)。
     - ``kind="skill"``:Skill 调用锚点(scope-aware last-invoked-owns;每个 Skill(target) 调用起段,
       到同作用域下一个 Skill 调用或作用域结束)。
     - ``kind="agent"``:agent 归属锚点(record.agent == target 的连续 run)。
 
-    target 从未以所选锚点出现 → 返回 []。
+    target 从未以所选锚点出现 → 返回 [](root 主作用域恒非空,不会 [])。
     """
     records = _records(transcript_path)
     if not records:
         return []
+    if kind == "root":
+        return _slice_root(records)
     if kind == "skill":
         return _slice_skill_invoke(records, target)
     if kind == "agent":
         return _slice_agent(records, target)
-    raise ValueError(f"kind 必须是 'skill' 或 'agent',收到 {kind!r}")
+    raise ValueError(f"kind 必须是 'root' / 'skill' / 'agent',收到 {kind!r}")
