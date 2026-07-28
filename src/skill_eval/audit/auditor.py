@@ -106,6 +106,20 @@ _MAX_BATCH_CONCURRENT = 6
 # 线程争同一个,自然按负载自均衡(某类批次多就多吃份额,而非每类均分固定额度)。
 _LLM_SEMAPHORE = threading.Semaphore(_MAX_BATCH_CONCURRENT)
 
+
+def configure_max_concurrent(n: int) -> None:
+    """运行时重设全局 LLM 调用并发上限(默认 ``_MAX_BATCH_CONCURRENT``=6)。
+
+    供 CLI ``--max-concurrent`` / env ``SKILL_EVAL_MAX_CONCURRENT`` 在大声明、低内存机器、
+    或多 audit 共存场景下调小(用时间换内存,防 OOM 与端点压力)。在 audit 起判定前调;
+    重设模块级 ``_LLM_SEMAPHORE``(``_judge_batch_with_retry`` 实际争用的那个)即全局生效。
+    """
+    global _LLM_SEMAPHORE
+    if n < 1:
+        raise ValueError(f"max_concurrent 必须 ≥ 1,收到 {n}")
+    _LLM_SEMAPHORE = threading.Semaphore(n)
+
+
 # 进度回调类型:audit 每批 LLM 判定 40-257s,全程静默对用户极不友好。核心只 emit 字符串,
 # 由 CLI 层(传 console.print)/测试层(传 list.append)决定如何呈现,producer/consumer 分离。
 ProgressFn = Callable[[str], None]

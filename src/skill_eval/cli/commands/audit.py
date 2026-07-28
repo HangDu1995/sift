@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -21,7 +22,7 @@ from typing import Optional
 import typer
 from rich.table import Table
 
-from skill_eval.audit.auditor import TranscriptAuditor
+from skill_eval.audit.auditor import TranscriptAuditor, configure_max_concurrent
 from skill_eval.cli.main import app, console
 from skill_eval.errors import SkillEvalError
 from skill_eval.evals.opencode_db import export_session, list_sessions, resolve_session
@@ -116,12 +117,34 @@ def audit(
         "--session",
         help="--db 下指定 session id;不给则单 session 自动选、多个列出让你挑了重跑",
     ),
+    max_concurrent: Optional[int] = typer.Option(
+        None,
+        "--max-concurrent",
+        help=("LLM 判定并发上限(默认 6;大声明/低内存/多 audit 共存时调小,如 3,用时间换内存)。"
+              "也读 env SKILL_EVAL_MAX_CONCURRENT;CLI 显式值优先"),
+    ),
 ):
     """Audit real session transcript(s) against SKILL.md(不 re-run,直接对账真实历史执行)。"""
     skill_path = resolve_skill_dir(skill_path)
     export_tmp: Optional[Path] = None  # --db 导出的临时 json,finally 清理
     expanded_tmps: list[Path] = []     # 结构化输入展开出的临时 cc-jsonl,finally 清理
     try:
+        # 并发上限:CLI --max-concurrent > env SKILL_EVAL_MAX_CONCURRENT > 默认 6(不调 configure)
+        mc = max_concurrent
+        if mc is None:
+            env_mc = os.environ.get("SKILL_EVAL_MAX_CONCURRENT")
+            if env_mc:  # None 或空串都视为未设
+                try:
+                    mc = int(env_mc)
+                except ValueError:
+                    console.print(f"[red]Error:[/red] SKILL_EVAL_MAX_CONCURRENT 非整数: {env_mc!r}")
+                    raise typer.Exit(code=2)
+        if mc is not None:
+            if mc < 1:
+                console.print(f"[red]Error:[/red] --max-concurrent 必须 ≥ 1,收到 {mc}")
+                raise typer.Exit(code=2)
+            configure_max_concurrent(mc)
+
         name, _desc, _content, _frontmatter, body = parse_skill_md(skill_path)
 
         if kind is not None and kind not in ("skill", "agent", "root"):
