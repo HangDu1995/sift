@@ -78,6 +78,8 @@
     .finding-head .cat, .finding-head .src { color: var(--text-muted); background: var(--bg); padding: 0.05rem 0.4rem; border-radius: 3px; }
     .finding-head .seq { color: var(--text-muted); font-weight: 600; }
     .finding-head .related { font-size: 0.8rem; color: var(--text-muted); }
+    /* turn-refs:色由 verdict cls(badge-fail…)给,这里只给字号/字重 */
+    .finding-head .turn-refs { font-size: 0.8rem; font-weight: 600; }
     .finding-head .ref-link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); margin-left: 0.25rem; }
     .finding-head .na-hint { color: var(--text-muted); font-size: 0.85em; font-weight: normal; }
     .finding-head .method { color: var(--text-muted); margin-left: auto; }
@@ -139,6 +141,16 @@
         return '<span class="noise" style="color:' + nl.color + ';border-color:' + nl.color + ';" title="' + title + '">' + escapeHtml(nl.text) + '</span>';
       }
 
+      // turn_refs:FAIL / INDETERMINATE 违规涉及的全局 turn(_turn_index,对应 transcript 里的 [Tn] 标记)。
+      // 让 reader 回 insight / 原 session 定位违规发生处。PASS / N/A / 段级缺席为空 → 返回 ''(无空占位)。
+      // 色随 verdict(reuse vd.cls:badge-fail / badge-indeterminate…)。格式 T<n> 绑 [T{idx}] 约定,
+      // 不用 #<n>(防与 finding seq #N 混)。finding-head 徽章簇里调,renderFinding 见下。
+      function turnBadge(turn_refs, verdict_cls) {
+        if (!turn_refs || !turn_refs.length) return '';
+        var refs = turn_refs.map(function (t) { return 'T' + t; }).join(', ');
+        return '<span class="turn-refs ' + verdict_cls + '" title="违规涉及的全局 turn(对应 transcript 里的 [Tn] 标记)">turn: ' + escapeHtml(refs) + '</span>';
+      }
+
       // verdict 五态 → (cls, icon, label) 一致表(汇总徽章 + 明细共用,DRY)。
       // NA 标"不适用"并补"(场景不触发)"hint(单说"不适用"不清晰);UNRESOLVED=没判成(可重跑)、
       // INDETERMINATE=判不准(重跑无益)。旧数据 verdict "UNCLEAR" 由后端 legacy validator 折成 UNRESOLVED。
@@ -178,10 +190,12 @@
         var related = relLinks ? '<span class="related">↔ 同源违规</span>' + relLinks : '';
         // FAIL 噪声判别徽章(仅 FAIL 且 noise_label 才显);放 method 前,留在徽章簇里(不跟 method 跑到右侧)
         var noise = (f.verdict === 'FAIL' && f.noise_label) ? noiseBadge(f.noise_label, f.noise_reasons) : '';
+        // turn 定位徽章(turn_refs 非空才显,即 FAIL / INDETERMINATE 违规);放噪声后、method 前,留徽章簇里
+        var turn = turnBadge(f.turn_refs, vd.cls);
         return '<div class="finding-head">' + verdictHtml +
           seqTag +
           '<span class="cat">' + escapeHtml(f.category || '') + '</span>' +
-          srcTag + derived + related + noise +
+          srcTag + derived + related + noise + turn +
           methodTag(f.method) + '</div>' +
           '<div class="instruction">' + escapeHtml(f.instruction_text || '') + '</div>' +
           '<div class="evidence">' + escapeHtml(f.evidence || '') + '</div>' +
