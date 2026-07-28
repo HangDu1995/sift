@@ -15,6 +15,12 @@ Read 结果的 opencode 形清洗(剥 ``<content>`` 包裹 + ``N: `` 行号)也�
 在重建器里按 ``<content>`` 标记触发——structured(insight 等)直喂 opencode 形 read 也自动洗净,
 cc / 裸内容不受 ``N: `` 正则误伤。
 cc 对外入口 ``build_digest`` = ``_digest_from_records(_records_from_cc(path))``(薄封装)。
+
+**内部 sentinel ``_turn_index``**:各 importer 加载时给每条 cc-record 标全局 1-based
+``_turn_index``(``stamp_turn_indices``)。下划线前缀 = 非 transcript 原生字段(纯内部标记、
+重建器不读),经 JSON 序列化往返保留——切片产出的 dict 子集写进 slice 文件、rebuild 读回时
+该字段存活,保住原全局位置(后续 turn_refs 引用基线)。opencode 切片经 message 子集往返、
+需重建后 re-stamp,见 ``opencode._records_from_opencode`` 的已知限制说明。
 """
 from __future__ import annotations
 
@@ -146,6 +152,19 @@ def _norm_tool(name: str) -> str:
     return _NAME_MAP.get((name or "").lower(), name or "")
 
 
+def stamp_turn_indices(records: list[dict]) -> None:
+    """给每条 record 标全局 _turn_index(1-based,若未带)。
+
+    切片/JSON 序列化往返保留:已带 _turn_index(切片文件读回)不覆盖,保原全局值;
+    首次加载(原 transcript)按顺序 stamp。opencode 路径重建 dict 时须显式拷此字段
+    (或在重建后 stamp 重建列表——_records_from_opencode 取后者:按 out 位置 stamp,
+    与 cc/structured 同款 position 语义、且重建 dict 无字段丢失风险)。
+    """
+    for i, r in enumerate(records, 1):
+        if "_turn_index" not in r:
+            r["_turn_index"] = i
+
+
 def _records_from_cc(transcript_path: Path) -> list[dict]:
     """读 Claude Code session JSONL → record 列表（跳过空行 / 坏 JSON 行）。
 
@@ -163,6 +182,7 @@ def _records_from_cc(transcript_path: Path) -> list[dict]:
                 records.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
+    stamp_turn_indices(records)
     return records
 
 

@@ -23,6 +23,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from skill_eval.evals.transcript import stamp_turn_indices
+
 
 def _records(path: Path) -> list[dict]:
     records: list[dict] = []
@@ -34,6 +36,9 @@ def _records(path: Path) -> list[dict]:
             records.append(json.loads(l))
         except json.JSONDecodeError:
             continue
+    # stamp 全局 _turn_index:切片产出 dict 子集会被 JSON 序列化进 slice 文件,
+    # rebuild 读回时 _turn_index 经 JSON 往返保留 → 保住原全局位置(后续 [T{idx}] 引用关键)。
+    stamp_turn_indices(records)
     return records
 
 

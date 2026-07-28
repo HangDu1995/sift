@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 
 from skill_eval.evals.transcript import (
-    SessionDigest, _digest_from_records, _norm_tool,
+    SessionDigest, _digest_from_records, _norm_tool, stamp_turn_indices,
 )
 
 
@@ -131,7 +131,14 @@ def _map_opencode_input(name: str, inp: dict) -> dict:
 
 def _records_from_opencode(path: Path) -> list[dict]:
     """opencode export JSON → cc-record 形 list(镜像 structured.load_structured_records,
-    直接喂 _digest_from_records)。parts 嵌在 message → 单趟;input/output 在 state 一体。"""
+    直接喂 _digest_from_records)。parts 嵌在 message → 单趟;input/output 在 state 一体。
+
+    已知限制(全局 seq 对齐):opencode 切片(``slice_opencode_by_agent``)返回 **message 子集**
+    (子 session dict)→ CLI 写 ``.json`` slice 文件 → rebuild 经本函数重建 → 重建后按**段内位置**
+    re-stamp ``_turn_index``(1,2,3…),非原全局位置。与 cc/structured 不同:那两者切片返回 **dict
+    引用子集**,``_turn_index`` 骑在 dict 字段上过 JSON 往返 → rebuild 读回保住**原全局位置**。
+    后果:opencode-sliced audit 的 turn_refs 为**段内 local**(v1 已知限制,见
+    ``docs/superpowers/specs/2026-07-28-turn-refs-design.md`` 范围外节)。"""
     sess = load_opencode_session(path)
     out: list[dict] = []
     counter = 0
@@ -158,4 +165,7 @@ def _records_from_opencode(path: Path) -> list[dict]:
         if results:
             rblocks = [{"type": "tool_result", "tool_use_id": tid, "content": r} for tid, r in results]
             out.append({"message": {"role": "user", "content": rblocks}, "parent_tool_use_id": None})
+    # 重建 dict 后 stamp:按 out 位置赋全局 _turn_index(与 cc/structured 同款 position 语义;
+    # 在重建之后 stamp,新建的 dict 直接被标、无字段丢失风险——L157 重建不必显式拷字段)。
+    stamp_turn_indices(out)
     return out

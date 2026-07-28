@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from skill_eval.evals.transcript import _norm_tool
+from skill_eval.evals.transcript import _norm_tool, stamp_turn_indices
 
 _FORMAT = "skill-eval-records"
 
@@ -90,4 +90,5 @@ def load_structured_records(path: Path) -> list[dict]:
         if results:
             rblocks = [{"type": "tool_result", "tool_use_id": tid, "content": r} for tid, r in results]
             out.append(_rec({"message": {"role": "user", "content": rblocks}, "parent_tool_use_id": ptid}, agent))
+    stamp_turn_indices(out)
     return out
