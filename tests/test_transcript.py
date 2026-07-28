@@ -181,8 +181,9 @@ def test_tool_trace_collects_all_tool_use_unconditionally_in_order(tmp_path):
     assert isinstance(glob_rec, ToolCallRecord)
     assert glob_rec.name == "Glob"
     assert glob_rec.input_summary == json.dumps({"pattern": "**/*.py"}, ensure_ascii=False)
-    # transcript_text 含两段 assistant 文本,用 \n 连接
-    assert d.transcript_text == "开始分析\n完成"
+    # transcript_text 含两段 assistant 文本,各带 [T{idx}] 前缀(turn 1/7 的 text),
+    # 中间 tool_use-only record(turn 2/4/5)发裸 [T{idx}] 锚。
+    assert d.transcript_text == "[T1] 开始分析\n[T2]\n[T4]\n[T5]\n[T7] 完成"
 
 def test_tool_trace_records_have_correct_input_summary(tmp_path):
     recs = [
@@ -218,7 +219,7 @@ def test_transcript_text_from_mixed_assistant_message(tmp_path):
         _tool_result("r1", "1\thi\n"),
     ]
     d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
-    assert d.transcript_text == "先思考"
+    assert d.transcript_text == "[T1] 先思考"
     assert [t.name for t in d.tool_trace] == ["Read"]
 
 def test_tool_trace_collects_multiple_distinct_unbranched_tools(tmp_path):

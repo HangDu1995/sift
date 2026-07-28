@@ -28,6 +28,7 @@ class RunConfig(BaseModel):
 class ToolCallRecord(BaseModel):
     name: str
     input_summary: str = ""
+    turn: int | None = None  # 该 tool_use 所属的全局 turnIndex(None=未标注)
 
 
 class RunOutput(BaseModel):

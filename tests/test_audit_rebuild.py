@@ -67,7 +67,7 @@ def test_rebuild_normal_returns_tuple(tmp_path: Path) -> None:
     assert len(tool_trace) == 1
     assert isinstance(tool_trace[0], ToolCallRecord)
     assert tool_trace[0].name == "Read"
-    assert text == "我现在读取它"
+    assert text == "[T2] 我现在读取它\n[T3]"
     assert isinstance(digest, SessionDigest)
     # rebuild 是解包同一 digest:返回的对象即 digest 的字段(同一引用)
     assert digest.tool_trace is tool_trace

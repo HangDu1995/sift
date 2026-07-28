@@ -17,10 +17,12 @@ cc / 裸内容不受 ``N: `` 正则误伤。
 cc 对外入口 ``build_digest`` = ``_digest_from_records(_records_from_cc(path))``(薄封装)。
 
 **内部 sentinel ``_turn_index``**:各 importer 加载时给每条 cc-record 标全局 1-based
-``_turn_index``(``stamp_turn_indices``)。下划线前缀 = 非 transcript 原生字段(纯内部标记、
-重建器不读),经 JSON 序列化往返保留——切片产出的 dict 子集写进 slice 文件、rebuild 读回时
-该字段存活,保住原全局位置(后续 turn_refs 引用基线)。opencode 切片经 message 子集往返、
-需重建后 re-stamp,见 ``opencode._records_from_opencode`` 的已知限制说明。
+``_turn_index``(``stamp_turn_indices``)。下划线前缀 = 非 transcript 原生字段(纯内部标记),
+经 JSON 序列化往返保留——切片产出的 dict 子集写进 slice 文件、rebuild 读回时该字段存活,
+保住原全局位置。重建器 ``_digest_from_records`` 消费它:每条 assistant record 的文本
+获 ``[T{idx}] `` 前缀(per-record,非 per-block)、``ToolCallRecord.turn`` 记录所属 turn——
+这是后续 finding 引用 turn 的基线(切片后仍是原全局号、不重编号)。opencode 切片经 message
+子集往返、需重建后 re-stamp,见 ``opencode._records_from_opencode`` 的已知限制说明。
 """
 from __future__ import annotations
 
@@ -241,26 +243,35 @@ def _digest_from_records(records: list[dict], root: str | None = None) -> Sessio
             continue
         if role != "assistant" or not isinstance(content, list):
             continue
+        # per-record 文本缓冲:同一 record 的多个 text 块合并、单次加 [T{idx}] 前缀
+        # (per-record 而非 per-block——一条 assistant 消息可能含多个 text 块,重复同 [T{idx}]
+        # 既吵又暗示是不同 turn;合并后前缀锚住整条 record 的全局位置)。
+        rec_text_parts: list[str] = []
+        had_block = False  # 本 record 是否含非空 text 或 tool_use(决定是否发 turn 锚)
+        turn_idx = rec.get("_turn_index")
         for b in content:
             if not isinstance(b, dict):
                 continue
             btype = b.get("type")
             if btype == "text":
                 if b.get("text"):
-                    transcript_text_parts.append(b.get("text", ""))
+                    rec_text_parts.append(b.get("text", ""))
+                    had_block = True
                 continue
             if btype != "tool_use":
                 continue
+            had_block = True
             name = b.get("name", "")
             inp = b.get("input", {}) or {}
             tid = b.get("id", "")
             # 无条件收集所有 tool_use 块(在按工具名分支之前):
             # 现有分支只覆盖 Skill/Read/Write/Edit/MultiEdit/Bash,
             # Glob/Grep/WebSearch 等会被忽略。tool_trace 必须收全部,
-            # audit 的工具指令对账才能按任意工具名匹配。
+            # audit 的工具指令对账才能按任意工具名匹配。turn=所属 record 的全局 _turn_index。
             tool_trace.append(ToolCallRecord(
                 name=name,
                 input_summary=json.dumps(b.get("input") or {}, ensure_ascii=False)[:200],
+                turn=turn_idx,
             ))
             if name == "Skill":
                 if not skill_used:
@@ -318,6 +329,15 @@ def _digest_from_records(records: list[dict], root: str | None = None) -> Sessio
                     tgt = (m.group(1) or "").strip("'\"")
                     if tgt:
                         bash_touched.add(tgt)
+        # flush 本 record 的 turn 锚:有 text 则带 [T{idx}] 前缀;text-less 的纯 tool_use
+        # record 也发 [T{idx}](LLM 可引用任何 turn,含纯动作 turn 如 Agent dispatch)。
+        # _turn_index 缺失(异常/旧切片)→ "?",不崩。
+        if had_block:
+            idx_str = str(turn_idx) if turn_idx is not None else "?"
+            if rec_text_parts:
+                transcript_text_parts.append(f"[T{idx_str}] " + "\n".join(rec_text_parts))
+            else:
+                transcript_text_parts.append(f"[T{idx_str}]")
 
     if root is None:
         root = _detect_root(all_paths)
