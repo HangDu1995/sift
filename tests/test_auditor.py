@@ -651,7 +651,12 @@ class TestJudgeStep:
         assert "Read" in captured["prompt"]
 
     def test_no_tool_trace_omits_section(self, monkeypatch) -> None:
-        """不传 tool_trace 时 prompt 不含工具调用段(向后兼容,现有调用不破)。"""
+        """不传 tool_trace 时 prompt 不含工具调用段(向后兼容,现有调用不破)。
+
+        断 ``## 实际工具调用记录`` 段头(而非裸串 ``工具调用记录``):turn 引用规则的说明文字
+        里会顺带提到"工具调用记录同"(讲明工具调用也带 [T{idx}] 标记),裸串会误命中。
+        段头才是真正"是否渲染了 tool_trace 段"的标志。
+        """
         captured: dict = {}
 
         def fake(prompt, *a, **k):
@@ -661,7 +666,7 @@ class TestJudgeStep:
         monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
         auditor = TranscriptAuditor()
         auditor._judge_step([_step_inst()], "执行记录", "s.jsonl")
-        assert "工具调用记录" not in captured["prompt"]
+        assert "## 实际工具调用记录" not in captured["prompt"]
 
     def test_unknown_verdict_unverifiable_na(self, monkeypatch) -> None:
         """未知 verdict(如 'maybe')→ 标 N/A(宁少报不乱报:判不准不报 FAIL)。"""

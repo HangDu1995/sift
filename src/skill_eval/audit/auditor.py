@@ -48,6 +48,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -641,8 +642,12 @@ class TranscriptAuditor:
             instructions, transcript_text, model, timeout, on_progress,
         )
 
+        # turn_refs 后验上界:从喂给 LLM 的同一份 transcript_text 的 [T{idx}] 标记反推最大
+        # turn 序号。judge 自包含,无需把 record 数 / 全局 turnIndex 透传过 audit/rebuild。
+        max_turn = self._max_turn_from_text(transcript_text)
+
         for i, inst in enumerate(instructions):
-            verdict, ev = violated_mask[i]
+            verdict, ev, tr_raw = violated_mask[i]
             if verdict == AuditVerdict.FAIL:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
@@ -652,6 +657,7 @@ class TranscriptAuditor:
                     category=AuditCategory.PROHIBITION,
                     evidence=ev or "执行中发生了违反该禁令的行为",
                     transcript=transcript_name,
+                    turn_refs=self._sanitize_turn_refs(tr_raw, max_turn),
                 )
             elif verdict == AuditVerdict.PASS:
                 findings[i] = AuditFinding(
@@ -662,6 +668,8 @@ class TranscriptAuditor:
                     category=AuditCategory.PROHIBITION,
                     evidence=ev or "执行中未违反该禁令",
                     transcript=transcript_name,
+                    # PASS 不是违规:即便 LLM 给了 turn_refs 也丢弃(不指向问题)。
+                    turn_refs=[],
                 )
             elif verdict == AuditVerdict.INDETERMINATE:
                 findings[i] = AuditFinding(
@@ -672,11 +680,13 @@ class TranscriptAuditor:
                     category=AuditCategory.PROHIBITION,
                     evidence=ev,
                     transcript=transcript_name,
+                    turn_refs=self._sanitize_turn_refs(tr_raw, max_turn),
                 )
             else:
                 # None:LLM 未给明确结论(调用失败/解析失败/未提及/畸形值/indeterminate 无 evidence)
                 # → 没判成(UNRESOLVED):宁少报不乱报,即便禁令也在无确证时不报 FAIL;
                 # audit() 汇总"建议重跑"警告提示人工复核,不靠假 FAIL 充数。
+                # turn_refs 默认空(没出判定,谈不上指向哪个 turn)。
                 findings[i] = self._make_unresolved_finding(
                     inst, transcript_name, "LLM 判定失败,无法确证是否违规 → 没判成",
                     category=AuditCategory.PROHIBITION,
@@ -729,8 +739,12 @@ class TranscriptAuditor:
             instructions, transcript_text, model, timeout, tool_trace, on_progress,
         )
 
+        # turn_refs 后验上界:从喂给 LLM 的同一份 transcript_text 的 [T{idx}] 标记反推最大
+        # turn 序号。与 _judge_prohibition 同款。
+        max_turn = self._max_turn_from_text(transcript_text)
+
         for i, inst in enumerate(instructions):
-            verdict, ev = verdict_mask[i]
+            verdict, ev, tr_raw = verdict_mask[i]
             if verdict == AuditVerdict.PASS:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
@@ -740,6 +754,8 @@ class TranscriptAuditor:
                     category=AuditCategory.STEP,
                     evidence=ev or "执行中走过了该步",
                     transcript=transcript_name,
+                    # PASS 不是问题:即便 LLM 给了 turn_refs 也丢弃。
+                    turn_refs=[],
                 )
             elif verdict == AuditVerdict.FAIL:
                 findings[i] = AuditFinding(
@@ -750,6 +766,7 @@ class TranscriptAuditor:
                     category=AuditCategory.STEP,
                     evidence=ev or "该走这一步但未走",
                     transcript=transcript_name,
+                    turn_refs=self._sanitize_turn_refs(tr_raw, max_turn),
                 )
             elif verdict == AuditVerdict.NA:
                 findings[i] = AuditFinding(
@@ -760,6 +777,8 @@ class TranscriptAuditor:
                     category=AuditCategory.STEP,
                     evidence=ev or "场景不涉及该步",
                     transcript=transcript_name,
+                    # NA(场景不涉及)不指向问题 turn。
+                    turn_refs=[],
                 )
             elif verdict == AuditVerdict.INDETERMINATE:
                 findings[i] = AuditFinding(
@@ -770,10 +789,11 @@ class TranscriptAuditor:
                     category=AuditCategory.STEP,
                     evidence=ev,
                     transcript=transcript_name,
+                    turn_refs=self._sanitize_turn_refs(tr_raw, max_turn),
                 )
             else:
                 # None/未知值/非字符串/indeterminate 无 evidence → 没判成(UNRESOLVED):
-                # 宁少报不乱报,判不准不报 FAIL。
+                # 宁少报不乱报,判不准不报 FAIL。turn_refs 默认空。
                 findings[i] = self._make_unresolved_finding(
                     inst, transcript_name, "LLM 判定失败,无法确证是否走过 → 没判成",
                     category=AuditCategory.STEP,
@@ -837,6 +857,57 @@ class TranscriptAuditor:
         return findings
 
     # ---- finding 工厂 -------------------------------------------------------
+
+    @staticmethod
+    def _max_turn_from_text(text: str) -> int:
+        """从 transcript_text 的 ``[T{idx}]`` 标记提取最大 turn 序号(LLM 能引用的合法上界)。
+
+        transcript_text(rebuild 渲染的执行记录)按 T2 给每条 assistant record 加了
+        ``[T{idx}] `` 前缀;``_judge_prohibition`` / ``_judge_step`` 把它喂给 LLM,LLM
+        据此回引 ``turn_refs``。本函数从同一份 text 反推上界,judge 自包含——无需把
+        record 数 / 全局 turnIndex 透传过 audit/rebuild 签名。
+
+        无标记(旧 digest / 空文本 / 仅 user 记录)→ 0 → ``_sanitize_turn_refs`` 全丢
+        (无法校验任何引用是否在范围内)。
+
+        注:``transcript_text`` 只含 assistant 记录(user / tool_result 在 T2 已跳过),
+        故上界框的是"LLM 实际能看到的 assistant turn"——恰好就是可被引用的范围。
+
+        **index space ≠ 可见 turn 数**:``_turn_index`` 计**所有** record(Task 1 给每条
+        stamp,含 user / tool_result),但 user / tool_result 在 transcript_text 渲染时
+        被跳过,所以本函数返回的 max 是"最大可引用 index"、不是"LLM 能看到的 turn 数"。
+        一个幻觉 seq 即便指向"纯 user turn"(如 T3 是 user-only,transcript_text 看不到)
+        也会过 sanitize(``1 ≤ 3 ≤ max``)——但 LLM 实际只看 assistant turn、自然只引那些,
+        实践中不构成问题。本函数只负责"上界钳制",不负责"可见性白名单"。
+        """
+        return max((int(m) for m in re.findall(r"\[T(\d+)\]", text)), default=0)
+
+    @staticmethod
+    def _sanitize_turn_refs(refs: object, max_turn: int) -> list[int]:
+        """后验校验 LLM 输出的 turn_refs,防幻觉 seq。
+
+        丢弃:>max_turn / <1 / 非整数 / 重复;返回升序去重 ``list[int]``。
+
+        - 非整数:字符串 ``"12"``、浮点 ``3.5``、布尔(布尔是 Python int 子类,
+          但语义上不该当 turn 序号——``isinstance(x, int) and not isinstance(x, bool)``)。
+        - ``max_turn <= 0``:无合法 turn 范围已知(无 ``[T{idx}]`` 标记)→ 无法校验任何
+          引用 → 全丢(返回 ``[]``),宁可空也不放过幻觉。
+        - ``refs`` 非 list / None:全丢。
+
+        LLM judge 的引用是"建议",sanitizer 是"硬过滤"——只要 LLM 给的范围合法就保留,
+        非法一律丢(不试图纠正)。返回的 list 长度可能为 0(段级缺席:全程未发生)。
+        """
+        if max_turn <= 0:
+            return []
+        if not isinstance(refs, list):
+            return []
+        seen: set[int] = set()
+        for x in refs:
+            # 严格 int、排除 bool:True/False 即便当 1/0 也无 turn 语义,且 LLM 偶尔把
+            # violated=true 误当 turn_refs=true 漏出来——一律丢弃更稳。
+            if isinstance(x, int) and not isinstance(x, bool) and 1 <= x <= max_turn:
+                seen.add(x)
+        return sorted(seen)
 
     @staticmethod
     def _make_match_pass_finding(
@@ -1133,23 +1204,26 @@ class TranscriptAuditor:
         model: str | None,
         timeout: int,
         on_progress: ProgressFn | None = None,
-    ) -> list[tuple[AuditVerdict | None, str]]:
+    ) -> list[tuple[AuditVerdict | None, str, list[int]]]:
         """分批 call_claude 判每条禁令在本次执行里是否被违反(每批 _MAX_LLM_IN_BATCH(10) 条,处理全部)。
 
-        返回与 candidates 等长的列表,每元素 ``(verdict, evidence)``:
-        - (FAIL, ev)          = 已违反
-        - (PASS, ev)          = 未违反
-        - (INDETERMINATE, ev) = 判不准(LLM 看了证据真矛盾/缺失,带具体 evidence)
-        - (None, "")          = 没判成(调用/解析失败/未提及/畸形值/indeterminate 无 evidence)
+        返回与 candidates 等长的列表,每元素 ``(verdict, evidence, turn_refs_raw)``:
+        - (FAIL, ev, tr)          = 已违反
+        - (PASS, ev, tr)          = 未违反
+        - (INDETERMINATE, ev, tr) = 判不准(LLM 看了证据真矛盾/缺失,带具体 evidence)
+        - (None, "", [])          = 没判成(调用/解析失败/未提及/畸形值/indeterminate 无 evidence)
+
+        ``turn_refs_raw`` 是 LLM 输出的原样引用(未 sanitize,可能含垃圾);``_judge_prohibition``
+        调 ``_sanitize_turn_refs`` 后验过滤后,只在 FAIL/INDETERMINATE finding 上挂。
 
         分批模式同 ``_llm_judge_applicable``:每批独立 call_claude + ``_parse_prohibition``,
         批内 index 从 0 计、结果按 ``results[start:start+bn]`` 写回全量(批间 index 映射,
         绝不用批内 index 直接当下标)。某批 RuntimeError → 先重试 ``_LLM_RETRY_MAX`` 次,
-        仍失败则该批保持 (None, "")(调用方标 UNRESOLVED + "建议重跑"警告),
+        仍失败则该批保持 (None, "", [])(调用方标 UNRESOLVED + "建议重跑"警告),
         其余批继续。空 candidates → 不调 LLM,返回 []。
         """
         n = len(candidates)
-        results: list[tuple[AuditVerdict | None, str]] = [(None, "")] * n
+        results: list[tuple[AuditVerdict | None, str, list[int]]] = [(None, "", [])] * n
         total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
         # 先攒齐所有批次的 prompt,再统一交 _run_batches_concurrent 并发跑(同类多批并发)。
         specs: list[tuple[int, int, int, str]] = []
@@ -1169,12 +1243,19 @@ class TranscriptAuditor:
                 "- ⚠ indeterminate=true(判不准):你看了执行记录,但证据真的相互矛盾或关键信息缺失,"
                 "判断不了是否违反。**必须**在 evidence 写明具体矛盾 / 缺失的证据;"
                 "不要用 indeterminate 偷懒回避判断。\n\n"
+                "## turn 引用规则\n"
+                "执行记录每行开头的 ``[T{idx}]`` 标记该动作所属的全局 turn 序号(从 1 计)。"
+                "当 violated=true 或 indeterminate=true 时,**必须**在 ``turn_refs`` 列出"
+                "该违规 / 矛盾发生的 turn 序号(如 ``[12]`` 或 ``[12, 34]``)——指向具体动作,"
+                "便于人工复核定位。**段级缺席**(如「整段全程未发生违规」「全程未编造数据」)"
+                "时留空 ``[]`` 并在 evidence 说明是全程性的。violated=false / PASS 留空 ``[]``。\n\n"
                 f"## 执行记录摘录\n{transcript_text[:_SCENE_TRUNCATE]}\n\n"
                 f"## 待判禁令 ({bn} 条)\n{instruction_list}\n"
                 "## 输出格式\n"
                 '只返回 JSON 数组,每元素:'
                 '{"index": 0, "violated": true/false, "indeterminate": true(仅判不准时), '
-                '"evidence": "中文简述为何违反/未违反/判不准(具体到证据)"}\n'
+                '"evidence": "中文简述为何违反/未违反/判不准(具体到证据)", '
+                '"turn_refs": [12, 34]  // 违规/矛盾发生的 turn 序号;段级缺席或 PASS 留空 []}\n'
             )
             specs.append((start, bn, k, prompt))
         for start, parsed in _run_batches_concurrent(
@@ -1188,20 +1269,25 @@ class TranscriptAuditor:
     @staticmethod
     def _parse_prohibition(
         text: str, n: int
-    ) -> list[tuple[AuditVerdict | None, str]]:
-        """解析 LLM 禁令违规判定 → ``(AuditVerdict | None, evidence)``;默认 ``(None, "")`` = 没判成。
+    ) -> list[tuple[AuditVerdict | None, str, list[int]]]:
+        """解析 LLM 禁令违规判定 → ``(AuditVerdict | None, evidence, turn_refs_raw)``;默认 ``(None, "", [])``。
 
-        - violated=true  → (FAIL, ev)
-        - violated=false → (PASS, ev)
-        - indeterminate=true 且 evidence 非空 → (INDETERMINATE, ev)(判不准)
-        - indeterminate=true 但 evidence 空 → **滥用闸 ①** 降级 (None, "") = 没判成
-        - 其余(缺键/None/非布尔/未提及)→ (None, "") = 没判成
+        - violated=true  → (FAIL, ev, tr)
+        - violated=false → (PASS, ev, tr)
+        - indeterminate=true 且 evidence 非空 → (INDETERMINATE, ev, tr)(判不准)
+        - indeterminate=true 但 evidence 空 → **滥用闸 ①** 降级 (None, "", []) = 没判成
+        - 其余(缺键/None/非布尔/未提及)→ (None, "", []) = 没判成
 
         与 ``_parse_applicable`` 同构(同 JSON 格式 + extract_first_balanced + 严格
         ``is True/is False``),只是多取一个 evidence 字段。畸形值(如字符串 "true")
-        不用 bool() 洗,保持 (None, "") = 没判成(不误判违规)。
+        不用 bool() 洗,保持 (None, "", []) = 没判成(不误判违规)。
+
+        第三个元素 ``turn_refs_raw``:LLM 输出的 turn 引用(**未经 sanitize** 的原样透传,
+        可能含负数 / 超范围 / 非整数)。sanitize 职责交 ``_judge_prohibition`` 调
+        ``_sanitize_turn_refs`` 统一做——parser 保持"忠实镜像 LLM 输出",不在两处过滤。
+        默认空 list(LLM 没输出该键 / 段级缺席)。
         """
-        results: list[tuple[AuditVerdict | None, str]] = [(None, "")] * n
+        results: list[tuple[AuditVerdict | None, str, list[int]]] = [(None, "", [])] * n
         arr_str = extract_first_balanced(text)
         if arr_str is None:
             return results
@@ -1217,17 +1303,23 @@ class TranscriptAuditor:
             idx = item.get("index")
             if isinstance(idx, int) and 0 <= idx < n:
                 ev = str(item.get("evidence", "") or "")
+                # turn_refs 原样透传:LLM 偶尔写成非 list / 含垃圾,sanitizer 在 judge 里兜底。
+                # 这里只做最小兼容:list 才收,其余(单 int / 字符串)当空。
+                # 注解 list[Any] 而非 list[int]:``list(raw)`` 保 LLM junk(如 [5, -1, 999, "x"]),
+                # 校验是 sanitizer 的职责,这里重复校验会破坏 raw 透传契约。
+                raw = item.get("turn_refs")
+                tr: list[Any] = list(raw) if isinstance(raw, list) else []
                 if item.get("indeterminate") is True:
                     if ev.strip():
-                        results[idx] = (AuditVerdict.INDETERMINATE, ev)
-                    # else: indeterminate 无 evidence → 滥用闸 ① 降级没判成(保持 (None,""))
+                        results[idx] = (AuditVerdict.INDETERMINATE, ev, tr)
+                    # else: indeterminate 无 evidence → 滥用闸 ① 降级没判成(保持 (None,"",[]))
                     continue
                 violated = item.get("violated")
                 if violated is True:
-                    results[idx] = (AuditVerdict.FAIL, ev)
+                    results[idx] = (AuditVerdict.FAIL, ev, tr)
                 elif violated is False:
-                    results[idx] = (AuditVerdict.PASS, ev)
-                # else: 缺 violated 键 / None / 非布尔 → 保持 (None,"") = 没判成
+                    results[idx] = (AuditVerdict.PASS, ev, tr)
+                # else: 缺 violated 键 / None / 非布尔 → 保持 (None,"",[]) = 没判成
         return results
 
     # ---- 步骤类 LLM 三态判定 -------------------------------------------------
@@ -1240,24 +1332,27 @@ class TranscriptAuditor:
         timeout: int,
         tool_trace: list | None = None,
         on_progress: ProgressFn | None = None,
-    ) -> list[tuple[AuditVerdict | None, str]]:
+    ) -> list[tuple[AuditVerdict | None, str, list[int]]]:
         """分批 call_claude 判每个步骤在本次执行里是否被走过(每批 _MAX_LLM_IN_BATCH(10) 条,处理全部)。
 
-        返回与 candidates 等长的列表,每元素 ``(verdict, evidence)``:
-        - (PASS, ev)          = 走过
-        - (FAIL, ev)          = 该走没走
-        - (NA, ev)            = 场景不涉及
-        - (INDETERMINATE, ev) = 判不准(LLM 看了证据真矛盾/缺失,带具体 evidence)
-        - (None, "")          = 没判成(调用/解析失败/未提及/未知 verdict/非字符串/indeterminate 无 evidence)
+        返回与 candidates 等长的列表,每元素 ``(verdict, evidence, turn_refs_raw)``:
+        - (PASS, ev, tr)          = 走过
+        - (FAIL, ev, tr)          = 该走没走
+        - (NA, ev, tr)            = 场景不涉及
+        - (INDETERMINATE, ev, tr) = 判不准(LLM 看了证据真矛盾/缺失,带具体 evidence)
+        - (None, "", [])          = 没判成(调用/解析失败/未提及/未知 verdict/非字符串/indeterminate 无 evidence)
+
+        ``turn_refs_raw`` 是 LLM 输出的原样引用(未 sanitize);``_judge_step`` 调
+        ``_sanitize_turn_refs`` 后验过滤后,只在 FAIL/INDETERMINATE finding 上挂。
 
         分批模式同 ``_llm_judge_applicable``:每批独立 call_claude + ``_parse_step``,
         批内 index 从 0 计、结果按 ``results[start:start+bn]`` 写回全量(批间 index 映射,
         绝不用批内 index 直接当下标)。某批 RuntimeError → 先重试 ``_LLM_RETRY_MAX`` 次,
-        仍失败则该批保持 (None, "")(调用方标 UNRESOLVED + "建议重跑"警告),
+        仍失败则该批保持 (None, "", [])(调用方标 UNRESOLVED + "建议重跑"警告),
         其余批继续。空 candidates → 不调 LLM,返回 []。
         """
         n = len(candidates)
-        results: list[tuple[AuditVerdict | None, str]] = [(None, "")] * n
+        results: list[tuple[AuditVerdict | None, str, list[int]]] = [(None, "", [])] * n
         total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
         # 先攒齐所有批次的 prompt,再统一交 _run_batches_concurrent 并发跑(同类多批并发)。
         specs: list[tuple[int, int, int, str]] = []
@@ -1271,11 +1366,18 @@ class TranscriptAuditor:
             # tool_trace 进 prompt:判涉及工具的步骤时让 LLM 看到实际工具调用,而非只凭
             # assistant 文字声称(canary 暴露的缺口 —— 否则"Read input log"步骤明明调了
             # Read 却因 transcript_text 只剩文字声称而误判 FAIL)。
+            # 每条 tool call 也带 [T{idx}](若 ToolCallRecord.turn 有标注),让 LLM 能把
+            # 工具调用对到具体 turn → step 的 turn_refs 引用更准(turn 粒度定位)。
             tool_section = ""
             if tool_trace:
-                tool_lines = "\n".join(f"- {t.name}: {t.input_summary}" for t in tool_trace)
+                tool_lines = "\n".join(
+                    f"- [T{t.turn}] {t.name}: {t.input_summary}" if t.turn is not None
+                    else f"- {t.name}: {t.input_summary}"
+                    for t in tool_trace
+                )
                 tool_section = (
-                    "## 实际工具调用记录(判涉及工具的步骤时以此为准,勿只凭文字声称)\n"
+                    "## 实际工具调用记录(判涉及工具的步骤时以此为准,勿只凭文字声称;"
+                    "``[T{idx}]`` 标该调用所属 turn)\n"
                     f"{tool_lines}\n\n"
                 )
             prompt = (
@@ -1287,13 +1389,20 @@ class TranscriptAuditor:
                 "- indeterminate:你看了执行记录,但证据真的相互矛盾或关键信息缺失,"
                 "判断不了走没走。**必须**在 evidence 写明具体矛盾 / 缺失的证据;"
                 "不要用 indeterminate 偷懒回避判断。\n\n"
+                "## turn 引用规则\n"
+                "执行记录每行开头的 ``[T{idx}]`` 标记该动作所属的全局 turn 序号(从 1 计);"
+                "工具调用记录同。当 verdict=fail 或 indeterminate 时,**必须**在 ``turn_refs`` "
+                "列出该问题(应走未走 / 证据矛盾)涉及的 turn 序号(如 ``[8]`` 或 ``[8, 15]``)——"
+                "指向具体动作,便于人工复核定位。**段级缺席**(如「整段全程未走该步」)"
+                "时留空 ``[]`` 并在 evidence 说明是全程性的。verdict=pass / na 留空 ``[]``。\n\n"
                 f"## 执行记录摘录\n{transcript_text[:_SCENE_TRUNCATE]}\n\n"
                 f"{tool_section}"
                 f"## 待判步骤 ({bn} 条)\n{instruction_list}\n"
                 "## 输出格式\n"
                 '只返回 JSON 数组,每元素:'
                 '{"index": 0, "verdict": "pass"|"fail"|"na"|"indeterminate", '
-                '"evidence": "中文简述(具体到证据)"}\n'
+                '"evidence": "中文简述(具体到证据)", '
+                '"turn_refs": [8, 15]  // fail/indeterminate 涉及的 turn 序号;段级缺席或 pass/na 留空 []}\n'
             )
             specs.append((start, bn, k, prompt))
         for start, parsed in _run_batches_concurrent(
@@ -1307,16 +1416,18 @@ class TranscriptAuditor:
     @staticmethod
     def _parse_step(
         text: str, n: int
-    ) -> list[tuple[AuditVerdict | None, str]]:
-        """解析 LLM 步骤判定 → ``(AuditVerdict | None, evidence)``;默认 ``(None, "")`` = 没判成。
+    ) -> list[tuple[AuditVerdict | None, str, list[int]]]:
+        """解析 LLM 步骤判定 → ``(AuditVerdict | None, evidence, turn_refs_raw)``;默认 ``(None, "", [])``。
 
         verdict 匹配大小写不敏感(strip + lower):
-        - "pass"/"fail"/"na" → (PASS/FAIL/NA, ev)
-        - "indeterminate" 且 evidence 非空 → (INDETERMINATE, ev)(判不准)
-        - "indeterminate" 但 evidence 空 → **滥用闸 ①** 降级 (None, "") = 没判成
-        - 未知值 / 非字符串 / 缺键 → (None, "") = 没判成(不误判 N/A 放过疑似漏步)
+        - "pass"/"fail"/"na" → (PASS/FAIL/NA, ev, tr)
+        - "indeterminate" 且 evidence 非空 → (INDETERMINATE, ev, tr)(判不准)
+        - "indeterminate" 但 evidence 空 → **滥用闸 ①** 降级 (None, "", []) = 没判成
+        - 未知值 / 非字符串 / 缺键 → (None, "", []) = 没判成(不误判 N/A 放过疑似漏步)
+
+        第三个元素 ``turn_refs_raw``:LLM 输出的 turn 引用(原样透传,sanitize 在 judge 做)。
         """
-        results: list[tuple[AuditVerdict | None, str]] = [(None, "")] * n
+        results: list[tuple[AuditVerdict | None, str, list[int]]] = [(None, "", [])] * n
         arr_str = extract_first_balanced(text)
         if arr_str is None:
             return results
@@ -1333,18 +1444,21 @@ class TranscriptAuditor:
             if isinstance(idx, int) and 0 <= idx < n:
                 v = item.get("verdict")
                 ev = str(item.get("evidence", "") or "")
+                # 注解 list[Any](同 _parse_prohibition):保 LLM junk 透传给 sanitizer。
+                raw = item.get("turn_refs")
+                tr: list[Any] = list(raw) if isinstance(raw, list) else []
                 if isinstance(v, str):
                     vl = v.strip().lower()
                     if vl == "pass":
-                        results[idx] = (AuditVerdict.PASS, ev)
+                        results[idx] = (AuditVerdict.PASS, ev, tr)
                     elif vl == "fail":
-                        results[idx] = (AuditVerdict.FAIL, ev)
+                        results[idx] = (AuditVerdict.FAIL, ev, tr)
                     elif vl == "na":
-                        results[idx] = (AuditVerdict.NA, ev)
+                        results[idx] = (AuditVerdict.NA, ev, tr)
                     elif vl == "indeterminate":
                         if ev.strip():
-                            results[idx] = (AuditVerdict.INDETERMINATE, ev)
-                        # else: indeterminate 无 evidence → 滥用闸 ① 降级没判成(保持 (None,""))
-                    # else: 未知 verdict 字符串 → 保持 (None,"") = 没判成
-                # else: 缺 verdict 键 / 非字符串 → 保持 (None,"") = 没判成
+                            results[idx] = (AuditVerdict.INDETERMINATE, ev, tr)
+                        # else: indeterminate 无 evidence → 滥用闸 ① 降级没判成(保持 (None,"",[]))
+                    # else: 未知 verdict 字符串 → 保持 (None,"",[]) = 没判成
+                # else: 缺 verdict 键 / 非字符串 → 保持 (None,"",[]) = 没判成
         return results
