@@ -149,6 +149,34 @@ def test_slice_opencode_purity_and_skill_used():
         assert any(tc.name.lower() == "read" for tc in d.tool_trace)
 
 
+def test_root_target_is_session_info_agent():
+    """root 在 opencode = 切 session.info.agent(声明的主 agent)。
+
+    audit.py 的 --kind root 依赖这条契约:opencode 无 parent_tool_use_id,root 靠
+    session.info.agent 定主 agent。multi-skill.json 的主 agent 是 log-error-analyzer
+    (另含 code-review-auditor / release-checklist-zh 两个子 agent)。断言
+    slice_opencode_by_agent 以 info.agent 为 target 返回非空、每段 info.agent 回填
+    主 agent、且段内不含别的 agent 的 message。
+    """
+    from skill_eval.evals.opencode import slice_opencode_by_agent
+
+    sess = load_opencode_session(_MULTI_OC)
+    main_agent = (sess.get("info") or {}).get("agent")
+    assert main_agent == "log-error-analyzer"  # multi-skill.json 声明的主 agent
+    assert main_agent, "multi-skill.json 应带 info.agent(主 agent)"
+
+    segs = slice_opencode_by_agent(_MULTI_OC, main_agent)
+    assert segs, "主 agent 段非空"
+    # 每段 info.agent 回填为 main_agent(slice_opencode_by_agent 契约)
+    assert all((s.get("info") or {}).get("agent") == main_agent for s in segs)
+    # 主 agent 段不含别的 agent 的 message(排除 code-review-auditor / release-checklist-zh)
+    other_agents = {
+        (m.get("info") or {}).get("agent")
+        for s in segs for m in s["messages"]
+    } - {main_agent}
+    assert not other_agents, f"主 agent 段混入了别的 agent: {other_agents}"
+
+
 # 真 `opencode export` 产出的会话(本地 /tmp/oc_export.json,缺席则 skip)。
 # 证明 build_digest_from_opencode 吃的是真实生产格式,非自造。生成:
 #   opencode session list  # 找 sessionID
