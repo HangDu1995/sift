@@ -291,7 +291,7 @@ skill-eval audit /path/to/skill/ --transcript opencode-session.json
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--transcript` | **必填** | 真实会话 transcript（cc `.jsonl` 或 opencode session `.json`，按格式自动分派；**可重复**，多 transcript 聚合） |
-| `--kind` | (无) | `skill`|`agent`：切本 skill/agent 被调用/被 dispatch 期间段（`skill` 按 `Skill` 调用切；`agent` 按 `agent` 归属切；opencode 单锚点按 per-message `agent` 切） |
+| `--kind` | (无) | `skill`|`agent`|`root`：切本 skill/agent 被调用/被 dispatch / 主 agent 作用域段（`skill` 按 `Skill` 调用切；`agent` 按 `agent` 归属切；`root` 切顶层主 agent 作用域——cc `parent_tool_use_id` 为空 / opencode `session.info.agent`，target 名忽略；opencode 单锚点按 per-message `agent` 切） |
 | `--output` / `-o` | ./output | 输出目录 |
 | `--model` | 默认 | 语义判定 LLM |
 | `--format` | table | table / json |
@@ -299,7 +299,9 @@ skill-eval audit /path/to/skill/ --transcript opencode-session.json
 
 > **`--kind skill` 归段 scope-aware（cc）**：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent（Agent 工具）是独立作用域（记录带 `parent_tool_use_id`），子 agent 里用的 skill 切到 Agent 返回、不污染主 agent。target 调多次 → 多段 → 多 transcript 聚合。**两限制**：① skill 无"返回"信号，"调 A→B→不重调 A 接着干 A"那段归 B（不可测）；② 委派子 skill 折进主 skill（inclusive）需声明、暂不支持。该 skill 没在 transcript 里被调过 → exit 2。
 >
-> **opencode 单锚点（`--kind` 对它无意义）**：opencode 无 `Skill` tool_use，skill = per-message `agent` 字段；按**连续同 agent 的 message** 切段（每次 agent 切换断段）。比 cc 简单但**扁平**——无 cc 的父子作用域（opencode 子 agent / `task` 工具就是另一段 agent run，不像 cc 能让主 span 跨子 agent 不断）。同一段切出后落盘成子 `.json`、再走 rebuild 对账。
+> **opencode 单锚点（`--kind skill/agent` 的区分对它无意义）**：opencode 无 `Skill` tool_use，skill = per-message `agent` 字段；按**连续同 agent 的 message** 切段（每次 agent 切换断段）。比 cc 简单但**扁平**——无 cc 的父子作用域（opencode 子 agent / `task` 工具就是另一段 agent run，不像 cc 能让主 span 跨子 agent 不断）。同一段切出后落盘成子 `.json`、再走 rebuild 对账。
+>
+> **`--kind root`：审顶层主 agent / 编排者**。切主 agent 作用域对账（其声明常是 workflow 级 SKILL.md，整 session 审计的地基）。**cc** = `parent_tool_use_id` 为空的全部 record（**单 span**：主 agent 自己的 turn + 它发起的 Agent dispatch tool_use/tool_result；子 agent 内部 record 的 `parent_tool_use_id` 指向某 Agent 调用，**排除**、归各自 `kind="agent"` 单元审）；**opencode** = `session.info.agent`（declared 主 agent；主 agent message 被子 agent 夹断可能**多 span**，findings pool 聚合、与单 span 等价——root 是 opencode 上 `--kind` 唯一改变 target 的取值：skill/agent 按声明名、root 取 `session.info.agent`）。**target 名对 root 无意义**（只认作用域、不按名切）。审的是主 agent 的**编排**（dispatch 谁 / 何时 / 怎么接返回），不是子 agent 内部。exit code 不变（无 gate）：cc 主作用域恒非空（never-invoked 不触发 exit 2）；opencode 缺 `session.info.agent` → exit 2。
 
 判定四类（条件性 / 禁令 / 步骤 / 输出格式），每条出**五态 verdict** + **method** 标（`PROGRAMMATIC` 程序对账 / `LLM` 语义判定）：`PASS` / `FAIL` / `N/A`（不适用，场景不触发）/ `UNRESOLVED`（没判成，LLM 失败/解析失败/未提及，可重跑）/ `INDETERMINATE`（判不准，证据真模糊，重跑无益）；输出格式是确定性子串匹配（`PROGRAMMATIC`，不调 LLM，只 PASS/FAIL）。**禁令判的角度反着来**——主动找违规、不判“遵守没”（如 `NEVER ...` / `不得编造`）。没判成报 UNRESOLVED + “建议重跑”警告、判不准报 INDETERMINATE + 占比告警，都不保守 FAIL（各类判法详表见 reference 的 audit 段）。产出 `audit-report.json` + `audit-report.html`（HTML always 写）。
 

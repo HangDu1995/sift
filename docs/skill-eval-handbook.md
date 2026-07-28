@@ -652,7 +652,8 @@ audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md �
 
 几个关键点：
 
-- **`--kind {skill,agent}`**：transcript 里调了多个 skill / dispatch 了多个 agent 时，默认会把整段会话混在一起判（别的单元的行为混进本单元的对账）。加 `--kind` 切成本单元被调用/被 dispatch 期间的段，只对账这些段。`--kind skill` 按 `Skill` 工具调用切，两条固有限制：① skill 无"返回"信号，"调 A→调 B→不重调 A 接着干 A"那段归 B（不可测）；② 委派子 skill 折进来审（inclusive）需声明、暂不支持。**审 agent（`--kind agent`，被 dispatch 的 subagent）是独立能力、和 skill 路语义不同（扁平切、dual-nature 各审各的），见 §7.8**。opencode 单锚点（无 `Skill` tool_use），kind 对它无意义、照常按 per-message `agent` 字段切。
+- **`--kind {skill,agent}`**：transcript 里调了多个 skill / dispatch 了多个 agent 时，默认会把整段会话混在一起判（别的单元的行为混进本单元的对账）。加 `--kind` 切成本单元被调用/被 dispatch 期间的段，只对账这些段。`--kind skill` 按 `Skill` 工具调用切，两条固有限制：① skill 无"返回"信号，"调 A→调 B→不重调 A 接着干 A"那段归 B（不可测）；② 委派子 skill 折进来审（inclusive）需声明、暂不支持。**审 agent（`--kind agent`，被 dispatch 的 subagent）是独立能力、和 skill 路语义不同（扁平切、dual-nature 各审各的），见 §7.8**。opencode 单锚点（无 `Skill` tool_use），`skill`/`agent` 的区分对它无意义、照常按 per-message `agent` 字段切。
+- **`--kind root`**：与 skill / agent 对称的第三种锚点——切**顶层主 agent**的作用域，审主 agent / 编排者（其声明常是 workflow 级 SKILL.md，是整 session 审计的地基）。cc = `parent_tool_use_id` 为空的全部 record（单 span）；opencode = `session.info.agent`（主 agent message 被子 agent 夹断可能多 span，pool 聚合等价）。**target 名对 root 无意义**（只认作用域、不按名切）。断段差异 + 编排语义详见 §7.8 末尾。
 - **derived_from_transcript（反推）**：findings 里 `derived_from_transcript: true` 的不是从 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（**只增不减** = 只新增 finding，不会替换或删掉从 SKILL.md 抽出来的指令）。**目前只补一类**：transcript 里 agent 真实 Read 过的输入/参考文件 → 各补一条"读取 \<path\>"（REFERENCE_USAGE，构造上即命中 → PASS，不膨胀 fail）。另外两类不反推——工具调用反推（`required_tools`，Bash 命令分不清业务专用还是通用）和产物文件反推（`required_outputs`，历史 trace 的产物未必还在盘，且"产出文件检查"属评分断言、不属遵循性指令），因为映射不干净、容易误判。
 - **别只数 fail**：每条 finding 带序号。**来源徽章**显示这条 finding 是从哪个 / 哪些 `InstructionSource` 抽出来的（CONSTRAINT / ANTI_FABRICATION / HEADING_STEP / TOOL_REQUIREMENT / REFERENCE_USAGE / OUTPUT_FORMAT）。当同一句 SKILL.md 文本同时匹配多个抽取模式（如同句既是约束、又是反捏造）、且同 transcript 同 verdict 时，会**合并成一条**，徽章就显示两个来源（如 `CONSTRAINT + ANTI_FABRICATION`）——证明同文重复已去重、没有虚增 fail。而同一行为跨两条**不同**规则（如没读某 reference 同时违反"条件性"+"步骤"两条）仍会是两条，但互标"↔ 同源违规 #N"。所以 fail 条数可能 > 真实问题数，逐条看 evidence 对照"哪个行为"，别数条数。
 
@@ -676,7 +677,22 @@ skill-eval audit path/to/test-runner/ --transcript session.json --kind agent   #
 
 现成示例：`fixtures/example-agents/`（test-runner / lint-reviewer，合成违规 transcript + 期望该抓的违规逐条列明），见 [example-agents/README.md](../fixtures/example-agents/README.md)。
 
-> opencode transcript 单锚点（无 `Skill` tool_use），`--kind` 对它无意义、照常按 per-message `agent` 字段切——cc 的 skill/agent 双锚点区分只对 cc / structured transcript 有意义。
+> opencode transcript 单锚点（无 `Skill` tool_use），`--kind skill/agent` 的区分对它无意义、照常按 per-message `agent` 字段切——cc 的 skill/agent 双锚点区分只对 cc / structured transcript 有意义（`--kind root` 在 opencode 取 `session.info.agent`，见下节）。
+
+#### 审 root（`--kind root`）：对账顶层主 agent / 编排者
+
+与 agent（被 dispatch 的子 agent）对称，root 切的是**顶层主 agent**的作用域——审主 agent 的**编排动作**（dispatch 了谁、何时、怎么接返回），而非子 agent 内部。它是整 session / workflow 审计的地基：主 agent 的声明常是一份 workflow 级 SKILL.md（管主 agent 怎么编排，而不是某个子 skill / 子 agent 的行为），root 就是拿这份声明去对账主 agent 作用域的执行。
+
+**双平台定义**：
+
+- **cc / 结构化 records** = `parent_tool_use_id` 为空的全部 record（主作用域）。主 agent 自己的 turn + 它发起的 Agent dispatch tool_use / tool_result 都在主作用域（这些是主 agent 的编排动作，**包含**）；子 agent 内部 record 的 `parent_tool_use_id` 指向某 Agent 调用（**排除**——那些归各自 `kind="agent"` 单元审）。
+- **opencode** 无父子作用域，root 取 `session.info.agent`（declared 主 agent），复用 `slice_opencode_by_agent` 按连续同 agent message 切段。
+
+**断段差异**（同源于 §7.8 上半 agent 路的"扁平切"）：cc 主作用域过滤后是连贯的主执行流，作为**单 span** 喂 auditor（即使主 record 在原序列里被子 agent record 物理夹断，过滤后仍连贯一段，区别于 agent 路的同名 run 断段）；opencode 按连续 message 切，主 agent 的 message 若被子 agent 的 message 夹断（主…子…主…子…主），会被切成**多段**——这无害，每段独立喂 auditor，findings 全量 pool 后按指令聚合（`aggregate_by_instruction`），verdict 与合成单 span 等价（与 agent 路断段无害同理）。
+
+**target 名对 root 无意义**：skill / agent 路靠声明名（`name` 契约）切，root 只认作用域（cc 的 `parent_tool_use_id` 是否为空 / opencode 的 `info.agent` 字段）——切主 agent 不看它叫什么、target 名忽略。这也是 root 能成为整 session 审计地基的原因：它不依赖某个子单元被点名调用，而是恒定的顶层作用域。
+
+exit code 不变（root 不引入新 gate）：cc 主作用域恒非空（至少起头 user turn 在主），never-invoked 不触发 exit 2；opencode 缺 `session.info.agent`（无法定主 agent）→ exit 2。
 
 ### 7.9 transcript 怎么变成可对账的 digest：三种来源同一条重建路
 
