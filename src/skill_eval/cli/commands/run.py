@@ -8,7 +8,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from skill_eval.cli.helpers import _check_claude_or_exit, _discover_evals, _parse_eval_samples
+from skill_eval.cli.helpers import _check_claude_or_exit, _discover_evals, _parse_eval_ids, _parse_eval_samples
 from skill_eval.cli.main import app, console
 from skill_eval.cli.pipeline import _run_ab_eval
 from skill_eval.env_check import check_skill_env, check_eval_env
@@ -170,6 +170,7 @@ def run(
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
     format: str = typer.Option("table", "--format", help="Output format"),
     eval_samples: Optional[str] = typer.Option(None, "--eval-samples", help="Number or pct of evals to run (e.g. 10 or 0.25)"),
+    eval_ids: Optional[str] = typer.Option(None, "--eval-ids", help="只跑指定 id 的题(逗号分隔,如 3,5,7);和 --eval-samples 互斥"),
     skill_b: Optional[Path] = typer.Option(
         None, "--skill-b",
         help="v1/v2 模式:第二个 skill 路径(两边都注入各自 skill);不给则默认 with/without(同一 skill 开/关)",
@@ -294,6 +295,7 @@ def run(
         output_dir=output_dir,
         fmt=format,
         eval_samples=_parse_eval_samples(eval_samples),
+        eval_ids=_parse_eval_ids(eval_ids),
         max_retries=max_retries,
         skill_b=skill_b,
         label_a=label_a,

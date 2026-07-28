@@ -27,6 +27,7 @@ def _run_ab_eval(
     output_dir: Path = Path("output"),
     fmt: str = "table",
     eval_samples: int | float | None = None,
+    eval_ids: list[int] | None = None,
     max_retries: int = 2,
     skill_b: Path | None = None,
     label_a: str | None = None,
@@ -35,12 +36,19 @@ def _run_ab_eval(
     from skill_eval.execution.runner import ABTestRunner, build_sides
     from skill_eval.execution.benchmark import BenchmarkAggregator
 
+    if eval_ids and eval_samples:
+        raise SkillEvalError("--eval-ids 和 --eval-samples 互斥(指定 id 就不再随机抽样)")
+
     # sides spec 单一事实源:skill_b 给定 → v1/v2 两 skill;None → 默认 with/without。
     sides = build_sides(skill_path, skill_b, label_a, label_b)
 
     lc = _log_console(fmt)
     total_evals = len(eval_set.evals)
     actual_evals = total_evals
+    selected = ""
+    if eval_ids:
+        actual_evals = len(eval_ids)
+        selected = f" (by id: {','.join(map(str, eval_ids))} = {actual_evals}/{total_evals})"
     sampled = ""
     if eval_samples:
         if isinstance(eval_samples, float) and eval_samples <= 1.0:
@@ -49,7 +57,7 @@ def _run_ab_eval(
         else:
             actual_evals = min(int(eval_samples), total_evals)
             sampled = f" (sampled {actual_evals}/{total_evals})"
-    lc.print(f"Running A/B test: {eval_set.skill_name} ({total_evals} evals{sampled} × {runs} runs)")
+    lc.print(f"Running A/B test: {eval_set.skill_name} ({total_evals} evals{selected}{sampled} × {runs} runs)")
 
     scoring_config = ScoringConfig(
         enable_programmatic=scoring in ("hybrid", "programmatic"),
@@ -68,6 +76,7 @@ def _run_ab_eval(
         skip_compliance=skip_compliance,
         refine_instructions=refine_instructions,
         eval_samples=eval_samples,
+        eval_ids=eval_ids,
         per_eval_timeout=timeout,
         min_runs_for_stats=max(3, runs),
         max_retries_per_eval=max_retries,

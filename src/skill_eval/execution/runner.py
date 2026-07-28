@@ -14,7 +14,7 @@ from typing import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
-from skill_eval.errors import ClaudeRunnerError
+from skill_eval.errors import ClaudeRunnerError, SkillEvalError
 from skill_eval.execution.cli_runner import ClaudeRunner, find_project_root  # noqa: F401 — re-exported for backward compat
 from skill_eval.execution.anomaly import detect_outliers, detect_timeout  # noqa: F401 — re-exported for backward compat
 from skill_eval.models import (
@@ -314,6 +314,22 @@ class ABTestRunner:
         return self._run_per_eval(skill_path, eval_set, evals_to_run, sides)
 
     def _sample_evals(self, evals: list[EvalCase]) -> list[EvalCase]:
+        if self.config.eval_ids is not None:
+            # 按 id 精确选(优先于 eval_samples 随机抽样)。保序去重;id 不存在报错(列可用,
+            # 避免静默漏跑)。互斥校验在 pipeline 层(用户参数);runner 层 eval_ids 优先是防御。
+            by_id = {e.id: e for e in evals}
+            missing = [i for i in self.config.eval_ids if i not in by_id]
+            if missing:
+                raise SkillEvalError(
+                    f"--eval-ids 不存在: {missing}(可用 id: {sorted(by_id)})"
+                )
+            seen: set[int] = set()
+            selected: list[EvalCase] = []
+            for i in self.config.eval_ids:
+                if i not in seen:
+                    seen.add(i)
+                    selected.append(by_id[i])
+            return selected
         if not self.config.eval_samples:
             return evals
         n = len(evals)

@@ -18,6 +18,7 @@ class RunConfig(BaseModel):
     skip_compliance: bool = False
     refine_instructions: bool = True
     eval_samples: int | float | None = None
+    eval_ids: list[int] | None = None  # 按 id 指定某几道题(优先于 eval_samples;互斥)
     per_eval_timeout: int = 300  # Per-eval timeout for outlier detection
     outlier_threshold_multiplier: float = 3.0  # > N×MAD → anomaly
     min_runs_for_stats: int = 3  # Minimum runs before statistical checks kick in

@@ -264,6 +264,7 @@ skill-eval vet my-skill/
 
 # 4. 快速验证（1 run）
 skill-eval run my-skill/ --runs 1 --eval-samples 5
+skill-eval run my-skill/ --runs 1 --eval-ids 3,5   # 或只跑指定 id（调试/回归某几道）
 
 # 5. 正式评测（3 runs，统计稳定）
 skill-eval run my-skill/ --runs 3 --compliance-gate

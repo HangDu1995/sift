@@ -150,6 +150,7 @@ skill-eval run path/to/skill/ --scoring programmatic   # 仅程序化，零 LLM 
 skill-eval run v2/ --skill-b v1/                        # v1/v2 双 skill 回归对照
 skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo   # 路径 1 真任务模式（默认 cc）
 skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo --executor opencode   # 同上，改用 opencode 跑
+skill-eval run path/to/skill/ --eval-ids 3,5                  # 只跑指定 id 的题（调试/回归某几道；和 --eval-samples 互斥）
 ```
 
 关键参数：
@@ -164,6 +165,8 @@ skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo --executor o
 | `--no-compliance` | auto | 跳过遵循性检查（`--runs<3` 时默认开） |
 | `--security-gate` | off | 安全审查返回 BLOCKED/REVIEW_NEEDED 时判失败 |
 | `--model` | — | claude -p 模型（也控制盲比较/赛后分析是否执行） |
+| `--eval-samples` | — | 随机抽样跑 N 道或 pct%（如 `10` 或 `0.25`） |
+| `--eval-ids` | — | 只跑指定 id 的题（逗号分隔，如 `3,5,7`）；和 `--eval-samples` 互斥 |
 
 > `run` 是纯数据生产者——exit 0 只代表产数据成功，**通过/失败判决由 `gate` 出**。
 

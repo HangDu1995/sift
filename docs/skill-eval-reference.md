@@ -217,7 +217,8 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 | `--no-vet` | 关闭 | 跳过末尾自动产安全审查（默认产，写进 output 目录根，供 report 安全面板） |
 | `--no-report` | 关闭 | 跳过末尾自动产 HTML 报告（默认产 report.html；聚合 benchmark/评分卡/安全） |
 | `--output` / `-o` | output/ | 输出目录 |
-| `--eval-samples` | 无 | 运行 eval 的数量或比例（如 `10` 或 `0.25`） |
+| `--eval-samples` | 无 | 运行 eval 的数量或比例（如 `10` 或 `0.25`）；**随机抽样**（不可控选哪几道） |
+| `--eval-ids` | 无 | 只跑指定 id 的题（逗号分隔，如 `3,5,7`）；**和 `--eval-samples` 互斥**；id 不存在报错（列可用）；保序去重。路径1（`--task`）不读 evals、对它无效 |
 | `--format` | table | 输出格式：table / json |
 | `--skill-b` | 无 | **v1/v2 模式**：第二个 skill 路径（两边各注入各自 skill）；不给则默认 with/without（同 skill 开/关） |
 | `--label-a` | skill 目录名 | v1/v2 模式 side A 显示标签 |

@@ -318,7 +318,28 @@ skill-eval run path/to/skill/ --scoring programmatic          # 仅程序化评�
 >
 > run 默认会在末尾自动跑静态体检 + 安全审查（产出 `scorecard.json` / `vet-report.json`，可 `--no-static` / `--no-vet` 跳过）。还有一个安全相关开关 **`--security-gate`**：开启后，若 vet 判 `BLOCKED` / `REVIEW_NEEDED`，run 直接退 1（否则 run 的退出码只表示产数据成败，通过/失败由 `gate` 判，见附录 exit code 表）。
 
-### 4.2 一次 run 的完整流程
+### 4.2 选题：全量 / 抽样 / 指定某几道
+
+run 默认跑 evals.json 的**全部题**。题多时全量耗时耗 token（每道 × runs × sides × Claude 调用），开发迭代常不需每次全量。三种选题策略：
+
+- **全量（默认）**：跑全部题——完整评估，正式评测用。耗时最长。
+- **`--eval-samples N` 或 `pct`**：**随机抽样** N 道或 pct% 道（如 `--eval-samples 10` 或 `0.25`）——快速估算整体表现，但**不可控选哪几道**（随机）。
+- **`--eval-ids 3,5,7`**：**精确指定**某几道（按 eval.id，逗号分隔）——调试某道 fail、回归某道、重现某道行为。和 `--eval-samples` **互斥**。
+
+```bash
+skill-eval run path/to/skill/ --eval-samples 10              # 随机抽 10 道估整体
+skill-eval run path/to/skill/ --eval-ids 3,5                 # 只跑 id=3、5（调试/回归某几道）
+```
+
+**为什么 ids 和 samples 互斥（不是叠加）**：指定了 id 又随机抽样会矛盾——"我选了第 3、5 道却又被随机抽掉"。语义清晰起见，同给报错；要减量就二选一（随机估整体用 samples / 聚焦某几道用 ids）。
+
+**id 不存在报错（不静默）**：`--eval-ids 99`（evals.json 没这题）直接报错并列出可用 id，不静默漏跑——id 是精确指定，笔误该立刻发现（不像 `--eval-samples` 格式错静默当全量：那个随机抽样，笔误当全量可接受）。保序去重（`--eval-ids 3,3,5` 跑 3、5 两道，按给定顺序）。
+
+**何时用哪个**：正式评测 → 全量；快速看 skill 大致水平 → `--eval-samples`；调试/回归/重现某道 → `--eval-ids`。
+
+> 路径1 真任务模式（`--task`）不读 evals.json、没有 id 概念，`--eval-ids` 和 `--eval-samples` 对它都无效（见第十三章）。
+
+### 4.3 一次 run 的完整流程
 
 一道 eval 在**注入了 skill 的 side** 上跑时，背后走 7 步——with/without 模式只有 with_skill 侧满足，v1/v2 模式两边都满足：
 
@@ -334,7 +355,7 @@ skill-eval run path/to/skill/ --scoring programmatic          # 仅程序化评�
 
 评分里若出现 **UNEVAL（评不出来）**——某条 expectation/assertion LLM 判不了（transcript 截断 / 解析失败 / 信息不足），区别于 FAIL（确定错）——会触发自动重试（`--max-retries`，默认 2），重试目录形如 `run-1-retry-1`。**重试有上限、不是无限重试到评出来为止**：耗尽次数仍 UNEVAL 就原样落盘，所以最终 grading 不保证全 PASS/FAIL，可能仍含 UNEVAL（以及 TIMEOUT/ERROR）。
 
-### 4.3 skill 怎么"注入"：拼进 prompt，不是加载
+### 4.4 skill 怎么"注入"：拼进 prompt，不是加载
 
 skill 不是一个运行时加载的模块。skill-eval 做的是：
 
@@ -345,7 +366,7 @@ skill 不是一个运行时加载的模块。skill-eval 做的是：
 
 > 一个常见坑：**references/ 在 skill 注入时会自动拷进工作区**（无需配置）；但 skill 依赖的 `scripts/` 等其它目录**不会**自动拷——若 SKILL.md 让模型运行 `scripts/foo.py` 或读取 references 以外的文件，得在 eval 里用 `source_dir` 把它拷进来，否则模型反复找不存在的文件直到 timeout，效果从"有增益"掉回"和不开一样"。看到 with/without delta 接近 0 时，先排查依赖目录进没进工作区。
 
-### 4.4 产物目录树
+### 4.5 产物目录树
 
 ```
 output/
