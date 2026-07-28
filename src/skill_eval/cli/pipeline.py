@@ -28,6 +28,7 @@ def _run_ab_eval(
     fmt: str = "table",
     eval_samples: int | float | None = None,
     eval_ids: list[int] | None = None,
+    changed_from: Path | None = None,
     max_retries: int = 2,
     skill_b: Path | None = None,
     label_a: str | None = None,
@@ -36,19 +37,46 @@ def _run_ab_eval(
     from skill_eval.execution.runner import ABTestRunner, build_sides
     from skill_eval.execution.benchmark import BenchmarkAggregator
 
-    if eval_ids and eval_samples:
-        raise SkillEvalError("--eval-ids 和 --eval-samples 互斥(指定 id 就不再随机抽样)")
+    lc = _log_console(fmt)
+
+    # 三选一互斥:samples(随机估)/ ids(手动精确)/ changed-from(自动精确)。
+    _selectors = [eval_ids, eval_samples, changed_from]
+    if sum(1 for s in _selectors if s) > 1:
+        raise SkillEvalError(
+            "--eval-ids / --eval-samples / --changed-from 三选一互斥(指定其一就不再用别的选题)"
+        )
+
+    # changed-from:路 A,resolve 成 eval_ids 复用现成 by-id 通道。RunConfig/runner 不动。
+    selection = None
+    if changed_from:
+        from skill_eval.cli.affected import compute_affected_evals
+        affected = compute_affected_evals(skill_path, changed_from, eval_set, model)
+        total_evals_pre = len(eval_set.evals)
+        selection = {
+            "mode": "changed-from",
+            "ids": affected,
+            "affected": len(affected),
+            "total": total_evals_pre,
+        }
+        lc.print(f"changed-from: 受影响 {affected} of {total_evals_pre} 道题 → 跑子集")
+        if not affected:
+            console.print(
+                "[yellow]判定无受影响 eval(改的可能是与所有题无关的措辞)。"
+                "不放心去掉 --changed-from 跑全量。[/yellow]"
+            )
+            raise typer.Exit(code=0)
+        eval_ids = affected  # 灌进 by-id 通道
 
     # sides spec 单一事实源:skill_b 给定 → v1/v2 两 skill;None → 默认 with/without。
     sides = build_sides(skill_path, skill_b, label_a, label_b)
 
-    lc = _log_console(fmt)
     total_evals = len(eval_set.evals)
     actual_evals = total_evals
     selected = ""
     if eval_ids:
         actual_evals = len(eval_ids)
-        selected = f" (by id: {','.join(map(str, eval_ids))} = {actual_evals}/{total_evals})"
+        _label = "changed-from" if changed_from else "by id"
+        selected = f" ({_label}: {','.join(map(str, eval_ids))} = {actual_evals}/{total_evals})"
     sampled = ""
     if eval_samples:
         if isinstance(eval_samples, float) and eval_samples <= 1.0:
@@ -106,6 +134,9 @@ def _run_ab_eval(
             runs_nested = list(cd.glob("eval-*/run-*"))
             console.print(f"    {c}/: {len(runs_direct)} direct runs, {len(runs_nested)} nested runs")
         raise typer.Exit(code=1)
+
+    if selection:
+        benchmark.selection = selection
 
     benchmark_path = iteration_dir / "benchmark.json"
     benchmark_path.write_text(

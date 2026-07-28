@@ -92,6 +92,7 @@ class BenchmarkData(BaseModel):
     analysis: AnalysisResult | None = None
     anomaly_report: AnomalyReport | None = None
     calibration_summary: CalibrationSummary | None = None
+    selection: dict[str, Any] | None = None  # 选题信息(如 changed-from 子集跑:mode/ids/affected/total)
 
 
 class InstructionCheck(BaseModel):

@@ -171,6 +171,10 @@ def run(
     format: str = typer.Option("table", "--format", help="Output format"),
     eval_samples: Optional[str] = typer.Option(None, "--eval-samples", help="Number or pct of evals to run (e.g. 10 or 0.25)"),
     eval_ids: Optional[str] = typer.Option(None, "--eval-ids", help="只跑指定 id 的题(逗号分隔,如 3,5,7);和 --eval-samples 互斥"),
+    changed_from: Optional[Path] = typer.Option(
+        None, "--changed-from",
+        help="改 skill 后只跑受影响的题:给基线 skill 目录,自动 diff 指令 + LLM 判受影响 eval(回归探针;和 --eval-ids/--eval-samples 互斥)。子集 delta 非整体测量,周期仍需全量兜底",
+    ),
     skill_b: Optional[Path] = typer.Option(
         None, "--skill-b",
         help="v1/v2 模式:第二个 skill 路径(两边都注入各自 skill);不给则默认 with/without(同一 skill 开/关)",
@@ -296,6 +300,7 @@ def run(
         fmt=format,
         eval_samples=_parse_eval_samples(eval_samples),
         eval_ids=_parse_eval_ids(eval_ids),
+        changed_from=changed_from,
         max_retries=max_retries,
         skill_b=skill_b,
         label_a=label_a,

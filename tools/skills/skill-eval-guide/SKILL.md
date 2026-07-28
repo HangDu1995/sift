@@ -439,7 +439,8 @@ skill-eval audit /path/to/skill/ --transcript /tmp/live/run-1/transcript.jsonl -
 
 ```bash
 skill-eval run /path/to/skill --eval-samples 3 --runs 1 -o out/
-skill-eval run /path/to/skill --eval-ids 3,5 --runs 1 -o out/  # 只跑指定 id(调试/回归某几道;和 --eval-samples 互斥)
+skill-eval run /path/to/skill --eval-ids 3,5 --runs 1 -o out/  # 只跑指定 id(调试/回归某几道;和 --eval-samples/--changed-from 三选一互斥)
+skill-eval run /path/to/skill --changed-from /path/to/v1 --runs 1 -o out/  # 改 skill 后只跑受影响的题(给基线目录;回归探针;和 --eval-samples/--eval-ids 互斥)
 ```
 
 ### "批量评测多个 skill"
@@ -455,7 +456,7 @@ skill-eval batch-report batch-workspace/ --open
 
 ```
 output/iteration-1/
-├── benchmark.json          # 聚合：双率 delta + comparisons + comparison_summary + analysis
+├── benchmark.json          # 聚合：双率 delta + comparisons + comparison_summary + analysis（--changed-from 子集跑时另记 selection）
 ├── report.html             # 自包含 HTML 报告（读 gate.json 显门禁徽章；run 末尾自动产）
 ├── gate.json               # gate 命令产出（判决 + 两轴明细；非 run 产出）
 ├── scorecard.json          # run 末尾自动产（静态评分卡；也可 analyze -o 单独产）
@@ -504,7 +505,7 @@ PYEOF
 | skill-eval 未安装 | 向用户索要 GitHub URL，clone + `bash install.sh` |
 | `run` 退 1 了 | 只在 `--security-gate` 触发时；负 delta 不再退 1。通过/失败看 `gate` |
 | pass_rate 全 0% | expectation 太模糊，重新 `init`；或用 `--scoring llm` |
-| 超时 | `--timeout 600`，`--eval-samples 5` 或 `--eval-ids 3,5`（只跑某几道） |
+| 超时 | `--timeout 600`，`--eval-samples 5` / `--eval-ids 3,5` / `--changed-from v1/`（只跑某几道） |
 | without_skill 无 grading | 正常（无 skill 时 Claude 可能不产出可评判内容） |
 | calibration 过程未知 | compliance 缺失或无可判定项（如纯推理题）；正常现象，非缺陷 |
 | calibration 高分存疑 | 输出对了但过程违反 prohibition/output 硬性规则；看 evidence 核对 |

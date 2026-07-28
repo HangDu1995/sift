@@ -320,24 +320,30 @@ skill-eval run path/to/skill/ --scoring programmatic          # 仅程序化评�
 
 ### 4.2 选题：全量 / 抽样 / 指定某几道
 
-run 默认跑 evals.json 的**全部题**。题多时全量耗时耗 token（每道 × runs × sides × Claude 调用），开发迭代常不需每次全量。三种选题策略：
+run 默认跑 evals.json 的**全部题**。题多时全量耗时耗 token（每道 × runs × sides × Claude 调用），开发迭代常不需每次全量。四种选题策略：
 
 - **全量（默认）**：跑全部题——完整评估，正式评测用。耗时最长。
 - **`--eval-samples N` 或 `pct`**：**随机抽样** N 道或 pct% 道（如 `--eval-samples 10` 或 `0.25`）——快速估算整体表现，但**不可控选哪几道**（随机）。
-- **`--eval-ids 3,5,7`**：**精确指定**某几道（按 eval.id，逗号分隔）——调试某道 fail、回归某道、重现某道行为。和 `--eval-samples` **互斥**。
+- **`--eval-ids 3,5,7`**：**精确指定**某几道（按 eval.id，逗号分隔）——调试某道 fail、回归某道、重现某道行为。和 `--eval-samples`/`--changed-from` **三选一互斥**。
+- **`--changed-from <baseline 目录>`**：**自动判受影响**——改 skill 后给基线目录，自动 diff 两边 SKILL.md 指令 + LLM 判哪些 eval 受这次改动影响、只跑那些（**回归探针**）。和 `--eval-samples`/`--eval-ids` **互斥**。
 
 ```bash
 skill-eval run path/to/skill/ --eval-samples 10              # 随机抽 10 道估整体
 skill-eval run path/to/skill/ --eval-ids 3,5                 # 只跑 id=3、5（调试/回归某几道）
+skill-eval run path/to/skill/ --changed-from v1/             # 改 skill 后只跑受影响的题（给基线目录）
 ```
 
 **为什么 ids 和 samples 互斥（不是叠加）**：指定了 id 又随机抽样会矛盾——"我选了第 3、5 道却又被随机抽掉"。语义清晰起见，同给报错；要减量就二选一（随机估整体用 samples / 聚焦某几道用 ids）。
 
 **id 不存在报错（不静默）**：`--eval-ids 99`（evals.json 没这题）直接报错并列出可用 id，不静默漏跑——id 是精确指定，笔误该立刻发现（不像 `--eval-samples` 格式错静默当全量：那个随机抽样，笔误当全量可接受）。保序去重（`--eval-ids 3,3,5` 跑 3、5 两道，按给定顺序）。
 
-**何时用哪个**：正式评测 → 全量；快速看 skill 大致水平 → `--eval-samples`；调试/回归/重现某道 → `--eval-ids`。
+**何时用哪个**：正式评测 → 全量；快速看 skill 大致水平 → `--eval-samples`；调试/回归/重现某道 → `--eval-ids`；**改 skill 后回归受影响的几道 → `--changed-from`**（省全量，但子集 delta 非整体测量，周期仍需全量兜底）。
 
-> 路径1 真任务模式（`--task`）不读 evals.json、没有 id 概念，`--eval-ids` 和 `--eval-samples` 对它都无效（见第十三章）。
+> `--changed-from` 是**回归探针，不是代表性测量**：它只跑 LLM 判定受改动影响的子集，聚合 delta 在偏置子集上算、不代表整体质量；判定靠 LLM（偏过召：拿不准就带），不对劲可用 `--eval-ids` 覆盖。判定失败（调用/解析/返回不存在 id）报错退出；判定空集（零受影响）合法、跑空退出。周期性仍跑一次全量拿真信号。
+
+> **想要更可控的判定？** `--changed-from` 现在靠 LLM 每次自动判受影响 eval（够用，但每次重判、不保证确定）。若需要更精确、可复现的判定，一个思路是**手工给每道 eval 标注它考的是 skill 的哪条指令**（存一张 eval↔指令对应表），改 skill 后直接查表得出受影响 eval——确定性、可审计，代价是要维护这张表、改动指令后得更新标注。当前未实现，留作后续方向；自动判定不敷用时可作为演进路径。
+
+> 路径1 真任务模式（`--task`）不读 evals.json、没有 id 概念，`--eval-ids`、`--eval-samples`、`--changed-from` 对它都无效（见第十三章）。
 
 ### 4.3 一次 run 的完整流程
 
@@ -968,6 +974,7 @@ spawn claude -p
 | `comparisons[]` | 盲比较逐条（读 `outputs/`，不是 benchmark） |
 | `comparison_summary` | 盲比较聚合 `{total, a_wins, b_wins, ties, failed, valid, win_rate, label_a, label_b}` |
 | `analysis` | 深度分析（见 12.3） |
+| `selection` | （可选，仅 `--changed-from` 子集跑时）`{mode, ids, affected, total}`——标识本次为受影响子集跑、delta 非整体测量 |
 
 每条 `RunResultEntry`：`eval_id` / `eval_name` / `configuration` / `run_number` / `result`（`RunResultMetrics`：`pass_rate`/`passed`/`failed`/`total`/`time_seconds`/`tokens`/`tool_calls`/`errors` + 双率 `pass_rate_programmatic`/`pass_rate_llm`）/ `expectations[]` / `compliance`（**通常为 null**——聚合器不嵌完整 compliance，完整 AuditReport 在 per-run `compliance.json` 里，report 用 `find_runs` 另读）/ `notes[]` / `is_anomaly` / `anomaly_reason` / `retry_count`。
 

@@ -104,7 +104,8 @@ output/
 │   ├── runs[]              #   每条 run 的 pass_rate / time / tokens
 │   ├── run_summary         #   mean / stddev / delta
 │   ├── comparisons[]       #   盲比较
-│   └── analysis            #   深度分析
+│   ├── analysis            #   深度分析
+│   └── selection           #   子集跑信息（仅 --changed-from 时：mode/ids/affected/total）
 ├── report.html             #   自包含 HTML 可视化报告
 │
 ├── with_skill/
@@ -265,6 +266,7 @@ skill-eval vet my-skill/
 # 4. 快速验证（1 run）
 skill-eval run my-skill/ --runs 1 --eval-samples 5
 skill-eval run my-skill/ --runs 1 --eval-ids 3,5   # 或只跑指定 id（调试/回归某几道）
+skill-eval run my-skill/ --runs 1 --changed-from v1/   # 或改 skill 后只跑受影响的题（给基线目录；回归探针）
 
 # 5. 正式评测（3 runs，统计稳定）
 skill-eval run my-skill/ --runs 3 --compliance-gate

@@ -218,11 +218,17 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 | `--no-report` | 关闭 | 跳过末尾自动产 HTML 报告（默认产 report.html；聚合 benchmark/评分卡/安全） |
 | `--output` / `-o` | output/ | 输出目录 |
 | `--eval-samples` | 无 | 运行 eval 的数量或比例（如 `10` 或 `0.25`）；**随机抽样**（不可控选哪几道） |
-| `--eval-ids` | 无 | 只跑指定 id 的题（逗号分隔，如 `3,5,7`）；**和 `--eval-samples` 互斥**；id 不存在报错（列可用）；保序去重。路径1（`--task`）不读 evals、对它无效 |
+| `--eval-ids` | 无 | 只跑指定 id 的题（逗号分隔，如 `3,5,7`）；**和 `--eval-samples`/`--changed-from` 三选一互斥**；id 不存在报错（列可用）；保序去重。路径1（`--task`）不读 evals、对它无效 |
+| `--changed-from` | 无 | 改 skill 后只跑受影响的题：给**基线 skill 目录**，自动 diff 两边 SKILL.md 指令 + LLM 判受影响 eval（回归探针）；**和 `--eval-ids`/`--eval-samples` 互斥**。子集 delta 非整体测量，周期仍需全量兜底。失败处理见下 |
 | `--format` | table | 输出格式：table / json |
 | `--skill-b` | 无 | **v1/v2 模式**：第二个 skill 路径（两边各注入各自 skill）；不给则默认 with/without（同 skill 开/关） |
 | `--label-a` | skill 目录名 | v1/v2 模式 side A 显示标签 |
 | `--label-b` | skill 目录名 | v1/v2 模式 side B 显示标签 |
+
+**`--changed-from` 判定的失败处理**：
+
+- **判定失败**（没给出可用 id 列表）→ 报错退出（不静默跑全量、不静默跑空）。三类：① LLM 调用失败（API/超时/限流，重试后仍不行）；② 解析不出（非 JSON / 无 `affected_ids` 列表 / 含非整数）；③ 返回 id 不存在（列可用）。提示重试 / 改用 `--eval-ids` / 跑全量。
+- **判定空集 ≠ 失败**：LLM 成功判定、结论“零受影响”（改的是与所有题无关的措辞）是**合法结果** → 正常退出（跑空），提示“不放心去掉 `--changed-from` 跑全量”。
 
 **两种模式**：
 
@@ -246,7 +252,7 @@ output/
         timing.json
   without_skill/
     eval-<id>/run-1/ ...
-  benchmark.json             ← 聚合结果(含 comparison_summary 盲评聚合)
+  benchmark.json             ← 聚合结果(含 comparison_summary 盲评聚合;--changed-from 子集跑时另记 selection)
   scorecard.json             ← run 末尾自动产(静态评分卡;也可 analyze -o 单独产)
   vet-report.json            ← run 末尾自动产(原生安全扫描;也可 vet -o 单独产)
   report.html                ← run 末尾自动产(也可 skill-eval report 重生成/带 --previous)
@@ -663,6 +669,7 @@ skill-eval batch-report batch-workspace/ --open
 - 每个 config 的 `run_summary` 含 `pass_rate` / `pass_rate_programmatic` / `pass_rate_llm`（后两者可能为 `null`）+ `time_seconds` / `tokens`。
 - `delta` 全为有符号字符串（`+0.27`），= `configs[0] - configs[1]`（候选 - 基线）；双率项可能为 `null`。
 - `comparison_summary.win_rate` = `a_wins/valid`（tie-计入）；`gate` 用 tie-排除版自行算。
+- `selection`（可选,仅 `--changed-from` 子集跑时）:`{mode, ids, affected, total}`——标识本次为受改动影响的子集跑、delta 非整体测量。
 
 ### gate.json（`gate` 命令产出）
 
@@ -697,7 +704,7 @@ skill-eval batch-report batch-workspace/ --open
 
 | 文件 | 内容 |
 |------|------|
-| `benchmark.json` | 聚合结果（双率 delta + 盲比较 comparison_summary + calibration_summary per-side 高分低遵循） |
+| `benchmark.json` | 聚合结果（双率 delta + 盲比较 comparison_summary + calibration_summary per-side 高分低遵循；`--changed-from` 子集跑时另记 `selection`） |
 | `report.html` | 自包含 HTML 报告（读 gate.json 显门禁徽章 + previous/benchmark.json 显「vs 上次」纵向 delta 卡）；run 末尾自动产（也可 `report` 命令重生成 / 带 `--previous` 基线对照） |
 | `previous/` | 重跑归档：fresh 重跑时把上一次完整 run 树整体 MOVE 到此（单槽覆盖）。含旧 `benchmark.json`（聚合纵向 delta 数据源）+ 旧 outputs/（report「上次输出」文件级面板）。仅 fresh 产生；accumulate/resume 不产。见下「重跑归档」 |
 | `gate.json` | `gate` 命令产出（非 run 产出）；判决 + 两轴明细 + calibration soft warning（高分低遵循 HIGH_SCORE_SUSPECT，不进 decision） |

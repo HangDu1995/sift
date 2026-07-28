@@ -151,6 +151,7 @@ skill-eval run v2/ --skill-b v1/                        # v1/v2 双 skill 回归
 skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo   # 路径 1 真任务模式（默认 cc）
 skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo --executor opencode   # 同上，改用 opencode 跑
 skill-eval run path/to/skill/ --eval-ids 3,5                  # 只跑指定 id 的题（调试/回归某几道；和 --eval-samples 互斥）
+skill-eval run path/to/skill/ --changed-from v1/              # 改 skill 后只跑受影响的题（给基线目录；回归探针；和 --eval-ids/--eval-samples 互斥）
 ```
 
 关键参数：
@@ -166,7 +167,8 @@ skill-eval run path/to/skill/ --eval-ids 3,5                  # 只跑指定 id 
 | `--security-gate` | off | 安全审查返回 BLOCKED/REVIEW_NEEDED 时判失败 |
 | `--model` | — | claude -p 模型（也控制盲比较/赛后分析是否执行） |
 | `--eval-samples` | — | 随机抽样跑 N 道或 pct%（如 `10` 或 `0.25`） |
-| `--eval-ids` | — | 只跑指定 id 的题（逗号分隔，如 `3,5,7`）；和 `--eval-samples` 互斥 |
+| `--eval-ids` | — | 只跑指定 id 的题（逗号分隔，如 `3,5,7`）；和 `--eval-samples`/`--changed-from` 三选一互斥 |
+| `--changed-from` | — | 改 skill 后给基线目录，自动 diff + LLM 判受影响 eval，只跑子集（回归探针；和 --eval-ids/--eval-samples 互斥） |
 
 > `run` 是纯数据生产者——exit 0 只代表产数据成功，**通过/失败判决由 `gate` 出**。
 
@@ -282,7 +284,7 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 
 ```
 output/
-├── benchmark.json          # 聚合:双率 delta + comparisons + comparison_summary + analysis
+├── benchmark.json          # 聚合:双率 delta + comparisons + comparison_summary + analysis(--changed-from 子集跑时另记 selection)
 ├── report.html             # 自包含 HTML 报告(读 gate.json 显门禁徽章;run 末尾自动产)
 ├── gate.json               # gate 命令产出(判决 + 两轴明细;非 run 产出)
 ├── previous/               # △ 重跑归档:fresh 重跑时上次 run 树整体移入(单槽),供 report「vs 上次」纵向 delta;仅 fresh 产生,详见 reference「重跑归档」
