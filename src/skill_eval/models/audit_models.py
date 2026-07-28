@@ -99,6 +99,10 @@ class AuditFinding(BaseModel):
     # FAIL 噪声判别(audit.noise.annotate_noise)填,只对 FAIL 标;None/[] 向后兼容旧 JSON
     noise_label: str | None = None  # "tool_noise" / "skill_issue" / "uncertain";非 FAIL 为 None
     noise_reasons: list[str] = Field(default_factory=list)  # 命中理由(中文);非 FAIL 为空
+    # finding 指向的全局 turn 序号(audit_records 的 _turn_index,transcript 切片后保留全局位置)。
+    # verdict=FAIL / INDETERMINATE 时存"该违规涉及哪些 turn";Task 4 由 LLM 引用填入。
+    # PASS / N/A 或 segment 级别缺席为空。旧 JSON 无此字段 → 空(向后兼容)。
+    turn_refs: list[int] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
