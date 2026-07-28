@@ -97,9 +97,10 @@ def audit(
     kind: Optional[str] = typer.Option(
         None,
         "--kind",
-        help=("声明单元种类:切本 skill/agent 执行段(skill=按 Skill 调用切;agent=按 agent 归属切)。"
-              "不传=审整条 transcript。opencode transcript 单锚点(info.agent),kind 对它无意义、"
-              "照常按 agent 字段切"),
+        help=("声明单元种类:切本 skill/agent 执行段(skill=按 Skill 调用切;agent=按 agent 归属切;"
+              "root=切顶层主 agent 作用域(cc parent_tool_use_id 为空 / opencode session.info.agent;"
+              "target 名忽略))。不传=审整条 transcript。opencode transcript 单锚点(info.agent),"
+              "kind=skill/agent 对它无意义、照常按 agent 字段切"),
     ),
     format: str = typer.Option("table", "--format", help="table|json"),
     open_browser: bool = typer.Option(
@@ -123,8 +124,8 @@ def audit(
     try:
         name, _desc, _content, _frontmatter, body = parse_skill_md(skill_path)
 
-        if kind is not None and kind not in ("skill", "agent"):
-            console.print(f"[red]Error:[/red] --kind 只接受 skill / agent,收到 {kind!r}")
+        if kind is not None and kind not in ("skill", "agent", "root"):
+            console.print(f"[red]Error:[/red] --kind 只接受 skill / agent / root,收到 {kind!r}")
             raise typer.Exit(code=2)
 
         out = output_dir or Path("output")
@@ -169,13 +170,14 @@ def audit(
         # --kind:切本声明单元被调用/被 dispatch 期间的段,每段写一个子段文件
         # (.jsonl=cc / .json=opencode),再喂 TranscriptAuditor(已支持多 transcript 聚合)。
         # 分派:transcript **格式**选切片器——opencode(单锚点 info.agent,无 Skill tool_use)
-        # → slice_opencode_by_agent(kind 对它无意义);cc/structured(双锚点)→ slice_transcript
-        # (kind 选 skill 调用锚点 / agent 归属锚点,不并集)。
+        # → slice_opencode_by_agent(kind=skill/agent 按声明名切;kind=root 取 session.info.agent);
+        #   cc/structured(三锚点)→ slice_transcript(kind 选 root/skill/agent 锚点,不并集)。
         # 文件名带 transcript 级序号 ti:多个 --transcript 可能同名 stem,仅靠内层 i 会碰撞 → 后者覆盖前者。
         if kind:
             from skill_eval.audit.slice import slice_transcript
             from skill_eval.evals.opencode import (
                 is_opencode_session,
+                load_opencode_session,
                 slice_opencode_by_agent,
             )
 
@@ -184,7 +186,20 @@ def audit(
             segs: list[tuple[Path, int, int, object, bool]] = []
             for ti, tp in enumerate(transcript, 1):
                 if is_opencode_session(tp):
-                    for i, seg in enumerate(slice_opencode_by_agent(tp, name), 1):
+                    # root:target 取 session.info.agent(opencode 无父子作用域,root 即主 agent);
+                    # skill/agent:照旧按声明名(name)切。
+                    if kind == "root":
+                        sess = load_opencode_session(tp)
+                        target_agent = (sess.get("info") or {}).get("agent")
+                        if not target_agent:
+                            console.print(
+                                "[red]Error:[/red] --kind root:opencode session 缺 info.agent,"
+                                "无法确定主 agent"
+                            )
+                            raise typer.Exit(code=2)
+                    else:
+                        target_agent = name
+                    for i, seg in enumerate(slice_opencode_by_agent(tp, target_agent), 1):
                         segs.append((tp, ti, i, seg, True))
                 else:
                     for i, seg in enumerate(slice_transcript(tp, name, kind), 1):
