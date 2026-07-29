@@ -141,14 +141,16 @@
         return '<span class="noise" style="color:' + nl.color + ';border-color:' + nl.color + ';" title="' + title + '">' + escapeHtml(nl.text) + '</span>';
       }
 
-      // turn_refs:FAIL / INDETERMINATE 违规涉及的全局 turn(_turn_index,对应 transcript 里的 [Tn] 标记)。
-      // 让 reader 回 insight / 原 session 定位违规发生处。PASS / N/A / 段级缺席为空 → 返回 ''(无空占位)。
+      // turn_refs:FAIL / INDETERMINATE 违规涉及的 turn(_turn_index,对应 transcript 里的 [Tn] 标记)。
+      // 仅 prohibition / step 类填(conditional / output 段级缺席恒空)。序号:cc/structured=会话全局,
+      // opencode 切片=段内 local。让 reader 回原 session 定位违规发生处。
+      // PASS / N/A / 段级缺席为空 → 返回 ''(无空占位)。
       // 色随 verdict(reuse vd.cls:badge-fail / badge-indeterminate…)。格式 T<n> 绑 [T{idx}] 约定,
       // 不用 #<n>(防与 finding seq #N 混)。finding-head 徽章簇里调,renderFinding 见下。
       function turnBadge(turn_refs, verdict_cls) {
         if (!turn_refs || !turn_refs.length) return '';
         var refs = turn_refs.map(function (t) { return 'T' + t; }).join(', ');
-        return '<span class="turn-refs ' + verdict_cls + '" title="违规涉及的全局 turn(对应 transcript 里的 [Tn] 标记)">turn: ' + escapeHtml(refs) + '</span>';
+        return '<span class="turn-refs ' + verdict_cls + '" title="违规涉及的 turn(对应 transcript 里的 [Tn] 标记;cc/structured=全局,opencode 切片=段内)">turn: ' + escapeHtml(refs) + '</span>';
       }
 
       // verdict 五态 → (cls, icon, label) 一致表(汇总徽章 + 明细共用,DRY)。

@@ -99,9 +99,12 @@ class AuditFinding(BaseModel):
     # FAIL 噪声判别(audit.noise.annotate_noise)填,只对 FAIL 标;None/[] 向后兼容旧 JSON
     noise_label: str | None = None  # "tool_noise" / "skill_issue" / "uncertain";非 FAIL 为 None
     noise_reasons: list[str] = Field(default_factory=list)  # 命中理由(中文);非 FAIL 为空
-    # finding 指向的全局 turn 序号(audit_records 的 _turn_index,transcript 切片后保留全局位置)。
-    # verdict=FAIL / INDETERMINATE 时存"该违规涉及哪些 turn";Task 4 由 LLM 引用填入。
-    # PASS / N/A 或 segment 级别缺席为空。旧 JSON 无此字段 → 空(向后兼容)。
+    # finding 指向的 turn 序号(对应 transcript 里 [Tn] 标记)。
+    # 仅 prohibition / step 类(走 transcript_text + turn 引用的 LLM judge)在 FAIL / INDETERMINATE
+    # 时由 LLM 填;conditional / output 类的 FAIL 是段级缺席(trace 全程未调用 / 未读取 X、期望格式
+    # 全程未出现),本就无具体 turn、恒空。PASS / N/A 或其它段级缺席亦为空。
+    # 序号语义:cc / structured 切片保留会话全局序号;opencode 切片经 message 子集往返重建、按段内
+    # 位置 re-stamp,seq 是段内 local(非会话全局)。旧 JSON 无此字段 → 空(向后兼容)。
     turn_refs: list[int] = Field(default_factory=list)
 
     @model_validator(mode="before")

@@ -208,7 +208,8 @@ def slice_transcript(transcript_path: Path, target: str, kind: str) -> list[list
       到同作用域下一个 Skill 调用或作用域结束)。
     - ``kind="agent"``:agent 归属锚点(record.agent == target 的连续 run)。
 
-    target 从未以所选锚点出现 → 返回 [](root 主作用域恒非空,不会 [])。
+    target 从未以所选锚点出现 → 返回 [](root 不按 target 切、作用域通常非空;全子 agent session 时
+    _slice_root 亦返 [],见上)。
     """
     records = _records(transcript_path)
     if not records:

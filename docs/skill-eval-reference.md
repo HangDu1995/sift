@@ -338,6 +338,7 @@ skill-eval audit path/to/skill/ --db opencode.db
 | `--session` | — | `--db` 下指定 session id;不给则单 session 自动选、多个列出让你挑了重跑(仅搭 `--db`) |
 | `--kind` | (无) | `skill`\|`agent`\|`root`：切本 skill/agent 被调用/被 dispatch / 主 agent 作用域段（`skill` 按 `Skill` 调用切；`agent` 按 `agent` 归属切；`root` 切顶层主 agent 作用域——cc `parent_tool_use_id` 为空 / opencode `session.info.agent`，target 名忽略；opencode 单锚点按 per-message `agent` 切，见下） |
 | `--refine-instructions` | 开启 | 判定前 LLM 精筛（默认开，`--no-refine-instructions` 关）：砍掉 extractor 误抽的示例/占位伪指令（精度>召回，per-SKILL 缓存，见下） |
+| `--turn-refs` / `--no-turn-refs` | 关(`--no-turn-refs`) | turn 定位（默认关）：`--turn-refs` 时 judge 输出 turn_refs + digest 加 `[T{idx}]` 前缀，finding 带违规发生的 turn 序号（供能 link 到 turn 内容的下游消费方）；默认 `--no-turn-refs` 回到无前缀的干净判定。加前缀会动 LLM prompt、引入条件分支过严（见 handbook §7.7），故默认关、按需开 |
 | `--output` / `-o` | ./output | 输出目录 |
 | `--model` | 默认 | 语义判定 LLM |
 | `--format` | table | table / json |

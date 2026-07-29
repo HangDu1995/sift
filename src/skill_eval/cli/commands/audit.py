@@ -97,9 +97,10 @@ def audit(
     refine_instructions: bool = typer.Option(True, "--refine-instructions/--no-refine-instructions", help="精筛(默认开):LLM 砍掉 extractor 误抽的示例/占位伪指令(audit 提精度,精度>召回);--no-refine-instructions 关闭"),
     locate_turns: bool = typer.Option(
         False, "--turn-refs/--no-turn-refs",
-        help="turn 定位(默认关):--turn-refs 时 judge 输出 turn_refs + digest 加 [T{idx}] 前缀,"
-             "finding 带违规发生的 turn 序号(供能 link 到 turn 内容的消费方如 insight);"
-             "默认 --no-turn-refs 回到无前缀的干净判定",
+        help="turn 定位(默认关):--turn-refs 时 digest 加 [T{idx}] 前缀、仅 prohibition/step 类 judge "
+             "输出 turn_refs(finding 带违规发生的 turn 序号,供能 link 到 turn 内容的下游消费方;"
+             "conditional/output 的 FAIL 是段级缺席、无 turn)。cc/structured 切片=全局序号,opencode "
+             "切片=段内 local。默认 --no-turn-refs 回到无前缀的干净判定",
     ),
     kind: Optional[str] = typer.Option(
         None,

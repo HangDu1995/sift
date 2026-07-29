@@ -329,7 +329,7 @@ class TranscriptAuditor:
             timeout: LLM 调用超时秒数。
             locate_turns: turn 定位开关(默认 False=关)。True 时 rebuild 给 digest 加
                 ``[T{idx}]`` 前缀、禁令/步骤 judge 向 LLM 索取 ``turn_refs`` 并挂在
-                FAIL/INDETERMINATE finding 上,供能 link 到 turn 内容的消费方(如 insight);
+                FAIL/INDETERMINATE finding 上,供能 link 到 turn 内容的下游消费方;
                 False 回到无前缀的干净判定(Task 1+2 已让 rebuild/judge 默认 False)。
 
         Returns:
