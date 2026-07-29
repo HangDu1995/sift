@@ -303,6 +303,8 @@ class TranscriptAuditor:
         timeout: int = 600,
         on_progress: ProgressFn | None = None,
         refine_instructions: bool = False,
+        *,
+        locate_turns: bool = False,
     ) -> AuditReport:
         """聚合主入口:把 skill 声明的指令 + transcript 反推声明逐条对账若干 transcript。
 
@@ -325,6 +327,10 @@ class TranscriptAuditor:
             transcripts: Claude Code session JSONL 路径列表(逐个 rebuild)。
             model: LLM 模型名(None 走 call_claude 默认)。
             timeout: LLM 调用超时秒数。
+            locate_turns: turn 定位开关(默认 False=关)。True 时 rebuild 给 digest 加
+                ``[T{idx}]`` 前缀、禁令/步骤 judge 向 LLM 索取 ``turn_refs`` 并挂在
+                FAIL/INDETERMINATE finding 上,供能 link 到 turn 内容的消费方(如 insight);
+                False 回到无前缀的干净判定(Task 1+2 已让 rebuild/judge 默认 False)。
 
         Returns:
             ``AuditReport``:findings 为所有**有效** transcript 的平铺结果;坏/空 transcript
@@ -379,7 +385,7 @@ class TranscriptAuditor:
         for ti, tp in enumerate(transcripts, 1):
             _emit(on_progress, f"对账 transcript {ti}/{len(transcripts)}: {tp.name}")
             try:
-                tool_trace, transcript_text, digest = rebuild(tp)
+                tool_trace, transcript_text, digest = rebuild(tp, locate_turns=locate_turns)
             except SkillEvalError as e:
                 # 坏/空 transcript:不崩,记 warning 跳过(其余 transcript 照常处理)。
                 warnings.append(f"{tp.name}: {e}")
@@ -413,10 +419,12 @@ class TranscriptAuditor:
                 fut_proh = pool.submit(
                     self._judge_prohibition, buckets[AuditCategory.PROHIBITION],
                     transcript_text, tp.name, model, timeout, on_progress=on_progress,
+                    locate_turns=locate_turns,
                 )
                 fut_step = pool.submit(
                     self._judge_step, buckets[AuditCategory.STEP], transcript_text,
                     tp.name, model, timeout, tool_trace=tool_trace, on_progress=on_progress,
+                    locate_turns=locate_turns,
                 )
                 findings: list[AuditFinding] = []
                 # 三个判定器并发跑;单个整体抛异常(内部 bug,非 call_claude 的 RuntimeError

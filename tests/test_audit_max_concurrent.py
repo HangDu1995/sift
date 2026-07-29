@@ -50,7 +50,7 @@ def _fake_report() -> AuditReport:
 class _FakeAuditor:
     def __init__(self): self.calls: list[dict] = []
     def audit(self, skill_name, skill_body, transcripts, model=None, timeout=600,
-              on_progress=None, refine_instructions=False):
+              on_progress=None, refine_instructions=False, locate_turns=False):
         self.calls.append({"transcripts": list(transcripts)})
         return _fake_report()
 
