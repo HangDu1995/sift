@@ -174,7 +174,7 @@ def test_tool_trace_collects_all_tool_use_unconditionally_in_order(tmp_path):
         _tool_result("b1", "calc.py\n"),
         _asst_text("完成"),
     ]
-    d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
+    d = build_digest(_write_jsonl(tmp_path, recs), root="/proj", locate_turns=True)
     assert [t.name for t in d.tool_trace] == ["Read", "Glob", "Bash"]
     # Glob(未被分支处理的工具)必须出现且内容正确
     glob_rec = d.tool_trace[1]
@@ -218,7 +218,7 @@ def test_transcript_text_from_mixed_assistant_message(tmp_path):
         ]}},
         _tool_result("r1", "1\thi\n"),
     ]
-    d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
+    d = build_digest(_write_jsonl(tmp_path, recs), root="/proj", locate_turns=True)
     assert d.transcript_text == "[T1] 先思考"
     assert [t.name for t in d.tool_trace] == ["Read"]
 

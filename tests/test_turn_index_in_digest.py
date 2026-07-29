@@ -21,7 +21,7 @@ def test_transcript_text_carries_turn_prefix(tmp_path):
     # 末尾补一条 user turn 让 rebuild 的空 digest 守卫通过(user_turns 非空);
     # assistant record 仍在 turn 1/2,断言语义不变。
     _write_jsonl(p, [_asst("FIRST"), _asst("SECOND"), _user("ok")])
-    _tool_trace, transcript_text, _digest = rebuild(p)
+    _tool_trace, transcript_text, _digest = rebuild(p, locate_turns=True)
     assert "[T1]" in transcript_text and "FIRST" in transcript_text
     assert "[T2]" in transcript_text and "SECOND" in transcript_text
 
@@ -32,7 +32,7 @@ def test_tool_trace_carries_turn(tmp_path):
         {"message": {"role": "assistant", "content": [
             {"type": "tool_use", "id": "r1", "name": "Read", "input": {"file_path": "/x"}}]}},
     ])
-    tool_trace, _tt, _d = rebuild(p)
+    tool_trace, _tt, _d = rebuild(p, locate_turns=True)
     assert tool_trace[0].turn == 1
 
 
@@ -50,7 +50,7 @@ def test_root_slice_preserves_global_turn_index(tmp_path):
     assert len(segs) == 1
     seg_path = tmp_path / "seg.jsonl"
     _write_jsonl(seg_path, segs[0])
-    _tt, transcript_text, _d = rebuild(seg_path)
+    _tt, transcript_text, _d = rebuild(seg_path, locate_turns=True)
     # root span 含 turn 1/2/4(排除 turn 3 子 agent);seq 是原全局,非段内 1/2/3
     assert "[T1]" in transcript_text and "MAIN1" in transcript_text
     assert "[T2]" in transcript_text          # dispatch 在 turn 2

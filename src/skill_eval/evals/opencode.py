@@ -55,7 +55,9 @@ def load_opencode_session(path: Path) -> dict:
     return {"info": data.get("info") or {}, "messages": msgs}
 
 
-def build_digest_from_opencode(path: Path, root: str | None = None) -> SessionDigest:
+def build_digest_from_opencode(
+    path: Path, root: str | None = None, *, locate_turns: bool = False
+) -> SessionDigest:
     """解析 opencode export 单 session → SessionDigest(薄封装,与 cc build_digest 同形)。
 
     路径:``_records_from_opencode`` 把 opencode export 归一成 cc-record 形(字段映射)→
@@ -64,9 +66,10 @@ def build_digest_from_opencode(path: Path, root: str | None = None) -> SessionDi
 
     ``skill_used`` 取 ``info.agent``:opencode session 无 ``Skill`` tool_use(它的 skill 在
     ``info.agent``),共享重建器只从 ``Skill`` tool_use 抽 → 抽不到 → 这里补回。
+    ``locate_turns`` 透传重建器(控 ``[T{idx}] `` 前缀与 ``ToolCallRecord.turn``,默认关)。
     """
     sess = load_opencode_session(path)
-    d = _digest_from_records(_records_from_opencode(path), root)
+    d = _digest_from_records(_records_from_opencode(path), root, locate_turns=locate_turns)
     agent = (sess.get("info") or {}).get("agent")
     if agent:
         d.skill_used = agent

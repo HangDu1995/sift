@@ -61,7 +61,7 @@ def test_rebuild_normal_returns_tuple(tmp_path: Path) -> None:
         ],
     )
 
-    tool_trace, text, digest = rebuild(p)
+    tool_trace, text, digest = rebuild(p, locate_turns=True)
 
     assert isinstance(tool_trace, list)
     assert len(tool_trace) == 1

@@ -19,12 +19,17 @@ from skill_eval.models import ToolCallRecord
 
 def rebuild(
     transcript_path: Path,
+    *,
+    locate_turns: bool = False,
 ) -> tuple[list[ToolCallRecord], str, SessionDigest]:
     """把 transcript 重建为 (tool_trace, transcript_text, digest)。
 
     按 ``is_opencode_session`` 分派格式:.json+三键(session/messages/parts)走
     ``build_digest_from_opencode``,其余按 Claude Code session JSONL 走 ``build_digest``。
     cc 路径零改动;空 digest 检查与三元组返回两路共用。
+
+    ``locate_turns`` 透传两路重建器(控 ``[T{idx}] `` 前缀与 ``ToolCallRecord.turn``):
+    默认 ``False`` = no-seq 形态(不加前缀、turn 置 None);``True`` 开 turn 定位渲染。
 
     Args:
         transcript_path: Claude Code session JSONL 或 opencode session JSON 路径。
@@ -41,9 +46,9 @@ def rebuild(
         raise SkillEvalError(f"transcript 文件不存在: {transcript_path}")
 
     if is_opencode_session(transcript_path):
-        digest = build_digest_from_opencode(transcript_path)
+        digest = build_digest_from_opencode(transcript_path, locate_turns=locate_turns)
     else:
-        digest = build_digest(transcript_path)
+        digest = build_digest(transcript_path, locate_turns=locate_turns)
 
     # digest 全空:无 user turn / 无文件 / 无工具调用 → 此 transcript 无可对账内容。
     # 常见于理解类题(L1):cc 纯推理作答、不走工具/不读写文件,遵循性审的是流程执行,

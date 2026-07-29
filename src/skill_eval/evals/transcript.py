@@ -19,10 +19,12 @@ cc 对外入口 ``build_digest`` = ``_digest_from_records(_records_from_cc(path)
 **内部 sentinel ``_turn_index``**:各 importer 加载时给每条 cc-record 标全局 1-based
 ``_turn_index``(``stamp_turn_indices``)。下划线前缀 = 非 transcript 原生字段(纯内部标记),
 经 JSON 序列化往返保留——切片产出的 dict 子集写进 slice 文件、rebuild 读回时该字段存活,
-保住原全局位置。重建器 ``_digest_from_records`` 消费它:每条 assistant record 的文本
-获 ``[T{idx}] `` 前缀(per-record,非 per-block)、``ToolCallRecord.turn`` 记录所属 turn——
-这是后续 finding 引用 turn 的基线(切片后仍是原全局号、不重编号)。opencode 切片经 message
-子集往返、需重建后 re-stamp,见 ``opencode._records_from_opencode`` 的已知限制说明。
+保住原全局位置。重建器 ``_digest_from_records`` 消费它:**默认(locate_turns=False)回到
+no-seq 形态**——不加 ``[T{idx}] `` 前缀、``ToolCallRecord.turn`` 置 ``None``;``locate_turns=True``
+时才给每条 assistant record 的文本加 ``[T{idx}] `` 前缀(per-record,非 per-block)、``turn`` 记
+所属 turnIndex(后续 finding 引用 turn 的基线,切片后仍是原全局号、不重编号)。``_turn_index``
+sentinel 总 stamp(切片往返用),仅控渲染。opencode 切片经 message 子集往返、需重建后 re-stamp,
+见 ``opencode._records_from_opencode`` 的已知限制说明。
 """
 from __future__ import annotations
 
@@ -188,11 +190,18 @@ def _records_from_cc(transcript_path: Path) -> list[dict]:
     return records
 
 
-def _digest_from_records(records: list[dict], root: str | None = None) -> SessionDigest:
+def _digest_from_records(
+    records: list[dict], root: str | None = None, *, locate_turns: bool = False
+) -> SessionDigest:
     """cc 记录列表（canonical 记录形）→ SessionDigest。纯内存、不读文件。
 
     从 ``build_digest`` 抽出，使「读文件」与「records→digest」分离：canonical
     importer（cc/opencode/insight）产 records，统一走本函数重建。
+
+    ``locate_turns`` 控 turn 定位特性的渲染(默认关):关时回到 no-seq 形态——
+    ``transcript_text`` 不加 ``[T{idx}] `` 前缀、``ToolCallRecord.turn`` 置 ``None``;
+    开时给每条 assistant record 的文本加 ``[T{idx}] `` 前缀(per-record)、``turn`` 记所属
+    全局 turnIndex。内部 ``_turn_index`` sentinel 总是 stamp(切片往返用),关时只是不渲染。
     """
     # pass 1: tool_use_id -> result text
     id2result: dict[str, str] = {}
@@ -267,11 +276,12 @@ def _digest_from_records(records: list[dict], root: str | None = None) -> Sessio
             # 无条件收集所有 tool_use 块(在按工具名分支之前):
             # 现有分支只覆盖 Skill/Read/Write/Edit/MultiEdit/Bash,
             # Glob/Grep/WebSearch 等会被忽略。tool_trace 必须收全部,
-            # audit 的工具指令对账才能按任意工具名匹配。turn=所属 record 的全局 _turn_index。
+            # audit 的工具指令对账才能按任意工具名匹配。turn=所属 record 的全局 _turn_index
+            # (locate_turns=False 时置 None——turn 定位特性可选化,no-seq 形态不标 turn)。
             tool_trace.append(ToolCallRecord(
                 name=name,
                 input_summary=json.dumps(b.get("input") or {}, ensure_ascii=False)[:200],
-                turn=turn_idx,
+                turn=turn_idx if locate_turns else None,
             ))
             if name == "Skill":
                 if not skill_used:
@@ -329,15 +339,17 @@ def _digest_from_records(records: list[dict], root: str | None = None) -> Sessio
                     tgt = (m.group(1) or "").strip("'\"")
                     if tgt:
                         bash_touched.add(tgt)
-        # flush 本 record 的 turn 锚:有 text 则带 [T{idx}] 前缀;text-less 的纯 tool_use
-        # record 也发 [T{idx}](LLM 可引用任何 turn,含纯动作 turn 如 Agent dispatch)。
-        # _turn_index 缺失(异常/旧切片)→ "?",不崩。
+        # flush 本 record 的 turn 锚(仅 locate_turns=True):有 text 则带 [T{idx}] 前缀;
+        # text-less 的纯 tool_use record 也发裸 [T{idx}](LLM 可引用任何 turn,含纯动作 turn
+        # 如 Agent dispatch)。locate_turns=False 时 text-less record 不贡献文本(无前缀可锚);
+        # 有 text 的 record 贡献纯文本。_turn_index 缺失(异常/旧切片)→ "?",不崩。
         if had_block:
-            idx_str = str(turn_idx) if turn_idx is not None else "?"
-            if rec_text_parts:
-                transcript_text_parts.append(f"[T{idx_str}] " + "\n".join(rec_text_parts))
-            else:
-                transcript_text_parts.append(f"[T{idx_str}]")
+            body = "\n".join(rec_text_parts)
+            if locate_turns:
+                idx_str = str(turn_idx) if turn_idx is not None else "?"
+                transcript_text_parts.append(f"[T{idx_str}] " + body if body else f"[T{idx_str}]")
+            elif body:
+                transcript_text_parts.append(body)
 
     if root is None:
         root = _detect_root(all_paths)
@@ -358,10 +370,13 @@ def _digest_from_records(records: list[dict], root: str | None = None) -> Sessio
     )
 
 
-def build_digest(transcript_path: Path, root: str | None = None) -> SessionDigest:
+def build_digest(
+    transcript_path: Path, root: str | None = None, *, locate_turns: bool = False
+) -> SessionDigest:
     """Claude Code session JSONL → SessionDigest（读文件 → cc 记录 → digest）。
 
     薄封装：``_records_from_cc`` 读文件成 cc 记录（canonical 记录形），``_digest_from_records``
     重建。拆分后各 importer（cc / opencode / insight）产 records 统一走 ``_digest_from_records``。
+    ``locate_turns`` 透传重建器(控 ``[T{idx}] `` 前缀与 ``ToolCallRecord.turn``,默认关)。
     """
-    return _digest_from_records(_records_from_cc(transcript_path), root)
+    return _digest_from_records(_records_from_cc(transcript_path), root, locate_turns=locate_turns)
