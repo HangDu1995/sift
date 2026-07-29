@@ -234,8 +234,13 @@ def audit(
                     for i, seg in enumerate(slice_transcript(tp, name, kind), 1):
                         segs.append((tp, ti, i, seg, False))
             if not segs:
+                # root 时 name(declared skill 名)对 root 无意义(root 按 parent_tool_use_id /
+                # session.info.agent 切,不按 name 契约)→ 不提 declared name。注:cc root 主作用域
+                # 在非空 transcript 下恒非空、opencode 缺 info.agent 已走前面 exit 2,故 root 时
+                # 此分支 latent unreachable;防御性文案,不引入行为变化。
+                who = f"'{name}'" if kind != "root" else "主 agent 作用域"
                 console.print(
-                    f"[red]Error:[/red] '{name}' 未在此 transcript 中以 --kind {kind} 锚点出现"
+                    f"[red]Error:[/red] {who} 未在此 transcript 中以 --kind {kind} 锚点出现"
                     f"(无可对账段)"
                 )
                 raise typer.Exit(code=2)

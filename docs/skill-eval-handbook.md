@@ -692,7 +692,7 @@ skill-eval audit path/to/test-runner/ --transcript session.json --kind agent   #
 
 **target 名对 root 无意义**：skill / agent 路靠声明名（`name` 契约）切，root 只认作用域（cc 的 `parent_tool_use_id` 是否为空 / opencode 的 `info.agent` 字段）——切主 agent 不看它叫什么、target 名忽略。这也是 root 能成为整 session 审计地基的原因：它不依赖某个子单元被点名调用，而是恒定的顶层作用域。
 
-exit code 不变（root 不引入新 gate）：cc 主作用域恒非空（至少起头 user turn 在主），never-invoked 不触发 exit 2；opencode 缺 `session.info.agent`（无法定主 agent）→ exit 2。
+exit code 不变（root 不引入新 gate）：cc 主作用域在**非空 transcript** 下恒非空（至少起头 user turn 在主），never-invoked 不触发 exit 2；**完全空 transcript 仍触发 exit 2**（无 record → 主作用域也为空，never-invoked）；opencode 缺 `session.info.agent`（无法定主 agent）→ exit 2。
 
 ### 7.9 transcript 怎么变成可对账的 digest：三种来源同一条重建路
 

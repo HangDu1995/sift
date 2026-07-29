@@ -115,6 +115,45 @@ def test_kind_root_opencode_uses_session_info_agent(monkeypatch, tmp_path):
         assert (seg.get("info") or {}).get("agent") == main_agent
 
 
+def test_kind_root_structured_records_excludes_subagent(monkeypatch, tmp_path):
+    """结构化 records 输入下 --kind root 切片正确排除子 agent(只含 parent_tool_use_id=null 的 root turn)。
+
+    belt-and-suspenders:structured reader 已透传 parent_tool_use_id(structured.py L89/L92),
+    _slice_root 按 parent_tool_use_id 为空过滤 → 此路径应直接 PASS;若红则 structured 透传断了。
+    照 test_audit_structured.py 的 friendly JSON 构造模式({format:"skill-eval-records", records}),
+    1 root turn(parent_tool_use_id=null)+ 1 子 agent turn(带 parent_tool_use_id)。
+    """
+    fake = _FakeAuditor()
+    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake)
+
+    sp = _skill_dir(tmp_path, "wf")            # 声明名 "wf" ≠ 主 agent(root 忽略名)
+    tp = tmp_path / "s.json"
+    tp.write_text(
+        json.dumps({"format": "skill-eval-records", "records": [
+            # root turn:主 agent 自己的 read(主作用域)
+            {"role": "assistant", "parent_tool_use_id": None, "text": "MAIN_TXT",
+             "tool_calls": [{"name": "read", "input": {"file_path": "/tmp/main.md"},
+                             "result": "m"}]},
+            # 子 agent turn:parent_tool_use_id 非空 → 排除(归 kind="agent")
+            {"role": "assistant", "parent_tool_use_id": "tu_1", "text": "SUB_TXT",
+             "tool_calls": [{"name": "read", "input": {"file_path": "/tmp/sub.md"},
+                             "result": "s"}]},
+        ]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    out = tmp_path / "out"
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp),
+                            "--kind", "root", "-o", str(out)])
+    assert r.exit_code == 0, r.output
+
+    assert len(fake.calls) == 1
+    slices = fake.calls[0]["transcripts"]
+    assert len(slices) == 1                          # 主作用域单 span → 1 切片
+    content = Path(slices[0]).read_text(encoding="utf-8")
+    assert "MAIN_TXT" in content and "/tmp/main.md" in content
+    assert "SUB_TXT" not in content                  # 子 agent 内部排除
+
+
 def test_kind_root_opencode_missing_info_agent_exits_2(monkeypatch, tmp_path):
     """opencode session 缺 info.agent → --kind root exit 2(无法定主 agent,不喂 auditor)。"""
     fake = _FakeAuditor()
