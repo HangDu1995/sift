@@ -650,13 +650,11 @@ audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md �
 
 判定要逐批调 LLM（每批约 40–257s），跑期间实时打印进度（`[条件性/禁令/步骤] 判定 N 条…`），三个 LLM 类别判定器（条件性 / 禁令 / 步骤；输出格式走程序判定不调 LLM）并发跑（约 2× 提速）。看到 `[类别] …` 滚动就是在跑，别误以为卡死。
 
-几个关键点：
+**对账作用域**：audit 默认审 **skill 作用域**——按 transcript 里的 `Skill` 工具调用切（scope-aware，last-invoked-owns：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent 是独立作用域，其 `parent_tool_use_id` 标记的 record 不污染主 skill 归属），只对账本 skill 被调用期间的段。两条固有限制：① skill 无"返回"信号，"调 A→调 B→不重调 A 接着干 A"那段会归给 B（不可测）；② 把委派子 skill 的段折进来审（inclusive）需声明、暂不支持。opencode 单锚点（无 `Skill` tool_use），按 per-message `agent` 字段切。
 
-- **`--kind {skill,agent}`**：transcript 里调了多个 skill / dispatch 了多个 agent 时，默认会把整段会话混在一起判（别的单元的行为混进本单元的对账）。加 `--kind` 切成本单元被调用/被 dispatch 期间的段，只对账这些段。`--kind skill` 按 `Skill` 工具调用切，两条固有限制：① skill 无"返回"信号，"调 A→调 B→不重调 A 接着干 A"那段归 B（不可测）；② 委派子 skill 折进来审（inclusive）需声明、暂不支持。**审 agent（`--kind agent`，被 dispatch 的 subagent）是独立能力、和 skill 路语义不同（扁平切、dual-nature 各审各的），见 §7.8**。opencode 单锚点（无 `Skill` tool_use），`skill`/`agent` 的区分对它无意义、照常按 per-message `agent` 字段切。
-- **`--kind root`**：与 skill / agent 对称的第三种锚点——切**顶层主 agent**的作用域，审主 agent / 编排者（其声明常是 workflow 级 SKILL.md，是整 session 审计的地基）。cc = `parent_tool_use_id` 为空的全部 record（单 span）；opencode = `session.info.agent`（主 agent message 被子 agent 夹断可能多 span，pool 聚合等价）。**target 名对 root 无意义**（只认作用域、不按名切）。断段差异 + 编排语义详见 §7.8 末尾。
-- **`--turn-refs` / `--no-turn-refs`（turn 定位，默认关）**：开 `--turn-refs` 让 finding 带违规发生的 turn 序号（供能 link 到 turn 内容的下游消费方定位）。默认关——加 turn 前缀会动 LLM prompt、引入条件分支过严。完整来龙去脉（为什么默认关 / 对结果的影响 / 三轮判定层纠偏尝试皆败 / 怎么 triage）见 **§7.12**。
-- **derived_from_transcript（反推）**：findings 里 `derived_from_transcript: true` 的不是从 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（**只增不减** = 只新增 finding，不会替换或删掉从 SKILL.md 抽出来的指令）。**目前只补一类**：transcript 里 agent 真实 Read 过的输入/参考文件 → 各补一条"读取 \<path\>"（REFERENCE_USAGE，构造上即命中 → PASS，不膨胀 fail）。另外两类不反推——工具调用反推（`required_tools`，Bash 命令分不清业务专用还是通用）和产物文件反推（`required_outputs`，历史 trace 的产物未必还在盘，且"产出文件检查"属评分断言、不属遵循性指令），因为映射不干净、容易误判。
-- **别只数 fail**：每条 finding 带序号。**来源徽章**显示这条 finding 是从哪个 / 哪些 `InstructionSource` 抽出来的（CONSTRAINT / ANTI_FABRICATION / HEADING_STEP / TOOL_REQUIREMENT / REFERENCE_USAGE / OUTPUT_FORMAT）。当同一句 SKILL.md 文本同时匹配多个抽取模式（如同句既是约束、又是反捏造）、且同 transcript 同 verdict 时，会**合并成一条**，徽章就显示两个来源（如 `CONSTRAINT + ANTI_FABRICATION`）——证明同文重复已去重、没有虚增 fail。而同一行为跨两条**不同**规则（如没读某 reference 同时违反"条件性"+"步骤"两条）仍会是两条，但互标"↔ 同源违规 #N"。所以 fail 条数可能 > 真实问题数，逐条看 evidence 对照"哪个行为"，别数条数。
+另两种作用域各成一节：**被 dispatch 的子 agent → §7.8**；**顶层主 agent / 编排者 → §7.9**。`--kind` 三选一，选锚点、不并集。
+
+读结果（别只数 fail、来源徽章 / 同源关联）见 **§7.10**；transcript 反推出的额外检查见 **§7.11**；违规 turn 定位见 **§7.13**。
 
 ### 7.8 审 agent：对账被 dispatch 的 subagent
 
@@ -678,9 +676,9 @@ skill-eval audit path/to/test-runner/ --transcript session.json --kind agent   #
 
 现成示例：`fixtures/example-agents/`（test-runner / lint-reviewer，合成违规 transcript + 期望该抓的违规逐条列明），见 [example-agents/README.md](../fixtures/example-agents/README.md)。
 
-> opencode transcript 单锚点（无 `Skill` tool_use），`--kind skill/agent` 的区分对它无意义、照常按 per-message `agent` 字段切——cc 的 skill/agent 双锚点区分只对 cc / structured transcript 有意义（`--kind root` 在 opencode 取 `session.info.agent`，见下节）。
+> opencode transcript 单锚点（无 `Skill` tool_use），`--kind skill/agent` 的区分对它无意义、照常按 per-message `agent` 字段切——cc 的 skill/agent 双锚点区分只对 cc / structured transcript 有意义（`--kind root` 在 opencode 取 `session.info.agent`，见 §7.9）。
 
-#### 审 root（`--kind root`）：对账顶层主 agent / 编排者
+### 7.9 审 root（`--kind root`）：对账顶层主 agent / 编排者
 
 与 agent（被 dispatch 的子 agent）对称，root 切的是**顶层主 agent**的作用域——审主 agent 的**编排动作**（dispatch 了谁、何时、怎么接返回），而非子 agent 内部。它是整 session / workflow 审计的地基：主 agent 的声明常是一份 workflow 级 SKILL.md（管主 agent 怎么编排，而不是某个子 skill / 子 agent 的行为），root 就是拿这份声明去对账主 agent 作用域的执行。
 
@@ -689,13 +687,87 @@ skill-eval audit path/to/test-runner/ --transcript session.json --kind agent   #
 - **cc / 结构化 records** = `parent_tool_use_id` 为空的全部 record（主作用域）。主 agent 自己的 turn + 它发起的 Agent dispatch tool_use / tool_result 都在主作用域（这些是主 agent 的编排动作，**包含**）；子 agent 内部 record 的 `parent_tool_use_id` 指向某 Agent 调用（**排除**——那些归各自 `kind="agent"` 单元审）。
 - **opencode** 无父子作用域，root 取 `session.info.agent`（declared 主 agent），复用 `slice_opencode_by_agent` 按连续同 agent message 切段。
 
-**断段差异**（同源于 §7.8 上半 agent 路的"扁平切"）：cc 主作用域过滤后是连贯的主执行流，作为**单 span** 喂 auditor（即使主 record 在原序列里被子 agent record 物理夹断，过滤后仍连贯一段，区别于 agent 路的同名 run 断段）；opencode 按连续 message 切，主 agent 的 message 若被子 agent 的 message 夹断（主…子…主…子…主），会被切成**多段**——这无害，每段独立喂 auditor，findings 全量 pool 后按指令聚合（`aggregate_by_instruction`），verdict 与合成单 span 等价（与 agent 路断段无害同理）。
+**断段差异**（同源于 §7.8 agent 路的"扁平切"）：cc 主作用域过滤后是连贯的主执行流，作为**单 span** 喂 auditor（即使主 record 在原序列里被子 agent record 物理夹断，过滤后仍连贯一段，区别于 agent 路的同名 run 断段）；opencode 按连续 message 切，主 agent 的 message 若被子 agent 的 message 夹断（主…子…主…子…主），会被切成**多段**——这无害，每段独立喂 auditor，findings 全量 pool 后按指令聚合（`aggregate_by_instruction`），verdict 与合成单 span 等价（与 agent 路断段无害同理）。
 
 **target 名对 root 无意义**：skill / agent 路靠声明名（`name` 契约）切，root 只认作用域（cc 的 `parent_tool_use_id` 是否为空 / opencode 的 `info.agent` 字段）——切主 agent 不看它叫什么、target 名忽略。这也是 root 能成为整 session 审计地基的原因：它不依赖某个子单元被点名调用，而是恒定的顶层作用域。
 
 exit code 不变（root 不引入新 gate）：cc 主作用域在**非空 transcript** 下恒非空（至少起头 user turn 在主），never-invoked 不触发 exit 2；**完全空 transcript 仍触发 exit 2**（无 record → 主作用域也为空，never-invoked）；opencode 缺 `session.info.agent`（无法定主 agent）→ exit 2。
 
-### 7.9 transcript 怎么变成可对账的 digest：三种来源同一条重建路
+### 7.10 怎么读 audit 结果：别只数 fail + 来源徽章
+
+读 audit 结果时记住一句话：**别只数 fail 条数**——每条 finding 带序号。**来源徽章**显示这条 finding 是从哪个 / 哪些 `InstructionSource` 抽出来的（CONSTRAINT / ANTI_FABRICATION / HEADING_STEP / TOOL_REQUIREMENT / REFERENCE_USAGE / OUTPUT_FORMAT）。当同一句 SKILL.md 文本同时匹配多个抽取模式（如同句既是约束、又是反捏造）、且同 transcript 同 verdict 时，会**合并成一条**，徽章就显示两个来源（如 `CONSTRAINT + ANTI_FABRICATION`）——证明同文重复已去重、没有虚增 fail。而同一行为跨两条**不同**规则（如没读某 reference 同时违反"条件性"+"步骤"两条）仍会是两条，但互标"↔ 同源违规 #N"。所以 fail 条数可能 > 真实问题数，逐条看 evidence 对照"哪个行为"，别数条数。
+
+### 7.11 derived_from_transcript（反推）
+
+findings 里 `derived_from_transcript: true` 的不是从 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（**只增不减** = 只新增 finding，不会替换或删掉从 SKILL.md 抽出来的指令）。**目前只补一类**：transcript 里 agent 真实 Read 过的输入/参考文件 → 各补一条"读取 \<path\>"（REFERENCE_USAGE，构造上即命中 → PASS，不膨胀 fail）。另外两类不反推——工具调用反推（`required_tools`，Bash 命令分不清业务专用还是通用）和产物文件反推（`required_outputs`，历史 trace 的产物未必还在盘，且"产出文件检查"属评分断言、不属遵循性指令），因为映射不干净、容易误判。
+
+### 7.12 逐条判别：某条 FAIL 是工具噪声还是 skill 问题
+
+fixture 下遵循性的 FAIL 混着工具噪声和真 skill 问题（见 §7.14）。报告现在给每条 FAIL **自动标**一个启发式判别（per-run findings、整体汇总 by_instruction、单次 audit-report 的违规表都带徽章 + hover 理由）：
+
+| `noise_label` | 含义 | 典型信号（命中即标）|
+|---|---|---|
+| `tool_noise`（疑似工具噪声）| 改 skill 治不了，根因在工具 | `source=HEADING_STEP` 且指令像资源链接（资源描述被当步骤）；evidence 自相矛盾（称"不涉及"却判 FAIL）；LLM 判定带跨类关联（`related` 非空）；聚合 NA 多 FAIL 少（条件性资源被当无条件步骤）|
+| `skill_issue`（疑似 skill 问题）| 大概率真 skill 没做到 | 硬约束（`CONSTRAINT`/`ANTI_FABRICATION`）+ 程序判定 FAIL（确定、可复现）|
+| `uncertain`（待确认）| 单条信号不足 | 其余 FAIL —— 看汇总分布或人工复核 evidence |
+
+**怎么用**：看到 FAIL 先看徽章 + 理由（hover）。`tool_noise` → 别急着改 skill，先想 extractor/判定/evidence 是不是工具的洞（典型：SKILL「详细资源」段的链接描述被抽成步骤）；`skill_issue` → 这才是改 skill 的信号；`uncertain` → 人工看 evidence。优先级 `tool_noise > skill_issue > uncertain`（取最严：有一条噪声信号就归 tool_noise，**避免据噪声误改 skill**）。
+
+**诚实说**：这是**启发式 + 疑似 + 理由，不是权威判决**（可能假阳/假阴）。它**治标**（帮解读现有噪声），没让 compliance 更准 —— 治本仍 `--refine-instructions`（判定前 LLM 砍伪指令，默认开）/ 结构化声明（frontmatter 声明 required_*）/ 真实 transcript audit。**别以为"标了 tool_noise = compliance 可信了"**。判别规则源码：`audit/noise.py`（纯函数，不调 LLM/不读 transcript）。
+
+### 7.13 turn 定位（`turn_refs`）：可选的违规 turn 定位，默认关
+
+audit 的 finding 默认告诉你「违反了什么指令 + evidence（中文理由）」，但**不告诉你在哪个 turn**——几百 turn 的 session 里手动翻找不现实。`turn_refs` 补这个：FAIL / INDETERMINATE 的 finding 带 `turn_refs` 列表（全局 turnIndex），能 link 到 turn 的消费方（如有 turn 浏览器的下游工具）拿它能直接跳到对应 turn 看上下文。
+
+**但默认关（`--no-turn-refs`），要 `--turn-refs` 显式开——不是没做完，是开它有代价。**
+
+#### 做了什么
+
+开 `--turn-refs` 时，digest 重建给每条 assistant record 文本加全局 `[T{idx}]` 前缀（`[T142] assistant: …`），judge prompt 据此要求 LLM 在 FAIL / INDETERMINATE 时输出 `turn_refs`。段级缺席（「全程未发生」，如「调用 subagent」全程没调）→ 留空；turn 级违规（某具体 turn 做错）→ 给 seq。`locate_turns` 参数贯穿 rebuild（控前缀）→ judge（控 prompt 的 turn 引用规则）→ audit CLI 开关。
+
+#### 对结果的影响：引入条件分支过严
+
+加 `[T{idx}]` 前缀 = 动了喂 LLM 的 prompt，实测让判定**变严**：step / prohibition 类里「条件不满足→本就该跳过」的指令（如「读取 PLAN.md」「读取 probe」，本 session 条件没触发、该判 N/A），LLM 见到 turn 信号就倾向 FAIL。实测加前缀后 FAIL 数会明显上涨，多出的**不是新违规、是条件分支误判**（真违规判定没退化：原本就成立的 turn 级违规 FAIL + turn_refs 全保留）。
+
+故默认关：多数场景（尤其 CLI 直接看报告、没有能 link 到 turn 内容的消费方）开了只多收条件分支误判噪声、拿不到定位收益；要定位且能接受多报时才 opt-in 开。
+
+#### 三轮「判定层纠偏」尝试皆败（教训，勿重蹈）
+
+发现过严后，试过三轮在**判定层**修正它，全败——记录于此免得未来开发者重蹈：
+
+| 尝试 | FAIL | 为什么败 |
+|---|---|---|
+| 调松 judge prompt 措辞 | 17（过宽） | 丢真违规（如「最多重试 2 次」→N/A） |
+| 加 `premise_held` 独立二判 | 30 | LLM 把 premise_held 当捷径、25 PASS→N/A + 丢真违规 |
+| 判后纠偏 pass（rectify） | 36（最接近） | **漏报**：喂去 `[T{idx}]` 的 stripped transcript 再判，但「条件分支该跳过」与「真违规该做没做」在 stripped 文本里长得一样（都 = 没出现），LLM 分不清、全判 N/A，误伤 ~10 真违规段级缺席 |
+
+**根因**：判定层二判无法区分两类「缺席」——stripped 掉 turn 信号后，「本就不该做」和「该做却没做」都是「没出现」，必漏报。审计最忌漏报（违规被掩盖、带「纠偏」标记还误导用户以为「不涉及」），比多报（可识别排除）危险得多。
+
+**最终落地：做成可选开关，而非判定层纠偏。** 判定层没法「既保 turn_refs 定位又免条件分支过严」，故不在判定层二选一——两个形态都保留交用户选：默认给干净的（no-seq），要定位且能接受多报时 opt-in 开 seq。比任何判定层纠偏都干净。
+
+#### 开 `--turn-refs` 时怎么读报告（triage）
+
+- **`turn_refs` 空** = 段级缺席（全程未发生）。两可能：条件分支没触发（本就该跳过 → 其实 N/A，属多报）／真违规该做没做（真问题）。需复核 evidence。
+- **`turn_refs` 有 seq**（如 `[142]`）= 确定的 turn 级违规，直接定位那个 turn。
+
+条件分支误判集中在「empty turn_refs」那批，看 seq 能快速分流。
+
+#### 已知限制 / 后续
+
+- **opencode 切片的 turn_refs 是段内 local、非全局**：opencode 切片经 message 子集往返重建、按段内位置 re-stamp；cc / structured records 不受影响（dict 引用子集，`_turn_index` 经 JSON 往返保全局）。opencode 路开 `--turn-refs` 时 seq 是段内的。
+- **OUTPUT / CONDITIONAL 类不带 turn_refs**：`--turn-refs` 只让 prohibition / step 类（走 transcript_text + turn 引用的 LLM judge）输出 turn_refs。OUTPUT 是程序化子串匹配、CONDITIONAL（TOOL_REQUIREMENT / REFERENCE_USAGE）的 FAIL 是段级缺席（trace 全程未调用 / 未读取 X）——两者都无具体 turn 可定位、恒空；只有 prohibition / step 的 turn 级违规才带 seq。
+- **想减条件分支误判**：别再试判定层纠偏（三轮皆败）。靠报告层 triage（empty/有 seq），或改单轮 prompt / conditional 判定器本身的「条件不满足→N/A」引导。
+
+### 7.14 这一层的边界：fixture 下边际价值低，真实 transcript 下价值高
+
+诚实说，遵循性在不同路径下价值差别很大：
+
+- **路径 3（fixture 评测）**：compliance 的边际价值偏低。fixture transcript 是按剧本 spawn 出来的，模型的行为高度受 skill-eval 的 prompt 框定；这里 compliance 查出来的"违规"，有相当一部分根因不在 skill 而在工具自身——典型就是上面讲的 extractor 把示例文字误当指令，导致大量 N/A。换句话说，fixture 下 compliance 更多暴露"工具的洞"，而非"skill 的洞"。要"找 skill 问题 → 改 skill"，主信号是 **scoring（A/B delta）+ 静态分析（analyze/vet）**，不是 compliance。
+- **路径 2（audit 真实 transcript）**：价值高。真实会话里的违规是**诊断资产**——它如实反映 skill 在实际使用中被遵循成什么样，反过来暴露 skill 指令设计清不清晰、容不容易被遵循。这里的违规不是噪声，正是你想看的。
+
+所以：做 fixture A/B 评测，别对 compliance 的数字过度解读（尤其 N/A 多时，先想 extractor 误抽）；要评估 skill 的真实遵循质量，拿真实会话跑 audit。
+
+### 7.15 transcript 怎么变成可对账的 digest：三种来源同一条重建路
 
 audit 对账前，先得把 transcript **重建**成一个结构化 digest——把"模型读了哪些文件、写了什么、改了什么、调了哪些工具"从原始会话记录里还原出来。这里有个关键架构：**cc 会话、opencode 会话、结构化输入三种来源，归一到同一种中间表示，再走同一个重建器**，所以重建逻辑只维护一份。
 
@@ -775,72 +847,6 @@ opencode 的转换器（`_records_from_opencode`）做三件事抹平格式差�
 **`parent_tool_use_id` 决定多 skill 切段的作用域归并**：`--kind skill` 的切片器（`slice.py:_scope_of`）按它把 record 归作用域——`null` = 主，其他值 = 某子 agent 的独立作用域；作用域内 last-invoked-owns（每个 `Skill` 调用起段，到同作用域下一个 `Skill` 调用或作用域结束）。**子 agent 里调用过 skill 的 session 必须填它**：若子 agent turn 也填 `null`，它们会和主 turn 挤进同一个主作用域，主作用域的噪声（别的工具调用 / 别的 skill）就按 last-invoked-owns 混进本 skill 的段 → 假证据（实测跨 scope 噪声 40%+）。填对之后，子 agent 的 skill 段被干净隔离进自己的作用域。零嵌套（子 agent 不再派生子 agent）数据下这是充分的：切片器的 depth-1 closure（靠 `Agent` tool_use 配对 tool_result）在结构化输入没合成 `Agent` 块时是 no-op，归段只靠 `parent_tool_use_id`——所以 producer **不必伪造 `Agent` tool_use**，把 scope id 填对即可。守卫测试：`test_structured.py::test_slice_isolates_subagent_scope_from_main`。
 
 **`tool_calls[].result` 是可选的——做对账(audit)的 producer 建议不传**：`result`（工具返回值，如 Read 整个文件、skill 正文、大段命令输出）在真实 session 里常达 10MB+，而 **audit 的判定根本不读它**——auditor 只取 `digest.user_turns`(场景)+ `tool_trace`(工具调用的**输入**)+ `transcript_text`(assistant 文本)，三项都不含工具结果；连"反推指令"(`derive_declarations`)也只读 `input_files` 的 **路径**(路径来自 Read 的 `file_path` **输入**，不靠 result)。所以全量回传 `result` 是纯死重量：会让 `--transcript` 的 session.json 撑到 20MB+，序列化 / 落盘 / skill-eval 解析全慢。做 audit 的 producer 因此**不传 `result`**（payload 实测 18MB→7MB，砍掉 10MB+ 的结果体）。reader 对缺 `result` 的 tool_call 本就容错（不产 tool_result 块，`input_files` 内容空但路径在、tool_trace 完整），对账 verdict 不变。仅在需要重建文件**内容**(produced_files 还原、非对账)时才传 `result`。
-
-### 7.10 这一层的边界：fixture 下边际价值低，真实 transcript 下价值高
-
-诚实说，遵循性在不同路径下价值差别很大：
-
-- **路径 3（fixture 评测）**：compliance 的边际价值偏低。fixture transcript 是按剧本 spawn 出来的，模型的行为高度受 skill-eval 的 prompt 框定；这里 compliance 查出来的"违规"，有相当一部分根因不在 skill 而在工具自身——典型就是上面讲的 extractor 把示例文字误当指令，导致大量 N/A。换句话说，fixture 下 compliance 更多暴露"工具的洞"，而非"skill 的洞"。要"找 skill 问题 → 改 skill"，主信号是 **scoring（A/B delta）+ 静态分析（analyze/vet）**，不是 compliance。
-- **路径 2（audit 真实 transcript）**：价值高。真实会话里的违规是**诊断资产**——它如实反映 skill 在实际使用中被遵循成什么样，反过来暴露 skill 指令设计清不清晰、容不容易被遵循。这里的违规不是噪声，正是你想看的。
-
-所以：做 fixture A/B 评测，别对 compliance 的数字过度解读（尤其 N/A 多时，先想 extractor 误抽）；要评估 skill 的真实遵循质量，拿真实会话跑 audit。
-
-### 7.11 逐条判别：某条 FAIL 是工具噪声还是 skill 问题
-
-fixture 下遵循性的 FAIL 混着工具噪声和真 skill 问题（见 7.9）。报告现在给每条 FAIL **自动标**一个启发式判别（per-run findings、整体汇总 by_instruction、单次 audit-report 的违规表都带徽章 + hover 理由）：
-
-| `noise_label` | 含义 | 典型信号（命中即标）|
-|---|---|---|
-| `tool_noise`（疑似工具噪声）| 改 skill 治不了，根因在工具 | `source=HEADING_STEP` 且指令像资源链接（资源描述被当步骤）；evidence 自相矛盾（称"不涉及"却判 FAIL）；LLM 判定带跨类关联（`related` 非空）；聚合 NA 多 FAIL 少（条件性资源被当无条件步骤）|
-| `skill_issue`（疑似 skill 问题）| 大概率真 skill 没做到 | 硬约束（`CONSTRAINT`/`ANTI_FABRICATION`）+ 程序判定 FAIL（确定、可复现）|
-| `uncertain`（待确认）| 单条信号不足 | 其余 FAIL —— 看汇总分布或人工复核 evidence |
-
-**怎么用**：看到 FAIL 先看徽章 + 理由（hover）。`tool_noise` → 别急着改 skill，先想 extractor/判定/evidence 是不是工具的洞（典型：SKILL「详细资源」段的链接描述被抽成步骤）；`skill_issue` → 这才是改 skill 的信号；`uncertain` → 人工看 evidence。优先级 `tool_noise > skill_issue > uncertain`（取最严：有一条噪声信号就归 tool_noise，**避免据噪声误改 skill**）。
-
-**诚实说**：这是**启发式 + 疑似 + 理由，不是权威判决**（可能假阳/假阴）。它**治标**（帮解读现有噪声），没让 compliance 更准 —— 治本仍 `--refine-instructions`（判定前 LLM 砍伪指令，默认开）/ 结构化声明（frontmatter 声明 required_*）/ 真实 transcript audit。**别以为"标了 tool_noise = compliance 可信了"**。判别规则源码：`audit/noise.py`（纯函数，不调 LLM/不读 transcript）。
-
-### 7.12 turn 定位（`turn_refs`）：可选的违规 turn 定位，默认关
-
-audit 的 finding 默认告诉你「违反了什么指令 + evidence（中文理由）」，但**不告诉你在哪个 turn**——几百 turn 的 session 里手动翻找不现实。`turn_refs` 补这个：FAIL / INDETERMINATE 的 finding 带 `turn_refs` 列表（全局 turnIndex），能 link 到 turn 的消费方（如有 turn 浏览器的下游工具）拿它能直接跳到对应 turn 看上下文。
-
-**但默认关（`--no-turn-refs`），要 `--turn-refs` 显式开——不是没做完，是开它有代价。**
-
-#### 做了什么
-
-开 `--turn-refs` 时，digest 重建给每条 assistant record 文本加全局 `[T{idx}]` 前缀（`[T142] assistant: …`），judge prompt 据此要求 LLM 在 FAIL / INDETERMINATE 时输出 `turn_refs`。段级缺席（「全程未发生」，如「调用 subagent」全程没调）→ 留空；turn 级违规（某具体 turn 做错）→ 给 seq。`locate_turns` 参数贯穿 rebuild（控前缀）→ judge（控 prompt 的 turn 引用规则）→ audit CLI 开关。
-
-#### 对结果的影响：引入条件分支过严
-
-加 `[T{idx}]` 前缀 = 动了喂 LLM 的 prompt，实测让判定**变严**：step / prohibition 类里「条件不满足→本就该跳过」的指令（如「读取 PLAN.md」「读取 probe」，本 session 条件没触发、该判 N/A），LLM 见到 turn 信号就倾向 FAIL。实测加前缀后 FAIL 数会明显上涨，多出的**不是新违规、是条件分支误判**（真违规判定没退化：原本就成立的 turn 级违规 FAIL + turn_refs 全保留）。
-
-故默认关：多数场景（尤其 CLI 直接看报告、没有能 link 到 turn 内容的消费方）开了只多收条件分支误判噪声、拿不到定位收益；要定位且能接受多报时才 opt-in 开。
-
-#### 三轮「判定层纠偏」尝试皆败（教训，勿重蹈）
-
-发现过严后，试过三轮在**判定层**修正它，全败——记录于此免得未来开发者重蹈：
-
-| 尝试 | FAIL | 为什么败 |
-|---|---|---|
-| 调松 judge prompt 措辞 | 17（过宽） | 丢真违规（如「最多重试 2 次」→N/A） |
-| 加 `premise_held` 独立二判 | 30 | LLM 把 premise_held 当捷径、25 PASS→N/A + 丢真违规 |
-| 判后纠偏 pass（rectify） | 36（最接近） | **漏报**：喂去 `[T{idx}]` 的 stripped transcript 再判，但「条件分支该跳过」与「真违规该做没做」在 stripped 文本里长得一样（都 = 没出现），LLM 分不清、全判 N/A，误伤 ~10 真违规段级缺席 |
-
-**根因**：判定层二判无法区分两类「缺席」——stripped 掉 turn 信号后，「本就不该做」和「该做却没做」都是「没出现」，必漏报。审计最忌漏报（违规被掩盖、带「纠偏」标记还误导用户以为「不涉及」），比多报（可识别排除）危险得多。
-
-**最终落地：做成可选开关，而非判定层纠偏。** 判定层没法「既保 turn_refs 定位又免条件分支过严」，故不在判定层二选一——两个形态都保留交用户选：默认给干净的（no-seq），要定位且能接受多报时 opt-in 开 seq。比任何判定层纠偏都干净。
-
-#### 开 `--turn-refs` 时怎么读报告（triage）
-
-- **`turn_refs` 空** = 段级缺席（全程未发生）。两可能：条件分支没触发（本就该跳过 → 其实 N/A，属多报）／真违规该做没做（真问题）。需复核 evidence。
-- **`turn_refs` 有 seq**（如 `[142]`）= 确定的 turn 级违规，直接定位那个 turn。
-
-条件分支误判集中在「empty turn_refs」那批，看 seq 能快速分流。
-
-#### 已知限制 / 后续
-
-- **opencode 切片的 turn_refs 是段内 local、非全局**：opencode 切片经 message 子集往返重建、按段内位置 re-stamp；cc / structured records 不受影响（dict 引用子集，`_turn_index` 经 JSON 往返保全局）。opencode 路开 `--turn-refs` 时 seq 是段内的。
-- **OUTPUT / CONDITIONAL 类不带 turn_refs**：`--turn-refs` 只让 prohibition / step 类（走 transcript_text + turn 引用的 LLM judge）输出 turn_refs。OUTPUT 是程序化子串匹配、CONDITIONAL（TOOL_REQUIREMENT / REFERENCE_USAGE）的 FAIL 是段级缺席（trace 全程未调用 / 未读取 X）——两者都无具体 turn 可定位、恒空；只有 prohibition / step 的 turn 级违规才带 seq。
-- **想减条件分支误判**：别再试判定层纠偏（三轮皆败）。靠报告层 triage（empty/有 seq），或改单轮 prompt / conditional 判定器本身的「条件不满足→N/A」引导。
 
 ---
 
