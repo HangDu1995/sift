@@ -610,6 +610,8 @@ class TranscriptAuditor:
         model: str | None = None,
         timeout: int = 600,
         on_progress: ProgressFn | None = None,
+        *,
+        locate_turns: bool = False,
     ) -> list[AuditFinding]:
         """判定禁令类指令(CONSTRAINT / ANTI_FABRICATION)——**主动检测违规是否发生**。
 
@@ -638,13 +640,15 @@ class TranscriptAuditor:
         findings: list[AuditFinding | None] = [None] * len(instructions)
 
         # 全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_prohibition 内部分批循环)。
+        # locate_turns 透传:False 时 prompt 不含 turn 引用规则、不要求 LLM 输出 turn_refs。
         violated_mask = self._llm_judge_prohibition(
             instructions, transcript_text, model, timeout, on_progress,
+            locate_turns=locate_turns,
         )
 
         # turn_refs 后验上界:从喂给 LLM 的同一份 transcript_text 的 [T{idx}] 标记反推最大
-        # turn 序号。judge 自包含,无需把 record 数 / 全局 turnIndex 透传过 audit/rebuild。
-        max_turn = self._max_turn_from_text(transcript_text)
+        # turn 序号。locate_turns=False 时不 sanitize(无需上界,省一次正则扫文本)。
+        max_turn = self._max_turn_from_text(transcript_text) if locate_turns else 0
 
         for i, inst in enumerate(instructions):
             verdict, ev, tr_raw = violated_mask[i]
@@ -657,7 +661,8 @@ class TranscriptAuditor:
                     category=AuditCategory.PROHIBITION,
                     evidence=ev or "执行中发生了违反该禁令的行为",
                     transcript=transcript_name,
-                    turn_refs=self._sanitize_turn_refs(tr_raw, max_turn),
+                    # locate_turns=False 时即便 LLM 给了 turn_refs 也丢(整链关 turn 定位)。
+                    turn_refs=self._sanitize_turn_refs(tr_raw, max_turn) if locate_turns else [],
                 )
             elif verdict == AuditVerdict.PASS:
                 findings[i] = AuditFinding(
@@ -680,7 +685,8 @@ class TranscriptAuditor:
                     category=AuditCategory.PROHIBITION,
                     evidence=ev,
                     transcript=transcript_name,
-                    turn_refs=self._sanitize_turn_refs(tr_raw, max_turn),
+                    # locate_turns=False 时即便 LLM 给了 turn_refs 也丢。
+                    turn_refs=self._sanitize_turn_refs(tr_raw, max_turn) if locate_turns else [],
                 )
             else:
                 # None:LLM 未给明确结论(调用失败/解析失败/未提及/畸形值/indeterminate 无 evidence)
@@ -705,6 +711,8 @@ class TranscriptAuditor:
         timeout: int = 600,
         tool_trace: list | None = None,
         on_progress: ProgressFn | None = None,
+        *,
+        locate_turns: bool = False,
     ) -> list[AuditFinding]:
         """判定步骤类指令(HEADING_STEP)的三态结论。
 
@@ -735,13 +743,15 @@ class TranscriptAuditor:
         findings: list[AuditFinding | None] = [None] * len(instructions)
 
         # 全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_step 内部分批循环)。
+        # locate_turns 透传:False 时 prompt 不含 turn 引用规则、tool_section 无 [T{idx}]。
         verdict_mask = self._llm_judge_step(
             instructions, transcript_text, model, timeout, tool_trace, on_progress,
+            locate_turns=locate_turns,
         )
 
         # turn_refs 后验上界:从喂给 LLM 的同一份 transcript_text 的 [T{idx}] 标记反推最大
-        # turn 序号。与 _judge_prohibition 同款。
-        max_turn = self._max_turn_from_text(transcript_text)
+        # turn 序号。与 _judge_prohibition 同款。locate_turns=False 时不 sanitize。
+        max_turn = self._max_turn_from_text(transcript_text) if locate_turns else 0
 
         for i, inst in enumerate(instructions):
             verdict, ev, tr_raw = verdict_mask[i]
@@ -766,7 +776,8 @@ class TranscriptAuditor:
                     category=AuditCategory.STEP,
                     evidence=ev or "该走这一步但未走",
                     transcript=transcript_name,
-                    turn_refs=self._sanitize_turn_refs(tr_raw, max_turn),
+                    # locate_turns=False 时即便 LLM 给了 turn_refs 也丢。
+                    turn_refs=self._sanitize_turn_refs(tr_raw, max_turn) if locate_turns else [],
                 )
             elif verdict == AuditVerdict.NA:
                 findings[i] = AuditFinding(
@@ -789,7 +800,8 @@ class TranscriptAuditor:
                     category=AuditCategory.STEP,
                     evidence=ev,
                     transcript=transcript_name,
-                    turn_refs=self._sanitize_turn_refs(tr_raw, max_turn),
+                    # locate_turns=False 时即便 LLM 给了 turn_refs 也丢。
+                    turn_refs=self._sanitize_turn_refs(tr_raw, max_turn) if locate_turns else [],
                 )
             else:
                 # None/未知值/非字符串/indeterminate 无 evidence → 没判成(UNRESOLVED):
@@ -1204,6 +1216,8 @@ class TranscriptAuditor:
         model: str | None,
         timeout: int,
         on_progress: ProgressFn | None = None,
+        *,
+        locate_turns: bool = False,
     ) -> list[tuple[AuditVerdict | None, str, list[int]]]:
         """分批 call_claude 判每条禁令在本次执行里是否被违反(每批 _MAX_LLM_IN_BATCH(10) 条,处理全部)。
 
@@ -1234,6 +1248,19 @@ class TranscriptAuditor:
             instruction_list = "".join(
                 f"[{i}] {inst.instruction_text}\n" for i, inst in enumerate(batch)
             )
+            # locate_turns=False 时整段 turn 引用规则不进 prompt,输出格式也不要求 turn_refs
+            # (judge 不向 LLM 索取 turn 引用 → 返回的 turn_refs 即便有也由 _judge 层丢弃)。
+            turn_rule_section = (
+                "## turn 引用规则\n"
+                "执行记录每行开头的 ``[T{idx}]`` 标记该动作所属的全局 turn 序号(从 1 计)。"
+                "当 violated=true 或 indeterminate=true 时,**必须**在 ``turn_refs`` 列出"
+                "该违规 / 矛盾发生的 turn 序号(如 ``[12]`` 或 ``[12, 34]``)——指向具体动作,"
+                "便于人工复核定位。**段级缺席**(如「整段全程未发生违规」「全程未编造数据」)"
+                "时留空 ``[]`` 并在 evidence 说明是全程性的。violated=false / PASS 留空 ``[]``。\n\n"
+            ) if locate_turns else ""
+            turn_refs_field = (
+                ', "turn_refs": [12, 34]  // 违规/矛盾发生的 turn 序号;段级缺席或 PASS 留空 []'
+            ) if locate_turns else ""
             prompt = (
                 "判断以下每条禁令/约束在本次真实执行里是否被违反。\n\n"
                 "## 判定标准(优先给出明确结论;只有证据真的相互矛盾或关键缺失时才用 indeterminate)\n"
@@ -1243,19 +1270,15 @@ class TranscriptAuditor:
                 "- ⚠ indeterminate=true(判不准):你看了执行记录,但证据真的相互矛盾或关键信息缺失,"
                 "判断不了是否违反。**必须**在 evidence 写明具体矛盾 / 缺失的证据;"
                 "不要用 indeterminate 偷懒回避判断。\n\n"
-                "## turn 引用规则\n"
-                "执行记录每行开头的 ``[T{idx}]`` 标记该动作所属的全局 turn 序号(从 1 计)。"
-                "当 violated=true 或 indeterminate=true 时,**必须**在 ``turn_refs`` 列出"
-                "该违规 / 矛盾发生的 turn 序号(如 ``[12]`` 或 ``[12, 34]``)——指向具体动作,"
-                "便于人工复核定位。**段级缺席**(如「整段全程未发生违规」「全程未编造数据」)"
-                "时留空 ``[]`` 并在 evidence 说明是全程性的。violated=false / PASS 留空 ``[]``。\n\n"
+                f"{turn_rule_section}"
                 f"## 执行记录摘录\n{transcript_text[:_SCENE_TRUNCATE]}\n\n"
                 f"## 待判禁令 ({bn} 条)\n{instruction_list}\n"
                 "## 输出格式\n"
                 '只返回 JSON 数组,每元素:'
                 '{"index": 0, "violated": true/false, "indeterminate": true(仅判不准时), '
-                '"evidence": "中文简述为何违反/未违反/判不准(具体到证据)", '
-                '"turn_refs": [12, 34]  // 违规/矛盾发生的 turn 序号;段级缺席或 PASS 留空 []}\n'
+                '"evidence": "中文简述为何违反/未违反/判不准(具体到证据)"'
+                f"{turn_refs_field}"
+                "}\n"
             )
             specs.append((start, bn, k, prompt))
         for start, parsed in _run_batches_concurrent(
@@ -1332,6 +1355,8 @@ class TranscriptAuditor:
         timeout: int,
         tool_trace: list | None = None,
         on_progress: ProgressFn | None = None,
+        *,
+        locate_turns: bool = False,
     ) -> list[tuple[AuditVerdict | None, str, list[int]]]:
         """分批 call_claude 判每个步骤在本次执行里是否被走过(每批 _MAX_LLM_IN_BATCH(10) 条,处理全部)。
 
@@ -1366,20 +1391,43 @@ class TranscriptAuditor:
             # tool_trace 进 prompt:判涉及工具的步骤时让 LLM 看到实际工具调用,而非只凭
             # assistant 文字声称(canary 暴露的缺口 —— 否则"Read input log"步骤明明调了
             # Read 却因 transcript_text 只剩文字声称而误判 FAIL)。
-            # 每条 tool call 也带 [T{idx}](若 ToolCallRecord.turn 有标注),让 LLM 能把
-            # 工具调用对到具体 turn → step 的 turn_refs 引用更准(turn 粒度定位)。
+            # locate_turns=True 时每条 tool call 带 [T{idx}](若 ToolCallRecord.turn 有标注),
+            # 让 LLM 能把工具调用对到具体 turn → step 的 turn_refs 引用更准(turn 粒度定位);
+            # locate_turns=False 时不带前缀、段标题也不提示 [T{idx}](整链关 turn 定位)。
             tool_section = ""
             if tool_trace:
-                tool_lines = "\n".join(
-                    f"- [T{t.turn}] {t.name}: {t.input_summary}" if t.turn is not None
-                    else f"- {t.name}: {t.input_summary}"
-                    for t in tool_trace
-                )
-                tool_section = (
-                    "## 实际工具调用记录(判涉及工具的步骤时以此为准,勿只凭文字声称;"
-                    "``[T{idx}]`` 标该调用所属 turn)\n"
-                    f"{tool_lines}\n\n"
-                )
+                if locate_turns:
+                    tool_lines = "\n".join(
+                        f"- [T{t.turn}] {t.name}: {t.input_summary}" if t.turn is not None
+                        else f"- {t.name}: {t.input_summary}"
+                        for t in tool_trace
+                    )
+                    tool_section = (
+                        "## 实际工具调用记录(判涉及工具的步骤时以此为准,勿只凭文字声称;"
+                        "``[T{idx}]`` 标该调用所属 turn)\n"
+                        f"{tool_lines}\n\n"
+                    )
+                else:
+                    tool_lines = "\n".join(
+                        f"- {t.name}: {t.input_summary}" for t in tool_trace
+                    )
+                    tool_section = (
+                        "## 实际工具调用记录(判涉及工具的步骤时以此为准,勿只凭文字声称)\n"
+                        f"{tool_lines}\n\n"
+                    )
+            # locate_turns=False 时整段 turn 引用规则不进 prompt,输出格式也不要求 turn_refs
+            # (与 _llm_judge_prohibition 同款;judge 层 locate_turns=False 时返回的 turn_refs 丢弃)。
+            turn_rule_section = (
+                "## turn 引用规则\n"
+                "执行记录每行开头的 ``[T{idx}]`` 标记该动作所属的全局 turn 序号(从 1 计);"
+                "工具调用记录同。当 verdict=fail 或 indeterminate 时,**必须**在 ``turn_refs`` "
+                "列出该问题(应走未走 / 证据矛盾)涉及的 turn 序号(如 ``[8]`` 或 ``[8, 15]``)——"
+                "指向具体动作,便于人工复核定位。**段级缺席**(如「整段全程未走该步」)"
+                "时留空 ``[]`` 并在 evidence 说明是全程性的。verdict=pass / na 留空 ``[]``。\n\n"
+            ) if locate_turns else ""
+            turn_refs_field = (
+                ', "turn_refs": [8, 15]  // fail/indeterminate 涉及的 turn 序号;段级缺席或 pass/na 留空 []'
+            ) if locate_turns else ""
             prompt = (
                 "判断以下每个步骤在本次执行里是否被走过。\n\n"
                 "## 判定标准(优先给出明确结论;只有证据真的相互矛盾或关键缺失时才用 indeterminate)\n"
@@ -1389,20 +1437,16 @@ class TranscriptAuditor:
                 "- indeterminate:你看了执行记录,但证据真的相互矛盾或关键信息缺失,"
                 "判断不了走没走。**必须**在 evidence 写明具体矛盾 / 缺失的证据;"
                 "不要用 indeterminate 偷懒回避判断。\n\n"
-                "## turn 引用规则\n"
-                "执行记录每行开头的 ``[T{idx}]`` 标记该动作所属的全局 turn 序号(从 1 计);"
-                "工具调用记录同。当 verdict=fail 或 indeterminate 时,**必须**在 ``turn_refs`` "
-                "列出该问题(应走未走 / 证据矛盾)涉及的 turn 序号(如 ``[8]`` 或 ``[8, 15]``)——"
-                "指向具体动作,便于人工复核定位。**段级缺席**(如「整段全程未走该步」)"
-                "时留空 ``[]`` 并在 evidence 说明是全程性的。verdict=pass / na 留空 ``[]``。\n\n"
+                f"{turn_rule_section}"
                 f"## 执行记录摘录\n{transcript_text[:_SCENE_TRUNCATE]}\n\n"
                 f"{tool_section}"
                 f"## 待判步骤 ({bn} 条)\n{instruction_list}\n"
                 "## 输出格式\n"
                 '只返回 JSON 数组,每元素:'
                 '{"index": 0, "verdict": "pass"|"fail"|"na"|"indeterminate", '
-                '"evidence": "中文简述(具体到证据)", '
-                '"turn_refs": [8, 15]  // fail/indeterminate 涉及的 turn 序号;段级缺席或 pass/na 留空 []}\n'
+                '"evidence": "中文简述(具体到证据)"'
+                f"{turn_refs_field}"
+                "}\n"
             )
             specs.append((start, bn, k, prompt))
         for start, parsed in _run_batches_concurrent(

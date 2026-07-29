@@ -202,7 +202,7 @@ def test_judge_prohibition_attaches_sanitized_turn_refs(monkeypatch) -> None:
     ])
     insts = [_prohibition_inst(text=f"rule {i}") for i in range(3)]
 
-    findings = aud._judge_prohibition(insts, ttext, "p.jsonl")
+    findings = aud._judge_prohibition(insts, ttext, "p.jsonl", locate_turns=True)
 
     assert len(findings) == 3
     assert findings[0].verdict == AuditVerdict.FAIL and findings[0].turn_refs == [15]
@@ -218,7 +218,7 @@ def test_judge_prohibition_segment_absence_empty(monkeypatch) -> None:
         (AuditVerdict.FAIL, "全程未发生违规行为", []),
     ])
 
-    findings = aud._judge_prohibition([_prohibition_inst()], ttext, "p.jsonl")
+    findings = aud._judge_prohibition([_prohibition_inst()], ttext, "p.jsonl", locate_turns=True)
 
     assert findings[0].verdict == AuditVerdict.FAIL
     assert findings[0].turn_refs == []
@@ -236,7 +236,7 @@ def test_judge_step_segment_absence_empty(monkeypatch) -> None:
         (AuditVerdict.FAIL, "全程未走这步", []),
     ])
 
-    findings = aud._judge_step([_step_inst()], ttext, "s.jsonl")
+    findings = aud._judge_step([_step_inst()], ttext, "s.jsonl", locate_turns=True)
 
     assert findings[0].verdict == AuditVerdict.FAIL
     assert findings[0].turn_refs == []
@@ -250,7 +250,7 @@ def test_judge_prohibition_no_turn_markers_still_runs(monkeypatch) -> None:
         (AuditVerdict.FAIL, "T5 违规", [5]),   # max_turn=0 → 5 全丢
     ])
 
-    findings = aud._judge_prohibition([_prohibition_inst()], ttext, "p.jsonl")
+    findings = aud._judge_prohibition([_prohibition_inst()], ttext, "p.jsonl", locate_turns=True)
 
     assert findings[0].verdict == AuditVerdict.FAIL
     assert findings[0].turn_refs == []   # 无合法 turn 范围,无法校验 → 空
@@ -268,7 +268,7 @@ def test_judge_step_attaches_sanitized_turn_refs(monkeypatch) -> None:
     ])
     insts = [_step_inst(text=f"step {i}") for i in range(4)]
 
-    findings = aud._judge_step(insts, ttext, "s.jsonl")
+    findings = aud._judge_step(insts, ttext, "s.jsonl", locate_turns=True)
 
     assert len(findings) == 4
     assert findings[0].verdict == AuditVerdict.FAIL and findings[0].turn_refs == [8]
@@ -285,7 +285,7 @@ def test_judge_step_unresolved_keeps_empty(monkeypatch) -> None:
         (None, "", []),  # 没判成
     ])
 
-    findings = aud._judge_step([_step_inst()], ttext, "s.jsonl")
+    findings = aud._judge_step([_step_inst()], ttext, "s.jsonl", locate_turns=True)
 
     assert findings[0].verdict == AuditVerdict.UNRESOLVED
     assert findings[0].turn_refs == []
