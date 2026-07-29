@@ -347,7 +347,8 @@ def _digest_from_records(
             body = "\n".join(rec_text_parts)
             if locate_turns:
                 idx_str = str(turn_idx) if turn_idx is not None else "?"
-                transcript_text_parts.append(f"[T{idx_str}] " + body if body else f"[T{idx_str}]")
+                anchor = f"[T{idx_str}]"
+                transcript_text_parts.append(f"{anchor} {body}" if body else anchor)
             elif body:
                 transcript_text_parts.append(body)
 
