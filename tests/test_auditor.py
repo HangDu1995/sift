@@ -1688,3 +1688,45 @@ def test_audit_populates_transcript_sources_cc_and_opencode(monkeypatch) -> None
     report = TranscriptAuditor().audit("lea", "# x\n\nNEVER fabricate data.\n", [cc, oc])
     assert report.transcripts == [cc.name, oc.name]
     assert report.transcript_sources == ["cc", "opencode"]
+
+
+# ---- 尾逗号 JSON 容错:LLM 长批输出偶发 [...,] / {...,} 不该让整批变 UNRESOLVED ----
+# 旧逻辑 _parse_* 直接 json.loads,尾逗号 → JSONDecodeError → 整批回退默认(没判成 →
+# UNRESOLVED,audit 模式下是主交付物有洞)。load_json_lenient 兜底:strip ]/} 前尾逗号重试。
+
+
+def test_parse_step_recovers_array_trailing_comma() -> None:
+    """LLM 输出数组尾逗号([... ,])→ 旧逻辑硬失败整批没判成;现应救回 pass/fail。"""
+    text = '[{"index":0,"verdict":"pass"},{"index":1,"verdict":"fail"},]'
+    res = TranscriptAuditor._parse_step(text, 2)
+    assert res[0][0] == AuditVerdict.PASS
+    assert res[1][0] == AuditVerdict.FAIL
+
+
+def test_parse_prohibition_recovers_object_trailing_comma() -> None:
+    """对象内尾逗号({...,})同样兜底;禁令 violated=true 不该因尾逗号漏判成 UNRESOLVED。"""
+    text = '[{"index":0,"violated":true,"evidence":"编造了数据",},]'
+    res = TranscriptAuditor._parse_prohibition(text, 1)
+    assert res[0][0] == AuditVerdict.FAIL
+    assert res[0][1] == "编造了数据"
+
+
+def test_parse_applicable_recovers_trailing_comma() -> None:
+    """条件性 applicable 判定同样兜底;true→FAIL(该做没做)/false→NA(不涉及)。"""
+    text = '[{"index":0,"applicable":true},{"index":1,"applicable":false},]'
+    res = TranscriptAuditor._parse_applicable(text, 2)
+    assert res[0][0] == AuditVerdict.FAIL
+    assert res[1][0] == AuditVerdict.NA
+
+
+def test_load_json_lenient_clean_unchanged_and_garbage_none() -> None:
+    """干净 JSON 直通不跑 strip(含合法 ', ]' 的字符串值不被破坏);真垃圾 → None。"""
+    from skill_eval.audit.tool_match import load_json_lenient
+
+    assert load_json_lenient('[1, 2, 3]') == [1, 2, 3]
+    # 含 ", ]" 的合法字符串值:直接 parse 成功 → strip 不跑 → 原样保留
+    assert load_json_lenient('["a, ]", "b"]') == ["a, ]", "b"]
+    # 尾逗号 → 直接失败 → strip 重试 → 救回
+    assert load_json_lenient('[1, 2, 3,]') == [1, 2, 3]
+    # 真垃圾 → None(调用方兜底默认 / UNRESOLVED)
+    assert load_json_lenient("not json at all") is None

@@ -47,7 +47,6 @@
 """
 from __future__ import annotations
 
-import json
 import re
 import threading
 import time
@@ -57,7 +56,7 @@ from typing import Any, Callable
 
 from skill_eval.audit.declare import derive_declarations
 from skill_eval.audit.rebuild import rebuild
-from skill_eval.audit.tool_match import extract_first_balanced, match_tool_call
+from skill_eval.audit.tool_match import extract_first_balanced, load_json_lenient, match_tool_call
 from skill_eval.audit.aggregate import aggregate_by_instruction
 from skill_eval.audit.dedup import post_process_findings
 from skill_eval.audit import refine_cache
@@ -1060,10 +1059,7 @@ class TranscriptAuditor:
         arr_str = extract_first_balanced(text)
         if arr_str is None:
             return mask
-        try:
-            items = json.loads(arr_str)
-        except json.JSONDecodeError:
-            return mask
+        items = load_json_lenient(arr_str)
         if not isinstance(items, list):
             return mask
         for item in items:
@@ -1194,10 +1190,7 @@ class TranscriptAuditor:
         arr_str = extract_first_balanced(text)
         if arr_str is None:
             return mask
-        try:
-            items = json.loads(arr_str)
-        except json.JSONDecodeError:
-            return mask
+        items = load_json_lenient(arr_str)
         if not isinstance(items, list):
             return mask
         for item in items:
@@ -1322,10 +1315,7 @@ class TranscriptAuditor:
         arr_str = extract_first_balanced(text)
         if arr_str is None:
             return results
-        try:
-            items = json.loads(arr_str)
-        except json.JSONDecodeError:
-            return results
+        items = load_json_lenient(arr_str)
         if not isinstance(items, list):
             return results
         for item in items:
@@ -1483,10 +1473,7 @@ class TranscriptAuditor:
         arr_str = extract_first_balanced(text)
         if arr_str is None:
             return results
-        try:
-            items = json.loads(arr_str)
-        except json.JSONDecodeError:
-            return results
+        items = load_json_lenient(arr_str)
         if not isinstance(items, list):
             return results
         for item in items:

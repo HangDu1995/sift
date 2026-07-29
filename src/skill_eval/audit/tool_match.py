@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 
@@ -50,6 +51,33 @@ def extract_first_balanced(text: str, open_ch: str = "[", close_ch: str = "]") -
 
 # 公共名为 ``extract_first_balanced``;保留 ``_extract_first_balanced`` 别名(旧测试仍 import 它)。
 _extract_first_balanced = extract_first_balanced
+
+
+# 尾逗号容错:LLM 长批 JSON 偶发 [...,] / {...,} → json.loads 硬失败。
+# 仅在直接 parse 失败后才 sub(不在所有输入上跑,以免破坏含 ", ]" 的合法字符串值)。
+_TRAILING_COMMA_RE = re.compile(r",\s*([\]}])")
+
+
+def load_json_lenient(s: str):
+    """``json.loads`` + 尾逗号容错;parse 不出返回 None。
+
+    LLM(尤其 GLM / 类 Claude)长批 JSON 输出偶发尾逗号(``[..., ]`` / ``{...,}``)→
+    ``json.loads`` 硬失败 → 调用方整批回退默认(没判成 → UNRESOLVED;audit 模式下是主
+    交付物有洞)。两阶段防御(对齐 DeepEval ``trimAndLoadJson``):
+
+    1. 先直接 ``json.loads``——干净输入(含合法 ``", ]"`` 字符串值)直接成功,不跑正则;
+    2. 仅在直接失败后才 ``re.sub`` 去掉 ``]`` / ``}`` 前的尾逗号重试一次。
+
+    两阶段都失败 → None(调用方兜底默认)。极少数"既尾逗号、字符串值内又含 `,]`"的病态
+    输入,第 2 步正则可能改写该字符串值——与 DeepEval 同限,可接受(尾逗号本身已非合法)。
+    """
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        try:
+            return json.loads(_TRAILING_COMMA_RE.sub(r"\1", s))
+        except json.JSONDecodeError:
+            return None
 
 
 def _command_word_re(tool_name: str):
