@@ -185,7 +185,7 @@ class BenchmarkAggregator:
                         _tj = json.loads(timing_path.read_text(encoding="utf-8"))
                         gtu = _tj.get("grader_token_usage") or {}
                         if gtu:
-                            grader_acc.add(gtu)
+                            grader_acc.add(gtu, count=gtu.get("calls", 1))
                     except Exception:
                         pass
                 comp_path = run_dir / "compliance.json"
@@ -193,7 +193,7 @@ class BenchmarkAggregator:
                     try:
                         ctu = json.loads(comp_path.read_text(encoding="utf-8")).get("token_usage") or {}
                         if ctu:
-                            audit_acc.add(ctu)
+                            audit_acc.add(ctu, count=ctu.get("calls", 1))
                     except Exception:
                         pass
 
@@ -432,14 +432,15 @@ class BenchmarkAggregator:
         scoring_total = TokenUsageAccumulator()
         for snap in (scoring_acc.snapshot(), grader_acc.snapshot()):
             if snap:
-                scoring_total.add(snap)
+                scoring_total.add(snap, count=snap.get("calls", 1))
         audit_snapshot = audit_acc.snapshot()
         total_acc = TokenUsageAccumulator()
         for snap in (scoring_total.snapshot(), audit_snapshot):
             if snap:
-                total_acc.add(snap)
+                total_acc.add(snap, count=snap.get("calls", 1))
         if executor_total:
-            total_acc.add({"input_tokens": executor_total, "output_tokens": 0})
+            # executor 是 cc 跑任务的 token,非评分 LLM 调用 → 累 input 但不计 calls(count=0)
+            total_acc.add({"input_tokens": executor_total, "output_tokens": 0}, count=0)
         main_benchmark = main_benchmark.model_copy(update={
             "llm_token_usage": {
                 "scoring": scoring_total.snapshot(),

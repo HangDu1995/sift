@@ -239,3 +239,22 @@ def test_accumulator_empty_when_no_calls():
     # 没累加过(calls==0)→ snapshot 返空 dict(无 LLM 调用的 audit,report 保持干净)。
     acc = TokenUsageAccumulator()
     assert acc.snapshot() == {}
+
+
+def test_accumulator_add_count_param():
+    # add(count=N) 计 N 次调用(rollup 子快照用,保子内部调用数);默认 count=1(单次 call_claude 回调)。
+    acc = TokenUsageAccumulator()
+    acc.add({"input_tokens": 10}, count=3)
+    assert acc.snapshot()["calls"] == 3
+    acc.add({"input_tokens": 5})  # 默认 count=1
+    assert acc.snapshot()["calls"] == 4
+
+
+def test_accumulator_snapshot_nonempty_when_tokens_but_zero_calls():
+    # executor 场景:count=0(非 LLM 调用)但有 token → snapshot 非空(判空看 token,不只看 calls)。
+    acc = TokenUsageAccumulator()
+    acc.add({"input_tokens": 50}, count=0)
+    snap = acc.snapshot()
+    assert snap != {}                   # 有 token 不该被判空
+    assert snap["input_tokens"] == 50
+    assert snap["calls"] == 0

@@ -681,7 +681,7 @@ skill-eval batch-report batch-workspace/ --open
 - `delta` 全为有符号字符串（`+0.27`），= `configs[0] - configs[1]`（候选 - 基线）；双率项可能为 `null`。
 - `comparison_summary.win_rate` = `a_wins/valid`（tie-计入）；`gate` 用 tie-排除版自行算。
 - `selection`（可选,仅 `--changed-from` 子集跑时）:`{mode, ids, affected, total}`——标识本次为受改动影响的子集跑、delta 非整体测量。
-- `llm_token_usage`:本次评测的 LLM token 用量,分四段——`scoring`(grader+comparator+analyzer 合计,带 cost/calls)、`audit`(compliance/audit rollup 自 per-run compliance.json)、`executor`(被测 cc token,仅 token 数无 cost)、`total`(全加 token;cost = scoring+audit)。**executor 是被测 skill 的 token 效率指标(无 cost);scoring+audit 才是评测系统付出的 LLM 成本**。现有「令牌数」/「Δ 令牌数」(executor)语义不变,viewer 头部新增「LLM token 用量」分列(评分/遵循性/executor)+ 总计。
+- `llm_token_usage`:本次评测的 LLM token 用量,分四段——`scoring`(grader+comparator+analyzer 合计,带 cost/calls,calls=各子项真实调用次数之和)、`audit`(compliance/audit rollup 自 per-run compliance.json)、`executor`(被测 cc token,仅 token 数无 cost)、`total`(全加 token;cost = scoring+audit)。**executor 是被测 skill 的 token 效率指标(无 cost);scoring+audit 才是评测系统付出的 LLM 成本**。现有「令牌数」/「Δ 令牌数」(executor)语义不变,viewer 头部新增「LLM token 用量」分列(评分/遵循性/executor)+ 总计。
 
 ### gate.json（`gate` 命令产出）
 

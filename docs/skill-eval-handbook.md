@@ -1044,7 +1044,7 @@ spawn claude -p
 | `comparison_summary` | 盲比较聚合 `{total, a_wins, b_wins, ties, failed, valid, win_rate, label_a, label_b}` |
 | `analysis` | 深度分析（见 12.3） |
 | `selection` | （可选，仅 `--changed-from` 子集跑时）`{mode, ids, affected, total}`——标识本次为受影响子集跑、delta 非整体测量 |
-| `llm_token_usage` | （Phase 2）本次评测的 LLM token 用量 `{scoring, audit, executor, total}`：`scoring`=grader+comparator+analyzer 合计（带 cost/calls）；`audit`=compliance rollup 自 per-run `compliance.json`；`executor`=被测 cc token（仅 token 数无 cost，对应 `run_summary.tokens`）；`total`=全加 token、cost=scoring+audit。**executor 是被测 token 效率（无 cost），scoring+audit 才是评测系统付出的 LLM 成本**。viewer 头部「LLM token 用量」分列 + 总计；旧 report 无此字段 → `{}` |
+| `llm_token_usage` | （Phase 2）本次评测的 LLM token 用量 `{scoring, audit, executor, total}`：`scoring`=grader+comparator+analyzer 合计（带 cost/calls,calls=各子项真实调用次数之和）；`audit`=compliance rollup 自 per-run `compliance.json`；`executor`=被测 cc token（仅 token 数无 cost，对应 `run_summary.tokens`）；`total`=全加 token、cost=scoring+audit。**executor 是被测 token 效率（无 cost），scoring+audit 才是评测系统付出的 LLM 成本**。viewer 头部「LLM token 用量」分列 + 总计；旧 report 无此字段 → `{}` |
 
 每条 `RunResultEntry`：`eval_id` / `eval_name` / `configuration` / `run_number` / `result`（`RunResultMetrics`：`pass_rate`/`passed`/`failed`/`total`/`time_seconds`/`tokens`/`tool_calls`/`errors` + 双率 `pass_rate_programmatic`/`pass_rate_llm`）/ `expectations[]` / `compliance`（**通常为 null**——聚合器不嵌完整 compliance，完整 AuditReport 在 per-run `compliance.json` 里，report 用 `find_runs` 另读）/ `notes[]` / `is_anomaly` / `anomaly_reason` / `retry_count`。
 

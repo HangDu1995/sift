@@ -54,3 +54,21 @@ def test_aggregate_llm_token_usage_empty_when_no_llm(tmp_path):
     assert tu.get("audit", {}) == {}
     assert tu["executor"]["input_tokens"] == 50
     assert tu["total"]["input_tokens"] == 50
+
+
+def test_aggregate_calls_reflect_child_call_counts(tmp_path):
+    """rollup 段 calls = 子快照 calls 之和,非 add 次数(修 calls 语义 bug)。
+    grader 内部 3 次、compliance 内部 5 次 → scoring.calls=3, audit.calls=5, total.calls=8。"""
+    from unittest.mock import patch
+    cfg = tmp_path / "with_skill"
+    _make_run(cfg / "eval-1" / "run-1", total_tokens=100,
+              grader_usage={"input_tokens": 30, "output_tokens": 10, "total_cost_usd": 0.01, "calls": 3},
+              compliance_usage={"input_tokens": 40, "output_tokens": 5, "total_cost_usd": 0.02, "calls": 5})
+    agg = BenchmarkAggregator(model=None)
+    with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+         patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+        bench = agg.aggregate(tmp_path)
+    tu = bench.llm_token_usage
+    assert tu["scoring"]["calls"] == 3   # grader 子快照 3 次(非 add 1 次)
+    assert tu["audit"]["calls"] == 5     # compliance 子快照 5 次
+    assert tu["total"]["calls"] == 8     # 3+5,executor 不计 calls

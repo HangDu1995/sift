@@ -126,16 +126,19 @@ class TokenUsageAccumulator:
         self._counts = {k: 0 for k in self._KEYS}
         self._counts["calls"] = 0
 
-    def add(self, payload: dict) -> None:
-        """on_usage 回调目标:把单次 usage+cost 累进去。缺键补 0(不 KeyError)。"""
+    def add(self, payload: dict, *, count: int = 1) -> None:
+        """on_usage 回调目标 / rollup 子快照累加。缺键补 0(不 KeyError)。
+        count: 本次 add 计几次调用;默认 1(单次 call_claude 回调)。rollup 子快照时传
+        count=snap.get("calls",1) 以保留子内部真实调用数(否则 add 一次会吞掉 child 的 calls)。"""
         with self._lock:
             for k in self._KEYS:
                 self._counts[k] += payload.get(k, 0) or 0
-            self._counts["calls"] += 1
+            self._counts["calls"] += count
 
     def snapshot(self) -> dict:
-        """返当前累计的副本;无调用(calls==0)返空 dict(无 usage 可报,report 保持干净)。"""
+        """返当前累计的副本;无任何 usage(所有 token 字段 + calls 皆 0)返空 dict。
+        判空看 token 不只看 calls:executor 段 count=0 但有 token(executor 非评分 LLM 调用)仍应非空。"""
         with self._lock:
-            if self._counts["calls"] == 0:
+            if not any(self._counts.values()):
                 return {}
             return dict(self._counts)
