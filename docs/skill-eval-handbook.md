@@ -580,6 +580,8 @@ v1/v2 是盲比较的**杀手级应用——CI 回归门禁**：skill 提 PR（v
 
 > 禁令的判法是**反着来**的：其它三类问"该不该做/做没做"（正面遵循），禁令问"这次执行里有没有发生**违反**这条禁令的行为"——主动找违规。例如 `NEVER fabricate error codes`，模型 hallucinate 一个错误码 → `violated=true` → FAIL。
 
+> **判官看什么 + 两处结构性噪声的防呆**：三个 LLM 判官各看不同的执行上下文——条件性看「场景」（`digest.user_turns`，任务上下文，判指令该不该触发）、禁令 / 步骤看「执行记录」（`transcript_text`，assistant 文字 + 工具调用渲染）。两处防呆治实测的两条主噪声：① **条件性场景回退**——`--kind skill/agent` 切出来的段只有执行 turn、没有 user turn（任务在父作用域），条件性判官原拿空场景只能一律弃判 INDETERMINATE（实测占 22%–55%）；现空场景时回退用 `transcript_text`（执行本身揭示任务上下文）当场景，判官方能判 applicability 而非弃判。② **头 + 尾窗口**——执行记录远超 prompt 预算时（实测单段 60–150KB），旧裸 `[:8000]` 只留头、尾部（最终结果 / 总结 / 收尾）判官全盲 → 禁令类「未见收口」假 PASS 或弃判；现取头 + 尾各半 + 中段截断标记，token 成本不变、覆盖从单端变双端。步骤类另有完整 `tool_trace`（不截断）兜底，所以「有没有调某工具」不受截断影响。
+
 > **extractor 的地基瓶颈**：SKILL.md 是给人读的自由文本——讲解、示例、真步骤混在一起，没有结构标记区分"这行是指令"还是"这行是示例"。extractor 抽指令只能靠正则死规则（标题下、大写开头 ≈ 步骤），于是教程型 skill 里的示例文字（如 `3 agents dispatched in parallel`、`6 failures across 3 files`）会被误抽成"指令"喂给判官 → 卷子大半是废题 → 判官再准也只能大量判 N/A（伪指令判不准）。这就是为什么遵循性常出很多 N/A、为什么教程型 skill 特别难审（路径 2/3 共用的地基问题）。根治两路：① **结构化声明**——skill 作者在 frontmatter 声明 `required_tools`/`required_reads`/`required_outputs`，extractor 直接查声明、不挖散文（最稳，但要 skill 作者配合改格式，待做）；② **refine**——正则粗召回后用 LLM 精筛伪指令（工具侧改进，不改 skill 格式），**默认开**，详见 §7.3。
 
 ### 7.3 refine：extractor 粗召回后的 LLM 精筛

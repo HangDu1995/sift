@@ -84,8 +84,26 @@ _MAX_LLM_IN_BATCH = 10
 # 阈值宽松(20%)+ 最小样本(5):真模糊偶尔会有,只在显著滥用时告警,免误报。
 _INDETERMINATE_ABUSE_RATE = 0.20
 _INDETERMINATE_ABUSE_MIN_TOTAL = 5
-# 防止场景描述过长撑爆 prompt(与 compliance 批量检查的 8000 截断一致)。
+# 判官 prompt 喂的执行记录/场景的最大字符预算。长 transcript(实测 skill/agent 切片
+# 60-150KB)远超此值 → 必须截断。旧裸 ``[:_SCENE_TRUNCATE]`` 只留头 → 尾部(最终结果 /
+# 总结 / 收尾清理)判官全盲,prohibition 类"段级缺席 / 未见收口"假 PASS 或弃判(实测
+# ops-spec-gen / precision-debug 主噪声源之一)。``_window`` 改取头+尾各半 + 中段截断
+# 标记:token 成本不变(窗口恒定)、覆盖从单端变双端。
 _SCENE_TRUNCATE = 8000
+
+
+def _window(text: str, limit: int = _SCENE_TRUNCATE) -> str:
+    """长文本取头 + 尾窗口(各 ``limit/2``),中段用截断标记替代。
+
+    ``text`` 长度 <= ``limit`` 原样返回;超长则保留头 ``limit//2`` + 尾 ``limit//2``,
+    中间用一行 ``[…截断中段约 N 字…]`` 衔接,让判官同时看到早期上下文(任务 / 规划)与
+    收尾(最终结果 / 总结)。是旧 ``text[:limit]`` 单端截断的替代——解决长切片尾部证据全盲。
+    """
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    omitted = len(text) - limit
+    return f"{text[:half]}\n\n[…截断中段约 {omitted} 字…]\n\n{text[-half:]}"
 # 整批 LLM 判定 transient 失败(超时 / CLI 非零退出 / 限流)的重试次数与退避间隔。
 # call_claude 在超时 / 非零退出时抛 RuntimeError,多为 transient——重试大多能救回整批,
 # 避免单次抖动让一整批指令兜底 N/A(audit-out3 实测 2 个整批共 25 条因此放弃)。
@@ -403,7 +421,11 @@ class TranscriptAuditor:
             for inst in all_inst:
                 buckets[self.classify(inst)].append(inst)
 
-            scene = "\n".join(digest.user_turns)
+            # conditional 判官靠 user_turns 当"场景"判指令该不该触发。skill/agent 切片
+            # (--kind)内只有执行 turn、无 user turn(任务在父作用域)→ scene 空 → conditional
+            # 全弃判 INDETERMINATE(实测 ops-spec-gen 22%、precision-debug 55% 弃判皆此)。
+            # 回退用 transcript_text(执行本身揭示任务上下文)作场景,判官方能判 applicability。
+            scene = "\n".join(digest.user_turns) or transcript_text
 
             # 三个 LLM 判定器(条件性/禁令/步骤)互相独立、无共享可变状态,并发跑省墙钟
             # (实测 zh:串行 13+51+37=101s → 并发 ≈ max=51s,约 2×)。max_workers=3 =
@@ -1026,7 +1048,7 @@ class TranscriptAuditor:
                 "- ⚠ indeterminate(判不准):你看了场景,但证据真的相互矛盾或关键信息缺失,"
                 "判断不了该不该触发。**必须**在 reason 写明具体矛盾 / 缺失的证据;"
                 "不要用 indeterminate 偷懒回避判断。\n\n"
-                f"## 场景描述\n{transcript_scene[:_SCENE_TRUNCATE]}\n\n"
+                f"## 场景描述\n{_window(transcript_scene)}\n\n"
                 f"## 待判指令 ({bn} 条)\n{instruction_list}\n"
                 "## 输出格式\n"
                 '只返回 JSON 数组,每元素:'
@@ -1272,7 +1294,7 @@ class TranscriptAuditor:
                 "判断不了是否违反。**必须**在 evidence 写明具体矛盾 / 缺失的证据;"
                 "不要用 indeterminate 偷懒回避判断。\n\n"
                 f"{turn_rule_section}"
-                f"## 执行记录摘录\n{transcript_text[:_SCENE_TRUNCATE]}\n\n"
+                f"## 执行记录摘录\n{_window(transcript_text)}\n\n"
                 f"## 待判禁令 ({bn} 条)\n{instruction_list}\n"
                 "## 输出格式\n"
                 '只返回 JSON 数组,每元素:'
@@ -1436,7 +1458,7 @@ class TranscriptAuditor:
                 "判断不了走没走。**必须**在 evidence 写明具体矛盾 / 缺失的证据;"
                 "不要用 indeterminate 偷懒回避判断。\n\n"
                 f"{turn_rule_section}"
-                f"## 执行记录摘录\n{transcript_text[:_SCENE_TRUNCATE]}\n\n"
+                f"## 执行记录摘录\n{_window(transcript_text)}\n\n"
                 f"{tool_section}"
                 f"## 待判步骤 ({bn} 条)\n{instruction_list}\n"
                 "## 输出格式\n"

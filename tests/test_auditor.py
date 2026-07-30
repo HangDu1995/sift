@@ -1730,3 +1730,86 @@ def test_load_json_lenient_clean_unchanged_and_garbage_none() -> None:
     assert load_json_lenient('[1, 2, 3,]') == [1, 2, 3]
     # 真垃圾 → None(调用方兜底默认 / UNRESOLVED)
     assert load_json_lenient("not json at all") is None
+
+
+# ---- 场景饥饿 + 截断:两处结构性噪声的修法(_window 头尾窗 + conditional 场景回退)----
+# 实测(ops-spec-gen 22%、precision-debug 55% 弃判):skill/agent 切片无 user turn →
+# conditional 判官拿空场景全弃判;长切片 transcript_text[:8000] 裸切 → prohibition 类
+# 尾部(最终结果/总结)全盲。_window 头+尾窗 + 空 scene 回退 transcript_text 治这两条。
+
+
+def test_window_short_text_unchanged() -> None:
+    """短文本(<= limit)原样返回;恰好 limit 不截(边界)。"""
+    from skill_eval.audit.auditor import _window, _SCENE_TRUNCATE
+
+    assert _window("短文本") == "短文本"
+    assert _window("x" * _SCENE_TRUNCATE) == "x" * _SCENE_TRUNCATE
+
+
+def test_window_long_text_keeps_head_tail_and_marker() -> None:
+    """长文本取头+尾(各 limit/2)+ 中段截断标记;头尾 canary 都在(旧裸 [:limit] 会丢尾)。"""
+    from skill_eval.audit.auditor import _window, _SCENE_TRUNCATE
+
+    text = "CANARY_HEAD" + "h" * 9000 + "t" * 9000 + "CANARY_TAIL"
+    out = _window(text)
+    assert "CANARY_HEAD" in out                       # 头保留
+    assert "CANARY_TAIL" in out                       # 尾保留(旧 [:8000] 只有头,丢这个)
+    assert "截断" in out                              # 中段标记
+    assert len(out) < len(text)                       # 确实缩短
+    half = _SCENE_TRUNCATE // 2
+    assert "CANARY_HEAD" in out[: half + 20]          # 头 canary 在前半窗
+    assert "CANARY_TAIL" in out[-(half + 20):]        # 尾 canary 在后半窗
+
+
+def test_prohibition_long_transcript_uses_head_tail_window(monkeypatch) -> None:
+    """长 transcript_text(>8000):prohibition prompt 含头+尾 canary + 截断标记。"""
+    captured: dict = {}
+
+    def fake(prompt, *a, **k):
+        captured["prompt"] = prompt
+        return "[]"
+
+    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+    auditor = TranscriptAuditor()
+    # ~18000 字:尾 canary 在 [:8000] 之外 → 旧裸切会丢
+    transcript_text = "CANARY_HEAD_PART" + "h" * 9000 + "t" * 9000 + "CANARY_TAIL_PART"
+    auditor._judge_prohibition([_prohibition_inst()], transcript_text, "p.jsonl")
+
+    assert "CANARY_HEAD_PART" in captured["prompt"]
+    assert "CANARY_TAIL_PART" in captured["prompt"]   # 旧 [:8000] 实现会缺
+    assert "截断" in captured["prompt"]
+
+
+def test_conditional_scene_fallback_when_no_user_turn(tmp_path, monkeypatch) -> None:
+    """skill/agent 切片无 user turn → conditional 判官原拿空场景全弃判(实测主噪声源);
+
+    回退用 transcript_text(执行记录)当场景 → prompt 场景描述含执行 canary、非空,
+    判官方能判 applicability 而非一律 INDETERMINATE。
+    """
+    captured: dict = {}
+
+    def fake(prompt, *a, **k):
+        captured["prompt"] = prompt
+        return json.dumps([{"index": i, "applicable": False} for i in range(60)])
+
+    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+    # 无 user turn 的切片:仅 assistant 文字(canary)+ 一个不匹配 "use Bash" 的 Read
+    tp = _write_jsonl(
+        tmp_path / "slice.jsonl",
+        [
+            {"message": {"role": "assistant", "content": [
+                {"type": "text", "text": "执行中 CANARY_SCENE_FALLBACK 标记。"},
+                {"type": "tool_use", "id": "t1", "name": "Read",
+                 "input": {"file_path": "/x/foo.md"}},
+            ]}},
+        ],
+    )
+    TranscriptAuditor().audit("s", "use Bash", [tp])  # use Bash → conditional, 不匹配 Read → LLM
+
+    p = captured["prompt"]
+    assert "## 场景描述" in p
+    m = re.search(r"## 场景描述\n(.*?)\n\n## 待判指令", p, re.S)
+    assert m, "未找到 conditional prompt 的场景描述段"
+    scene = m.group(1)
+    assert scene.strip() != "", "skill 切片无 user turn → 场景描述不应为空(应回退 transcript_text)"
+    assert "CANARY_SCENE_FALLBACK" in scene

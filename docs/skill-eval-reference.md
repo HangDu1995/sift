@@ -366,6 +366,8 @@ skill-eval audit path/to/skill/ --db opencode.db
 
 > **禁令判的角度反着来**：其它三类问“该不该做 / 做没做”（正面遵循），禁令问“这次执行里有没有发生**违反**这条禁令的行为”——主动找违规。例：`NEVER delete production data`、`不得编造不存在的错误码`（模型 hallucinate 一个码 → `violated=true` → FAIL）。
 
+> **判官看什么 + 两处结构性噪声的防呆**：条件性看「场景」（`digest.user_turns`，任务上下文），禁令 / 步骤看「执行记录」（`transcript_text`）。两处防呆：① **条件性场景回退**——`--kind skill/agent` 段内无 user turn（任务在父作用域）→ 空场景原致条件性一律弃判 INDETERMINATE（实测占 22%–55%）；现空场景回退用 `transcript_text` 当场景。② **头 + 尾窗口**——执行记录超 prompt 预算（实测单段 60–150KB）时，旧裸 `[:8000]` 只留头、尾部（最终结果/总结）全盲 → 禁令类假 PASS / 弃判；现取头 + 尾各半 + 截断标记，成本不变、双端可见。步骤类另有完整 `tool_trace`（不截断）兜底，「有没有调某工具」不受截断影响。
+
 > **没判成不乱报**：三类 LLM 判定（条件性 / 禁令 / 步骤）在 LLM 失败 / 解析失败 / 未提及时一律报 **UNRESOLVED（没判成）**，**不保守 FAIL**——FAIL 只留给 LLM 明确判“违反 / 该做没做”。
 >
 > **N/A、没判成、判不准 是三码事，别混**：① **UNRESOLVED（没判成）** = LLM 没出判定（调用 / 解析失败 / 未提及 / 畸形值）→ 操作性失败、**可重跑**、汇总进“建议重跑”警告；② **INDETERMINATE（判不准）** = LLM 出了判定、判定本身是“证据真模糊判不了”→ semantic、**重跑无益**，须带具体 reason（写明矛盾/缺失的证据，空 reason 降级回 UNRESOLVED）；③ **N/A（不适用）** = 规则存在但本次场景不触发——条件性类 LLM 明确判“不涉及”（`applicable=false`）、步骤类 LLM 返回“na”→ 已解决的有效结论、不进警告、不用重跑。N/A 为什么会有：提取是**对 SKILL 静态全抽**（skill 写了“读 references/foo.md”就抽一条），但“该读 foo.md”有触发条件——audit 一个根本不涉及该条件的 transcript 时，agent 没读是对的，不能 FAIL 也不能 PASS（规则没被触发），故 N/A。
