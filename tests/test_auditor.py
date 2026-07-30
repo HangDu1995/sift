@@ -170,10 +170,10 @@ class TestUnmatchedLlm:
         assert "Bash" in f.evidence
 
     def test_applicable_false_is_na(self, monkeypatch) -> None:
-        """未命中 + LLM applicable=false → N/A(场景不涉及),method=LLM。"""
+        """未命中 + LLM applicable=false(带 reason)→ N/A,evidence 用 LLM 给的具体理由(非套话)。"""
         monkeypatch.setattr(
             "skill_eval.audit.auditor.call_claude",
-            lambda *a, **k: '[{"index": 0, "applicable": false}]',
+            lambda *a, **k: '[{"index": 0, "applicable": false, "reason": "本任务只生成 spec,未跑测试"}]',
         )
         auditor = TranscriptAuditor()
 
@@ -183,7 +183,25 @@ class TestUnmatchedLlm:
         assert f.verdict == AuditVerdict.NA
         assert f.category == AuditCategory.CONDITIONAL
         assert f.method == AuditMethod.LLM
-        assert "场景不涉及" in f.evidence
+        assert "本任务只生成 spec,未跑测试" in f.evidence  # LLM 给的具体理由,非硬编码套话
+
+    def test_applicable_false_without_reason_keeps_na_with_fallback(self, monkeypatch) -> None:
+        """applicable=false 但 LLM 未给 reason → 仍 N/A,evidence 退兜底套话(不降级,对齐 step)。
+
+        与 indeterminate 滥用闸不同:N/A 是合法高频判决,空 reason **不**降级 UNRESOLVED,
+        只退兜底 evidence——镜像 step judge 的 ``ev or "场景不涉及该步"``(捕获+用,非惩罚闸)。
+        """
+        monkeypatch.setattr(
+            "skill_eval.audit.auditor.call_claude",
+            lambda *a, **k: '[{"index": 0, "applicable": false}]',
+        )
+        auditor = TranscriptAuditor()
+
+        findings = auditor._judge_conditional([_ref_inst()], [], "某场景", "t.jsonl")
+
+        f = findings[0]
+        assert f.verdict == AuditVerdict.NA  # 空 reason 不降级,仍 N/A
+        assert "场景不涉及" in f.evidence      # 退兜底套话
 
     def test_runtime_error_unverifiable_na(self, monkeypatch) -> None:
         """call_claude 持续抛 RuntimeError(重试耗尽)→ 标 N/A(宁少报不乱报)。"""

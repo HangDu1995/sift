@@ -607,7 +607,9 @@ class TranscriptAuditor:
                     verdict=AuditVerdict.NA,
                     method=AuditMethod.LLM,
                     category=AuditCategory.CONDITIONAL,
-                    evidence="场景不涉及该指令",
+                    # 用 LLM 给的"为何不涉及"理由;空才退兜底套话(镜像 step judge 的
+                    # ``ev or "场景不涉及该步"``)。N/A 合法高频,空 reason 不降级(非 indeterminate 闸)。
+                    evidence=reason or "场景不涉及该指令",
                     transcript=transcript_name,
                 )
             elif verdict == AuditVerdict.INDETERMINATE:
@@ -1012,7 +1014,7 @@ class TranscriptAuditor:
 
         返回与 candidates 等长的列表,每元素 ``(verdict, reason)``:
         - (FAIL, "")     = 该触发(该做没做)
-        - (NA, "")       = 不涉及(场景不触发)
+        - (NA, reason)   = 不涉及(场景不触发,带 LLM 给的"为何不涉及";空则调用方退兜底套话)
         - (INDETERMINATE, reason) = 判不准(LLM 看了场景但证据真矛盾/缺失,带具体 reason)
         - (None, "")     = 没判成(调用/解析失败/未提及/indeterminate 无 reason)
 
@@ -1044,7 +1046,8 @@ class TranscriptAuditor:
                 "- ✅ true(该触发):这个场景满足指令的隐含条件——执行者本应做该动作"
                 "(如场景涉及该工具应被调用、该参考文件应被读取),却没做 = 疑似违规。\n"
                 "- ❌ false(不涉及):这个场景根本不涉及该指令(场景未触及该工具 / 参考"
-                "文件的适用范围,本就不该触发)。\n"
+                "文件的适用范围,本就不该触发)。**reason 必须写明:场景为何不触及该指令的适用范围**"
+                "(不许空口'不涉及',要给可核对的依据)。\n"
                 "- ⚠ indeterminate(判不准):你看了场景,但证据真的相互矛盾或关键信息缺失,"
                 "判断不了该不该触发。**必须**在 reason 写明具体矛盾 / 缺失的证据;"
                 "不要用 indeterminate 偷懒回避判断。\n\n"
@@ -1053,7 +1056,7 @@ class TranscriptAuditor:
                 "## 输出格式\n"
                 '只返回 JSON 数组,每元素:'
                 '{"index": 0, "applicable": true/false, "indeterminate": true(仅判不准时), '
-                '"reason": "indeterminate 时必填:具体矛盾/缺失的证据"}\n'
+                '"reason": "applicable=false 时必填(写为何场景不涉及该指令);indeterminate 时必填(写具体矛盾/缺失)"}\n'
             )
             specs.append((start, bn, k, prompt))
         for start, parsed in _run_batches_concurrent(
@@ -1069,7 +1072,7 @@ class TranscriptAuditor:
         """解析 LLM 场景触发判定 → ``(AuditVerdict | None, reason)``;默认 ``(None, "")`` = 没判成。
 
         - applicable=true  → (FAIL, "")(该做没做)
-        - applicable=false → (NA, "")(场景不涉及)
+        - applicable=false → (NA, reason)(场景不涉及;reason 为 LLM 给的"为何不涉及",可空→调用方退兜底)
         - indeterminate=true 且 reason 非空 → (INDETERMINATE, reason)(判不准)
         - indeterminate=true 但 reason 空 → **滥用闸 ①** 降级 (None, "") = 没判成
           (不许空口"判不准",必须带具体矛盾/缺失证据)
@@ -1099,7 +1102,9 @@ class TranscriptAuditor:
                 if val is True:
                     mask[idx] = (AuditVerdict.FAIL, "")
                 elif val is False:
-                    mask[idx] = (AuditVerdict.NA, "")
+                    # 捕获 LLM 给的"为何不涉及"理由(空则调用方退兜底套话)。N/A 是合法高频
+                    # 判决,空 reason 不降级(对齐 step judge 的 ev or 兜底,非 indeterminate 滥用闸)。
+                    mask[idx] = (AuditVerdict.NA, str(item.get("reason", "") or "").strip())
                 # else: 缺 applicable / None / 非布尔 → 保持 (None,"") = 没判成
         return mask
 
