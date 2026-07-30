@@ -316,6 +316,16 @@ def audit(
         f"na=[yellow]{n_na}[/yellow]{src_tail}"
     )
 
+    tu = report.token_usage
+    if tu.get("calls"):
+        cache_read = tu.get("cache_read_input_tokens", 0)
+        console.print(
+            f"[dim]LLM tokens:[/dim] input={tu.get('input_tokens', 0)} "
+            f"output={tu.get('output_tokens', 0)}"
+            + (f" cache_read={cache_read}" if cache_read else "")
+            + f" [dim]· cost=${tu.get('total_cost_usd', 0):.4f} · {tu['calls']} call(s)[/dim]"
+        )
+
     if report.warnings:
         console.print("[yellow]Warnings:[/yellow]")
         for w in report.warnings:

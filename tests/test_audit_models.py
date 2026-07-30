@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -209,3 +211,47 @@ class TestAuditReport:
         restored = AuditReport.model_validate_json(report.model_dump_json())
         assert restored.findings[0].verdict is AuditVerdict.NA
         assert restored.findings[0].verdict.value == "N/A"
+
+    def test_token_usage_defaults_empty(self) -> None:
+        # 不传 → 默认空 dict(向后兼容旧 report / 无 LLM 调用的 audit)。
+        report = AuditReport(
+            skill_name="demo",
+            transcripts=["run-1.jsonl"],
+            summary={"total": 1, "pass": 1, "fail": 0, "na": 0},
+            findings=[self._make_finding()],
+        )
+        assert report.token_usage == {}
+
+    def test_token_usage_roundtrip(self) -> None:
+        # token 用量(call_claude json 模式抓的 usage+cost)经 JSON 往返不丢。
+        tu = {
+            "input_tokens": 1234, "output_tokens": 56,
+            "cache_read_input_tokens": 100, "cache_creation_input_tokens": 7,
+            "total_cost_usd": 0.0234, "calls": 3,
+        }
+        report = AuditReport(
+            skill_name="demo",
+            transcripts=["run-1.jsonl"],
+            summary={"total": 1, "pass": 1, "fail": 0, "na": 0},
+            findings=[self._make_finding()],
+            token_usage=tu,
+        )
+        restored = AuditReport.model_validate_json(report.model_dump_json())
+        assert restored.token_usage == tu
+
+    def test_legacy_json_without_token_usage_loads(self) -> None:
+        # 旧 report(本期之前)没有 token_usage 字段 → 加载默认 {},不崩。
+        legacy = {
+            "skill_name": "demo",
+            "transcripts": ["run-1.jsonl"],
+            "summary": {"total": 1, "pass": 1, "fail": 0, "na": 0},
+            "findings": [
+                {
+                    "instruction_text": "必须调用 Read", "source": "TOOL_REQUIREMENT",
+                    "verdict": "PASS", "method": "PROGRAMMATIC", "category": "conditional",
+                    "evidence": "e", "transcript": "run-1.jsonl",
+                }
+            ],
+        }
+        restored = AuditReport.model_validate_json(json.dumps(legacy))
+        assert restored.token_usage == {}

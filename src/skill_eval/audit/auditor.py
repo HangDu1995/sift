@@ -72,7 +72,7 @@ from skill_eval.models.audit_models import (
     AuditReport,
     AuditVerdict,
 )
-from skill_eval.utils import call_claude
+from skill_eval.utils import TokenUsageAccumulator, call_claude
 
 # 每批交 LLM 判定的指令数上限。**小于**已删 compliance.checker 的 30:audit 每条要 LLM 产出
 # "verdict + 中文 evidence"(输出量大),且 LLM 延迟方差极大(实测 ~10 条/批 40-257s)。
@@ -167,6 +167,7 @@ def _judge_batch_with_retry(
     bn: int,
     *,
     on_progress: ProgressFn | None,
+    on_usage: Callable[[dict], None] | None = None,
     label: str,
     k: int,
     total: int,
@@ -197,7 +198,7 @@ def _judge_batch_with_retry(
             # 信号量门控全局在飞 call_claude ≤ _MAX_BATCH_CONCURRENT:跨类别 + 同类多批
             # 统一争这一个。只圈住 call_claude(不圈 parse/重试 sleep),故重试退避不占槽。
             with _LLM_SEMAPHORE:
-                result_text = call_claude(prompt, model=model, timeout=timeout, max_turns=1)
+                result_text = call_claude(prompt, model=model, timeout=timeout, max_turns=1, on_usage=on_usage)
         except RuntimeError as exc:
             _emit(on_progress, f"  {prefix} 调用失败: {str(exc)[:120]}")
             continue
@@ -217,6 +218,7 @@ def _run_batches_concurrent(
     model: str | None,
     timeout: int,
     on_progress: ProgressFn | None,
+    on_usage: Callable[[dict], None] | None,
     label: str,
     total: int,
     is_unparsed: Callable[[Any], bool],
@@ -246,6 +248,7 @@ def _run_batches_concurrent(
                 parsed = _judge_batch_with_retry(
                     prompt, model, timeout, parse_fn, bn,
                     on_progress=on_progress, label=label, k=k, total=total,
+                    on_usage=on_usage,
                     is_unparsed=is_unparsed,
                 )
             except Exception as exc:
@@ -262,6 +265,7 @@ def _run_batches_concurrent(
             pool.submit(
                 _judge_batch_with_retry, prompt, model, timeout, parse_fn, bn,
                 on_progress=on_progress, label=label, k=k, total=total,
+                on_usage=on_usage,
                 is_unparsed=is_unparsed,
             ): idx
             for idx, (start, bn, k, prompt) in enumerate(specs)
@@ -356,6 +360,7 @@ class TranscriptAuditor:
         instructions = InstructionExtractor().extract(skill_body)
         warnings: list[str] = []
         refine_dropped_count = 0
+        acc = TokenUsageAccumulator()  # 累加所有判官 LLM 调用的 token(audit 末尾 snapshot 进 report)
         if refine_instructions:
             # per-SKILL hash 缓存:同 instructions + model + prompt 版本只 refine 一次,
             # 跨 audit() 调用复用(runner.py 每 eval×config×run 调一次 audit,同 SKILL.md
@@ -370,9 +375,11 @@ class TranscriptAuditor:
                 _model=model,
                 _timeout=timeout,
                 _on_progress=on_progress,
+                _on_usage=acc.add,
             ):
                 refined, _warns = self._refine_pseudo_instructions(
-                    _insts, model=_model, timeout=_timeout, on_progress=_on_progress
+                    _insts, model=_model, timeout=_timeout, on_progress=_on_progress,
+                    on_usage=_on_usage,
                 )
                 return refined, len(_insts) - len(refined)
 
@@ -436,15 +443,18 @@ class TranscriptAuditor:
                 fut_cond = pool.submit(
                     self._judge_conditional, buckets[AuditCategory.CONDITIONAL],
                     tool_trace, scene, tp.name, model, timeout, on_progress=on_progress,
+                    on_usage=acc.add,
                 )
                 fut_proh = pool.submit(
                     self._judge_prohibition, buckets[AuditCategory.PROHIBITION],
                     transcript_text, tp.name, model, timeout, on_progress=on_progress,
+                    on_usage=acc.add,
                     locate_turns=locate_turns,
                 )
                 fut_step = pool.submit(
                     self._judge_step, buckets[AuditCategory.STEP], transcript_text,
                     tp.name, model, timeout, tool_trace=tool_trace, on_progress=on_progress,
+                    on_usage=acc.add,
                     locate_turns=locate_turns,
                 )
                 findings: list[AuditFinding] = []
@@ -529,6 +539,7 @@ class TranscriptAuditor:
             by_instruction=by_instruction,
             warnings=warnings,
             refine_dropped_count=refine_dropped_count,
+            token_usage=acc.snapshot(),
         )
 
     def _judge_conditional(
@@ -540,6 +551,7 @@ class TranscriptAuditor:
         model: str | None = None,
         timeout: int = 600,
         on_progress: ProgressFn | None = None,
+        on_usage: Callable[[dict], None] | None = None,
     ) -> list[AuditFinding]:
         """判定条件性指令(TOOL_REQUIREMENT / REFERENCE_USAGE)的三态结论。
 
@@ -582,7 +594,7 @@ class TranscriptAuditor:
         # 未命中全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_applicable 内部分批循环,
         # 不再单次截断 + 超限保守 FAIL)。
         applicable_mask = self._llm_judge_applicable(
-            [inst for _, inst in unmatched], transcript_scene, model, timeout, on_progress,
+            [inst for _, inst in unmatched], transcript_scene, model, timeout, on_progress, on_usage,
         )
 
         for local_pos, (orig_i, inst) in enumerate(unmatched):
@@ -641,6 +653,7 @@ class TranscriptAuditor:
         model: str | None = None,
         timeout: int = 600,
         on_progress: ProgressFn | None = None,
+        on_usage: Callable[[dict], None] | None = None,
         *,
         locate_turns: bool = False,
     ) -> list[AuditFinding]:
@@ -673,7 +686,7 @@ class TranscriptAuditor:
         # 全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_prohibition 内部分批循环)。
         # locate_turns 透传:False 时 prompt 不含 turn 引用规则、不要求 LLM 输出 turn_refs。
         violated_mask = self._llm_judge_prohibition(
-            instructions, transcript_text, model, timeout, on_progress,
+            instructions, transcript_text, model, timeout, on_progress, on_usage,
             locate_turns=locate_turns,
         )
 
@@ -742,6 +755,7 @@ class TranscriptAuditor:
         timeout: int = 600,
         tool_trace: list | None = None,
         on_progress: ProgressFn | None = None,
+        on_usage: Callable[[dict], None] | None = None,
         *,
         locate_turns: bool = False,
     ) -> list[AuditFinding]:
@@ -776,7 +790,7 @@ class TranscriptAuditor:
         # 全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_step 内部分批循环)。
         # locate_turns 透传:False 时 prompt 不含 turn 引用规则、tool_section 无 [T{idx}]。
         verdict_mask = self._llm_judge_step(
-            instructions, transcript_text, model, timeout, tool_trace, on_progress,
+            instructions, transcript_text, model, timeout, tool_trace, on_progress, on_usage,
             locate_turns=locate_turns,
         )
 
@@ -1009,6 +1023,7 @@ class TranscriptAuditor:
         model: str | None,
         timeout: int,
         on_progress: ProgressFn | None = None,
+        on_usage: Callable[[dict], None] | None = None,
     ) -> list[tuple[AuditVerdict | None, str]]:
         """分批 call_claude 判每条未命中指令在该场景是否"该触发"(每批 _MAX_LLM_IN_BATCH(10) 条,处理全部)。
 
@@ -1060,7 +1075,7 @@ class TranscriptAuditor:
             )
             specs.append((start, bn, k, prompt))
         for start, parsed in _run_batches_concurrent(
-            specs, self._parse_applicable, model, timeout, on_progress,
+            specs, self._parse_applicable, model, timeout, on_progress, on_usage,
             "条件性", total, lambda v: v[0] is None,
         ):
             for j, val in enumerate(parsed):
@@ -1116,6 +1131,7 @@ class TranscriptAuditor:
         model: str | None,
         timeout: int,
         on_progress: ProgressFn | None = None,
+        on_usage: Callable[[dict], None] | None = None,
     ) -> tuple[list[InstructionCheck], list[str]]:
         """LLM 精筛:砍掉 extractor 误抽的示例/占位文字(非真实可检查指令)。
 
@@ -1135,7 +1151,7 @@ class TranscriptAuditor:
         candidates = [instructions[i] for i in cand_idx]
         if not candidates:
             return instructions, []  # 无候选,不调 LLM
-        mask = self._llm_classify_real(candidates, model, timeout, on_progress)
+        mask = self._llm_classify_real(candidates, model, timeout, on_progress, on_usage)
         keep = [True] * len(instructions)  # 默认全保留(精度>召回)
         dropped_src: list[str] = []
         for k, verdict in enumerate(mask):
@@ -1156,6 +1172,7 @@ class TranscriptAuditor:
         model: str | None,
         timeout: int,
         on_progress: ProgressFn | None = None,
+        on_usage: Callable[[dict], None] | None = None,
     ) -> list[bool | None]:
         """分批 call_claude 判每条候选「真实可检查指令 vs 示例/占位」(每批 _MAX_LLM_IN_BATCH 条)。
 
@@ -1196,7 +1213,7 @@ class TranscriptAuditor:
             )
             specs.append((start, bn, k, prompt))
         for start, parsed in _run_batches_concurrent(
-            specs, self._parse_real, model, timeout, on_progress,
+            specs, self._parse_real, model, timeout, on_progress, on_usage,
             "精筛", total, lambda v: v is None,
         ):
             for j, val in enumerate(parsed):
@@ -1244,6 +1261,7 @@ class TranscriptAuditor:
         model: str | None,
         timeout: int,
         on_progress: ProgressFn | None = None,
+        on_usage: Callable[[dict], None] | None = None,
         *,
         locate_turns: bool = False,
     ) -> list[tuple[AuditVerdict | None, str, list[int]]]:
@@ -1310,7 +1328,7 @@ class TranscriptAuditor:
             )
             specs.append((start, bn, k, prompt))
         for start, parsed in _run_batches_concurrent(
-            specs, self._parse_prohibition, model, timeout, on_progress,
+            specs, self._parse_prohibition, model, timeout, on_progress, on_usage,
             "禁令", total, lambda v: v[0] is None,
         ):
             for j, val in enumerate(parsed):
@@ -1380,6 +1398,7 @@ class TranscriptAuditor:
         timeout: int,
         tool_trace: list | None = None,
         on_progress: ProgressFn | None = None,
+        on_usage: Callable[[dict], None] | None = None,
         *,
         locate_turns: bool = False,
     ) -> list[tuple[AuditVerdict | None, str, list[int]]]:
@@ -1475,7 +1494,7 @@ class TranscriptAuditor:
             )
             specs.append((start, bn, k, prompt))
         for start, parsed in _run_batches_concurrent(
-            specs, self._parse_step, model, timeout, on_progress,
+            specs, self._parse_step, model, timeout, on_progress, on_usage,
             "步骤", total, lambda v: v[0] is None,
         ):
             for j, val in enumerate(parsed):

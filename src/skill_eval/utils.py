@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
+import threading
+from collections.abc import Callable
 
 
 def claude_cli_env() -> dict:
@@ -28,17 +31,11 @@ def claude_cli_env() -> dict:
     return env
 
 
-def call_claude(
-    prompt: str,
-    model: str | None = None,
-    timeout: int = 120,
-    max_turns: int | None = None,
-) -> str:
-    cmd = ["claude", "-p", "--output-format", "text", "--dangerously-skip-permissions"]
-    if max_turns is not None:
-        cmd.extend(["--max-turns", str(max_turns)])
-    if model:
-        cmd.extend(["--model", model])
+def _spawn_claude(cmd: list[str], prompt: str, timeout: int) -> str:
+    """跑 claude CLI 子进程、返 stdout 文本。超时 killpg、非零退出 raise。
+
+    text / json 两条输出格式共用此底层(只管 spawn + 收 stdout,不关心格式)。
+    """
     env = claude_cli_env()
     # start_new_session 让外部 CLI(claude/opencode 等通用 backend)在独立进程组,
     # 超时方可 os.killpg 杀整组含其子进程树——这类 CLI 常是 wrapper + node worker,
@@ -64,3 +61,81 @@ def call_claude(
         detail = err.strip() or out.strip()
         raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {detail[:500]}")
     return out
+
+
+def call_claude(
+    prompt: str,
+    model: str | None = None,
+    timeout: int = 120,
+    max_turns: int | None = None,
+    on_usage: Callable[[dict], None] | None = None,
+) -> str:
+    """调 claude CLI 拿文本回。
+
+    - ``on_usage=None``(默认)→ ``--output-format text``,纯文本进出(历史行为;
+      其余调用方与所有测试 mock 走这条,字节不变)。
+    - ``on_usage`` 给定 → ``--output-format json``,解析单结果对象,返回 ``result``
+      (文本,等同 text 模式输出);对象的 ``usage``(token 用量)+ ``total_cost_usd``
+      打包成 dict 回调 ``on_usage``,供调用方累加。
+      **兜底**:json 解析失败/对象畸形 → 退回返 raw stdout、**不触发** on_usage——
+      绝不让抓 token 砸了拿结果(token 是锦上添花,不是单点故障)。
+
+    为何不另起 ``call_claude_with_usage`` 而在本函数加可选回调:全仓 ~35 处测试 mock
+    patch 的是 ``skill_eval.audit.auditor.call_claude`` 这个名字(auditor.py 把它
+    from-import 进本模块命名空间);换名会让 mock 全失效→测试去打真 claude。默认
+    None 保持 text 模式,这些 mock 与其余 7 个调用方零改动。
+    """
+    fmt = "json" if on_usage is not None else "text"
+    cmd = ["claude", "-p", "--output-format", fmt, "--dangerously-skip-permissions"]
+    if max_turns is not None:
+        cmd.extend(["--max-turns", str(max_turns)])
+    if model:
+        cmd.extend(["--model", model])
+    out = _spawn_claude(cmd, prompt, timeout)
+    if on_usage is None:
+        return out
+    # json 模式:解析单结果对象,抠 result + usage + cost。
+    try:
+        obj = json.loads(out)
+    except (json.JSONDecodeError, ValueError):
+        return out  # 兜底:畸形输出当纯文本返,不回调(无法可信地报 token)。
+    usage = obj.get("usage")
+    if isinstance(usage, dict):
+        payload = dict(usage)
+        payload["total_cost_usd"] = obj.get("total_cost_usd") or 0.0
+        on_usage(payload)
+    # result 缺失 → 空串(不返 raw json,免得 usage dict 被下游文本解析误 carve)。
+    return obj.get("result", "")
+
+
+class TokenUsageAccumulator:
+    """线程安全地累加 call_claude 的 token 用量。
+
+    audit 判官在线程池里并发触发 ``on_usage``(=``self.add``),snapshot 在 audit
+    末尾单线程取。锁防并发丢失更新(实证见 tests/test_audit_parallel.py)。
+    """
+
+    _KEYS = (
+        "input_tokens", "output_tokens",
+        "cache_read_input_tokens", "cache_creation_input_tokens",
+        "total_cost_usd",
+    )
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._counts = {k: 0 for k in self._KEYS}
+        self._counts["calls"] = 0
+
+    def add(self, payload: dict) -> None:
+        """on_usage 回调目标:把单次 usage+cost 累进去。缺键补 0(不 KeyError)。"""
+        with self._lock:
+            for k in self._KEYS:
+                self._counts[k] += payload.get(k, 0) or 0
+            self._counts["calls"] += 1
+
+    def snapshot(self) -> dict:
+        """返当前累计的副本;无调用(calls==0)返空 dict(无 usage 可报,report 保持干净)。"""
+        with self._lock:
+            if self._counts["calls"] == 0:
+                return {}
+            return dict(self._counts)

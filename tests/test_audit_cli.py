@@ -136,6 +136,46 @@ def test_audit_writes_report_and_prints_summary(monkeypatch, tmp_path):
     assert call["transcripts"] == [tp]
 
 
+def test_audit_console_summary_includes_token_usage(monkeypatch, tmp_path):
+    # token_usage 非空 → console 打 token 行 + 写出 JSON 带字段。
+    report = _fake_report()
+    report.token_usage = {
+        "input_tokens": 1234, "output_tokens": 56,
+        "cache_read_input_tokens": 100, "cache_creation_input_tokens": 0,
+        "total_cost_usd": 0.0234, "calls": 3,
+    }
+
+    class _TokFake(_FakeAuditor):
+        def audit(self, *a, **k):
+            super().audit(*a, **k)  # 记录入参
+            return report
+
+    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _TokFake())
+    sp = _skill_dir(tmp_path)
+    tp = _transcript(tmp_path)
+    out = tmp_path / "out"
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    assert "LLM tokens" in r.output
+    assert "1234" in r.output  # input_tokens
+    data = json.loads((out / "audit-report.json").read_text(encoding="utf-8"))
+    assert data["token_usage"]["calls"] == 3
+    assert data["token_usage"]["input_tokens"] == 1234
+
+
+def test_audit_console_summary_omits_token_usage_when_empty(monkeypatch, tmp_path):
+    # token_usage 空(默认)→ 不打 token 行(别出 tokens=0 噪声)。
+    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    sp = _skill_dir(tmp_path)
+    tp = _transcript(tmp_path)
+    out = tmp_path / "out"
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    assert "LLM tokens" not in r.output
+    data = json.loads((out / "audit-report.json").read_text(encoding="utf-8"))
+    assert data["token_usage"] == {}
+
+
 def test_audit_multiple_transcripts_repeatable(monkeypatch, tmp_path):
     fake = _FakeAuditor()
     monkeypatch.setattr(

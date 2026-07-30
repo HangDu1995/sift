@@ -167,3 +167,8 @@ class AuditReport(BaseModel):
     # refine(LLM 精筛伪指令)砍掉的条数(len(before) - len(after))。
     # 0 = 没开 refine_instructions 或开了但没砍任何条;向后兼容旧 report(默认 0)。
     refine_dropped_count: int = 0
+    # 本次 audit 所有 LLM 判定调用(refine + 条件/禁令/步骤判官 × 批)的 token 用量合计。
+    # call_claude json 模式抓 usage,经 TokenUsageAccumulator 累加:{input_tokens,
+    # output_tokens, cache_read_input_tokens, cache_creation_input_tokens,
+    # total_cost_usd, calls}。空 dict = 无 LLM 调用或旧 report(默认空,向后兼容)。
+    token_usage: dict = Field(default_factory=dict)

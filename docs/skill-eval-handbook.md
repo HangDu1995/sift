@@ -959,6 +959,7 @@ spawn claude -p
 | `findings[]` | 每条指令的对账结果（见下） |
 | `by_instruction[]` | 按指令跨 transcript 聚合：`pass_count`/`fail_count`/`na_count`/`unresolved_count`/`indeterminate_count`/`total`/`fail_rate`/`fail_in_transcripts[]`（单 transcript 也有，每指令 1 条） |
 | `warnings[]` | 顶部警告（没判成建议重跑、判不准占比偏高等） |
+| `token_usage` | 本次 audit 所有 **LLM 判定调用**（refine + 条件/禁令/步骤判官 × 批）的 token 用量合计：`{input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, total_cost_usd, calls}`。空 `{}` = 无 LLM 调用或旧 report（`call_claude` json 模式抓 usage 累加；audit 默认就开）。**注意是判官 token**——与 run 侧 `RunResultMetrics.tokens`（executor 跑任务的 token，走 stream-json）不同；run 的 grader/comparator token 暂未计（Phase 2） |
 
 每条 `AuditFinding`（两个正交维度 `verdict` × `method`）：
 

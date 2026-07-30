@@ -1096,6 +1096,61 @@ class TestAuditAggregate:
         assert len(non_derived) == 2
         assert all(f.verdict == AuditVerdict.NA for f in non_derived)
 
+    def test_audit_populates_token_usage_from_call_claude(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """on_usage 穿透整条判官漏斗到 call_claude:mock 取出 on_usage 回灌 usage →
+        report.token_usage 累计(calls>=1、input>0、cost>0)。
+
+        证明 on_usage 从 audit() 经 _judge_* → _llm_judge_* → _run_batches_concurrent →
+        _judge_batch_with_retry → call_claude 一路传到位(任一环漏传就 calls==0)。
+        """
+        inner = _pass_fake()
+
+        def fake(prompt, *a, **k):
+            ou = k.get("on_usage")
+            if ou:  # call_claude json 模式抓到 usage 才回调
+                ou({"input_tokens": 100, "output_tokens": 50, "total_cost_usd": 0.02})
+            return inner(prompt, *a, **k)
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+
+        foo = tmp_path / "foo.md"
+        tp = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records(str(foo)))
+        report = TranscriptAuditor().audit("myskill", "use Bash", [tp])
+
+        tu = report.token_usage
+        assert tu.get("calls", 0) >= 1
+        assert tu.get("input_tokens", 0) > 0
+        assert tu.get("total_cost_usd", 0) > 0
+
+    def test_audit_token_usage_empty_when_no_llm(self, tmp_path, monkeypatch) -> None:
+        """空 transcripts → 不跑任何判官 → token_usage 空(无 LLM 调用,report 干净)。"""
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+        report = TranscriptAuditor().audit("myskill", "use Bash", [])
+        assert report.token_usage == {}
+
+    def test_audit_token_usage_survives_model_dump_roundtrip(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """token_usage 经 model_dump_json / model_validate_json 往返不丢。"""
+        inner = _pass_fake()
+
+        def fake(prompt, *a, **k):
+            ou = k.get("on_usage")
+            if ou:
+                ou({"input_tokens": 7, "output_tokens": 3, "total_cost_usd": 0.001})
+            return inner(prompt, *a, **k)
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        foo = tmp_path / "foo.md"
+        tp = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records(str(foo)))
+        report = TranscriptAuditor().audit("myskill", "use Bash", [tp])
+
+        restored = AuditReport.model_validate_json(report.model_dump_json())
+        assert restored.token_usage == report.token_usage
+        assert restored.token_usage.get("calls", 0) >= 1
+
     def test_bad_transcript_goes_to_warning_others_processed(
         self, tmp_path, monkeypatch
     ) -> None:

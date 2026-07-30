@@ -1,12 +1,15 @@
 # tests/test_utils.py
-"""call_claude 的 subprocess 行为:timeout 必须真生效(kill 整组,含孙进程)。"""
+"""call_claude 的 subprocess 行为:timeout 必须真生效(kill 整组,含孙进程)。
+on_usage 回调(json 模式抓 token)+ TokenUsageAccumulator 并发累加。"""
+import json
 import os
+import shlex
 import stat
 import time
 
 import pytest
 
-from skill_eval.utils import call_claude
+from skill_eval.utils import TokenUsageAccumulator, call_claude
 
 
 def _make_fake_claude(tmp_path, body: str) -> None:
@@ -113,3 +116,126 @@ def test_call_claude_nonzero_exit_shows_stdout_when_stderr_empty(monkeypatch, tm
     with pytest.raises(RuntimeError, match="rate limit exceeded") as exc:
         call_claude("x", timeout=10)
     assert "failed" in str(exc.value)
+
+
+# ── on_usage 回调:json 模式抓 token ──────────────────────────────────────────
+def _fake_claude_json(tmp_path, obj: dict) -> None:
+    """造假 claude,stdout 吐给定 dict 的 json(单行)。"""
+    _make_fake_claude(tmp_path, "echo " + shlex.quote(json.dumps(obj)))
+
+
+def test_call_claude_with_usage_invokes_callback_and_returns_result(monkeypatch, tmp_path):
+    # json 模式:解析单对象 → 返 result 文本;usage+cost 回调给 on_usage 供累加。
+    obj = {
+        "type": "result", "subtype": "success", "is_error": False, "result": "hello",
+        "usage": {"input_tokens": 10, "output_tokens": 20,
+                  "cache_read_input_tokens": 1, "cache_creation_input_tokens": 2},
+        "total_cost_usd": 0.001,
+    }
+    _fake_claude_json(tmp_path, obj)
+    _prepend_path(monkeypatch, tmp_path)
+    acc = TokenUsageAccumulator()
+    out = call_claude("x", timeout=10, on_usage=acc.add)
+    assert out.strip() == "hello"
+    snap = acc.snapshot()
+    assert snap["input_tokens"] == 10
+    assert snap["output_tokens"] == 20
+    assert snap["cache_read_input_tokens"] == 1
+    assert snap["cache_creation_input_tokens"] == 2
+    assert snap["total_cost_usd"] == pytest.approx(0.001)
+    assert snap["calls"] == 1
+
+
+def test_call_claude_without_on_usage_uses_text_format(monkeypatch):
+    # 默认 on_usage=None → text 模式(历史行为,字节不变)。
+    from unittest.mock import MagicMock
+    import skill_eval.utils as u
+    proc = MagicMock(); proc.communicate.return_value = ("out", ""); proc.returncode = 0; proc.pid = 99999
+    mock_popen = MagicMock(return_value=proc)
+    monkeypatch.setattr(u.subprocess, "Popen", mock_popen)
+    call_claude("x", timeout=10)
+    cmd = mock_popen.call_args.args[0]
+    assert cmd[cmd.index("--output-format") + 1] == "text"
+
+
+def test_call_claude_with_on_usage_uses_json_format(monkeypatch):
+    # 给 on_usage → json 模式。
+    from unittest.mock import MagicMock
+    import skill_eval.utils as u
+    proc = MagicMock(); proc.communicate.return_value = ('{"result":"x","usage":{}}', ""); proc.returncode = 0; proc.pid = 99999
+    mock_popen = MagicMock(return_value=proc)
+    monkeypatch.setattr(u.subprocess, "Popen", mock_popen)
+    call_claude("x", timeout=10, on_usage=lambda d: None)
+    cmd = mock_popen.call_args.args[0]
+    assert cmd[cmd.index("--output-format") + 1] == "json"
+
+
+def test_call_claude_json_parse_failure_returns_raw_no_callback(monkeypatch, tmp_path):
+    # 兜底:输出不是合法 json → 退回 raw stdout、不触发 on_usage(不砸拿结果)。
+    _make_fake_claude(tmp_path, "echo 'this is not json at all'")
+    _prepend_path(monkeypatch, tmp_path)
+    acc = TokenUsageAccumulator()
+    out = call_claude("x", timeout=10, on_usage=acc.add)
+    assert "this is not json" in out
+    assert acc.snapshot().get("calls", 0) == 0  # 不回调(snapshot 空)
+
+
+def test_call_claude_usage_missing_skips_callback(monkeypatch, tmp_path):
+    # 对象无 usage 字段 → 返 result、不回调(token 不可信就别报)。
+    _fake_claude_json(tmp_path, {"type": "result", "result": "hi"})
+    _prepend_path(monkeypatch, tmp_path)
+    acc = TokenUsageAccumulator()
+    out = call_claude("x", timeout=10, on_usage=acc.add)
+    assert out == "hi"
+    assert acc.snapshot().get("calls", 0) == 0  # 无 usage 不回调
+
+
+# ── TokenUsageAccumulator:累加 + 并发安全 ────────────────────────────────────
+def test_accumulator_adds_and_sums():
+    acc = TokenUsageAccumulator()
+    acc.add({"input_tokens": 10, "output_tokens": 20, "total_cost_usd": 0.01})
+    acc.add({"input_tokens": 5, "output_tokens": 1, "total_cost_usd": 0.02})
+    snap = acc.snapshot()
+    assert snap["input_tokens"] == 15
+    assert snap["output_tokens"] == 21
+    assert snap["total_cost_usd"] == pytest.approx(0.03)
+    assert snap["calls"] == 2
+
+
+def test_accumulator_missing_keys_default_zero():
+    acc = TokenUsageAccumulator()
+    acc.add({})  # 缺键不 KeyError
+    snap = acc.snapshot()
+    assert snap["input_tokens"] == 0
+    assert snap["calls"] == 1
+
+
+def test_accumulator_concurrent_adds_thread_safe():
+    # audit 判官在线程池并发触发 on_usage;锁必须防丢失更新。
+    import threading
+    acc = TokenUsageAccumulator()
+
+    def worker():
+        for _ in range(50):
+            acc.add({"input_tokens": 1})
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert acc.snapshot()["input_tokens"] == 400  # 8 × 50,无丢失更新
+
+
+def test_accumulator_snapshot_is_copy():
+    acc = TokenUsageAccumulator()
+    acc.add({"input_tokens": 5})
+    snap = acc.snapshot()
+    snap["input_tokens"] = 999  # 改副本
+    assert acc.snapshot()["input_tokens"] == 5  # 内部不受影响
+
+
+def test_accumulator_empty_when_no_calls():
+    # 没累加过(calls==0)→ snapshot 返空 dict(无 LLM 调用的 audit,report 保持干净)。
+    acc = TokenUsageAccumulator()
+    assert acc.snapshot() == {}

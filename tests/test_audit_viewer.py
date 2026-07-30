@@ -20,6 +20,39 @@ def test_audit_html_renders_header_skill_name_and_transcripts():
     assert 'id="audit-root"' in html
 
 
+def test_audit_html_renders_token_usage_when_present():
+    report = AuditReport(
+        skill_name="s",
+        transcripts=["t.jsonl"],
+        summary={"total": 1, "pass": 1, "fail": 0, "na": 0},
+        findings=[],
+        by_instruction=[],
+        warnings=[],
+        token_usage={"input_tokens": 1234, "output_tokens": 56,
+                     "cache_read_input_tokens": 100, "cache_creation_input_tokens": 0,
+                     "total_cost_usd": 0.0234, "calls": 3},
+    )
+    html = AuditReportGenerator().generate_html(report)
+    # JS 在浏览器渲染 span,test 核数据落盘 + 模板含渲染逻辑(渲染输出由 node -e 验)
+    assert '"token_usage"' in html          # embedded JSON 带字段
+    assert '"calls": 3' in html             # 值落盘
+    assert "tu.calls" in html               # 模板含读取 token 的渲染逻辑
+
+
+def test_audit_html_omits_token_usage_when_empty():
+    report = AuditReport(
+        skill_name="s",
+        transcripts=["t.jsonl"],
+        summary={"total": 1, "pass": 1, "fail": 0, "na": 0},
+        findings=[],
+        by_instruction=[],
+        warnings=[],
+        # token_usage 默认 {} → tu.calls 假 → 浏览器不渲染 span
+    )
+    html = AuditReportGenerator().generate_html(report)
+    assert '"token_usage": {}' in html      # 空字段落盘
+
+
 def test_audit_html_renders_warnings_and_findings_full_set():
     report = AuditReport(
         skill_name="s",

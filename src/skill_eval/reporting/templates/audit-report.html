@@ -68,6 +68,7 @@
     .badge-na { color: var(--accent); font-weight: 600; }
     .badge-unresolved { color: var(--text-muted); font-weight: 600; }
     .badge-indeterminate { color: var(--red); font-weight: 600; }
+    .badge-tokens { color: var(--text-muted); font-weight: normal; }
 
     .derived { color: var(--text-muted); font-size: 0.9em; font-weight: normal; }
 
@@ -232,6 +233,7 @@
       var derivedCount = findings.filter(function (f) { return f.derived_from_transcript; }).length;
       var refineDropped = EMBEDDED_DATA.refine_dropped_count || 0;
       var s = EMBEDDED_DATA.summary || {};
+      var tu = EMBEDDED_DATA.token_usage || {};
       root.insertAdjacentHTML('beforeend',
         '<div class="header">' +
           '<h1>' + escapeHtml(EMBEDDED_DATA.skill_name || '') + '</h1>' +
@@ -245,6 +247,7 @@
             '<span>共 ' + (s.total || 0) + '</span>' +
             (derivedCount ? ' · <span class="derived">↺ ' + derivedCount + ' 条由 transcript 反推</span>' : '') +
             (refineDropped ? ' · <span style="color:var(--accent);" title="LLM 精筛砍掉 extractor 误抽的示例/占位伪指令">↺ refine 砍 ' + refineDropped + ' 条伪指令</span>' : '') +
+            (tu.calls ? ' · <span class="badge-tokens" title="本次 audit 所有 LLM 判定调用(refine + 条件/禁令/步骤判官 × 批)的 token 用量合计">⚙ tokens in ' + (tu.input_tokens||0) + ' / out ' + (tu.output_tokens||0) + ' · $' + Number(tu.total_cost_usd||0).toFixed(4) + ' · ' + tu.calls + ' calls</span>' : '') +
           '</div>' +
         '</div>');
 
