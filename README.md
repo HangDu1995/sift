@@ -284,7 +284,7 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 
 ```
 output/
-├── benchmark.json          # 聚合:双率 delta + comparisons + comparison_summary + analysis(--changed-from 子集跑时另记 selection)
+├── benchmark.json          # 聚合:双率 delta + comparisons + comparison_summary + analysis + llm_token_usage(评测 LLM 成本)(--changed-from 子集跑时另记 selection)
 ├── report.html             # 自包含 HTML 报告(读 gate.json 显门禁徽章;run 末尾自动产)
 ├── gate.json               # gate 命令产出(判决 + 两轴明细;非 run 产出)
 ├── previous/               # △ 重跑归档:fresh 重跑时上次 run 树整体移入(单槽),供 report「vs 上次」纵向 delta;仅 fresh 产生,详见 reference「重跑归档」

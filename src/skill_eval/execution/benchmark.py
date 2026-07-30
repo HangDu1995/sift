@@ -22,6 +22,7 @@ from skill_eval.models import (
 from skill_eval.parser import parse_skill_md
 from skill_eval.execution.comparison_suite import run_comparisons
 from skill_eval.execution.analysis_suite import run_analysis
+from skill_eval.utils import TokenUsageAccumulator
 from skill_eval.execution.run_paths import index_runs, is_nested
 
 
@@ -122,6 +123,11 @@ class BenchmarkAggregator:
         anomalies: list[RunAnomaly] = []
         duration_map: dict[str, list[dict]] = {}
         real_model = ""  # 从 transcript 抓的真实模型名(executor 落盘,三模型字段复用)
+        # Phase 2: LLM token 累加(scoring = comparator+analyzer+grader;audit = compliance rollup)
+        scoring_acc = TokenUsageAccumulator()   # comparator + analyzer(:364/:390 回灌)
+        grader_acc = TokenUsageAccumulator()    # per-run grader(timing.json 汇总)
+        audit_acc = TokenUsageAccumulator()     # per-run compliance.json rollup
+        executor_total = 0                      # per-run executor token(timing.json total_tokens)
 
         for config_dir in sorted(iteration_dir.iterdir()):
             if not config_dir.is_dir():
@@ -171,6 +177,25 @@ class BenchmarkAggregator:
                     td = json.loads(timing_path.read_text(encoding="utf-8"))
                     time_seconds = td.get("total_duration_seconds", 0.0)
                     tokens = td.get("total_tokens", tokens)
+
+                # Phase 2: per-run token 累加
+                executor_total += tokens
+                if timing_path.exists():
+                    try:
+                        _tj = json.loads(timing_path.read_text(encoding="utf-8"))
+                        gtu = _tj.get("grader_token_usage") or {}
+                        if gtu:
+                            grader_acc.add(gtu)
+                    except Exception:
+                        pass
+                comp_path = run_dir / "compliance.json"
+                if comp_path.exists():
+                    try:
+                        ctu = json.loads(comp_path.read_text(encoding="utf-8")).get("token_usage") or {}
+                        if ctu:
+                            audit_acc.add(ctu)
+                    except Exception:
+                        pass
 
                 metrics = grading.get("execution_metrics") or {}
                 tool_calls = metrics.get("total_tool_calls", 0)
@@ -361,7 +386,7 @@ class BenchmarkAggregator:
             main_benchmark = main_benchmark.model_copy(update={"notes": checkpoints_data})
 
         try:
-            comparisons = run_comparisons(self, iteration_dir, sides=sides)
+            comparisons = run_comparisons(self, iteration_dir, sides=sides, on_usage=scoring_acc.add)
             if comparisons:
                 # label 从 sides 透到 ComparisonSummary(默认 with/without)
                 label_a = sides[0][2] if sides else "with"
@@ -387,7 +412,7 @@ class BenchmarkAggregator:
             print(f"Warning: calibration summary failed ({exc}), skipping", file=__import__("sys").stderr)
 
         try:
-            analysis_notes, analysis_result = run_analysis(self, iteration_dir, main_benchmark)
+            analysis_notes, analysis_result = run_analysis(self, iteration_dir, main_benchmark, on_usage=scoring_acc.add)
             if analysis_notes:
                 existing = list(main_benchmark.notes or [])
                 existing.extend(analysis_notes)
@@ -401,6 +426,28 @@ class BenchmarkAggregator:
                 )
         except Exception as exc:
             print(f"Warning: analysis step failed ({exc}), skipping", file=__import__("sys").stderr)
+
+        # Phase 2: 汇总五路 → llm_token_usage(scoring/audit/executor/total)
+        # 只在 snapshot 非空时 add(空 snapshot = 无调用,add({}) 会假计数)
+        scoring_total = TokenUsageAccumulator()
+        for snap in (scoring_acc.snapshot(), grader_acc.snapshot()):
+            if snap:
+                scoring_total.add(snap)
+        audit_snapshot = audit_acc.snapshot()
+        total_acc = TokenUsageAccumulator()
+        for snap in (scoring_total.snapshot(), audit_snapshot):
+            if snap:
+                total_acc.add(snap)
+        if executor_total:
+            total_acc.add({"input_tokens": executor_total, "output_tokens": 0})
+        main_benchmark = main_benchmark.model_copy(update={
+            "llm_token_usage": {
+                "scoring": scoring_total.snapshot(),
+                "audit": audit_snapshot,
+                "executor": {"input_tokens": executor_total, "output_tokens": 0, "calls": 0},
+                "total": total_acc.snapshot(),
+            }
+        })
 
         return main_benchmark
 

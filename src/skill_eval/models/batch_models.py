@@ -93,6 +93,7 @@ class BenchmarkData(BaseModel):
     anomaly_report: AnomalyReport | None = None
     calibration_summary: CalibrationSummary | None = None
     selection: dict[str, Any] | None = None  # 选题信息(如 changed-from 子集跑:mode/ids/affected/total)
+    llm_token_usage: dict[str, Any] = Field(default_factory=dict)  # Phase 2: {scoring, audit, executor, total}
 
 
 class InstructionCheck(BaseModel):

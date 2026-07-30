@@ -25,9 +25,11 @@ class PosthocAnalyzer:
         self,
         benchmark_json: str,
         skill_description: str = "",
+        *,
+        on_usage=None,
     ) -> list[str]:
         prompt = self._build_benchmark_prompt(benchmark_json, skill_description)
-        response = self._call(prompt)
+        response = self._call(prompt, on_usage=on_usage)
         return self._parse_notes(response)
 
     def analyze_comparison(
@@ -40,13 +42,14 @@ class PosthocAnalyzer:
         loser_transcript: str,
         *,
         focus_skill: str,
+        on_usage=None,
     ) -> AnalysisResult | None:
         prompt = self._build_comparison_prompt(
             winner, winner_skill, loser_skill,
             comparison_reasoning, winner_transcript, loser_transcript,
             focus_skill=focus_skill,
         )
-        response = self._call(prompt)
+        response = self._call(prompt, on_usage=on_usage)
         return self._parse_analysis(response)
 
     def _build_benchmark_prompt(self, benchmark_json: str, skill_description: str) -> str:
@@ -103,9 +106,9 @@ class PosthocAnalyzer:
         ]
         return "\n".join(parts)
 
-    def _call(self, prompt: str) -> str:
+    def _call(self, prompt: str, *, on_usage=None) -> str:
         try:
-            return call_claude(prompt, model=self.model, timeout=self.timeout, max_turns=1)
+            return call_claude(prompt, model=self.model, timeout=self.timeout, max_turns=1, on_usage=on_usage)
         except RuntimeError:
             return ""
 

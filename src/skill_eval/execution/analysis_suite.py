@@ -18,7 +18,7 @@ def _load_transcript(run_dir: Path) -> str:
     return ""
 
 
-def run_comparison_analysis(aggregator, iteration_dir: Path, benchmark: BenchmarkData, analyzer) -> AnalysisResult | None:
+def run_comparison_analysis(aggregator, iteration_dir: Path, benchmark: BenchmarkData, analyzer, on_usage=None) -> AnalysisResult | None:
     from skill_eval.parser import parse_skill_md
 
     skill_path = Path(benchmark.metadata.skill_path) if benchmark.metadata.skill_path else None
@@ -96,10 +96,11 @@ def run_comparison_analysis(aggregator, iteration_dir: Path, benchmark: Benchmar
         winner_transcript=winner_trans,
         loser_transcript=loser_trans,
         focus_skill=skill_content,   # 改进对象:恒 = 被测/candidate skill(不随 winner 侧变)
+        on_usage=on_usage,
     )
 
 
-def run_analysis(aggregator, iteration_dir: Path, benchmark: BenchmarkData) -> tuple:
+def run_analysis(aggregator, iteration_dir: Path, benchmark: BenchmarkData, on_usage=None) -> tuple:
     import sys
     from skill_eval.scoring.analyzer import PosthocAnalyzer
 
@@ -115,7 +116,7 @@ def run_analysis(aggregator, iteration_dir: Path, benchmark: BenchmarkData) -> t
     notes = None
     for attempt in range(3):
         try:
-            notes = analyzer.analyze_benchmark(benchmark_json, benchmark.metadata.skill_name)
+            notes = analyzer.analyze_benchmark(benchmark_json, benchmark.metadata.skill_name, on_usage=on_usage)
             break
         except Exception:
             if attempt < 2:
@@ -129,7 +130,7 @@ def run_analysis(aggregator, iteration_dir: Path, benchmark: BenchmarkData) -> t
     if benchmark.comparisons:
         for attempt in range(3):
             try:
-                comp_analysis = run_comparison_analysis(aggregator, iteration_dir, benchmark, analyzer)
+                comp_analysis = run_comparison_analysis(aggregator, iteration_dir, benchmark, analyzer, on_usage=on_usage)
                 break
             except Exception:
                 if attempt < 2:

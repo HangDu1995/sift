@@ -44,7 +44,7 @@ def _progress_bar(current, total, width) -> str:
     return f" {bar} {pct*100:.0f}%"
 
 
-def _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectations, label_a="with", label_b="without", max_retries=3):
+def _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectations, label_a="with", label_b="without", max_retries=3, on_usage=None):
     """盲比较带重试:compare() 返回 failed=True(调用/解析失败)时重试,成功即返回。
 
     失败判定靠 ComparisonResult.failed 标志(_parse 在调用/解析失败时设 True)。
@@ -60,6 +60,7 @@ def _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectat
             expectations=expectations if expectations else None,
             label_a=label_a,
             label_b=label_b,
+            on_usage=on_usage,
         )
         if not getattr(result, "failed", False):
             return result
@@ -68,7 +69,7 @@ def _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectat
     return None
 
 
-def run_comparisons(aggregator, iteration_dir: Path, sides: list | None = None) -> list:
+def run_comparisons(aggregator, iteration_dir: Path, sides: list | None = None, on_usage=None) -> list:
     import sys
     import time
     import threading
@@ -131,7 +132,7 @@ def run_comparisons(aggregator, iteration_dir: Path, sides: list | None = None) 
         if ws_grading:
             expectations = [e.get("text", "") for e in ws_grading.get("expectations", []) if e.get("text")]
 
-        result = _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectations, label_a, label_b)
+        result = _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectations, label_a, label_b, on_usage=on_usage)
         if result is None:
             with lock:
                 failures[0] += 1

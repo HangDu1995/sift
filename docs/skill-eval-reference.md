@@ -665,7 +665,13 @@ skill-eval batch-report batch-workspace/ --open
     "total": 10, "a_wins": 6, "b_wins": 2, "ties": 1, "failed": 1,
     "valid": 9, "win_rate": 0.67, "label_a": "with", "label_b": "without"
   },
-  "analysis": {...}
+  "analysis": {...},
+  "llm_token_usage": {
+    "scoring": {"input_tokens": 8200, "output_tokens": 1100, "total_cost_usd": 0.09, "calls": 14},
+    "audit": {"input_tokens": 15000, "output_tokens": 2000, "total_cost_usd": 0.21, "calls": 9},
+    "executor": {"input_tokens": 84852, "output_tokens": 0, "calls": 0},
+    "total": {"input_tokens": 108052, "output_tokens": 3100, "total_cost_usd": 0.30}
+  }
 }
 ```
 
@@ -675,6 +681,7 @@ skill-eval batch-report batch-workspace/ --open
 - `delta` 全为有符号字符串（`+0.27`），= `configs[0] - configs[1]`（候选 - 基线）；双率项可能为 `null`。
 - `comparison_summary.win_rate` = `a_wins/valid`（tie-计入）；`gate` 用 tie-排除版自行算。
 - `selection`（可选,仅 `--changed-from` 子集跑时）:`{mode, ids, affected, total}`——标识本次为受改动影响的子集跑、delta 非整体测量。
+- `llm_token_usage`:本次评测的 LLM token 用量,分四段——`scoring`(grader+comparator+analyzer 合计,带 cost/calls)、`audit`(compliance/audit rollup 自 per-run compliance.json)、`executor`(被测 cc token,仅 token 数无 cost)、`total`(全加 token;cost = scoring+audit)。**executor 是被测 skill 的 token 效率指标(无 cost);scoring+audit 才是评测系统付出的 LLM 成本**。现有「令牌数」/「Δ 令牌数」(executor)语义不变,viewer 头部新增「LLM token 用量」分列(评分/遵循性/executor)+ 总计。
 
 ### gate.json（`gate` 命令产出）
 
@@ -709,7 +716,7 @@ skill-eval batch-report batch-workspace/ --open
 
 | 文件 | 内容 |
 |------|------|
-| `benchmark.json` | 聚合结果（双率 delta + 盲比较 comparison_summary + calibration_summary per-side 高分低遵循；`--changed-from` 子集跑时另记 `selection`） |
+| `benchmark.json` | 聚合结果（双率 delta + 盲比较 comparison_summary + calibration_summary per-side 高分低遵循 + `llm_token_usage` 评测 LLM 成本 scoring/audit/executor/total；`--changed-from` 子集跑时另记 `selection`） |
 | `report.html` | 自包含 HTML 报告（读 gate.json 显门禁徽章 + previous/benchmark.json 显「vs 上次」纵向 delta 卡）；run 末尾自动产（也可 `report` 命令重生成 / 带 `--previous` 基线对照） |
 | `previous/` | 重跑归档：fresh 重跑时把上一次完整 run 树整体 MOVE 到此（单槽覆盖）。含旧 `benchmark.json`（聚合纵向 delta 数据源）+ 旧 outputs/（report「上次输出」文件级面板）。仅 fresh 产生；accumulate/resume 不产。见下「重跑归档」 |
 | `gate.json` | `gate` 命令产出（非 run 产出）；判决 + 两轴明细 + calibration soft warning（高分低遵循 HIGH_SCORE_SUSPECT，不进 decision） |

@@ -58,6 +58,8 @@ class BlindComparator:
         expectations: list[str] | None = None,
         label_a: str = "with",
         label_b: str = "without",
+        *,
+        on_usage=None,
     ) -> ComparisonResult:
         """盲比较 side A / side B 两份产出(v1/v2 双 skill:label_a/b=v1/v2;默认 with/without)。
 
@@ -73,7 +75,7 @@ class BlindComparator:
         else:
             pos_a, pos_b = output_b, output_a
         prompt = self._build_prompt(pos_a, pos_b, eval_prompt, expectations)
-        response = self._call(prompt)
+        response = self._call(prompt, on_usage=on_usage)
         raw = self._parse(response)
         return self._translate(raw, side0_is_posA=side0_is_posA, label_a=label_a, label_b=label_b)
 
@@ -106,9 +108,9 @@ class BlindComparator:
         parts.append("Write your comparison as JSON matching the comparison schema. All string values (reasoning, strengths, weaknesses, etc.) must be in Chinese (中文).")
         return "\n".join(parts)
 
-    def _call(self, prompt: str) -> str:
+    def _call(self, prompt: str, *, on_usage=None) -> str:
         try:
-            return call_claude(prompt, model=self.model, timeout=self.timeout, max_turns=1)
+            return call_claude(prompt, model=self.model, timeout=self.timeout, max_turns=1, on_usage=on_usage)
         except RuntimeError:
             return ""
 

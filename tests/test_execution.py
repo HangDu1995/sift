@@ -639,7 +639,7 @@ class TestComparisonPairing:
             def __init__(self, *a, **kw):
                 pass
 
-            def compare(self, output_a, output_b, eval_prompt=None, expectations=None, label_a=None, label_b=None):
+            def compare(self, output_a, output_b, eval_prompt=None, expectations=None, label_a=None, label_b=None, **kwargs):
                 calls.append((output_a, output_b))
                 return ComparisonResult(winner="with", reasoning="ok")
 
@@ -719,7 +719,7 @@ class TestComparisonSides:
             def __init__(self, *a, **kw):
                 pass
 
-            def compare(self, output_a, output_b, eval_prompt=None, expectations=None, label_a=None, label_b=None):
+            def compare(self, output_a, output_b, eval_prompt=None, expectations=None, label_a=None, label_b=None, **kwargs):
                 seen_labels.append((label_a, label_b))
                 return ComparisonResult(winner=label_a, reasoning="ok")  # side A 胜
 
@@ -744,7 +744,7 @@ class TestComparisonSides:
             def __init__(self, *a, **kw):
                 pass
 
-            def compare(self, output_a, output_b, eval_prompt=None, expectations=None, label_a=None, label_b=None):
+            def compare(self, output_a, output_b, eval_prompt=None, expectations=None, label_a=None, label_b=None, **kwargs):
                 return ComparisonResult(winner=label_a, reasoning="ok")
 
         monkeypatch.setattr(comparison_suite, "BlindComparator", _FakeComparator)
@@ -770,7 +770,7 @@ class TestComparisonRetry:
         attempts = []
 
         class _Flaky:
-            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None, label_a=None, label_b=None):
+            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None, label_a=None, label_b=None, **kwargs):
                 attempts.append(len(attempts) + 1)
                 if len(attempts) < 3:
                     return ComparisonResult(winner="tie", reasoning="无法解析", failed=True)
@@ -786,7 +786,7 @@ class TestComparisonRetry:
         attempts = []
 
         class _AlwaysFail:
-            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None, label_a=None, label_b=None):
+            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None, label_a=None, label_b=None, **kwargs):
                 attempts.append(1)
                 return ComparisonResult(winner="tie", reasoning="对比调用失败", failed=True)
 
@@ -800,7 +800,7 @@ class TestComparisonRetry:
         attempts = []
 
         class _Ok:
-            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None, label_a=None, label_b=None):
+            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None, label_a=None, label_b=None, **kwargs):
                 attempts.append(1)
                 return ComparisonResult(winner="with", reasoning="ok", failed=False)
 
@@ -816,7 +816,7 @@ class TestComparisonRetry:
             def __init__(self, *a, **kw):
                 pass
 
-            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None, label_a=None, label_b=None):
+            def compare(self, output_a=None, output_b=None, eval_prompt=None, expectations=None, label_a=None, label_b=None, **kwargs):
                 return ComparisonResult(winner="tie", reasoning="对比调用失败", failed=True)
 
         monkeypatch.setattr(comparison_suite, "BlindComparator", _AlwaysFails)

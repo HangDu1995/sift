@@ -17,6 +17,7 @@ import threading
 from skill_eval.errors import ClaudeRunnerError, SkillEvalError
 from skill_eval.execution.cli_runner import ClaudeRunner, find_project_root  # noqa: F401 — re-exported for backward compat
 from skill_eval.execution.anomaly import detect_outliers, detect_timeout  # noqa: F401 — re-exported for backward compat
+from skill_eval.utils import TokenUsageAccumulator
 from skill_eval.models import (
     AssertionVerdict,
     EvalCase,
@@ -463,12 +464,7 @@ class ABTestRunner:
                 return run_label
 
             try:
-                timing = TimingData(
-                    total_tokens=run_output.total_tokens,
-                    duration_ms=run_output.duration_ms,
-                    total_duration_seconds=run_output.duration_ms / 1000.0,
-                )
-                (config_dir / "timing.json").write_text(timing.model_dump_json(indent=2), encoding="utf-8")
+                grader_acc = TokenUsageAccumulator()
 
                 self._emit_progress(
                     eval_case.get_name(), config_name,
@@ -482,7 +478,16 @@ class ABTestRunner:
                     tool_trace=run_output.tool_trace,
                     num_turns=run_output.num_turns,
                     stop_reason=run_output.stop_reason,
+                    on_usage=grader_acc.add,
                 )
+
+                timing = TimingData(
+                    total_tokens=run_output.total_tokens,
+                    duration_ms=run_output.duration_ms,
+                    total_duration_seconds=run_output.duration_ms / 1000.0,
+                    grader_token_usage=grader_acc.snapshot(),
+                )
+                (config_dir / "timing.json").write_text(timing.model_dump_json(indent=2), encoding="utf-8")
 
                 overall_grading = GradingResult(
                     expectations=all_expectations,
@@ -642,6 +647,7 @@ class ABTestRunner:
         tool_trace: list | None = None,
         num_turns: int = 0,
         stop_reason: str = "",
+        on_usage=None,
     ) -> tuple[list, list[dict]]:
         prog_checker = None
         if self.scoring_config.enable_programmatic:
@@ -677,12 +683,13 @@ class ABTestRunner:
                         eval_case=eval_case,
                         transcript=transcript,
                         output_dir=outputs_dir,
+                        on_usage=on_usage,
                     )
                     llm_results = llm_grading.expectations if llm_grading else []
 
                 tier3_assertions = [a for a in eval_case.assertions if a.tier and a.tier.value == "TIER3"]
                 if tier3_assertions:
-                    tier3_results = grader.grade_tier3(tier3_assertions, transcript, outputs_dir)
+                    tier3_results = grader.grade_tier3(tier3_assertions, transcript, outputs_dir, on_usage=on_usage)
 
             merged = prog_results[:]
             merged.extend(llm_results)

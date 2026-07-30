@@ -234,3 +234,35 @@ class TestCalibrationSummary:
         from skill_eval.models.batch_models import CalibrationSummary
         s = CalibrationSummary.from_per_side({"with_skill": None, "without_skill": None})
         assert s.sides["with_skill"] is None
+
+
+def test_benchmark_data_llm_token_usage_defaults_empty():
+    from skill_eval.models import BenchmarkData, BenchmarkMetadata
+    d = BenchmarkData(metadata=BenchmarkMetadata(skill_name="s"))
+    assert d.llm_token_usage == {}
+
+
+def test_benchmark_data_llm_token_usage_roundtrip():
+    from skill_eval.models import BenchmarkData, BenchmarkMetadata
+    tu = {"scoring": {"input_tokens": 100, "output_tokens": 50, "total_cost_usd": 0.01, "calls": 3},
+          "total": {"input_tokens": 200, "output_tokens": 80, "total_cost_usd": 0.02}}
+    d = BenchmarkData(metadata=BenchmarkMetadata(skill_name="s"), llm_token_usage=tu)
+    js = d.model_dump_json()
+    d2 = BenchmarkData.model_validate_json(js)
+    assert d2.llm_token_usage == tu
+
+
+def test_legacy_benchmark_json_without_llm_token_usage_loads():
+    """旧 benchmark.json 无该字段 → {}(向后兼容)。"""
+    from skill_eval.models import BenchmarkData
+    legacy = '{"metadata":{"skill_name":"s"},"runs":[],"run_summary":{}}'
+    d = BenchmarkData.model_validate_json(legacy)
+    assert d.llm_token_usage == {}
+
+
+def test_timing_data_grader_token_usage_field():
+    from skill_eval.models.grading_models import TimingData
+    t = TimingData()
+    assert t.grader_token_usage == {}
+    t2 = TimingData(total_tokens=5, grader_token_usage={"input_tokens": 9})
+    assert t2.grader_token_usage == {"input_tokens": 9}

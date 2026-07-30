@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from skill_eval.models.enums import AssertionVerdict
@@ -11,6 +13,7 @@ class TimingData(BaseModel):
     total_tokens: int = 0
     duration_ms: int = 0
     total_duration_seconds: float = 0.0
+    grader_token_usage: dict[str, Any] = Field(default_factory=dict)  # Phase 2: per-run grader LLM token
 
 
 class ExecutionMetrics(BaseModel):

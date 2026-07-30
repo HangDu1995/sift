@@ -33,9 +33,11 @@ class LLMGrader:
         eval_case: EvalCase,
         transcript: str,
         output_dir: Path,
+        *,
+        on_usage=None,
     ) -> GradingResult:
         prompt = self._build_prompt(eval_case, transcript, output_dir)
-        response = self._call_claude(prompt)
+        response = self._call_claude(prompt, on_usage=on_usage)
 
         if not response or not response.strip():
             return self._build_uneval_result(eval_case, "LLM grading returned empty response")
@@ -53,6 +55,8 @@ class LLMGrader:
         tier3_assertions: list,
         transcript: str,
         output_dir: Path,
+        *,
+        on_usage=None,
     ) -> list[ExpectationResult]:
         """Grade Tier 3 assertions specifically with evidence/citation requirements."""
         if not tier3_assertions:
@@ -60,7 +64,7 @@ class LLMGrader:
 
         outputs = self._collect_outputs(output_dir)
         prompt = self._build_tier3_prompt(tier3_assertions, transcript, outputs)
-        response = self._call_claude(prompt)
+        response = self._call_claude(prompt, on_usage=on_usage)
 
         if not response or not response.strip():
             return [
@@ -222,9 +226,9 @@ class LLMGrader:
                     parts.append(f"=== {f.name} === (binary)")
         return "\n\n".join(parts) if parts else "(no output files)"
 
-    def _call_claude(self, prompt: str) -> str:
+    def _call_claude(self, prompt: str, *, on_usage=None) -> str:
         try:
-            return call_claude(prompt, model=self.model, timeout=self.timeout, max_turns=1)
+            return call_claude(prompt, model=self.model, timeout=self.timeout, max_turns=1, on_usage=on_usage)
         except RuntimeError:
             return ""
 

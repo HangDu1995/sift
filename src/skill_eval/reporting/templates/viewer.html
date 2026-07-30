@@ -1514,6 +1514,29 @@
       }
       html += "</tbody></table>";
 
+      // ── LLM token 用量(评测系统成本:scoring+audit;executor 被测效率无 cost)──
+      // benchmark 级汇总(非 per-config delta),单列分四行。executor=被测 token 效率(无 cost);
+      // scoring+audit=评测系统付出的 LLM 成本;总计 cost 只含 scoring+audit。
+      var tu = data.llm_token_usage || {};
+      if (tu.total && (tu.total.input_tokens || tu.total.output_tokens || tu.total.total_cost_usd)) {
+        function _tokSeg(seg, showCost) {
+          var inn = (seg.input_tokens || 0), out = (seg.output_tokens || 0);
+          var s = "in " + inn.toLocaleString() + " / out " + out.toLocaleString();
+          if (showCost && seg.total_cost_usd) s += " · $" + Number(seg.total_cost_usd).toFixed(4);
+          if (seg.calls) s += " · " + seg.calls + " calls";
+          return s;
+        }
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">LLM token 用量</div>';
+        html += '<table class="benchmark-table"><tbody>';
+        var sc = tu.scoring || {}, au = tu.audit || {}, ex = tu.executor || {};
+        if (sc.input_tokens || sc.output_tokens) html += "<tr><td><strong>⚙ 评分 LLM</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(grader+comparator+analyzer)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(sc, true) + "</td></tr>";
+        if (au.input_tokens || au.output_tokens) html += "<tr><td><strong>⚙ 遵循性 LLM</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(audit)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(au, true) + "</td></tr>";
+        if (ex.input_tokens || ex.output_tokens) html += "<tr><td><strong>令牌数 (executor)</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(被测效率,无 cost)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(ex, false) + "</td></tr>";
+        html += "<tr><td><strong>总计 LLM</strong></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(tu.total, true) + "</td></tr>";
+        html += "</tbody></table></div>";
+      }
+
       // ── Compliance aggregate(过程层,插盲评前:客观结果 → 过程 → 主观结果)──
       html += renderComplianceAggregate();
 

@@ -209,12 +209,14 @@
       const table = document.getElementById("summary-table");
       const hasTime = allSkills.some(s => s.delta_time != null);
       const hasTokens = allSkills.some(s => s.delta_tokens != null);
+      const hasLLMCost = allSkills.some(s => s.benchmark && s.benchmark.llm_token_usage && s.benchmark.llm_token_usage.total && s.benchmark.llm_token_usage.total.total_cost_usd);
       const hasComps = allSkills.some(s => s.has_comparisons);
       const hasAnalysis = allSkills.some(s => s.has_analysis);
 
       let html = "<thead><tr><th>Skill</th><th>状态</th><th>with_skill</th><th>without_skill</th><th>变化</th>";
       if (hasTime) html += "<th>Δ 耗时</th>";
       if (hasTokens) html += "<th>Δ 令牌数</th>";
+      if (hasLLMCost) html += "<th>评测 LLM 成本</th>";
       if (hasComps) html += "<th>对比</th>";
       if (hasAnalysis) html += "<th>分析</th>";
       html += "<th>过拟合</th>";
@@ -238,6 +240,11 @@
           "<td class='" + deltaClass + "'>" + dd + "</td>";
         if (hasTime) html += "<td>" + (s.delta_time || "—") + "</td>";
         if (hasTokens) html += "<td>" + (s.delta_tokens || "—") + "</td>";
+        if (hasLLMCost) {
+          var _tu = (s.benchmark && s.benchmark.llm_token_usage) || {};
+          var _tot = _tu.total || {};
+          html += "<td style='font-size:0.75rem;color:var(--text-muted);'>" + (_tot.total_cost_usd ? "$" + Number(_tot.total_cost_usd).toFixed(4) : "—") + "</td>";
+        }
         if (hasComps) html += "<td>" + (s.has_comparisons ? "✓" : "—") + "</td>";
         if (hasAnalysis) html += "<td>" + (s.has_analysis ? "✓" : "—") + "</td>";
 
