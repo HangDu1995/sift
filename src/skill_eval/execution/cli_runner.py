@@ -178,6 +178,81 @@ class ClaudeRunner:
         except Exception as exc:
             raise ClaudeRunnerError(f"claude -p failed: {exc}")
 
+    def run_trigger(
+        self,
+        prompt: str,
+        cwd: Path | str,
+        env: dict,
+        model: str | None = None,
+        timeout: int = 120,
+        max_turns: int = 10,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> RunOutput:
+        """trigger 模式 spawn:不灌 body(prompt 原样)、不加 --disable-slash-commands(skill 要开启)。
+
+        trigger-accuracy 评测专用:skill 须由调用方放进 ``cwd/.claude/skills/`` 让 cc 按
+        description 自动发现(不靠注入)。两个关键约束(本方法的全部意义):① 绝不加
+        ``--disable-slash-commands``(``run()`` 在 ``not skill_path`` 时加,trigger 必须避開——
+        否则关掉所有 skill);② prompt 原样传 ``claude -p``,不调 build_live_prompt /
+        _build_non_interactive_prompt。``env`` 由调用方传入(含 HOME=<temp> 干净隔离全局
+        plugin)——本方法不调 claude_cli_env(),隔离归调用方。
+        """
+        cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
+               "--dangerously-skip-permissions", "--max-turns", str(max_turns)]
+        # 注意:绝不加 --disable-slash-commands(run() 在 not skill_path 时加,trigger 必须避開)
+        if model:
+            cmd.extend(["--model", model])
+        try:
+            stdout, returncode, duration_ms, timed_out, stderr = self._spawn(
+                cmd, cwd, env, timeout, on_progress)
+        except FileNotFoundError:
+            raise ClaudeRunnerError("'claude' CLI not found — ensure it is installed and in PATH")
+        if timed_out:
+            if stdout.strip():
+                return self._assemble(stdout, returncode, duration_ms, timed_out, timeout, stderr)
+            raise ClaudeRunnerError(f"claude -p timed out after {timeout}s (killed process tree)")
+        if returncode != 0 and not stdout.strip():
+            raise ClaudeRunnerError(f"claude -p exited with code {returncode}: {stderr[:500]}")
+        return self._assemble(stdout, returncode, duration_ms, timed_out, timeout, stderr)
+
+    def _assemble(
+        self,
+        stdout: str,
+        returncode: int,
+        duration_ms: int,
+        timed_out: bool,
+        timeout: int,
+        stderr: str,
+    ) -> RunOutput:
+        """parse + 构 RunOutput(DRY run_trigger 两条路径;字段值与 run() 对应路径逐字一致)。
+
+        timed_out 路径镜像 ``run()`` 的 timed_out-with-partial 分支(``exit_code=-1``、
+        ``stop_reason=f"timed_out_after_{timeout}s"`` 无 fallback);正常路径镜像 ``run()``
+        的正常分支(``exit_code=returncode``、``stop_reason or exit_{code}`` fallback)。
+        ``run()`` 自身因两条路径前都有 has-output 守卫(需先 parse 再判),改接 _assemble 会
+        双重 parse,故 run() 保持原样、仅 run_trigger() 用本助手。
+        """
+        transcript, total_tokens, tool_calls, result_text, num_turns, stop_reason, tool_trace = \
+            self._parse_stream_json(stdout)
+        if timed_out:
+            exit_code = -1
+            final_stop = f"timed_out_after_{timeout}s"
+        else:
+            exit_code = returncode
+            final_stop = stop_reason or (f"exit_{returncode}" if returncode != 0 else "")
+        return RunOutput(
+            exit_code=exit_code,
+            stdout=stdout,
+            duration_ms=duration_ms,
+            total_tokens=total_tokens,
+            transcript=transcript,
+            tool_calls=tool_calls,
+            tool_trace=tool_trace,
+            result_text=result_text,
+            num_turns=num_turns,
+            stop_reason=final_stop,
+        )
+
     def _spawn(
         self,
         cmd: list[str],
