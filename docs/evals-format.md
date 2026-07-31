@@ -2,14 +2,15 @@
 
 > evals.json 是 `run`(**路径3 fixture run**)的考卷:每条 eval 是一道题(prompt + 期望 + 断言 + 测试夹具)。`init` 生成它,`run` 跑它,`inspect` 体检它。
 >
-> **谁不读 evals.json**:`audit`(路径2,读 transcript 对账)、`run --task`(路径1,真任务)。只有路径3 的 `run` 读它。
+> **谁读哪段**:`run` 读 `evals` 段;`trigger` 只读 `trigger_probes` 段(忽略 `evals`)。**谁不读 evals.json**:`audit`(路径2,读 transcript 对账)、`run --task`(路径1,真任务)。
 
 ## 顶层结构
 
 ```json
 {
   "skill_name": "my-skill",
-  "evals": [ {EvalCase}, {EvalCase} ]
+  "evals": [ {EvalCase}, {EvalCase} ],
+  "trigger_probes": [ {TriggerProbe}, ... ]   // 可选,只 trigger 命令读、run 忽略(见下)
 }
 ```
 
@@ -155,6 +156,36 @@
 ```
 
 `inspect` 这份考卷的输出:`程序化 3 (100%) / LLM 0 · expectations 7(全 LLM 判)`,problem 标 `L1-错误分类规则理解 (id=1)` 零程序化(纯主观)——L1 是概念题只能 LLM 判,L2 才有硬断言兜底。
+
+## trigger_probes（trigger 命令的输入，可选）
+
+顶层可选段，给 [`trigger`](skill-eval-reference.md#trigger--触发准确度第-4-维) 命令用——测 cc 会不会**仅凭 skill 的 description 自然触发**本 skill（不评输出对错）。`run` **忽略**此段（只有 `trigger` 读它）。旧 evals.json 无此段 → `[]`，向后兼容。由 `init --trigger-probes` 生成、id 接续已有 `max+1`。
+
+```json
+"trigger_probes": [
+  {
+    "id": 1,
+    "prompt": "把这份访问日志按端点聚合并标出异常突增的时段",
+    "expect_trigger": true,
+    "rationale": "本 skill 正处理日志异常分析,该触发"
+  },
+  {
+    "id": 2,
+    "prompt": "把这本小说翻译成英文",
+    "expect_trigger": false,
+    "rationale": "翻译任务,看着是文本处理但本 skill 不该接(测 description 会不会过宽)"
+  }
+]
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `id` | int | ✅ | 题号（唯一） |
+| `prompt` | str | ✅ | 喂给 cc 的中性用户请求。should-trigger：**不点名 skill**（点名就只是测字面匹配）；should-not：看着相关但 skill 不该接 |
+| `expect_trigger` | bool | ✅ | `true`=该触发（贡献 `recall`）/ `false`=不该触发（贡献 `false_trigger_rate`） |
+| `rationale` | str | — | 为何该 / 不该触发（人审抓手） |
+
+两类探题各测一种失效（详见 [reference · trigger](skill-eval-reference.md#trigger--触发准确度第-4-维)）：should-trigger 测**漏召**（recall），should-not-trigger 测**误触**（false_trigger_rate）——两者是不同失效模式，`trigger` 分开报、不合成一个分。
 
 ---
 

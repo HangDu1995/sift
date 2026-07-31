@@ -16,6 +16,7 @@
   - [run — A/B 评测](#run--ab-评测)
   - [gate — 通过/失败判决](#gate--通过失败判决)
   - [audit — 真实 transcript 对账](#audit--真实-transcript-对账)
+  - [trigger — 触发准确度（第 4 维）](#trigger--触发准确度第-4-维)
   - [report — HTML 报告](#report--html-报告)
   - [batch — 批量评测](#batch--批量评测)
   - [batch-report — 批量 HTML 报告](#batch-report--批量-html-报告)
@@ -91,6 +92,7 @@ skill-eval init path/to/skill/ --from-transcript session.jsonl  # 从真实会�
 | `--timeout` | 600 | LLM 调用超时秒数（mining 是单次大 prompt；撞超时 → degraded fallback） |
 | `--focus` | (无) | 定向生成某一类 eval 补盲区：`negative-cases`（反面场景）/ `edge-cases`（边界/错误）/ 任意自由文本（skill 特定方向）；常配 `--append`。`anti-triggers` 是旧名，保留为静默别名 |
 | `--append` | 关 | 追加到已有 evals.json（不覆盖），新 eval id 接续已有 `max+1` |
+| `--trigger-probes` | 关 | 生成 trigger-accuracy 探题（should-trigger / should-not-trigger），追加到 evals.json 的 `trigger_probes` 段（见 [evals-format.md](evals-format.md)）。LLM 读 description 出题；默认每方向 5 道，`--num-evals` = 每方向**上限**（trim 多余、不补下限）。不重生成已有 scoring evals（载入已有 evals.json 保留原题）；新探题 id 接续已有 trigger_probes `max+1`。配合 [`trigger`](#trigger--触发准确度第-4-维) 跑 |
 
 `--from-transcript` 解析 session transcript（模型、user turns、用到的 skill），重建 input_files / commands / produced_files，生成带结构化 assertions 的 eval。若 LLM 失败降级为 fallback eval，会带 `degraded:*` flag 并在终端告警（不再静默）。多 skill transcript 不传 `--kind` 时会把全部当本 skill 挖（可能串味）→ 终端告警，建议加 `--kind skill` 只挖本 skill 段。
 
@@ -390,6 +392,37 @@ skill-eval audit path/to/skill/ --db opencode.db
 
 > **怎么看结果（别只数 fail）**：每条 finding 带 **#N 序号**。① **同文重复已去重**——同句被抽成 `CONSTRAINT` + `ANTI_FABRICATION` 的合并成一条、来源徽章显 `CONSTRAINT + ANTI_FABRICATION`（不再虚增 fail）。② **同行为跨类已关联**——同一行为（如没读某 reference）同时违反 条件性 + 步骤 两条**不同**规则的，仍是两条（确是两条规则），但互标 `↔ 同源违规 #N`（可点跳）；故 fail 条数仍可能 > 真实问题数，**逐条看 evidence 对照"哪个行为"**，别数条数。③ **没判成（UNRESOLVED）多 ≠ 全过**——LLM 没判成的一律 UNRESOLVED（见上），汇总成警告提示重跑；N/A（不适用）是已解决结论、不进警告。④ **对照预期**：自带 3 个 audit 示例的预期违规已逐条列明（见 [example-skills/README.md](../fixtures/example-skills/README.md)），跑完比对该抓的违规是否都出现在 FAIL、evidence 是否点中。⑤ **verdict 徽章 + method 标签**（每条）：左侧 verdict 五态图标（✓通过 / ✗失败 / ⊘不适用（场景不触发）/ ○没判成（可重跑）/ ?判不准（重跑无益）），右侧 method 标签「程序」（tool_trace 命中 / 子串匹配，不调 LLM）或「LLM」。⑥ **FAIL 噪声判别**（每条 FAIL + by_instruction 失败行）：`noise_label` 徽章（`tool_noise` 疑似工具噪声 / `skill_issue` 疑似 skill 问题 / `uncertain` 待确认）+ `noise_reasons`（hover 看理由）。fixture 下 FAIL 混着工具噪声（extractor 误提资源描述当步骤、evidence 自相矛盾、LLM 判定不稳）和真 skill 问题（硬约束程序判定 FAIL），判别帮区分、避免据噪声误改 skill。判别法见 handbook §7.12、诚实边界见 §7.14；治本仍 `--refine-instructions` / 结构化声明 / 真实 transcript audit。**source / category 徽章**：单次 audit-report、viewer per-run、整体汇总三处都显 `source`（InstructionSource，如 `CONSTRAINT` / `HEADING_STEP`）+ `category` —— `source` 比 `category` 细（6 vs 4），是判别噪声的关键信号（如 `HEADING_STEP` + 资源链接 → 疑似资源描述被当步骤）。
 
+### `trigger` — 触发准确度（第 4 维）
+
+测 cc 会不会**仅凭 skill 的 `description` 自然调用本 skill**——不评输出对错、只看触发。前三层（scoring / compliance / calibration）都默认 skill 已"上场"：scoring 的 `_build_non_interactive_prompt` 把 skill body 强制注入 cc prompt + "Follow its instructions" → cc 对"要不要够这个 skill"没得选，**触发能力从不被测**。一个永不触发的 skill，body 再好也是死重量；trigger-accuracy 补的就是这个上游缺口。
+
+> skill 放进 `<cwd>/.claude/skills/<name>/`、给 cc 一条**中性 prompt**（不点名 skill），看 cc 按描述自动发现并调用。检测复用 `audit/slice.invoked_skills`（扫 transcript 里的 `Skill` tool_use）。**干净 HOME 隔离**：spawn 时 `HOME=<temp>` 压掉用户全局 plugin（否则结果依赖测试机装了啥 → 不可移植 / CI 不稳）；cc 内置 skill 仍在（恒定基线），auth 走 env 不受影响。
+
+```bash
+skill-eval trigger path/to/skill/ --runs 2 -o /tmp/out
+skill-eval trigger path/to/skill/ --evals path/to/evals.json --model claude-sonnet-5
+```
+
+**参数**：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--evals` | 自动查找（`<skill>/evals/evals.json`） | 含 `trigger_probes` 的 evals.json 路径；无 `trigger_probes` 段 → 友好警告 + exit 0 |
+| `--runs` | 1 | 每条 probe 重复跑几次（触发带随机性，多跑聚合成 `trigger_rate` 更可信） |
+| `--model` | 用户默认 | claude -p 模型 |
+| `--timeout` | 120 | 单次 spawn 超时（秒） |
+| `--max-turns` | 10 | claude -p 最大轮数 |
+| `--output` / `-o` | `<skill>/evals/` | 输出目录（写 `trigger-report.json` + 终端摘要） |
+
+**两种探题**：
+
+- **should-trigger**（`expect_trigger: true`）：该 skill 该处理的真任务，措辞**中性**（prompt 里点名 skill 就只是测字面匹配，不是测触发）。
+- **should-not-trigger**（`expect_trigger: false`）：看着相关但 skill **不该**触发的任务——测误触发 / description 过宽。
+
+**判定**：每条 probe 跨 N runs 算 `trigger_rate = fired 次数 / runs`，阈值 0.5 二值化 → PASS / FAIL；spawn 失败 / 超时 → 该 probe = `UNRESOLVED`（**不进率分母**，宁少报不乱报）。聚合**分开报**（各带样本量）：`recall` = should-trigger 方向均值；`false_trigger_rate` = should-not 方向均值——两者是**不同失效模式、不合成一个分**。某方向 0 probe → 对应率 `null`（N/A，不是假 0.0）。
+
+> **诊断定位、无门禁**：v1 **无 gate / 不出 exit-code 判决**（纯诊断）。`trigger-report.json` 是独立 artifact，**不并入 `benchmark.json`**。用 [`init --trigger-probes`](#init--初始化评测定义) 生成探题。`description_hash` = sha256(frontmatter `description`)[:16]——锚定触发判定唯一依赖的输入，跨版本对比时判断 recall 变化是否源于 description 改动。成本：每 probe = 1 次 cc spawn（比 `run` 轻——无 with/without 双 spawn、无 grader、无 compliance judge）。
+
 ### `report` — HTML 报告
 
 ```bash
@@ -482,6 +515,12 @@ skill-eval batch-report batch-workspace/ --open
 | 输出错误但过程遵循 | FAIL | PASS | Skill 逻辑正确但执行失败，需改进 |
 
 > 三层是**并列独立信号**，不存在复合 Score 公式（历史文档里 `Score = StaticCompliance + DeltaPassRate + ...` 的公式在代码中并未实现）。消费方按需组合判断。
+
+### 触发准确度（trigger-accuracy，第 4 维）
+
+前三层都默认 skill 已"上场"——scoring 的 `_build_non_interactive_prompt` 把 skill body **强制注入** cc prompt + "Follow its instructions"，cc 对"要不要够这个 skill"没得选，**触发能力从不被测**。但真实会话里 cc 调不调用一个 skill，靠的**只有 frontmatter 的 `description`**——这一项三维都不评。一个永不触发的 skill，body 再好也是死重量。
+
+[`trigger`](#trigger--触发准确度第-4-维) 命令补这个上游缺口：把 skill 放进 `<cwd>/.claude/skills/`、给中性 prompt，测 cc 会不会仅凭 description 自动触发（干净 HOME 隔离全局 plugin）。产 `trigger-report.json`——`recall`（漏召）+ `false_trigger_rate`（误触）分开报、各带样本量，独立 artifact（**不并入 `benchmark.json`**），v1 无 gate / 不进 exit-code 判决（诊断定位）。
 
 ### 双率：客观侧 vs 主观侧
 
@@ -602,9 +641,15 @@ skill-eval batch-report batch-workspace/ --open
       "rationale": "对应 SKILL.md ## 步骤 第2条",
       "confidence": 0.8
     }
+  ],
+  "trigger_probes": [
+    {"id": 1, "prompt": "<中性用户请求，应让 cc 够到本 skill>", "expect_trigger": true,  "rationale": "为何该触发"},
+    {"id": 2, "prompt": "<看着相关但 skill 不该触发的请求>",  "expect_trigger": false, "rationale": "为何不该触发"}
   ]
 }
 ```
+
+> 顶层 `trigger_probes` 段**可选**（旧 evals.json 无 → `[]`，向后兼容），只 [`trigger`](#trigger--触发准确度第-4-维) 命令读、`run` 忽略它。字段见下表。
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
@@ -620,6 +665,17 @@ skill-eval batch-report batch-workspace/ --open
 | `flags` | 否 | 后处理标记（如 `degraded:no-llm`）；默认空 |
 | `rationale` | 否 | 该 eval 对应 SKILL.md 哪段/哪条（`init` 自报,审阅溯源;空 → `review:no-rationale`） |
 | `confidence` | 否 | `init` 生成器自报 0-1（该题切中规则的把握）;仅 init 审阅分诊,**不入任何 gate**。同名区分:≠ audit-finding 的 confidence,也 ≠ 旧版校准已删的 confidence（grade/agreement 那套）——这是出卷阶段生成器自评 |
+
+### trigger_probes（`trigger` 命令的输入，可选）
+
+`evals.json` 顶层可选段，给 [`trigger`](#trigger--触发准确度第-4-维) 命令用（`run` 忽略它）。旧 evals.json 无此段 → `[]`（向后兼容）。由 `init --trigger-probes` 生成、id 接续已有 `max+1`。
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `id` | 是 | 唯一标识，整数 |
+| `prompt` | 是 | 喂给 cc 的中性用户请求（should-trigger：不点名 skill；should-not：看着相关） |
+| `expect_trigger` | 是 | `true` = 该触发（贡献 `recall`）/ `false` = 不该触发（贡献 `false_trigger_rate`） |
+| `rationale` | 否 | 为何该 / 不该触发（人审抓手） |
 
 ### grading.json
 
@@ -725,6 +781,40 @@ skill-eval batch-report batch-workspace/ --open
   }
 }
 ```
+
+### trigger-report.json（`trigger` 命令产出）
+
+```json
+{
+  "skill_name": "my-skill",
+  "description_hash": "a1b2c3d4e5f60718",
+  "runs": 2,
+  "recall": 0.75,
+  "false_trigger_rate": 0.10,
+  "n_should_trigger": 5,
+  "n_should_not": 5,
+  "unresolved": 0,
+  "token_usage": {"total_tokens": 28400},
+  "probes": [
+    {"id": 1, "expect_trigger": true,  "trigger_rate": 1.0, "verdict": "PASS", "transcript_path": ""},
+    {"id": 2, "expect_trigger": false, "trigger_rate": 0.0, "verdict": "PASS", "transcript_path": ""}
+  ]
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `skill_name` | 被测 skill 名（frontmatter `name`） |
+| `description_hash` | sha256(frontmatter `description`)[:16]——触发判定唯一依赖输入的锚，跨版本对比 / 判断 recall 变化是否源于 description 改动 |
+| `runs` | 每条 probe 跑的次数 |
+| `recall` | should-trigger 方向 `trigger_rate` 均值；该方向 0 probe → `null`（N/A） |
+| `false_trigger_rate` | should-not 方向 `trigger_rate` 均值；该方向 0 probe → `null`（N/A） |
+| `n_should_trigger` / `n_should_not` | 两方向 probe 数（各自样本量） |
+| `unresolved` | spawn 异常的 probe 数（**不进** recall / false_trigger_rate 分母） |
+| `token_usage` | `{total_tokens}`——所有 probe spawn 的 cc token 合计 |
+| `probes[]` | 每条 probe：`id` / `expect_trigger` / `trigger_rate`（fired / runs）/ `verdict`（PASS / FAIL / UNRESOLVED）/ `transcript_path`（人审抓手） |
+
+> `recall` 与 `false_trigger_rate` 是**不同失效模式、分开报**（前者测漏召、后者测误触），不合成单一分。某方向 0 probe → 对应字段 `null`（N/A，不是假 0.0）。v1 **无 gate、不进 `benchmark.json`**（诊断定位，独立 artifact）。
 
 ### 输出文件说明
 

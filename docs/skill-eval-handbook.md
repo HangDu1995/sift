@@ -22,6 +22,7 @@
 - [第十二章 report HTML 布局](#第十二章-report-html-布局)
 - [第十三章 路径 1：真任务模式（live）](#第十三章-路径-1真任务模式live)
 - [第十四章 batch / batch-report](#第十四章-batch--batch-report)
+- [第十五章 触发准确度（trigger-accuracy，第 4 维）](#第十五章-触发准确度trigger-accuracy第-4-维)
 - [附录](#附录)
 
 ---
@@ -1359,6 +1360,77 @@ skill-eval batch-report batch-workspace/ --open
 
 ---
 
+## 第十五章 触发准确度（trigger-accuracy，第 4 维）
+
+前三层（评分 / 遵循性 / 校准）回答的都是 skill 已经"上场"之后的问题——输出对不对、过程遵不遵循、结果×过程协不协调。但有一个更上游的问题它们都没碰：**cc 到底会不会调用这个 skill？**
+
+### 15.1 上游缺口：三层都假设 skill 已"上场"
+
+一个 skill 在真实会话里被不被调用，靠的**只有 frontmatter 的 `description`**——cc 扫到一份 skill、读它的 description、据此决定这次任务要不要够它。description 写得不到位，cc 永不触发，skill body 再好也是死重量。
+
+但前三层都跳过了这一步：
+
+- **评分（run A/B）**：`_build_non_interactive_prompt` 把 skill body **强制注入** cc prompt，开头就是 "You have the following Skill loaded. Follow its instructions"——cc 对"要不要够这个 skill"没得选，触发能力**从不被测**。
+- **遵循性（audit）**：审的是 skill 被调用**之后**的行为（默认它已触发）。
+- **校准**：结果×过程 coherence，与触发无关。
+
+`description` 这一触发判定唯一依赖的输入，三维都不评。trigger-accuracy 补的就是这个缺口——它和前三层正交：前三层评"上场后表现如何"，trigger 评"会不会上场"。
+
+### 15.2 怎么测：中性 prompt + 干净 HOME
+
+```bash
+skill-eval trigger path/to/skill/ --runs 2 -o /tmp/out
+```
+
+`trigger` 命令把被测 skill 放进 `<cwd>/.claude/skills/<name>/`，给 cc 一条**中性 prompt**——不点名 skill、不暗示该用它，就是一个普通用户请求。然后看 cc 会不会仅凭 description 自动发现并调用本 skill。检测复用遵循性引擎的 `audit/slice.invoked_skills`（扫 transcript 里的 `Skill` tool_use，看本 skill 名在不在里面）。
+
+**干净 HOME 隔离**：spawn 时把 `HOME` 指向一个临时空目录，压掉用户全局 plugin——否则结果就依赖"测试机今天装了哪些 plugin"，换台机器 / 上 CI 就变，不可移植。隔离后 cc 只看到沙箱里的本 skill（按 description 自动发现）+ 内置 skill（恒定基线）；auth 走 env、不受影响。这条隔离是 trigger 可信的前提：确保触发**只由沙箱里本 skill 的 description 决定**，不被用户环境的其它 skill / plugin 噪声干扰。
+
+### 15.3 两种探题：recall 与 false-trigger 是不同失效模式
+
+trigger 探题分两个方向，各测一种失效：
+
+- **should-trigger**（`expect_trigger: true`）：该 skill 该处理的真任务，措辞**中性**（在 prompt 里点名 skill 就只是测字面匹配，不是测触发）。
+- **should-not-trigger**（`expect_trigger: false`）：看着相关但 skill **不该**触发的任务——测 description 会不会过宽、把不该接的活也揽下来。
+
+两种是**不同的失效模式**，所以聚合时**分开报、不合成一个分**：
+
+| 率 | 来自 | 测的失效 | 方向 |
+|----|------|---------|------|
+| `recall` | should-trigger 方向 trigger_rate 均值 | 漏召（该触发没触发） | 越高越好 |
+| `false_trigger_rate` | should-not 方向 trigger_rate 均值 | 误触（不该触发却触发） | 越低越好 |
+
+为什么不合？因为"漏召"和"误触"指向相反的修法：recall 低 → description 太窄 / 缺关键词，要加触发线索；false_trigger 高 → description 太宽 / 太泛，要收窄 scope。合成一个分会把这两个相反信号互相抵消，丢掉诊断价值。
+
+### 15.4 判定与样本
+
+每条 probe 跨 N runs 算 `trigger_rate = fired 次数 / runs`（触发带随机性，`--runs` 多跑聚合成率更可信），阈值 0.5 二值化 → PASS / FAIL。spawn 失败 / 超时 → 该 probe = `UNRESOLVED`，**不进 recall / false_trigger_rate 的分母**（宁少报不乱报，避免单次异常污染率——同遵循性"没判成不乱报"的哲学）。某方向 0 probe → 对应率 `null`（N/A，不是假 0.0）。
+
+每个率都带自己的样本量（`n_should_trigger` / `n_should_not`），别脱离样本量解读一个率：init 默认每方向 5 道，<3 道会告警"样本少"。同 1.6 的噪声分工，trigger 侧也有"答题噪声 B"（cc 触发带随机性）——靠 `--runs` 多跑抹平。
+
+### 15.5 出题：`init --trigger-probes`
+
+```bash
+skill-eval init path/to/skill/ --trigger-probes                 # 默认每方向 5 道，追加到 trigger_probes 段
+skill-eval init path/to/skill/ --trigger-probes --num-evals 8   # 每方向上限 8（trim 多余、不补下限）
+```
+
+LLM 读 skill 的 description 生成两方向探题，追加到 evals.json 的 `trigger_probes` 段（新 id 接续已有 `max+1`）。**不重生成已有 scoring evals**——载入已有 evals.json、只加 trigger 探题（`--trigger-probes` 单用、不加 `--append` 也保留原 scoring 题）。
+
+**`--num-evals` 是每方向上限、不是下限**（关键）：LLM 生成的探题多于这个数会被 trim，少于这个数**原样保留**、不强行凑满——硬凑会出重复 / 充数题，反而劣化信号质量。这是有意的"欠交付"：宁可少几道真信号，不要凑数的噪声。所以实际跑出来某方向可能少于你给的 `--num-evals`，别当成 bug。
+
+### 15.6 边界：诊断定位，无门禁
+
+trigger-accuracy v1 是**诊断工具，不是门禁**：
+
+- **无 gate / 不出 exit-code 判决**——只产 `trigger-report.json` + 终端摘要。recall 低或 false_trigger 高是"该改 description"的信号，不是合并阻断（那是 skill 内容要改、不是 PR 该卡的红灯）。
+- **独立 artifact，不并入 `benchmark.json`**——trigger 回答的是上游独立问题，和 scoring / compliance / calibration 不耦合，benchmark 的双率 delta / 盲评胜率都不含触发信号。
+- **`description_hash`**（sha256(frontmatter `description`)[:16]）锚定触发判定唯一依赖的输入——跨版本对比时，hash 变了说明 description 改了，recall 的变化才有"是 description 改动引起"的归因依据；hash 没变而 recall 变了，更可能是 cc 触发随机性（看 `--runs`）。
+
+> **成本**：每条 probe = 1 次 cc spawn（有 LLM 成本，但比 `run` 轻——无 with/without 双 spawn、无 grader、无 compliance judge）。配合前三层用：先 `trigger` 看 description 能不能让 cc 够到这个 skill，再 `run` 看上场后表现。
+
+---
+
 ## 附录
 
 ### A. 命令速查
@@ -1374,6 +1446,7 @@ skill-eval batch-report batch-workspace/ --open
 | `run` | A/B 评测主流程 | Claude + LLM |
 | `gate` | post-hoc 门禁判决 | 零 API，毫秒 |
 | `audit` | 真实 transcript 对账 | LLM |
+| `trigger` | 触发准确度（第 4 维，诊断、无门禁） | Claude spawn |
 | `report` | 生成 HTML 报告 | 零 API |
 | `batch` | 批量评测（DAG） | Claude + LLM |
 | `batch-report` | 批量对比 HTML | 零 API |
@@ -1384,6 +1457,7 @@ skill-eval batch-report batch-workspace/ --open
 |------|---|---|---|---|
 | `gate` | PASS | FAIL | N/A / UNCLEAR / 使用错误 | — |
 | `run` | 产数据成功 | （`--security-gate` 触发） | 输入错误 | 执行错误 |
+| `trigger` | 跑完（诊断，无门禁） | — | 输入错误 | 执行错误（cc 缺失/超时） |
 | `vet` | SAFE / REVIEW_NEEDED | BLOCKED | 输入错误 | — |
 | `analyze` | score 满 | score 未满 | 输入错误 | — |
 | `init`/`inspect`/`freeze`/`report` | 成功 | — | 输入错误 | — |

@@ -109,6 +109,7 @@ LLM 自动生成 L1/L2 测试用例，自动推导程序化断言。也可从真
 skill-eval init path/to/skill/
 skill-eval init path/to/skill/ --from-transcript session.jsonl   # 从真实会话挖题
 skill-eval init path/to/skill/ --focus negative-cases --append   # 定向补反面场景,追加到已有考卷
+skill-eval init path/to/skill/ --trigger-probes                  # 生成触发准确度探题(should/should-not)
 ```
 
 ### `add` — 追加评测用例
@@ -195,6 +196,15 @@ skill-eval audit path/to/test-runner/ --transcript session.json --kind agent # �
 skill-eval audit path/to/orchestrator/ --transcript session.json --kind root # 审顶层主 agent / 编排者（workflow 级 SKILL.md）
 skill-eval audit path/to/skill/ --transcript opencode-session.json          # opencode 跑出的 session
 skill-eval audit path/to/skill/ --db opencode.db                            # 直接给 opencode .db(自动 list/export/audit)
+```
+
+### `trigger` — 触发准确度（第 4 维）
+
+测 cc 会不会**仅凭 skill 的 `description` 自然触发**（不评输出对错）。前三层都假设 skill 已"上场"——scoring 强制注入 body，触发能力从不被测；trigger 补这个上游缺口：中性 prompt + 干净 HOME 隔离，看 cc 按描述自动发现。诊断定位、无门禁、独立 artifact（不并入 benchmark）。
+
+```bash
+skill-eval init   path/to/skill/ --trigger-probes    # 先生成探题(should/should-not 各 5)
+skill-eval trigger path/to/skill/ --runs 2 -o /tmp/out
 ```
 
 ### `report` — HTML 报告
