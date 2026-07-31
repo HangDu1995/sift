@@ -108,7 +108,7 @@ LLM 自动生成 L1/L2 测试用例，自动推导程序化断言。也可从真
 ```bash
 skill-eval init path/to/skill/
 skill-eval init path/to/skill/ --from-transcript session.jsonl   # 从真实会话挖题
-skill-eval init path/to/skill/ --focus anti-triggers --append    # 定向补反面场景,追加到已有考卷
+skill-eval init path/to/skill/ --focus negative-cases --append   # 定向补反面场景,追加到已有考卷
 ```
 
 ### `add` — 追加评测用例

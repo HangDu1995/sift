@@ -670,8 +670,8 @@ Output JSON ONLY:
 
     # --focus 预设类:补 LLM 一次性生成整套时的通用盲区(预设兜无意识盲区,自由文本兜 skill 特定方向)
     _FOCUS_PRESETS = {
-        "anti-triggers": (
-            "## Focus: Anti-trigger / negative scenarios\n\n"
+        "negative-cases": (
+            "## Focus: Negative scenarios\n\n"
             "ONLY generate evals for scenarios where this skill should **NOT** be triggered, "
             "or should **refuse / hand off / warn** — wrong input type, out-of-scope request, "
             "ambiguous trigger, precondition not met. Default generation over-indexes on "
@@ -685,18 +685,22 @@ Output JSON ONLY:
             "edge / error-coverage gap.\n\n"
         ),
     }
+    # 旧名 anti-triggers 已在公开 main 上过,保留静默 back-compat 别名(否则未知 key 会走
+    # 自由文本回退,把 "anti-triggers" 当字面方向 → 静默错行为)。新文档/测试一律用 negative-cases。
+    _FOCUS_ALIASES = {"anti-triggers": "negative-cases"}
 
     @staticmethod
     def _focus_directive(focus: str | None) -> str:
         """--focus → 注入 prompt 的定向指令段(None/空 → "",默认生成整套不变)。
 
-        预设类(anti-triggers / edge-cases)补 LLM 生成整套时的**通用盲区**(prompt 精调,
+        预设类(negative-cases / edge-cases)补 LLM 生成整套时的**通用盲区**(prompt 精调,
         强制反面 / 边界思维);其余当**自由文本**(补 skill 特定薄弱面,如"加密 PDF")。
         通常配 ``--append`` 增量补到已有 evals.json(否则覆盖式只换套题,价值低)。
         """
         if not focus or not focus.strip():
             return ""
         key = focus.strip().lower()
+        key = EvalInitGenerator._FOCUS_ALIASES.get(key, key)  # 旧名 back-compat
         if key in EvalInitGenerator._FOCUS_PRESETS:
             return EvalInitGenerator._FOCUS_PRESETS[key]
         return (

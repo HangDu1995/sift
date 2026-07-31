@@ -38,7 +38,7 @@ def init(
     ),
     focus: Optional[str] = typer.Option(
         None, "--focus",
-        help="定向生成某一类 eval 补盲区:预设 anti-triggers(反面场景)/ edge-cases(边界/错误),"
+        help="定向生成某一类 eval 补盲区:预设 negative-cases(反面场景)/ edge-cases(边界/错误),"
              "或任意自由文本(skill 特定方向)。常配 --append 增量补到已有 evals.json。",
     ),
     trigger_probes: bool = typer.Option(

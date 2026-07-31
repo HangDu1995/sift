@@ -281,12 +281,12 @@ skill-eval add pdf/ --idea "..." --dry-run                          # 预览不�
 `init` 一次性生成整套时，LLM 有个系统性盲区——**倾向正面题 / happy path**，容易漏反面场景（skill 不该被触发的请求）、边界 / 错误处理（空输入、超大、损坏、异常）。`init --focus` + `--append` 帮你定向补这些盲区，且不丢之前生成 / 手改的题：
 
 ```bash
-skill-eval init path/to/skill/ --focus anti-triggers --append   # 补反面场景,追加到已有考卷
+skill-eval init path/to/skill/ --focus negative-cases --append  # 补反面场景,追加到已有考卷
 skill-eval init path/to/skill/ --focus edge-cases --append      # 补边界/错误处理
 skill-eval init path/to/skill/ --focus "加密/损坏 PDF" --append # 自由文本:skill 特定方向
 ```
 
-- **`--focus <类>`** 决定这次生成什么：预设 `anti-triggers`（skill 不该被触发的反面场景）/ `edge-cases`（边界 / 错误处理）覆盖最常见的通用盲区；也接受**自由文本**（任意描述一个 skill 特定方向，如"加密 PDF""超大日志"），补通用类够不到的薄弱处。它往 prompt 注入一段定向指令，强制 LLM 进入反面 / 边界思维。
+- **`--focus <类>`** 决定这次生成什么：预设 `negative-cases`（skill 不该被触发的反面场景）/ `edge-cases`（边界 / 错误处理）覆盖最常见的通用盲区；也接受**自由文本**（任意描述一个 skill 特定方向，如"加密 PDF""超大日志"），补通用类够不到的薄弱处。它往 prompt 注入一段定向指令，强制 LLM 进入反面 / 边界思维。（`anti-triggers` 是旧名，仍作静默别名兼容。）
 - **`--append`** 决定怎么写：追加到已有 evals.json（新 eval 的 id 接续已有 `max+1`、不覆盖旧题）。不带 `--append` 则默认覆盖（首次出题或想重练一套时用）。
 
 **为什么用这个而不是 `add`**：`add`（3.3）是手动一道道加，得你自己想反面场景；`--focus` 让 LLM 在定向模式下批量生成一类，省掉手想的力气——尤其补的是你**没意识到的**盲区（通用预设类主动提示）。两者互补：`--focus` 批量铺面，`add` 精修单道。

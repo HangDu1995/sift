@@ -615,7 +615,7 @@ def test_merge_same_task_evals_preserves_rationale_confidence():
     assert abs(out.evals[0].confidence - 0.7) < 1e-9
 
 
-# ---- --focus:定向补 LLM 生成整套时的盲区(预设类 anti-triggers/edge-cases + 自由文本)----
+# ---- --focus:定向补 LLM 生成整套时的盲区(预设类 negative-cases/edge-cases + 自由文本)----
 
 def test_focus_directive_empty_when_no_focus():
     """无 focus → 不注入(默认生成整套,行为不变)。"""
@@ -624,12 +624,20 @@ def test_focus_directive_empty_when_no_focus():
     assert EvalInitGenerator._focus_directive("   ") == ""
 
 
-def test_focus_directive_anti_triggers_preset():
-    """--focus anti-triggers → 精调反面场景指令(强制补"skill 不该被触发"盲区)。大小写不敏感。"""
-    d = EvalInitGenerator._focus_directive("anti-triggers")
+def test_focus_directive_negative_cases_preset():
+    """--focus negative-cases → 精调反面场景指令(强制补"skill 不该被触发"盲区)。大小写不敏感。"""
+    d = EvalInitGenerator._focus_directive("negative-cases")
     assert "## Focus" in d
     assert "NOT" in d  # 强调不该触发/refuse
-    assert "## Focus" in EvalInitGenerator._focus_directive("Anti-Triggers")  # 大小写不敏感
+    assert "## Focus" in EvalInitGenerator._focus_directive("Negative-Cases")  # 大小写不敏感
+
+
+def test_focus_directive_anti_triggers_legacy_alias():
+    """旧名 anti-triggers → 仍解析成同一指令(back-compat,避免静默走自由文本回退)。"""
+    d_old = EvalInitGenerator._focus_directive("anti-triggers")
+    d_new = EvalInitGenerator._focus_directive("negative-cases")
+    assert d_old == d_new
+    assert "## Focus" in d_old and "NOT" in d_old
 
 
 def test_focus_directive_edge_cases_preset():
@@ -649,7 +657,7 @@ def test_focus_directive_free_text_fallback():
 def test_build_llm_prompt_injects_focus_directive():
     """--focus 注入到 prompt(## Output JSON 前),改变这次生成目标。"""
     gen = EvalInitGenerator()
-    prompt = gen._build_llm_prompt("s", "d", "# b\n", is_procedural=False, focus="anti-triggers")
+    prompt = gen._build_llm_prompt("s", "d", "# b\n", is_procedural=False, focus="negative-cases")
     assert "## Focus" in prompt
     assert prompt.index("## Focus") < prompt.index("## Output JSON")  # 注入在 Output JSON 前
 

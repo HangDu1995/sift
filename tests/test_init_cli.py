@@ -354,13 +354,13 @@ def test_init_threads_focus_flag_to_generator(monkeypatch, tmp_path):
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
                         lambda self, sp: _fake_evalset())
     sp = _skill_dir(tmp_path)
-    r = runner.invoke(app, ["init", str(sp), "--focus", "anti-triggers", "-o", str(tmp_path / "out")])
+    r = runner.invoke(app, ["init", str(sp), "--focus", "negative-cases", "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
-    assert captured.get("focus") == "anti-triggers", f"--focus 没透到 generator: {captured}"
+    assert captured.get("focus") == "negative-cases", f"--focus 没透到 generator: {captured}"
 
 
 def test_init_focus_directive_reaches_prompt(monkeypatch, tmp_path):
-    """--focus anti-triggers → 透到 generator → 发给 LLM 的 prompt 含反面场景指令。"""
+    """--focus negative-cases → 透到 generator → 发给 LLM 的 prompt 含反面场景指令。"""
     captured = {}
 
     def fake_call(prompt, *a, **k):
@@ -369,10 +369,10 @@ def test_init_focus_directive_reaches_prompt(monkeypatch, tmp_path):
 
     monkeypatch.setattr("skill_eval.evals.generator.call_claude", fake_call)
     sp = _skill_dir(tmp_path)
-    r = runner.invoke(app, ["init", str(sp), "--focus", "anti-triggers", "-o", str(tmp_path / "out")])
+    r = runner.invoke(app, ["init", str(sp), "--focus", "negative-cases", "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
     assert "## Focus" in captured.get("prompt", ""), "focus 指令没进 prompt"
-    assert "NOT" in captured.get("prompt", "")  # anti-triggers 精调指令
+    assert "NOT" in captured.get("prompt", "")  # negative-cases 精调指令
 
 
 def test_init_trigger_probes_appends_to_trigger_probes_section(tmp_path, monkeypatch):
