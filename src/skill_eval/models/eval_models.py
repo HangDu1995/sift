@@ -70,6 +70,15 @@ class EvalCase(BaseModel):
         return str(dst), src.name
 
 
+class TriggerProbe(BaseModel):
+    """trigger-accuracy 探题:测 cc 会不会按 description 自然触发本 skill(不评输出对错)。"""
+    id: int
+    prompt: str
+    expect_trigger: bool          # True=该触发(贡献 recall)/ False=不该触发(贡献 precision)
+    rationale: str = ""           # 为什么该/不该触发(人审抓手)
+
+
 class EvalSet(BaseModel):
     skill_name: str
     evals: list[EvalCase]
+    trigger_probes: list[TriggerProbe] = Field(default_factory=list)  # 向后兼容:旧 JSON 无 → []

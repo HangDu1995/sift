@@ -65,6 +65,7 @@ from skill_eval.models.eval_models import (
     EvalCase,
     EvalSet,
     FixtureFile,
+    TriggerProbe,
 )
 from skill_eval.models.execution_models import (
     CheckResult,
@@ -111,6 +112,7 @@ __all__ = [
     "EvalCase",
     "EvalSet",
     "FixtureFile",
+    "TriggerProbe",
     # Grading models
     "Claim",
     "EvalFeedback",

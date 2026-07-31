@@ -324,3 +324,36 @@ def test_legacy_eval_json_without_rationale_loads():
     """旧 evals.json 无 rationale/confidence → 空默认(向后兼容)。"""
     ec = EvalCase.model_validate_json('{"id":1,"prompt":"x"}')
     assert ec.rationale == "" and ec.confidence is None
+
+
+# ---------------------------------------------------------------------------
+# trigger-accuracy 探题:独立 trigger_probes 段(不进 evals,不背 scoring 空字段)
+# ---------------------------------------------------------------------------
+
+def test_trigger_probe_fields():
+    from skill_eval.models.eval_models import TriggerProbe
+    p = TriggerProbe(id=1, prompt="分析这份日志", expect_trigger=True, rationale="正中用途")
+    assert p.expect_trigger is True
+    assert p.rationale == "正中用途"
+
+
+def test_evalset_trigger_probes_default_empty():
+    es = EvalSet(skill_name="x", evals=[])
+    assert es.trigger_probes == []
+
+
+def test_evalset_backward_compat_old_json_no_trigger_probes():
+    """旧 evals.json 无 trigger_probes key → 空 list(向后兼容)。"""
+    old = {"skill_name": "x", "evals": [{"id": 1, "prompt": "p"}]}
+    es = EvalSet.model_validate(old)
+    assert es.trigger_probes == []
+    assert es.evals[0].prompt == "p"
+
+
+def test_evalset_roundtrip_with_trigger_probes():
+    from skill_eval.models.eval_models import TriggerProbe
+    es = EvalSet(skill_name="x", evals=[],
+                 trigger_probes=[TriggerProbe(id=1, prompt="p", expect_trigger=False)])
+    js = es.model_dump(mode="json")
+    es2 = EvalSet.model_validate(js)
+    assert es2.trigger_probes[0].expect_trigger is False
