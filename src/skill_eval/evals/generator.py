@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable, TYPE_CHECKING
 
 from skill_eval.errors import SkillEvalError
-from skill_eval.models import Assertion, AssertionTier, AssertionType, EvalCase, EvalSet
+from skill_eval.models import Assertion, AssertionTier, AssertionType, EvalCase, EvalSet, TriggerProbe
 from skill_eval.parser import parse_skill_md
 from skill_eval.utils import call_claude
 
@@ -224,6 +224,80 @@ class EvalInitGenerator:
             return eval_set
 
         return self.generate_template(skill_path)
+
+    # ------------------------------------------------------------------
+    # Trigger-accuracy probes — 读 description 生成 should/should-not 探题
+    # (Task 6;init --trigger-probes 在 Task 7 接线)
+    # ------------------------------------------------------------------
+
+    def generate_trigger_probes(self, skill_path: Path, num_each: int = 5) -> list[TriggerProbe]:
+        """LLM 读 description 生成 should-trigger + should-not-trigger 探题。
+
+        探题测的是 cc 会不会**光看 description** 就自然触达本 skill,故 prompt 强制 neutral
+        wording、不命名 skill(在 prompt 里点名就只是测字面匹配,不是测触发)。should-not 取
+        plausible-but-wrong(看着像但本 skill 真不该管 —— 测 false-trigger / 过宽 description)。
+        LLM 失败 → 返 [](under-delivery / trim 留 init 层处理,不在此强造)。
+        """
+        name, description, *_ = parse_skill_md(skill_path)
+        prompt = self._build_trigger_prompt(name, description, num_each)
+        try:
+            response = call_claude(prompt, model=self.model, timeout=self.timeout)
+        except RuntimeError:
+            return []
+        return self._parse_trigger_response(response)
+
+    @staticmethod
+    def _build_trigger_prompt(name: str, description: str, num_each: int) -> str:
+        return f"""You are generating trigger-accuracy probes for a Claude Code Skill.
+
+Skill name: {name}
+Skill description: {description}
+
+Generate {num_each} should-trigger prompts + {num_each} should-not-trigger prompts.
+- should-trigger (expect_trigger=true): a REAL task this skill should handle, written as a
+  user request. CRITICAL: use neutral wording — DO NOT name or hint at the skill in the prompt
+  (the test is whether the model reaches for the skill from its description alone).
+- should-not-trigger (expect_trigger=false): a task that looks plausibly related but where
+  this skill should NOT fire (tests false-trigger / over-broad description).
+
+Each probe needs a one-line rationale (why it should/shouldn't trigger).
+
+Output JSON ONLY:
+{{"skill_name": "{name}", "trigger_probes": [
+  {{"id": 1, "prompt": "...", "expect_trigger": true, "rationale": "..."}},
+  ...
+]}}
+
+## Output JSON
+"""
+
+    def _parse_trigger_response(self, response: str) -> list[TriggerProbe]:
+        """两段式解析(同 ``_parse_llm_response``):直接 ``json.loads`` 失败 → 正则抽 ``{...}``。
+
+        每条 probe 单独 try(某条畸形不影响其余);整体解析不出 → [](不造探题)。
+        """
+        try:
+            data = json.loads(response)
+        except (json.JSONDecodeError, Exception):
+            match = re.search(r"\{.*\}", response, re.DOTALL)
+            if not match:
+                return []
+            try:
+                data = json.loads(match.group())
+            except (json.JSONDecodeError, Exception):
+                return []
+        probes: list[TriggerProbe] = []
+        for i, item in enumerate(data.get("trigger_probes", []) or [], 1):
+            try:
+                probes.append(TriggerProbe(
+                    id=item.get("id", i),
+                    prompt=item.get("prompt", ""),
+                    expect_trigger=bool(item.get("expect_trigger")),
+                    rationale=item.get("rationale", ""),
+                ))
+            except Exception:
+                continue
+        return probes
 
     def _is_procedural_skill(self, content: str, skill_path: Path) -> bool:
         """Detect if skill is tool-chain/procedural (deserves L2 evals)."""

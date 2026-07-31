@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -658,3 +659,57 @@ def test_build_llm_prompt_without_focus_unchanged():
     gen = EvalInitGenerator()
     prompt = gen._build_llm_prompt("s", "d", "# b\n", is_procedural=False)
     assert "## Focus" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# trigger-accuracy 探题生成(Task 6):generate_trigger_probes
+# 读 description 生成 should/should-not trigger 探题,prompt 强制 neutral wording。
+# ---------------------------------------------------------------------------
+
+def _skill(tmp_path):
+    s = tmp_path / "my"; s.mkdir()
+    (s / "SKILL.md").write_text("---\nname: my\ndescription: does X\n---\n# body\n")
+    return s
+
+
+def test_generate_trigger_probes_parses_llm_json(tmp_path):
+    fake = ('{"skill_name":"my","trigger_probes":['
+            '{"id":1,"prompt":"做这个 skill 该做的事","expect_trigger":true,"rationale":"正中用途"},'
+            '{"id":2,"prompt":"看着像但不该管的事","expect_trigger":false,"rationale":"无关"}]}')
+    gen = EvalInitGenerator()
+    with patch("skill_eval.evals.generator.call_claude", return_value=fake):
+        probes = gen.generate_trigger_probes(_skill(tmp_path))
+    assert len(probes) == 2
+    assert probes[0].expect_trigger is True and probes[1].expect_trigger is False
+    assert probes[0].rationale  # 带溯源
+
+
+def test_trigger_probe_prompt_is_neutral_and_does_not_name_skill(tmp_path):
+    """生成 prompt 必须强制 neutral wording、不命名 skill(否则不是测触发)。"""
+    gen = EvalInitGenerator()
+    with patch("skill_eval.evals.generator.call_claude") as mc:
+        mc.return_value = '{"skill_name":"my","trigger_probes":[]}'
+        gen.generate_trigger_probes(_skill(tmp_path))
+        sent = mc.call_args.args[0]
+    assert "neutral" in sent.lower()
+    assert "do not name" in sent.lower()
+
+
+def test_generate_trigger_probes_extracts_json_embedded_in_prose(tmp_path):
+    """LLM 把 JSON 包在散文里 → 正则回退抽出。"""
+    fake = ('Here you go:\n{"skill_name":"my","trigger_probes":'
+            '[{"id":1,"prompt":"q","expect_trigger":true,"rationale":"r"}]}\nDone.')
+    gen = EvalInitGenerator()
+    with patch("skill_eval.evals.generator.call_claude", return_value=fake):
+        probes = gen.generate_trigger_probes(_skill(tmp_path))
+    assert len(probes) == 1 and probes[0].expect_trigger is True
+
+
+def test_generate_trigger_probes_empty_on_llm_failure(tmp_path):
+    """call_claude 抛异常 → 返 [](under-delivery 由 init 层处理)。"""
+    gen = EvalInitGenerator()
+    def boom(*a, **k):
+        raise RuntimeError("llm down")
+    with patch("skill_eval.evals.generator.call_claude", side_effect=boom):
+        probes = gen.generate_trigger_probes(_skill(tmp_path))
+    assert probes == []
