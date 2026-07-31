@@ -186,6 +186,104 @@ class TestRunStreaming:
             ClaudeRunner().run(prompt="x", cwd=tmp_path, timeout=2)
 
 
+class TestSpawnDirect:
+    """直接测 ``_spawn`` 的元组契约 ``(stdout, returncode, duration_ms, timed_out, stderr)``。
+
+    锁定 ``run()`` 与将来的 ``run_trigger()``(Task 3,不注入 skill body / 不关 slash)
+    共用的 spawn 机制契约。``run()`` 的 e2e 覆盖见 ``TestRunStreaming``(真 fake claude
+    走 PATH);这里用 mock Popen 直接断言 ``_spawn`` 本身 —— 快、确定性地覆盖三条路:
+    正常完成(含进度回调)/ 超时带部分输出(kill 被调,stdout 保留)/ 超时无输出。
+    """
+
+    def _make_proc(self, stdout_lines, stderr=b"", returncode=0):
+        """造 mock proc:``readline`` 逐行吐 ``stdout_lines`` 然后立即 EOF(b\"\")。"""
+        from unittest.mock import MagicMock
+        proc = MagicMock()
+        proc.stdout.readline.side_effect = list(stdout_lines) + [b""]
+        proc.stderr.read.return_value = stderr
+        proc.returncode = returncode
+        proc.wait.return_value = returncode
+        return proc
+
+    def test_normal_completion_returns_tuple(self, monkeypatch, tmp_path):
+        """正常完成:stdout 全收集、returncode 回传、timed_out=False、不 kill、stderr 透传。"""
+        from unittest.mock import MagicMock
+        import skill_eval.execution.cli_runner as mod
+
+        proc = self._make_proc(
+            [
+                b'{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"x.py"}}]}}\n',
+                b'{"type":"result","result":"done","usage":{"input_tokens":10,"output_tokens":5}}\n',
+            ],
+            stderr=b"some warn",
+        )
+        monkeypatch.setattr(mod.subprocess, "Popen", MagicMock(return_value=proc))
+
+        stdout, returncode, duration_ms, timed_out, stderr_str = (
+            ClaudeRunner()._spawn(["claude"], tmp_path, {}, timeout=10, on_progress=None)
+        )
+
+        assert timed_out is False
+        assert returncode == 0
+        assert isinstance(duration_ms, int) and duration_ms >= 0  # 实测毫秒(快测可能 ~0)
+        assert '"tool_use"' in stdout and '"result":"done"' in stdout
+        assert stderr_str == "some warn"
+        proc.kill.assert_not_called()  # 正常完成不 kill
+        proc.wait.assert_called_once()
+
+    def test_progress_callback_invoked_per_streamed_line(self, monkeypatch, tmp_path):
+        """on_progress:每条 tool_use/result 事件行经 _progress_from_event 吐一条进度。"""
+        from unittest.mock import MagicMock
+        import skill_eval.execution.cli_runner as mod
+
+        proc = self._make_proc(
+            [b'{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"a.py"}}]}}\n'],
+        )
+        monkeypatch.setattr(mod.subprocess, "Popen", MagicMock(return_value=proc))
+
+        collected = []
+        ClaudeRunner()._spawn(["claude"], tmp_path, {}, timeout=10, on_progress=collected.append)
+
+        assert collected == ["🔧 Read: a.py"]  # 一行一进度(散文行不报)
+
+    def test_timeout_with_partial_output(self, monkeypatch, tmp_path):
+        """超时但已有部分输出:timed_out=True、kill 被调一次、已读 stdout 保留、returncode 透传。"""
+        import threading
+        from unittest.mock import MagicMock
+        import skill_eval.execution.cli_runner as mod
+
+        proc = MagicMock()
+        # 第一行立刻吐,之后 readline 阻塞(模拟 cc 卡住,主线程 queue.get 会超时)
+        block = threading.Event()
+        calls = iter([
+            b'{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"x"}}]}}\n'
+        ])
+
+        def readline():
+            try:
+                return next(calls)
+            except StopIteration:
+                block.wait(30)  # reader 线程卡这,主线程 queue.get(timeout) 超时
+                return b""
+
+        proc.stdout.readline.side_effect = readline
+        proc.stderr.read.return_value = b""
+        proc.returncode = -9
+        proc.wait.return_value = -9
+        monkeypatch.setattr(mod.subprocess, "Popen", MagicMock(return_value=proc))
+
+        stdout, returncode, duration_ms, timed_out, stderr_str = (
+            ClaudeRunner()._spawn(["claude"], tmp_path, {}, timeout=1, on_progress=None)
+        )
+
+        assert timed_out is True
+        assert '"tool_use"' in stdout  # 部分输出保留(run() 据此决定 partial return vs raise)
+        assert returncode == -9
+        assert stderr_str == ""
+        proc.kill.assert_called_once()  # 超时 kill 整个 proc
+        block.set()  # 解放 reader daemon 线程,让它撞 EOF 哨兵干净退出
+
+
 class TestBuildLivePrompt:
     """build_live_prompt:抽自 ClaudeRunner.run 内联块,供 cc/opencode 两执行器共用同一份
     注入 prompt。``skill_path`` 为 None 时原样返回 task;否则与 _build_non_interactive_prompt

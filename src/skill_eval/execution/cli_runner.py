@@ -127,86 +127,30 @@ class ClaudeRunner:
 
             env = claude_cli_env()
 
-            start = time.time()
             try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    cwd=str(project_root),
-                    env=env,
+                stdout, returncode, duration_ms, timed_out, stderr = self._spawn(
+                    cmd, project_root, env, timeout, on_progress
                 )
-                # 流式读 stdout:cc --output-format stream-json 逐行出事件,边读边解析吐进度
-                # (同 audit on_progress),不再 communicate 全缓冲到结束才返回(那让长 spawn
-                # 全程无反馈)。独立线程阻塞 readline + 主线程 queue.get(timeout) 实现超时 +
-                # 流式(避开 select 对带缓冲 file 对象的对齐坑)。stderr 不流式(cc stderr
-                # 通常很小、常空),proc 退出后一次 read。
-                line_queue: queue.Queue = queue.Queue()
-
-                def _stdout_reader() -> None:
-                    for raw in iter(proc.stdout.readline, b""):
-                        line_queue.put(raw)
-                    line_queue.put(None)  # EOF 哨兵
-
-                reader = threading.Thread(target=_stdout_reader, daemon=True)
-                reader.start()
-
-                stdout_chunks: list[str] = []
-                timed_out = False
-                while True:
-                    remaining = timeout - (time.time() - start)
-                    if remaining <= 0:
-                        timed_out = True
-                        break
-                    try:
-                        raw = line_queue.get(timeout=remaining)
-                    except queue.Empty:
-                        timed_out = True
-                        break
-                    if raw is None:
-                        break  # stdout EOF → cc 结束/退出
-                    line = raw.decode("utf-8", errors="replace")
-                    stdout_chunks.append(line)
-                    if on_progress:
-                        msg = _progress_from_event(line)
-                        if msg:
-                            on_progress(msg)
-
-                if timed_out:
-                    proc.kill()
-                proc.wait()
-                try:
-                    stderr_bytes = proc.stderr.read() if proc.stderr else b""
-                except Exception:
-                    stderr_bytes = b""
-
-                stdout = "".join(stdout_chunks)
-                stderr = stderr_bytes.decode("utf-8", errors="replace")
-                returncode = proc.returncode
-
-                if timed_out:
-                    if stdout.strip():
-                        transcript, total_tokens, tool_calls, result_text, num_turns, stop_reason, tool_trace = self._parse_stream_json(stdout)
-                        if transcript or result_text or total_tokens > 0:
-                            duration_ms = int((time.time() - start) * 1000)
-                            return RunOutput(
-                                exit_code=-1,
-                                stdout=stdout,
-                                duration_ms=duration_ms,
-                                total_tokens=total_tokens,
-                                transcript=transcript,
-                                tool_calls=tool_calls,
-                                tool_trace=tool_trace,
-                                result_text=result_text,
-                                num_turns=num_turns,
-                                stop_reason=f"timed_out_after_{timeout}s",
-                            )
-                    raise ClaudeRunnerError(f"claude -p timed out after {timeout}s (killed process tree)")
-            except ClaudeRunnerError:
-                raise
             except FileNotFoundError:
                 raise ClaudeRunnerError("'claude' CLI not found — ensure it is installed and in PATH")
-            duration_ms = int((time.time() - start) * 1000)
+
+            if timed_out:
+                if stdout.strip():
+                    transcript, total_tokens, tool_calls, result_text, num_turns, stop_reason, tool_trace = self._parse_stream_json(stdout)
+                    if transcript or result_text or total_tokens > 0:
+                        return RunOutput(
+                            exit_code=-1,
+                            stdout=stdout,
+                            duration_ms=duration_ms,
+                            total_tokens=total_tokens,
+                            transcript=transcript,
+                            tool_calls=tool_calls,
+                            tool_trace=tool_trace,
+                            result_text=result_text,
+                            num_turns=num_turns,
+                            stop_reason=f"timed_out_after_{timeout}s",
+                        )
+                raise ClaudeRunnerError(f"claude -p timed out after {timeout}s (killed process tree)")
 
             transcript, total_tokens, tool_calls, result_text, num_turns, stop_reason, tool_trace = self._parse_stream_json(stdout)
 
@@ -233,6 +177,78 @@ class ClaudeRunner:
             raise ClaudeRunnerError("'claude' CLI not found — ensure it is installed and in PATH")
         except Exception as exc:
             raise ClaudeRunnerError(f"claude -p failed: {exc}")
+
+    def _spawn(
+        self,
+        cmd: list[str],
+        cwd: Path,
+        env: dict,
+        timeout: int,
+        on_progress: Callable[[str], None] | None,
+    ) -> tuple[str, int, int, bool, str]:
+        """Popen + 流式读 stdout(queue 超时)+ proc.kill()。返 ``(stdout, returncode, duration_ms, timed_out, stderr)``。
+
+        纯 spawn 机制(无 skill 注入 / 无 slash 控制 / 无 parse),``run()`` 与将来的
+        ``run_trigger()``(Task 3)共用。``FileNotFoundError``(Popen 找不到 claude)向上抛,
+        由调用方转 ``ClaudeRunnerError``。从 run() 原样抽出,行为字节不变。
+        """
+        start = time.time()
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=str(cwd),
+            env=env,
+        )
+        # 流式读 stdout:cc --output-format stream-json 逐行出事件,边读边解析吐进度
+        # (同 audit on_progress),不再 communicate 全缓冲到结束才返回(那让长 spawn
+        # 全程无反馈)。独立线程阻塞 readline + 主线程 queue.get(timeout) 实现超时 +
+        # 流式(避开 select 对带缓冲 file 对象的对齐坑)。stderr 不流式(cc stderr
+        # 通常很小、常空),proc 退出后一次 read。
+        line_queue: queue.Queue = queue.Queue()
+
+        def _stdout_reader() -> None:
+            for raw in iter(proc.stdout.readline, b""):
+                line_queue.put(raw)
+            line_queue.put(None)  # EOF 哨兵
+
+        reader = threading.Thread(target=_stdout_reader, daemon=True)
+        reader.start()
+
+        stdout_chunks: list[str] = []
+        timed_out = False
+        while True:
+            remaining = timeout - (time.time() - start)
+            if remaining <= 0:
+                timed_out = True
+                break
+            try:
+                raw = line_queue.get(timeout=remaining)
+            except queue.Empty:
+                timed_out = True
+                break
+            if raw is None:
+                break  # stdout EOF → cc 结束/退出
+            line = raw.decode("utf-8", errors="replace")
+            stdout_chunks.append(line)
+            if on_progress:
+                msg = _progress_from_event(line)
+                if msg:
+                    on_progress(msg)
+
+        if timed_out:
+            proc.kill()
+        proc.wait()
+        try:
+            stderr_bytes = proc.stderr.read() if proc.stderr else b""
+        except Exception:
+            stderr_bytes = b""
+
+        stdout = "".join(stdout_chunks)
+        stderr = stderr_bytes.decode("utf-8", errors="replace")
+        returncode = proc.returncode
+        duration_ms = int((time.time() - start) * 1000)
+        return stdout, returncode, duration_ms, timed_out, stderr
 
     def _parse_stream_json(self, stdout: str) -> tuple[str, int, dict[str, int], str, int, str, list]:
         from skill_eval.models import ToolCallRecord
