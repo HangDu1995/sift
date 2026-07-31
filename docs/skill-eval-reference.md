@@ -564,7 +564,7 @@ skill-eval batch-report batch-workspace/ --open
 
 `calibration.json` 字段：`verdict` / `result_pass` / `process_status`（ok/violated/unknown）/ `hard_violations`（每条 category+instruction_text+evidence）/ `soft_notes`（step/conditional FAIL 计数）/ `scoring_rate` / `scoring_rate_basis`（programmatic|mixed）/ `scoring_rate_programmatic` / `scoring_rate_llm` / `compliance_rate`。
 
-> 设计取舍：verdict 只押在实测高精度的 prohibition/output 硬类违规上（"高分存疑"= 值得一看的分诊，非定罪）。仅 with_skill 产（without 无 compliance）。旧版的 confidence/grade/agreement/dual-judgment 机制已移除——eval 设计**不再需要**为校准刻意"同一项同时写 assertion + expectation"。
+> 设计取舍：verdict 只押在实测高精度的 prohibition/output 硬类违规上（"高分存疑"= 值得一看的分诊，非定罪）。仅 with_skill 产（without 无 compliance）。旧版校准的 confidence/grade/agreement/dual-judgment 机制已移除——eval 设计**不再需要**为校准刻意"同一项同时写 assertion + expectation"。
 >
 > **聚合 + gate 消费**：per-run `calibration.json` 在 benchmark 聚合时聚合成顶层 `calibration_summary`（per-side：`sides: {<side>: {total, verdict_counts, high_score_suspects:[{eval,run,category,instruction_text,evidence,compliance_rate}]} | null}`；with/without 模式 without 侧 null，v1/v2 两侧都有）。gate 的 `_eval_calibration` 读它——把 HIGH_SCORE_SUSPECT 作 **soft warning**：分诊两侧、填 `GateResult.calibration` + `warnings`，**不进 axes、不改 decision/exit_code**（HIGH_SCORE_SUSPECT 是 gate 两轴的盲区：结果对→客观轴过、输出好→盲评过，但 prohibition 被违反）。SKILL_FAILED/FIXABLE 结果错归客观轴，不重复标。viewer `renderCalibrationSummary` 同源显示。
 
@@ -592,7 +592,9 @@ skill-eval batch-report batch-workspace/ --open
         {"name": "包含 json", "type": "CONTAINS_PATTERN", "params": {"pattern": "json.dump", "path": "output.py"}}
       ],
       "timeout": 600,
-      "flags": []
+      "flags": [],
+      "rationale": "对应 SKILL.md ## 步骤 第2条",
+      "confidence": 0.8
     }
   ]
 }
@@ -610,6 +612,8 @@ skill-eval batch-report batch-workspace/ --open
 | `timeout` | 否 | per-eval 超时覆盖（秒）；不设则用 `--timeout` |
 | `source_dir` | 否 | 从 skill 目录拷进工作区的源目录 |
 | `flags` | 否 | 后处理标记（如 `degraded:no-llm`）；默认空 |
+| `rationale` | 否 | 该 eval 对应 SKILL.md 哪段/哪条（`init` 自报,审阅溯源;空 → `review:no-rationale`） |
+| `confidence` | 否 | `init` 生成器自报 0-1（该题切中规则的把握）;仅 init 审阅分诊,**不入任何 gate**。同名区分:≠ audit-finding 的 confidence,也 ≠ 旧版校准已删的 confidence（grade/agreement 那套）——这是出卷阶段生成器自评 |
 
 ### grading.json
 

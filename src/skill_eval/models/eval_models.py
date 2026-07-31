@@ -40,6 +40,9 @@ class EvalCase(BaseModel):
     source_dir_as: str = ""
     timeout: int | None = None  # per-eval 覆盖全局 timeout(P1-3a);None 走 RunConfig.timeout_seconds
     flags: list[str] = Field(default_factory=list)   # 后处理标记(如 degraded/review),默认空,向后兼容
+    # 候选①:per-eval 溯源 + 把握度(init 生成器自报,审阅抓手 + 为路B instruction_refs 铺种子)
+    rationale: str = ""        # 该 eval 对应 SKILL.md 哪段/哪条(自由文本;空 → review:no-rationale flag)
+    confidence: float | None = None  # 生成器自报 0-1(是否切中所指规则);仅 review 分诊,不入任何 gate;≠ audit-finding confidence
 
     def get_name(self) -> str:
         return self.name or f"eval-{self.id}"

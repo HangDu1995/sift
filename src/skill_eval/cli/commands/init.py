@@ -94,9 +94,15 @@ def init(
             console.print("[yellow]建议重跑,或检查 claude CLI 可用性。[/yellow]")
         for e in eval_set.evals:
             level = getattr(e, 'level', 'L1')
-            console.print(f"  [{level}] {e.name}: {len(e.assertions)} assertions, "
-                          f"{len(e.expectations)} expectations"
-                          + (f", {len(e.fixtures)} fixtures" if e.fixtures else ""))
+            line = (f"  [{level}] {e.name}: {len(e.assertions)} assertions, "
+                    f"{len(e.expectations)} expectations"
+                    + (f", {len(e.fixtures)} fixtures" if e.fixtures else ""))
+            if e.confidence is not None:
+                line += f" · conf {e.confidence:.2f}"
+            console.print(line)
+            rat = (e.rationale or "").strip()
+            if rat:
+                console.print(f"      ↳ {rat[:140]}")
         for g in same_prompt_groups(eval_set):
             prompt_short = g["prompt"][:60] + ("…" if len(g["prompt"]) > 60 else "")
             flag_note = ",带 split flag" if g["split_flag"] else ""

@@ -206,6 +206,7 @@ class EvalInitGenerator:
 
         eval_set = self._parse_llm_response(response, name)
         if eval_set is not None:
+            self._flag_missing_rationale(eval_set)
             for case in eval_set.evals:
                 if case.level == "L1":
                     case.assertions = self._auto_generate_assertions(case)
@@ -617,12 +618,15 @@ class EvalInitGenerator:
             '        {"name": "mentions X", "type": "CONTAINS_PATTERN", "params": {"pattern": "keyword"}},\n'
             '        {"name": "avoids Y", "type": "NOT_CONTAINS", "params": {"pattern": "forbidden"}}\n'
             "      ],\n"
-            '      "fixtures": []\n'
+            '      "fixtures": [],\n'
+            '      "rationale": "<which SKILL.md section/bullet/quote this eval tests — SAME language as SKILL.md>",\n'
+            '      "confidence": 0.0-1.0\n'
             "    }\n"
             "  ]\n"
             "}\n"
             "```\n\n"
             "## Rules\n"
+            "- Every eval MUST include `rationale`: cite the exact SKILL.md span it tests (section / bullet / quoted rule, same language as SKILL.md). `confidence` (0.0-1.0) = how sure you are this eval cleanly tests that rule (for human review triage).\n"
             "- 5-10 evals covering the most important rules\n"
             "- NO vague expectations — every one must be objectively checkable\n"
             "- assertions use ONLY: CONTAINS_PATTERN, NOT_CONTAINS for text checks. "
@@ -662,7 +666,9 @@ class EvalInitGenerator:
             '      "assertions": [\n'
             '        {"name": "mentions correct tool", "type": "CONTAINS_PATTERN", "params": {"pattern": "keyword"}}\n'
             '      ],\n'
-            '      "fixtures": []\n'
+            '      "fixtures": [],\n'
+            '      "rationale": "<SKILL.md span this eval tests — same language as SKILL.md>",\n'
+            '      "confidence": 0.0-1.0\n'
             "    },\n"
             "    {\n"
             '      "id": 5,\n'
@@ -678,12 +684,15 @@ class EvalInitGenerator:
             "      ],\n"
             '      "fixtures": [\n'
             '        {"path": "input.pdf", "content": "(simulated file content — make it realistic but minimal)"}\n'
-            "      ]\n"
+            "      ],\n"
+            '      "rationale": "<SKILL.md span this eval tests — same language as SKILL.md>",\n'
+            '      "confidence": 0.0-1.0\n'
             "    }\n"
             "  ]\n"
             "}\n"
             "```\n\n"
             "## Rules\n"
+            "- Every eval MUST include `rationale`: cite the exact SKILL.md span it tests (section / bullet / quoted rule, same language as SKILL.md). `confidence` (0.0-1.0) = how sure you are this eval cleanly tests that rule (for human review triage).\n"
             "- Total 8-12 evals\n"
             "- L1: test rules/decisions (no fixtures). L2: test actual execution (with fixtures).\n"
             "- L2 fixtures must be REALISTIC minimal test data that Claude can actually process.\n"
@@ -715,6 +724,18 @@ class EvalInitGenerator:
                 pass
 
         return None
+
+    @staticmethod
+    def _flag_missing_rationale(eval_set: EvalSet) -> None:
+        """rationale 空 → 标 review:no-rationale(不拒;拒会掉确定性 fallback 更差)。
+
+        rationale 是审阅抓手 + 路 B instruction_ref 种子,缺了要让人看见、人工补。
+        (Waza validateTaskMetadata 无 rationale 直接拒;我们 flag 不拒——拒绝会把
+        整批 LLM eval 作废掉进 generate_template 确定性 fallback,反而更差。)
+        """
+        for ev in eval_set.evals:
+            if not (ev.rationale or "").strip():
+                ev.flags = list(dict.fromkeys([*(ev.flags or []), "review:no-rationale"]))
 
     # ------------------------------------------------------------------
     # Transcript-driven generation
@@ -804,6 +825,8 @@ class EvalInitGenerator:
                 source_dir_as=first.source_dir_as,
                 timeout=first.timeout,
                 flags=flags,
+                rationale=first.rationale,
+                confidence=first.confidence,
             ))
             next_id += 1
         return EvalSet(skill_name=eval_set.skill_name, evals=merged)
@@ -881,6 +904,7 @@ class EvalInitGenerator:
         eval_set = self._parse_llm_response(response, name)
         if eval_set is None:
             return self._transcript_fallback(name, description, digest)
+        self._flag_missing_rationale(eval_set)
         eval_set = self._enforce_manifest(eval_set, digest.manifest | skill_outputs)
         return self._merge_same_task_evals(eval_set)
 
@@ -936,7 +960,9 @@ class EvalInitGenerator:
         L.append('\n## Output JSON ONLY(EvalSet schema): {"skill_name":"...","evals":'
                  '[{"id":1,"name":"...","level":"L1|L2","prompt":"...","expected_output":"...",'
                  '"expectations":["..."],"assertions":[{"name":"...","type":"...","params":{...}}],'
-                 '"fixtures":[{"path":"...","content":"..."}]}]}\n')
+                 '"fixtures":[{"path":"...","content":"..."}],'
+                 '"rationale":"<对应 SKILL.md 哪段/哪条 或 transcript 哪个行为>","confidence":0.0-1.0}]}\n')
         L.append("生成 5-8 条 eval(L1+L2 混)。语言同 transcript。\n")
+        L.append("每条 eval 必须带 rationale(对应 SKILL.md 哪段/哪条,或 transcript 哪个真实行为)与 confidence(0-1,审阅分诊用)。\n")
         L.append(f"\n## SKILL\nname: {name}\ndescription: {description}\n\n{body[:6000]}\n")
         return "".join(L)

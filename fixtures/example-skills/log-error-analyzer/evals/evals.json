@@ -6,6 +6,8 @@
       "name": "L1-错误分类规则理解",
       "prompt": "You have an application log file to triage. Based on the log-error-analyzer skill, what steps and rules must you follow to classify errors and produce the report?",
       "level": "L1",
+      "rationale": "Rules「NEVER fabricate error codes or invent error messages that do not appear in the log」+ Steps「If a line matches no known code, mark it unclassified」",
+      "confidence": 0.9,
       "expectations": [
         "应使用 Read 工具读取输入日志",
         "应读 references/error-codes.md 查错误码表来分类",
@@ -19,6 +21,8 @@
       "name": "L2-分析日志写报告",
       "prompt": "Analyze the errors in logs/app.log and write error-report.json.",
       "level": "L2",
+      "rationale": "Rules「NEVER fabricate error codes or invent error messages that do not appear in the log」+ Steps「Classify each error — Read references/error-codes.md」",
+      "confidence": 0.9,
       "fixtures": [
         {"path": "logs/app.log", "content": "2024-01-01 10:00:00 E-AUTH-001 login failed for user alice\n2024-01-01 10:01:00 E-DB-002 database connection lost\n2024-01-01 10:02:00 some weird line with no code"}
       ],

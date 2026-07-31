@@ -223,6 +223,8 @@ skill-eval vet path/to/skill/ --skip-external # 只跑内置 2 个扫描器
 {
   "id": 1,
   "prompt": "把 data.csv 按日期排序后输出 sorted.csv",
+  "rationale": "对应 ## 步骤(按日期升序排序后产出 sorted.csv)",
+  "confidence": 0.85,
   "expected_output": "生成 sorted.csv，内容按日期升序",
   "level": "L2",
   "fixtures": ["data.csv"],
@@ -243,6 +245,7 @@ skill-eval vet path/to/skill/ --skip-external # 只跑内置 2 个扫描器
 - **expected_output 是给阅卷参考的，绝不喂给被测 Claude**。把它拼进 prompt 等于把答案泄露给考生，A/B 对照会失真。skill-eval 只在评分侧用它。
 - **fixtures** 是前置文件（如输入数据），会被拷进工作区。
 - **source_dir** 是 eval 自带的额外目录（如 skill 的 `scripts/`、被处理的样例代码），会和 fixtures 一起拷进工作区——skill 依赖、但不在 `references/` 里的东西靠它带进考场（见 4.3 的依赖拷贝坑）。
+- **rationale / confidence**（`init` 生成时自带）：每道题带 `rationale`（对应 SKILL.md 哪段/哪条,审阅溯源抓手）和 `confidence`（0-1,生成器自报把握）。`init` 终端逐条打印这俩,方便审阅"这题到底在考什么、生成器多有把握"。两者都**不入评分 gate**（confidence ≠ audit-finding 的 confidence,别混淆）;`rationale` 缺失打 `review:no-rationale` flag 提示人工补。
 - 完整字段（`timeout` / `flags` 等）见参考手册和 [evals-format.md](evals-format.md)。
 
 ### 3.2 init：自动出题
@@ -341,7 +344,7 @@ skill-eval run path/to/skill/ --changed-from v1/             # 改 skill 后只�
 
 > `--changed-from` 是**回归探针，不是代表性测量**：它只跑 LLM 判定受改动影响的子集，聚合 delta 在偏置子集上算、不代表整体质量；判定靠 LLM（偏过召：拿不准就带），不对劲可用 `--eval-ids` 覆盖。判定失败（调用/解析/返回不存在 id）报错退出；判定空集（零受影响）合法、跑空退出。周期性仍跑一次全量拿真信号。
 
-> **想要更可控的判定？** `--changed-from` 现在靠 LLM 每次自动判受影响 eval（够用，但每次重判、不保证确定）。若需要更精确、可复现的判定，一个思路是**手工给每道 eval 标注它考的是 skill 的哪条指令**（存一张 eval↔指令对应表），改 skill 后直接查表得出受影响 eval——确定性、可审计，代价是要维护这张表、改动指令后得更新标注。当前未实现，留作后续方向；自动判定不敷用时可作为演进路径。
+> **想要更可控的判定？** `--changed-from` 现在靠 LLM 每次自动判受影响 eval（够用，但每次重判、不保证确定）。若需要更精确、可复现的判定，一个思路是**手工给每道 eval 标注它考的是 skill 的哪条指令**（存一张 eval↔指令对应表），改 skill 后直接查表得出受影响 eval——确定性、可审计，但这张表只有人工逐条校对维护时才比自动判定强；若也让 LLM 自动建、没人管，准度和自动判定（同一个 LLM 判断）一样，却白搭维护复杂度——权衡后当前未采用。自动判定不敷用时再考虑。
 
 > 路径1 真任务模式（`--task`）不读 evals.json、没有 id 概念，`--eval-ids`、`--eval-samples`、`--changed-from` 对它都无效（见第十三章）。
 

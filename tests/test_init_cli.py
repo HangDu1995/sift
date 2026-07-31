@@ -226,3 +226,21 @@ def test_init_lists_programmatic_count_per_eval(monkeypatch, tmp_path):
     r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
     assert any("2 assertions, 3 expectations" in p for p in printed), printed
+
+
+def test_init_lists_rationale_per_eval(monkeypatch, tmp_path):
+    """init 逐条输出显示 rationale(审阅抓手:这题对应 SKILL.md 哪段)+ confidence。
+    断言用 rationale 内容整串,避开 tmp_path 假绿。"""
+    evalset = EvalSet(skill_name="s", evals=[EvalCase(
+        id=1, name="n", prompt="p", level="L1",
+        rationale="对应 ## 决策逻辑 bullet 2", confidence=0.85)])
+    printed = []
+    monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
+                        lambda *a, **k: printed.append(str(a)))
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp: evalset)
+    sp = _skill_dir(tmp_path)
+    r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert any("对应 ## 决策逻辑 bullet 2" in p for p in printed), printed
+    assert any("conf 0.85" in p for p in printed), printed

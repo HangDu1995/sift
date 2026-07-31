@@ -28,6 +28,8 @@
 | `files` | list[str] | — | 相关文件名 |
 | `timeout` | int\|null | — | per-eval 超时秒(覆盖全局;null 走全局) |
 | `flags` | list[str] | — | 后处理标记(`degraded:`/`review:`,见下) |
+| `rationale` | str | — | 该题对应 SKILL.md 哪段/哪条(`init` 生成器自报,审阅溯源抓手;空 → `review:no-rationale`) |
+| `confidence` | float\|null | — | `init` 生成器自报 0-1(该题切中所指规则的把握);**仅 init 审阅分诊,不入任何 gate**。同名区分:≠ audit-finding 的 confidence,也 ≠ 旧版校准已删的 confidence(grade/agreement 那套)——这是出卷阶段生成器自评 |
 | `mode` / `source_dir` / `source_dir_as` | str | — | 高级:源目录注入模式 |
 
 ## expectations vs assertions(最易混)
@@ -106,7 +108,8 @@
 ## flags(后处理标记)
 
 - `degraded:no-llm`:`init` 降级 fallback(LLM 失败,未挖到结构化信号,assertions 可能为空);`inspect` 标 ⚠。
-- `review:...`:需人工复核。
+- `review:no-rationale`:`init` 生成时该题没带 `rationale`(生成器没自报溯源);提示人工补——溯源缺失不影响判分,只影响审阅。
+- `review:...`:需人工复核(如 `review:dropped-assertions` / `review:fixture-not-in-manifest`)。
 
 ## 完整示例(log-error-analyzer,逐字段注释)
 
@@ -119,6 +122,8 @@
       "name": "L1-错误分类规则理解",               // 题名(inspect 用它定位)
       "prompt": "Based on the skill, what steps must you follow to classify errors?",  // 喂给 claude
       "level": "L1",                              // 层级
+      "rationale": "Rules「NEVER fabricate error codes or invent error messages that do not appear in the log」",  // 段名 + 逐字引 SKILL.md 原文(生成器自报,审阅溯源)
+      "confidence": 0.85,                         // 生成器自报把握(仅 init 审阅分诊,不入 gate)
       "expectations": [                           // 主观期望,LLM 判(这道题纯主观)
         "应使用 Read 工具读取输入日志",
         "应读 references/error-codes.md 查错误码表来分类",

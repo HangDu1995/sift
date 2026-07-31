@@ -301,3 +301,26 @@ def test_benchmark_data_llm_duration_roundtrip():
     d = BenchmarkData(metadata=BenchmarkMetadata(skill_name="s"), llm_duration_seconds=du)
     d2 = BenchmarkData.model_validate_json(d.model_dump_json())
     assert d2.llm_duration_seconds == du
+
+
+# ---------------------------------------------------------------------------
+# 候选①:EvalCase rationale + confidence(per-eval 溯源 + 把握度)
+# ---------------------------------------------------------------------------
+
+def test_eval_case_rationale_confidence_defaults():
+    ec = EvalCase(id=1, prompt="x")
+    assert ec.rationale == ""
+    assert ec.confidence is None
+
+
+def test_eval_case_rationale_confidence_roundtrip():
+    ec = EvalCase(id=1, prompt="x", rationale="## 步骤 bullet 2", confidence=0.8)
+    ec2 = EvalCase.model_validate_json(ec.model_dump_json())
+    assert ec2.rationale == "## 步骤 bullet 2"
+    assert abs(ec2.confidence - 0.8) < 1e-9
+
+
+def test_legacy_eval_json_without_rationale_loads():
+    """旧 evals.json 无 rationale/confidence → 空默认(向后兼容)。"""
+    ec = EvalCase.model_validate_json('{"id":1,"prompt":"x"}')
+    assert ec.rationale == "" and ec.confidence is None

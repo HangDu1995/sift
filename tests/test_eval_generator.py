@@ -490,3 +490,78 @@ def test_from_transcript_kind_target_never_invoked_raises(tmp_path: Path):
     tp = _multi_skill_transcript(tmp_path)  # 含 skillA + skillB,无 skillC
     with pytest.raises(SkillEvalError):
         gen.generate_from_transcript(sp, tp, kind="skill")
+
+
+# ---------------------------------------------------------------------------
+# 候选①:per-eval rationale + confidence(审阅抓手 + 路 B instruction_ref 种子)
+# ---------------------------------------------------------------------------
+
+def test_knowledge_prompt_asks_for_rationale_and_confidence():
+    gen = EvalInitGenerator()
+    p = gen._build_knowledge_prompt("s", "d", "# body\n")
+    assert "rationale" in p and "confidence" in p
+
+
+def test_procedural_prompt_asks_for_rationale_and_confidence():
+    gen = EvalInitGenerator()
+    p = gen._build_procedural_prompt("s", "d", "# body\n")
+    assert "rationale" in p and "confidence" in p
+
+
+def test_transcript_prompt_asks_for_rationale():
+    gen = EvalInitGenerator()
+    digest = SessionDigest(user_turns=["t"], input_files=[], produced_files=[])
+    p = gen._build_transcript_prompt("s", "d", "body", digest)
+    assert "rationale" in p
+
+
+def test_parse_llm_response_populates_rationale_confidence():
+    import json
+    gen = EvalInitGenerator()
+    resp = json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "name": "n", "level": "L1", "prompt": "p",
+         "rationale": "## 决策 bullet 1", "confidence": 0.9,
+         "expectations": [], "assertions": [], "fixtures": []}]})
+    es = gen._parse_llm_response(resp, "s")
+    assert es is not None
+    assert es.evals[0].rationale == "## 决策 bullet 1"
+    assert abs(es.evals[0].confidence - 0.9) < 1e-9
+
+
+def test_generate_with_llm_flags_missing_rationale(monkeypatch, tmp_path):
+    """LLM 没给 rationale → 标 review:no-rationale(不拒;拒会掉确定性 fallback 更差)。"""
+    import json
+    sp = tmp_path / "skill"; sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n", encoding="utf-8")
+    fake = json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "name": "n", "level": "L1", "prompt": "p",
+         "expectations": ["e"], "assertions": [], "fixtures": []}]})  # 无 rationale
+    monkeypatch.setattr("skill_eval.evals.generator.call_claude", lambda *a, **k: fake)
+    es = EvalInitGenerator().generate_with_llm(sp)
+    assert "review:no-rationale" in (es.evals[0].flags or [])
+
+
+def test_generate_with_llm_no_flag_when_rationale_present(monkeypatch, tmp_path):
+    import json
+    sp = tmp_path / "skill"; sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n", encoding="utf-8")
+    fake = json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "name": "n", "level": "L1", "prompt": "p", "rationale": "## 规则",
+         "expectations": ["e"], "assertions": [], "fixtures": []}]})
+    monkeypatch.setattr("skill_eval.evals.generator.call_claude", lambda *a, **k: fake)
+    es = EvalInitGenerator().generate_with_llm(sp)
+    assert "review:no-rationale" not in (es.evals[0].flags or [])
+
+
+def test_merge_same_task_evals_preserves_rationale_confidence():
+    """合并同 prompt eval:rationale/confidence 取 first(同 prompt 同溯源),不丢。"""
+    evals = [
+        EvalCase(id=1, prompt="同任务", level="L1", rationale="## X", confidence=0.7,
+                 expectations=["e1"]),
+        EvalCase(id=2, prompt="同任务", level="L1", rationale="## X", confidence=0.7,
+                 expectations=["e2"]),
+    ]
+    out = EvalInitGenerator._merge_same_task_evals(EvalSet(skill_name="s", evals=evals))
+    assert len(out.evals) == 1
+    assert out.evals[0].rationale == "## X"
+    assert abs(out.evals[0].confidence - 0.7) < 1e-9
