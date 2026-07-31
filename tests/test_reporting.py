@@ -198,6 +198,28 @@ class TestReportGeneratorStatic:
         assert "test-skill" in html
         assert "benchmark" in html.lower()
 
+    def test_generate_html_flat_objective_delta_warning(self, tmp_path: Path):
+        """D6 趋零解读:客观 pass_rate_programmatic |Δ|≤0.05 → 渲染「无增益」警告
+        (skill 相对 base 未带来增益,可能已被模型原生能力覆盖)。
+
+        viewer 是 JS 渲染:文案字面量 + 趋零判断函数入模板由本测断言;
+        条件逻辑(趋零显 / 显著不显 / 缺值 None 不显)由 node -e 验变换
+        (记忆 [[skill-eval-viewer-js-needs-node-check]]:render-smoke 抓不到条件盲区)。
+        客观为主(稳),主观不单独触发(漂,记忆 [[skill-eval-p2-5-multisample-ineffective]])。
+        """
+        benchmark = {
+            "metadata": {"skill_name": "s"},
+            "runs": [],
+            "run_summary": {
+                "with_skill": {"pass_rate_programmatic": {"mean": 0.6}},
+                "without_skill": {"pass_rate_programmatic": {"mean": 0.6}},
+                "delta": {"pass_rate_programmatic": "-0.02", "pass_rate_llm": "+0.01"},
+            },
+        }
+        html = ReportGenerator().generate_html(tmp_path, benchmark)
+        assert "无增益" in html          # 警告文案入模板
+        assert "isFlatDelta" in html     # 趋零判断函数(node -e 验条件逻辑)
+
     def test_generate_html_comparison_blind_position_map(self, tmp_path: Path):
         """盲评卡揭盲标注:comparator 存 pos_a_label/pos_b_label(当次 A/B 各是哪个语义侧),
         viewer 在 reasoning 上方标「Output A = with · Output B = without」——否则 reasoning 里的

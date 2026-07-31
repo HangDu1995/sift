@@ -201,6 +201,7 @@
         '<div class="info">' +
         '<span class="badge ' + statusClass + '">' + statusLabel + '</span> ' +
         'Δ <span class="' + deltaClass + '">' + deltaStr + '</span>' +
+        (s.flat_programmatic ? ' <span title="客观 Δ≈0,skill 未带来增益——先查依赖是否进工作区(常见假无增益);排除后可能已被模型原生能力覆盖,建议核查 scope" style="color:var(--accent);cursor:help;">⚠</span>' : '') +
         (s.pass_rate_with != null ? ' · ' + (s.pass_rate_with * 100).toFixed(0) + '%' : '') +
         '</div></div>';
     }
@@ -239,7 +240,7 @@
           "<td><span class='badge " + statusClass + "'>" + s.status + "</span></td>" +
           "<td>" + wr + "</td>" +
           "<td>" + wo + "</td>" +
-          "<td class='" + deltaClass + "'>" + dd + "</td>";
+          "<td class='" + deltaClass + "'>" + dd + (s.flat_programmatic ? ' <span title="客观 Δ≈0,skill 未带来增益——先查依赖是否进工作区(常见假无增益);排除后可能已被模型原生能力覆盖,建议核查 scope" style="color:var(--accent);cursor:help;">⚠</span>' : '') + "</td>";
         if (hasTime) html += "<td>" + (s.delta_time || "—") + "</td>";
         if (hasTokens) html += "<td>" + (s.delta_tokens || "—") + "</td>";
         if (hasLLMCost) {

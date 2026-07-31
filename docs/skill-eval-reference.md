@@ -683,6 +683,7 @@ skill-eval batch-report batch-workspace/ --open
 
 - 每个 config 的 `run_summary` 含 `pass_rate` / `pass_rate_programmatic` / `pass_rate_llm`（后两者可能为 `null`）+ `time_seconds` / `tokens`。
 - `delta` 全为有符号字符串（`+0.27`），= `configs[0] - configs[1]`（候选 - 基线）；双率项可能为 `null`。
+- **客观 Δ 趋零解读（D6）**：`delta.pass_rate_programmatic` 绝对值 ≤ 0.05（对齐染色阈值）= with/without 客观通过率无显著差异 = skill 相对 base 未带来增益。viewer「通过率变化」卡显 ⚠️ 警告、batch 表格/DAG delta 旁标 ⚠。**⚠ 只是「无增益」信号，不等于 skill 无用——先排查依赖目录是否进入工作区（常见假无增益，见 handbook），排除后再考虑 skill 已被模型原生能力覆盖（dead weight）、该核查 scope 或收窄**。客观为主（稳）；主观 Δ 不单独触发（漂）。
 - `comparison_summary.win_rate` = `a_wins/valid`（tie-计入）；`gate` 用 tie-排除版自行算。
 - `selection`（可选,仅 `--changed-from` 子集跑时）:`{mode, ids, affected, total}`——标识本次为受改动影响的子集跑、delta 非整体测量。
 - `llm_token_usage`:本次评测的 LLM token 用量,分四段——`scoring`(grader+comparator+analyzer 合计,带 cost/calls,calls=各子项真实调用次数之和)、`audit`(compliance/audit rollup 自 per-run compliance.json)、`executor`(被测 cc token,仅 token 数无 cost)、`total`(全加 token;cost = scoring+audit)。**executor 是被测 skill 的 token 效率指标(无 cost);scoring+audit 才是评测系统付出的 LLM 成本**。现有「令牌数」/「Δ 令牌数」(executor)语义不变,viewer 头部新增「LLM token 用量」分列(评分/遵循性/executor)+ 总计。

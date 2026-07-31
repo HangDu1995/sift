@@ -1288,11 +1288,18 @@
       // 通过率变化:双率(客观稳 / 主观漂),不再用混合 pass_rate(与 gate 客观侧、校准结果轴同源)
       const fmtD = v => { const n = parseFloat(v); return isNaN(n) ? "—" : (n > 0 ? "+" : "") + v; };
       const dClr = v => { const n = parseFloat(v); if (isNaN(n)) return "var(--text-muted)"; if (n > 0.05) return "var(--green)"; if (n < -0.05) return "var(--red)"; return "var(--text-muted)"; };
+      // D6 趋零解读:客观 Δ |≤0.05 = with/without 无显著差异 = skill 相对 base 无增益
+      // (可能已被模型原生能力覆盖,dead weight)。客观为主(稳);主观不单独触发(漂,噪声大)。
+      // NaN/None 不触发(诚实缺值,不报假趋零)。条件逻辑由 node -e 验变换。
+      const isFlatDelta = v => { const n = parseFloat(v); return !isNaN(n) && Math.abs(n) <= 0.05; };
       html += '<div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;text-align:center;">'
         + '<div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem;">通过率变化 (Δ)</div>'
         + '<div style="font-size:1.4rem;font-family:Poppins,sans-serif;font-weight:600;color:' + dClr(delta.pass_rate_programmatic) + ';">客观 ' + fmtD(delta.pass_rate_programmatic) + '</div>'
         + '<div style="font-size:1.1rem;font-family:Poppins,sans-serif;font-weight:600;color:' + dClr(delta.pass_rate_llm) + ';">主观 ' + fmtD(delta.pass_rate_llm) + '</div>'
         + '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;">客观稳 · 主观看方向</div>'
+        + (isFlatDelta(delta.pass_rate_programmatic)
+            ? '<div style="font-size:0.68rem;color:var(--accent);margin-top:0.4rem;border-top:1px dashed var(--border);padding-top:0.35rem;line-height:1.4;">⚠️ 客观 Δ≈0 · skill 未带来增益——先查依赖目录是否进工作区(常见假无增益);排除后可能 skill 已被模型原生能力覆盖,建议核查 scope</div>'
+            : '')
         + '</div>';
 
       // 盲评胜率(主观主指标,§45 与客观 delta_programmatic 并列报出;紧挨 Δ 卡 = 两主指标并列)

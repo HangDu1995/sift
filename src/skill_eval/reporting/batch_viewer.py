@@ -6,6 +6,21 @@ import json
 from pathlib import Path
 
 
+def _is_flat_delta(value) -> bool:
+    """客观 Δ |≤0.05 = with/without 趋零(skill 相对 base 无增益,可能已被模型原生能力覆盖)。
+
+    与 viewer.html 的 ``isFlatDelta`` 同逻辑/同阈值(0.05,对齐 dClr 染色边界)。
+    None/缺值/非数 → False(诚实,不报假趋零)。客观为主(稳),不在此判主观(漂)。
+    """
+    if value is None:
+        return False
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return False
+    return abs(n) <= 0.05
+
+
 def collect_batch_data(workspace: Path, manifest: dict | None = None) -> dict:
     """Collect all benchmark data from a batch workspace."""
     skills: list[dict] = []
@@ -38,8 +53,10 @@ def collect_batch_data(workspace: Path, manifest: dict | None = None) -> dict:
                 "pass_rate_with": with_skill.get("mean") if with_skill else None,
                 "pass_rate_without": without_skill.get("mean") if without_skill else None,
                 "delta": delta.get("pass_rate"),
+                "delta_programmatic": delta.get("pass_rate_programmatic"),
                 "delta_time": delta.get("time_seconds"),
                 "delta_tokens": delta.get("tokens"),
+                "flat_programmatic": _is_flat_delta(delta.get("pass_rate_programmatic")),
                 "runs": bench.get("runs", []),
                 "benchmark": bench,
                 "has_comparisons": bool(bench.get("comparisons")),

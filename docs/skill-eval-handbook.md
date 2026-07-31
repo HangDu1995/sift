@@ -370,7 +370,7 @@ skill 不是一个运行时加载的模块。skill-eval 做的是：
 
 所以"模型用了 skill"≈"模型读到了这份手册并照着做"。这也是为什么 SKILL.md 的写法直接决定效果——它就是模型看到的全部指令。
 
-> 一个常见坑：**references/ 在 skill 注入时会自动拷进工作区**（无需配置）；但 skill 依赖的 `scripts/` 等其它目录**不会**自动拷——若 SKILL.md 让模型运行 `scripts/foo.py` 或读取 references 以外的文件，得在 eval 里用 `source_dir` 把它拷进来，否则模型反复找不存在的文件直到 timeout，效果从"有增益"掉回"和不开一样"。看到 with/without delta 接近 0 时，先排查依赖目录进没进工作区。
+> 一个常见坑：**references/ 在 skill 注入时会自动拷进工作区**（无需配置）；但 skill 依赖的 `scripts/` 等其它目录**不会**自动拷——若 SKILL.md 让模型运行 `scripts/foo.py` 或读取 references 以外的文件，得在 eval 里用 `source_dir` 把它拷进来，否则模型反复找不存在的文件直到 timeout，效果从"有增益"掉回"和不开一样"。看到 with/without delta 接近 0 时，先排查依赖目录进没进工作区。（客观 Δ 趋零时 viewer/batch 会主动标 ⚠ 提醒——但 ⚠ 只是「无增益」信号，首选按这里排查依赖这一常见假阳性；排除依赖后，才考虑 skill 是否已被模型原生能力覆盖、该收窄 scope。）
 
 ### 4.5 产物目录树
 
