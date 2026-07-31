@@ -85,6 +85,10 @@ from skill_eval.models.grading_models import (
     TimingData,
     UserNotes,
 )
+from skill_eval.models.trigger_report import (
+    ProbeResult,
+    TriggerReport,
+)
 
 __all__ = [
     # Audit models
@@ -163,4 +167,7 @@ __all__ = [
     "SecurityReport",
     "SkillEntry",
     "SkillsManifest",
+    # Trigger-accuracy report
+    "ProbeResult",
+    "TriggerReport",
 ]

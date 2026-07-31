@@ -357,3 +357,28 @@ def test_evalset_roundtrip_with_trigger_probes():
     js = es.model_dump(mode="json")
     es2 = EvalSet.model_validate(js)
     assert es2.trigger_probes[0].expect_trigger is False
+
+
+# ---------------------------------------------------------------------------
+# trigger-accuracy 报告:TriggerReport / ProbeResult(写 trigger-report.json)
+# ---------------------------------------------------------------------------
+
+def test_trigger_report_roundtrip():
+    from skill_eval.models.trigger_report import TriggerReport, ProbeResult
+    r = TriggerReport(skill_name="x", description_hash="abc", runs=1,
+                      recall=0.5, false_trigger_rate=0.0, n_should_trigger=2, n_should_not=1,
+                      unresolved=0, token_usage={"total_tokens": 100},
+                      probes=[ProbeResult(id=1, expect_trigger=True, trigger_rate=1.0, verdict="PASS")])
+    r2 = TriggerReport.model_validate_json(r.model_dump_json())
+    assert r2.recall == 0.5 and r2.description_hash == "abc"
+    assert r2.probes[0].verdict == "PASS" and r2.probes[0].transcript_path == ""
+
+
+def test_trigger_report_optional_rates_can_be_none():
+    """recall / false_trigger_rate 可为 None(某方向无探题 → N/A)。"""
+    from skill_eval.models.trigger_report import TriggerReport
+    r = TriggerReport(skill_name="x", description_hash="h", runs=1,
+                      recall=None, false_trigger_rate=None,
+                      n_should_trigger=0, n_should_not=0, probes=[])
+    r2 = TriggerReport.model_validate_json(r.model_dump_json())
+    assert r2.recall is None and r2.false_trigger_rate is None
