@@ -76,6 +76,42 @@ class TestEvalLoader:
         with pytest.raises(EvalValidationError, match="prompt"):
             loader.load(p)
 
+    def test_load_preserves_trigger_probes(self, tmp_path: Path):
+        """loader 须透传 trigger_probes 段(否则 inspect/freeze 等走 loader 的路径看不到)。"""
+        p = tmp_path / "evals.json"
+        p.write_text(json.dumps({
+            "skill_name": "test",
+            "evals": [{"id": 1, "prompt": "a"}],
+            "trigger_probes": [
+                {"id": 1, "prompt": "q1", "expect_trigger": True, "rationale": "r"},
+                {"id": 2, "prompt": "q2", "expect_trigger": False, "rationale": ""},
+            ],
+        }), encoding="utf-8")
+        eval_set = EvalLoader().load(p)
+        assert len(eval_set.trigger_probes) == 2
+        assert eval_set.trigger_probes[0].expect_trigger is True
+        assert eval_set.trigger_probes[1].expect_trigger is False
+
+    def test_load_trigger_probe_missing_field_rejected(self, tmp_path: Path):
+        p = tmp_path / "evals.json"
+        p.write_text(json.dumps({
+            "skill_name": "test",
+            "evals": [{"id": 1, "prompt": "a"}],
+            "trigger_probes": [{"id": 1, "prompt": "q"}],  # 缺 expect_trigger
+        }), encoding="utf-8")
+        loader = EvalLoader()
+        with pytest.raises(EvalValidationError, match="expect_trigger"):
+            loader.load(p)
+
+    def test_load_no_trigger_probes_defaults_empty(self, tmp_path: Path):
+        """旧 evals.json 无 trigger_probes 段 → [](向后兼容)。"""
+        p = tmp_path / "evals.json"
+        p.write_text(json.dumps({
+            "skill_name": "test",
+            "evals": [{"id": 1, "prompt": "a"}],
+        }), encoding="utf-8")
+        assert EvalLoader().load(p).trigger_probes == []
+
 
 class TestCalculateStats:
     def test_empty(self):

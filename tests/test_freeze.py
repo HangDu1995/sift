@@ -68,3 +68,18 @@ def test_skill_name_mismatch_detected(tmp_path):
     baseline = tmp_path / "baseline.json"
     assert skill_name_mismatch(baseline, "skill-B") is not None  # 不等 → 警告
     assert skill_name_mismatch(baseline, "skill-A") is None       # 相等 → 不警告
+
+
+def test_freeze_preserves_trigger_probes(tmp_path):
+    """freeze 是字节拷贝(copy2)→ trigger_probes 段原样钉进 baseline,不丢。"""
+    from skill_eval.models import TriggerProbe
+    es = EvalSet(skill_name="sk", evals=[EvalCase(id=1, prompt="p", expectations=["e"])],
+                 trigger_probes=[TriggerProbe(id=1, prompt="q", expect_trigger=True),
+                                 TriggerProbe(id=2, prompt="r", expect_trigger=False)])
+    src = tmp_path / "evals.json"
+    src.write_text(json.dumps(es.model_dump(mode="json"), ensure_ascii=False), encoding="utf-8")
+    baseline, _meta = freeze_baseline(src, name="baseline")
+    data = json.loads(baseline.read_text(encoding="utf-8"))
+    assert len(data["trigger_probes"]) == 2
+    assert data["trigger_probes"][0]["expect_trigger"] is True
+    assert data["trigger_probes"][1]["expect_trigger"] is False

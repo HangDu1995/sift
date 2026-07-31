@@ -45,6 +45,11 @@ def inspect(
     console.print(f"  完整性: {comp['evals']} evals · {comp['assertions']} 断言 · {comp['expectations']} expectations · 层级 {dict(comp['levels'])}")
     console.print(f"  稳定性: 程序化 {stab['programmatic']} ({ratio_str}) / LLM {stab['llm']} · expectations {stab['expectations']}(全 LLM 判)")
 
+    if eval_set.trigger_probes:
+        n_should = sum(1 for p in eval_set.trigger_probes if p.expect_trigger)
+        console.print(f"  trigger 探题: {len(eval_set.trigger_probes)} 道"
+                      f"(should-trigger {n_should} / should-not {len(eval_set.trigger_probes) - n_should})")
+
     flags = []
     if prob["degraded"]:
         flags.append(f"degraded: {', '.join(prob['degraded'])}")

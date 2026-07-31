@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from skill_eval.errors import EvalValidationError
-from skill_eval.models import EvalCase, EvalSet
+from skill_eval.models import EvalCase, EvalSet, TriggerProbe
 
 
 class EvalLoader:
@@ -44,4 +44,15 @@ class EvalLoader:
             seen_ids.add(eid)
             cases.append(EvalCase(**raw))
 
-        return EvalSet(skill_name=data["skill_name"], evals=cases)
+        # trigger_probes 段(可选,纯 scoring 卷无此段 → []):逐条校验后透传,
+        # 否则 loader 重建 EvalSet 时会丢掉它(inspect/freeze 等走 loader 的路径就看不到)。
+        trigger_probes: list[TriggerProbe] = []
+        for raw_tp in data.get("trigger_probes", []):
+            for req in ("id", "prompt", "expect_trigger"):
+                if req not in raw_tp:
+                    raise EvalValidationError(
+                        f"Trigger probe {raw_tp.get('id', '?')}: missing '{req}'")
+            trigger_probes.append(TriggerProbe(**raw_tp))
+
+        return EvalSet(skill_name=data["skill_name"], evals=cases,
+                       trigger_probes=trigger_probes)
