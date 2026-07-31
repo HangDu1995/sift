@@ -248,6 +248,7 @@
             (derivedCount ? ' · <span class="derived">↺ ' + derivedCount + ' 条由 transcript 反推</span>' : '') +
             (refineDropped ? ' · <span style="color:var(--accent);" title="LLM 精筛砍掉 extractor 误抽的示例/占位伪指令">↺ refine 砍 ' + refineDropped + ' 条伪指令</span>' : '') +
             (tu.calls ? ' · <span class="badge-tokens" title="本次 audit 所有 LLM 判定调用(refine + 条件/禁令/步骤判官 × 批)的 token 用量合计">⚙ tokens in ' + (tu.input_tokens||0) + ' / out ' + (tu.output_tokens||0) + ' · $' + Number(tu.total_cost_usd||0).toFixed(4) + ' · ' + tu.calls + ' calls</span>' : '') +
+            (EMBEDDED_DATA.duration_seconds ? ' · <span class="badge-tokens" title="audit 墙钟(audit 头尾 perf_counter)">⏱ ' + Number(EMBEDDED_DATA.duration_seconds).toFixed(0) + 's</span>' : '') +
           '</div>' +
         '</div>');
 

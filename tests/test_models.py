@@ -266,3 +266,38 @@ def test_timing_data_grader_token_usage_field():
     assert t.grader_token_usage == {}
     t2 = TimingData(total_tokens=5, grader_token_usage={"input_tokens": 9})
     assert t2.grader_token_usage == {"input_tokens": 9}
+
+
+def test_timing_data_grader_duration_field():
+    from skill_eval.models.grading_models import TimingData
+    t = TimingData()
+    assert t.grader_duration_seconds == 0.0
+    t2 = TimingData(grader_duration_seconds=2.5)
+    assert t2.grader_duration_seconds == 2.5
+    # legacy:旧 json 无该字段 → 0.0
+    assert TimingData.model_validate_json('{"total_tokens":5}').grader_duration_seconds == 0.0
+
+
+def test_audit_report_duration_seconds_field():
+    from skill_eval.models.audit_models import AuditReport
+    r2 = AuditReport(skill_name="s", transcripts=[], summary={}, findings=[], duration_seconds=87.0)
+    assert r2.duration_seconds == 87.0
+    assert AuditReport.model_validate_json(r2.model_dump_json()).duration_seconds == 87.0
+    # legacy:旧 report 无该字段 → 0.0(向后兼容)
+    d = r2.model_dump(mode="json")
+    d.pop("duration_seconds", None)
+    assert AuditReport.model_validate(d).duration_seconds == 0.0
+
+
+def test_benchmark_data_llm_duration_defaults_empty():
+    from skill_eval.models import BenchmarkData, BenchmarkMetadata
+    d = BenchmarkData(metadata=BenchmarkMetadata(skill_name="s"))
+    assert d.llm_duration_seconds == {}
+
+
+def test_benchmark_data_llm_duration_roundtrip():
+    from skill_eval.models import BenchmarkData, BenchmarkMetadata
+    du = {"scoring": 1.5, "audit": 3.0, "executor": 0.5, "total": 10.0}
+    d = BenchmarkData(metadata=BenchmarkMetadata(skill_name="s"), llm_duration_seconds=du)
+    d2 = BenchmarkData.model_validate_json(d.model_dump_json())
+    assert d2.llm_duration_seconds == du

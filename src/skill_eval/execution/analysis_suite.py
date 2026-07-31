@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import time
 from pathlib import Path
 from skill_eval.models import AnalysisResult, BenchmarkData
 
@@ -18,7 +19,7 @@ def _load_transcript(run_dir: Path) -> str:
     return ""
 
 
-def run_comparison_analysis(aggregator, iteration_dir: Path, benchmark: BenchmarkData, analyzer, on_usage=None) -> AnalysisResult | None:
+def run_comparison_analysis(aggregator, iteration_dir: Path, benchmark: BenchmarkData, analyzer, on_usage=None, on_duration=None) -> AnalysisResult | None:
     from skill_eval.parser import parse_skill_md
 
     skill_path = Path(benchmark.metadata.skill_path) if benchmark.metadata.skill_path else None
@@ -88,7 +89,8 @@ def run_comparison_analysis(aggregator, iteration_dir: Path, benchmark: Benchmar
         f"以下为 {winner_label} 侧赢的一个代表性比较判词:\n{rep_reasoning}"
     )
 
-    return analyzer.analyze_comparison(
+    _t0 = time.perf_counter()
+    result = analyzer.analyze_comparison(
         winner=winner_label,
         winner_skill=winner_skill,
         loser_skill=loser_skill,
@@ -98,9 +100,12 @@ def run_comparison_analysis(aggregator, iteration_dir: Path, benchmark: Benchmar
         focus_skill=skill_content,   # 改进对象:恒 = 被测/candidate skill(不随 winner 侧变)
         on_usage=on_usage,
     )
+    if on_duration:
+        on_duration(time.perf_counter() - _t0)
+    return result
 
 
-def run_analysis(aggregator, iteration_dir: Path, benchmark: BenchmarkData, on_usage=None) -> tuple:
+def run_analysis(aggregator, iteration_dir: Path, benchmark: BenchmarkData, on_usage=None, on_duration=None) -> tuple:
     import sys
     from skill_eval.scoring.analyzer import PosthocAnalyzer
 
@@ -116,7 +121,10 @@ def run_analysis(aggregator, iteration_dir: Path, benchmark: BenchmarkData, on_u
     notes = None
     for attempt in range(3):
         try:
+            _t0 = time.perf_counter()
             notes = analyzer.analyze_benchmark(benchmark_json, benchmark.metadata.skill_name, on_usage=on_usage)
+            if on_duration:
+                on_duration(time.perf_counter() - _t0)
             break
         except Exception:
             if attempt < 2:
@@ -130,7 +138,7 @@ def run_analysis(aggregator, iteration_dir: Path, benchmark: BenchmarkData, on_u
     if benchmark.comparisons:
         for attempt in range(3):
             try:
-                comp_analysis = run_comparison_analysis(aggregator, iteration_dir, benchmark, analyzer, on_usage=on_usage)
+                comp_analysis = run_comparison_analysis(aggregator, iteration_dir, benchmark, analyzer, on_usage=on_usage, on_duration=on_duration)
                 break
             except Exception:
                 if attempt < 2:

@@ -325,6 +325,8 @@ def audit(
             + (f" cache_read={cache_read}" if cache_read else "")
             + f" [dim]· cost=${tu.get('total_cost_usd', 0):.4f} · {tu['calls']} call(s)[/dim]"
         )
+    if report.duration_seconds:
+        console.print(f"[dim]耗时:[/dim] {report.duration_seconds:.0f}s")
 
     if report.warnings:
         console.print("[yellow]Warnings:[/yellow]")

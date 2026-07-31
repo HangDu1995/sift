@@ -14,6 +14,7 @@ class TimingData(BaseModel):
     duration_ms: int = 0
     total_duration_seconds: float = 0.0
     grader_token_usage: dict[str, Any] = Field(default_factory=dict)  # Phase 2: per-run grader LLM token
+    grader_duration_seconds: float = 0.0  # Phase 2.5: per-run grader 耗时(累加 grade 调用 perf_counter)
 
 
 class ExecutionMetrics(BaseModel):

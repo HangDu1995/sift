@@ -142,3 +142,21 @@ class TokenUsageAccumulator:
             if not any(self._counts.values()):
                 return {}
             return dict(self._counts)
+
+
+class DurationAccumulator:
+    """线程安全累加时长(秒)。rollup 各类调用的 perf_counter 时长(scoring/audit)。
+
+    与 TokenUsageAccumulator 不同:time 是墙钟、单值,只累加秒数(无 calls/cost 多字段)。
+    """
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._total = 0.0
+
+    def add(self, seconds: float | None) -> None:
+        with self._lock:
+            self._total += seconds or 0.0
+
+    def snapshot(self) -> float:
+        with self._lock:
+            return self._total

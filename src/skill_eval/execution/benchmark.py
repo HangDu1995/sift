@@ -22,7 +22,7 @@ from skill_eval.models import (
 from skill_eval.parser import parse_skill_md
 from skill_eval.execution.comparison_suite import run_comparisons
 from skill_eval.execution.analysis_suite import run_analysis
-from skill_eval.utils import TokenUsageAccumulator
+from skill_eval.utils import TokenUsageAccumulator, DurationAccumulator
 from skill_eval.execution.run_paths import index_runs, is_nested
 
 
@@ -109,7 +109,7 @@ class BenchmarkAggregator:
         # 盲比较只服务于主观题;programmatic-only(enable_llm=False)时 run_comparisons 跳过
         self.enable_llm = enable_llm
 
-    def aggregate(self, iteration_dir: Path, skill_path: Path = Path(), sides: list | None = None) -> BenchmarkData:
+    def aggregate(self, iteration_dir: Path, skill_path: Path = Path(), sides: list | None = None, wall_duration: float | None = None) -> BenchmarkData:
         import sys
         sys.stderr.write("aggregate: reading run results...\n")
         sys.stderr.flush()
@@ -128,6 +128,11 @@ class BenchmarkAggregator:
         grader_acc = TokenUsageAccumulator()    # per-run grader(timing.json 汇总)
         audit_acc = TokenUsageAccumulator()     # per-run compliance.json rollup
         executor_total = 0                      # per-run executor token(timing.json total_tokens)
+        # Phase 2.5: 耗时累加(分列=各类调用时长加总;total=墙钟,独立测,见末尾 rollup)
+        scoring_dur = DurationAccumulator()     # comparator + analyzer(:389/:415 回灌)
+        grader_dur = DurationAccumulator()      # per-run grader(timing.json grader_duration_seconds)
+        audit_dur = DurationAccumulator()       # per-run compliance.json duration_seconds
+        executor_dur = 0.0                      # per-run executor 时长(timing total_duration_seconds)
 
         for config_dir in sorted(iteration_dir.iterdir()):
             if not config_dir.is_dir():
@@ -178,22 +183,26 @@ class BenchmarkAggregator:
                     time_seconds = td.get("total_duration_seconds", 0.0)
                     tokens = td.get("total_tokens", tokens)
 
-                # Phase 2: per-run token 累加
+                # Phase 2: per-run token 累加 / Phase 2.5: per-run 时长累加
                 executor_total += tokens
+                executor_dur += time_seconds  # timing.total_duration_seconds(:178 已读)
                 if timing_path.exists():
                     try:
                         _tj = json.loads(timing_path.read_text(encoding="utf-8"))
                         gtu = _tj.get("grader_token_usage") or {}
                         if gtu:
                             grader_acc.add(gtu, count=gtu.get("calls", 1))
+                        grader_dur.add(_tj.get("grader_duration_seconds") or 0.0)
                     except Exception:
                         pass
                 comp_path = run_dir / "compliance.json"
                 if comp_path.exists():
                     try:
-                        ctu = json.loads(comp_path.read_text(encoding="utf-8")).get("token_usage") or {}
+                        _cj = json.loads(comp_path.read_text(encoding="utf-8"))
+                        ctu = _cj.get("token_usage") or {}
                         if ctu:
                             audit_acc.add(ctu, count=ctu.get("calls", 1))
+                        audit_dur.add(_cj.get("duration_seconds") or 0.0)
                     except Exception:
                         pass
 
@@ -386,7 +395,7 @@ class BenchmarkAggregator:
             main_benchmark = main_benchmark.model_copy(update={"notes": checkpoints_data})
 
         try:
-            comparisons = run_comparisons(self, iteration_dir, sides=sides, on_usage=scoring_acc.add)
+            comparisons = run_comparisons(self, iteration_dir, sides=sides, on_usage=scoring_acc.add, on_duration=scoring_dur.add)
             if comparisons:
                 # label 从 sides 透到 ComparisonSummary(默认 with/without)
                 label_a = sides[0][2] if sides else "with"
@@ -412,7 +421,7 @@ class BenchmarkAggregator:
             print(f"Warning: calibration summary failed ({exc}), skipping", file=__import__("sys").stderr)
 
         try:
-            analysis_notes, analysis_result = run_analysis(self, iteration_dir, main_benchmark, on_usage=scoring_acc.add)
+            analysis_notes, analysis_result = run_analysis(self, iteration_dir, main_benchmark, on_usage=scoring_acc.add, on_duration=scoring_dur.add)
             if analysis_notes:
                 existing = list(main_benchmark.notes or [])
                 existing.extend(analysis_notes)
@@ -447,7 +456,14 @@ class BenchmarkAggregator:
                 "audit": audit_snapshot,
                 "executor": {"input_tokens": executor_total, "output_tokens": 0, "calls": 0},
                 "total": total_acc.snapshot(),
-            }
+            },
+            "llm_duration_seconds": {
+                # 分列=各类调用时长加总(可 ≥ 墙钟,并行所致);total=墙钟,独立测,不由分列加
+                "scoring": round(scoring_dur.snapshot() + grader_dur.snapshot(), 3),
+                "audit": round(audit_dur.snapshot(), 3),
+                "executor": round(executor_dur, 3),
+                "total": round(wall_duration or 0.0, 3),
+            },
         })
 
         return main_benchmark

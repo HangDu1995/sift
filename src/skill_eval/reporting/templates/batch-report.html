@@ -210,6 +210,7 @@
       const hasTime = allSkills.some(s => s.delta_time != null);
       const hasTokens = allSkills.some(s => s.delta_tokens != null);
       const hasLLMCost = allSkills.some(s => s.benchmark && s.benchmark.llm_token_usage && s.benchmark.llm_token_usage.total && s.benchmark.llm_token_usage.total.total_cost_usd);
+      const hasDuration = allSkills.some(s => s.benchmark && s.benchmark.llm_duration_seconds && s.benchmark.llm_duration_seconds.total);
       const hasComps = allSkills.some(s => s.has_comparisons);
       const hasAnalysis = allSkills.some(s => s.has_analysis);
 
@@ -217,6 +218,7 @@
       if (hasTime) html += "<th>Δ 耗时</th>";
       if (hasTokens) html += "<th>Δ 令牌数</th>";
       if (hasLLMCost) html += "<th>评测 LLM 成本</th>";
+      if (hasDuration) html += "<th>总时长</th>";
       if (hasComps) html += "<th>对比</th>";
       if (hasAnalysis) html += "<th>分析</th>";
       html += "<th>过拟合</th>";
@@ -244,6 +246,10 @@
           var _tu = (s.benchmark && s.benchmark.llm_token_usage) || {};
           var _tot = _tu.total || {};
           html += "<td style='font-size:0.75rem;color:var(--text-muted);'>" + (_tot.total_cost_usd ? "$" + Number(_tot.total_cost_usd).toFixed(4) : "—") + "</td>";
+        }
+        if (hasDuration) {
+          var _du = (s.benchmark && s.benchmark.llm_duration_seconds) || {};
+          html += "<td style='font-size:0.75rem;color:var(--text-muted);'>" + (_du.total ? Number(_du.total).toFixed(0) + 's' : "—") + "</td>";
         }
         if (hasComps) html += "<td>" + (s.has_comparisons ? "✓" : "—") + "</td>";
         if (hasAnalysis) html += "<td>" + (s.has_analysis ? "✓" : "—") + "</td>";

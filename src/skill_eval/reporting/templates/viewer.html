@@ -1537,6 +1537,20 @@
         html += "</tbody></table></div>";
       }
 
+      // ── 耗时(分列=各类调用时长加总;total=墙钟,独立测,不对账分列)──
+      var du = data.llm_duration_seconds || {};
+      if (du.total || du.scoring || du.audit || du.executor) {
+        function _dur(s) { return (typeof s === 'number' && s > 0) ? s.toFixed(1) + 's' : '—'; }
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">耗时</div>';
+        html += '<table class="benchmark-table"><tbody>';
+        if (du.scoring) html += "<tr><td><strong>⏱ 评分耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(grader+comparator+analyzer 累计)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.scoring) + "</td></tr>";
+        if (du.audit) html += "<tr><td><strong>⏱ 遵循性耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(audit)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.audit) + "</td></tr>";
+        if (du.executor) html += "<tr><td><strong>执行耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(executor 累计)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.executor) + "</td></tr>";
+        if (du.total) html += "<tr><td><strong>总计耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(墙钟·真实等待)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.total) + "</td></tr>";
+        html += "</tbody></table></div>";
+      }
+
       // ── Compliance aggregate(过程层,插盲评前:客观结果 → 过程 → 主观结果)──
       html += renderComplianceAggregate();
 

@@ -94,6 +94,7 @@ class BenchmarkData(BaseModel):
     calibration_summary: CalibrationSummary | None = None
     selection: dict[str, Any] | None = None  # 选题信息(如 changed-from 子集跑:mode/ids/affected/total)
     llm_token_usage: dict[str, Any] = Field(default_factory=dict)  # Phase 2: {scoring, audit, executor, total}
+    llm_duration_seconds: dict[str, Any] = Field(default_factory=dict)  # Phase 2.5: {scoring, audit, executor, total};total=墙钟(非分列和)
 
 
 class InstructionCheck(BaseModel):

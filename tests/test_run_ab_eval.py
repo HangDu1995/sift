@@ -25,7 +25,7 @@ def _wire(tmp_path: Path, captured: dict):
         captured["runner_sides"] = sides
         return iter_dir
 
-    def fake_aggregate(self, iteration_dir, skill_path=Path(), sides=None):
+    def fake_aggregate(self, iteration_dir, skill_path=Path(), sides=None, **kwargs):
         captured["agg_sides"] = sides
         return BenchmarkData(metadata=BenchmarkMetadata(skill_name="sk"))
 
@@ -187,7 +187,7 @@ def test_run_does_not_exit_on_negative_delta(tmp_path):
                      "delta": {"pass_rate": "-0.40", "pass_rate_programmatic": "-0.40"}},
     )
 
-    def fake_aggregate(self, iteration_dir, skill_path=Path(), sides=None):
+    def fake_aggregate(self, iteration_dir, skill_path=Path(), sides=None, **kwargs):
         return neg_bench
 
     with patch("skill_eval.execution.runner.ABTestRunner.run_ab_test", fake_run_ab_test), \

@@ -1130,6 +1130,20 @@ class TestAuditAggregate:
         report = TranscriptAuditor().audit("myskill", "use Bash", [])
         assert report.token_usage == {}
 
+    def test_audit_populates_duration_seconds(self, tmp_path, monkeypatch) -> None:
+        """audit() 头尾 perf_counter → duration_seconds > 0(audit 跑过即有正墙钟,不依赖判官是否调用)。"""
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+        foo = tmp_path / "foo.md"
+        tp = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records(str(foo)))
+        report = TranscriptAuditor().audit("myskill", "use Bash", [tp])
+        assert report.duration_seconds > 0  # 实现前 default 0.0 → fail;实现后 audit 墙钟 >0
+
+    def test_audit_duration_seconds_nonneg_when_no_llm(self, tmp_path, monkeypatch) -> None:
+        """空 transcripts → audit 仍跑过,duration_seconds 非负(墙钟存在,即便无判官)。"""
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+        report = TranscriptAuditor().audit("myskill", "use Bash", [])
+        assert report.duration_seconds >= 0.0
+
     def test_audit_token_usage_survives_model_dump_roundtrip(
         self, tmp_path, monkeypatch
     ) -> None:

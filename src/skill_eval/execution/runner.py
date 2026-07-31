@@ -17,7 +17,7 @@ import threading
 from skill_eval.errors import ClaudeRunnerError, SkillEvalError
 from skill_eval.execution.cli_runner import ClaudeRunner, find_project_root  # noqa: F401 — re-exported for backward compat
 from skill_eval.execution.anomaly import detect_outliers, detect_timeout  # noqa: F401 — re-exported for backward compat
-from skill_eval.utils import TokenUsageAccumulator
+from skill_eval.utils import TokenUsageAccumulator, DurationAccumulator
 from skill_eval.models import (
     AssertionVerdict,
     EvalCase,
@@ -465,6 +465,7 @@ class ABTestRunner:
 
             try:
                 grader_acc = TokenUsageAccumulator()
+                grader_dur = DurationAccumulator()
 
                 self._emit_progress(
                     eval_case.get_name(), config_name,
@@ -479,6 +480,7 @@ class ABTestRunner:
                     num_turns=run_output.num_turns,
                     stop_reason=run_output.stop_reason,
                     on_usage=grader_acc.add,
+                    on_duration=grader_dur.add,
                 )
 
                 timing = TimingData(
@@ -486,6 +488,7 @@ class ABTestRunner:
                     duration_ms=run_output.duration_ms,
                     total_duration_seconds=run_output.duration_ms / 1000.0,
                     grader_token_usage=grader_acc.snapshot(),
+                    grader_duration_seconds=grader_dur.snapshot(),
                 )
                 (config_dir / "timing.json").write_text(timing.model_dump_json(indent=2), encoding="utf-8")
 
@@ -648,6 +651,7 @@ class ABTestRunner:
         num_turns: int = 0,
         stop_reason: str = "",
         on_usage=None,
+        on_duration=None,
     ) -> tuple[list, list[dict]]:
         prog_checker = None
         if self.scoring_config.enable_programmatic:
@@ -679,17 +683,23 @@ class ABTestRunner:
                 grader = LLMGrader(model=self.scoring_config.llm_model, timeout=self.scoring_config.llm_timeout)
 
                 if eval_case.expectations:
+                    _t0 = time.perf_counter()
                     llm_grading = grader.grade(
                         eval_case=eval_case,
                         transcript=transcript,
                         output_dir=outputs_dir,
                         on_usage=on_usage,
                     )
+                    if on_duration:
+                        on_duration(time.perf_counter() - _t0)
                     llm_results = llm_grading.expectations if llm_grading else []
 
                 tier3_assertions = [a for a in eval_case.assertions if a.tier and a.tier.value == "TIER3"]
                 if tier3_assertions:
+                    _t0 = time.perf_counter()
                     tier3_results = grader.grade_tier3(tier3_assertions, transcript, outputs_dir, on_usage=on_usage)
+                    if on_duration:
+                        on_duration(time.perf_counter() - _t0)
 
             merged = prog_results[:]
             merged.extend(llm_results)

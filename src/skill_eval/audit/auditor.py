@@ -357,6 +357,7 @@ class TranscriptAuditor:
             ``AuditReport``:findings 为所有**有效** transcript 的平铺结果;坏/空 transcript
             不进 findings,而是带文件名进 warnings。
         """
+        _wall_start = time.perf_counter()  # audit 墙钟(头尾测;判官 token 在 token_usage)
         instructions = InstructionExtractor().extract(skill_body)
         warnings: list[str] = []
         refine_dropped_count = 0
@@ -540,6 +541,7 @@ class TranscriptAuditor:
             warnings=warnings,
             refine_dropped_count=refine_dropped_count,
             token_usage=acc.snapshot(),
+            duration_seconds=time.perf_counter() - _wall_start,
         )
 
     def _judge_conditional(

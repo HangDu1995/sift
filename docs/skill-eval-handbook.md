@@ -928,7 +928,7 @@ spawn claude -p
 | `expectations[]` | 每条 expectation / assertion 的判定（见下表） |
 | `summary` | 汇总：`passed`/`failed`/`total`/`pass_rate` + 双率分项 |
 | `execution_metrics` | 工具调用统计：`tool_calls`{工具名→次数}、`total_tool_calls`、`total_steps`、`files_created[]`、`errors_encountered`、`output_chars`、`transcript_chars` |
-| `timing` | `total_tokens` / `duration_ms` / `total_duration_seconds` / `grader_token_usage`（Phase 2：per-run grader LLM token，rollup 进 `benchmark.json.llm_token_usage.scoring`）|
+| `timing` | `total_tokens` / `duration_ms` / `total_duration_seconds` / `grader_token_usage`（Phase 2：per-run grader LLM token，rollup 进 `benchmark.json.llm_token_usage.scoring`）/ `grader_duration_seconds`（Phase 2.5：per-run grader 耗时，rollup 进 `llm_duration_seconds.scoring`）|
 | `claims[]` | grader 抽取的事实声明（`claim`/`type`/`verified`/`evidence`） |
 | `user_notes_summary` | grader 标的不确定项：`uncertainties[]` / `needs_review[]` / `workarounds[]` |
 | `eval_feedback` | grader 对这道 eval 设计本身的反馈（`suggestions[]` / `overall`） |
@@ -1045,6 +1045,7 @@ spawn claude -p
 | `analysis` | 深度分析（见 12.3） |
 | `selection` | （可选，仅 `--changed-from` 子集跑时）`{mode, ids, affected, total}`——标识本次为受影响子集跑、delta 非整体测量 |
 | `llm_token_usage` | （Phase 2）本次评测的 LLM token 用量 `{scoring, audit, executor, total}`：`scoring`=grader+comparator+analyzer 合计（带 cost/calls,calls=各子项真实调用次数之和）；`audit`=compliance rollup 自 per-run `compliance.json`；`executor`=被测 cc token（仅 token 数无 cost，对应 `run_summary.tokens`）；`total`=全加 token、cost=scoring+audit。**executor 是被测 token 效率（无 cost），scoring+audit 才是评测系统付出的 LLM 成本**。viewer 头部「LLM token 用量」分列 + 总计；旧 report 无此字段 → `{}` |
+| `llm_duration_seconds` | （Phase 2.5）本次评测耗时（秒）`{scoring, audit, executor, total}`：分列=各类调用时长加总（grader+comparator+analyzer / compliance / 各 run）；**`total`=墙钟**（run 命令头尾独立测）。与 token 根本不同：token 是消耗品可累加（total=分列和）；time 是墙钟、各段并行重叠（workers/线程池），**分列和 ≥ total 正常**，total 不由分列加、viewer 不对账分列和 vs total。分列看"哪段重"，total 看"等多久"；旧 report 无此字段 → `{}` |
 
 每条 `RunResultEntry`：`eval_id` / `eval_name` / `configuration` / `run_number` / `result`（`RunResultMetrics`：`pass_rate`/`passed`/`failed`/`total`/`time_seconds`/`tokens`/`tool_calls`/`errors` + 双率 `pass_rate_programmatic`/`pass_rate_llm`）/ `expectations[]` / `compliance`（**通常为 null**——聚合器不嵌完整 compliance，完整 AuditReport 在 per-run `compliance.json` 里，report 用 `find_runs` 另读）/ `notes[]` / `is_anomaly` / `anomaly_reason` / `retry_count`。
 

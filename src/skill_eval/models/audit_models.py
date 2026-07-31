@@ -172,3 +172,4 @@ class AuditReport(BaseModel):
     # output_tokens, cache_read_input_tokens, cache_creation_input_tokens,
     # total_cost_usd, calls}。空 dict = 无 LLM 调用或旧 report(默认空,向后兼容)。
     token_usage: dict = Field(default_factory=dict)
+    duration_seconds: float = 0.0  # Phase 2.5: audit 墙钟(audit() 头尾 perf_counter;判官 token 在 token_usage)
