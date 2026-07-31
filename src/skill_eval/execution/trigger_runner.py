@@ -144,8 +144,10 @@ class TriggerRunner:
         """单 probe 单 run:建沙箱 → 干净 HOME → spawn → 写 transcript → 检测 fired。
 
         Returns:
-            ``(fired, transcript_path, total_tokens)``。``fired`` = 被测 skill 名
-            (frontmatter name)出现在 ``invoked_skills`` 检出列表里。
+            ``(fired, transcript_path, total_tokens, exit_code)``。``fired`` = 被测 skill 名
+            (frontmatter name)出现在 ``invoked_skills`` 检出列表里。``exit_code`` 透传给
+            ``run()`` 判非零退出(cc 撞限流 / 异常退出常 exit 1 + 错误打 stdout、stderr 空,
+            此时 ``run_trigger`` 不 raise,须据此判 UNRESOLVED,见 ``run()``)。
         """
         sandbox = self._sandbox_with_skill(out_base, probe.id, run)
         # 干净 HOME 压全局 plugin:claude_cli_env 补身份/auth,再覆 HOME 为临时空目录,
@@ -163,14 +165,20 @@ class TriggerRunner:
         transcript = sandbox / "transcript.jsonl"
         transcript.write_text(out.stdout, encoding="utf-8")
         fired = self.name in invoked_skills(transcript)
-        return fired, str(transcript), out.total_tokens
+        return fired, str(transcript), out.total_tokens, out.exit_code
 
     def run(self, probes: list[TriggerProbe], out_base: Path) -> dict:
         """跑全部探题、聚合 trigger 率。
 
-        spawn 抛异常(ClaudeRunnerError / timeout / CLI 缺失…)→ 该 run 不累加 fired;
-        probe **任一** run 异常即整 probe 计 UNRESOLVED、不进聚合分母(保守:宁少报不
-        乱报,避免单次假 0/异常污染 recall)。返回结构::
+        两种异常 → probe **任一** run 命中即整 probe 计 UNRESOLVED、不进聚合分母
+        (保守:宁少报不乱报,避免假 0 / 异常污染 recall):
+
+        - spawn 抛异常(ClaudeRunnerError / timeout / CLI 缺失…);
+        - cc **非零退出且没触发**(``exit_code != 0 and not fired``)——cc 后端不可用 /
+          限流时实测 exit 1 + 错误打 stdout、stderr 空,``run_trigger`` 不 raise 而返正常
+          RunOutput;若不判会把它当「正常没触发」→ should-trigger 假 FAIL / should-not
+          假 PASS,静默污染双率。skill 先触发后 cc 崩(``fired=True``)则照算,不丢 fire。
+          返回结构::
 
             {"probes": [per-probe dict], "recall", "false_trigger_rate",
              "n_should_trigger", "n_should_not", "unresolved"}
@@ -182,9 +190,11 @@ class TriggerRunner:
             tokens = 0
             for r in range(self.runs):
                 try:
-                    fired, _path, tk = self._run_probe_once(probe, out_base, r)
+                    fired, _path, tk, exit_code = self._run_probe_once(probe, out_base, r)
                     fired_count += int(fired)
                     tokens += tk
+                    if not fired and exit_code != 0:
+                        unresolved = True   # cc 异常退出且没触发 → 无法判定,计 UNRESOLVED
                 except Exception:
                     unresolved = True
             trigger_rate = fired_count / self.runs if self.runs else 0.0

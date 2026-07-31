@@ -163,3 +163,79 @@ def test_trigger_runner_spawn_failure_is_unresolved_excluded_from_rates(monkeypa
     assert res["probes"][0]["verdict"] == "UNRESOLVED"
     assert res["unresolved"] == 1
     assert res["recall"] is None  # 唯一 should-trigger 探题 UNRESOLVED → 该方向空 → N/A
+
+
+def test_trigger_runner_nonzero_exit_without_fire_is_unresolved(monkeypatch, tmp_path):
+    """cc 非零退出带 stdout(如限流错误文本)但没触发 → UNRESOLVED,不进分母。
+
+    回归 I1:cc 后端不可用 / 限流时实测 exit 1 + 错误打 stdout、stderr 空,run_trigger
+    不 raise 而返正常 RunOutput;若 _run_probe_once 不看 exit_code,会被当「正常没触发」
+    → should-trigger 假 FAIL / should-not 假 PASS,静默污染双率。
+    """
+    from skill_eval.execution.trigger_runner import TriggerRunner
+    from skill_eval.models.eval_models import TriggerProbe
+    from skill_eval.models.execution_models import RunOutput
+
+    def fake_run_trigger(self, prompt, cwd, env, **kw):
+        # cc 撞限流:exit 1、stdout 是错误文本(无 Skill tool_use)
+        return RunOutput(exit_code=1, stdout="Error: backend overloaded (529)\n", total_tokens=0)
+
+    skill = tmp_path / "my-skill"; skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
+    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    tr = TriggerRunner(skill, runs=1)
+    res = tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=True)], out_base=tmp_path / "out")
+    assert res["probes"][0]["verdict"] == "UNRESOLVED"
+    assert res["unresolved"] == 1
+    assert res["recall"] is None  # 唯一 should-trigger 探题 UNRESOLVED → N/A,不是假 0.0
+
+
+def test_trigger_runner_fired_then_nonzero_exit_still_counts(monkeypatch, tmp_path):
+    """skill 先触发后 cc 非零退出(fired=True)→ 不计 UNRESOLVED,保住这次 fire(I1 修法的边界)。"""
+    from skill_eval.execution.trigger_runner import TriggerRunner
+    from skill_eval.models.eval_models import TriggerProbe
+    from skill_eval.models.execution_models import RunOutput
+
+    skill_stdout = ('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"my-skill"}}]}}\n'
+                    '{"type":"result","result":"x"}\n')
+
+    def fake_run_trigger(self, prompt, cwd, env, **kw):
+        return RunOutput(exit_code=1, stdout=skill_stdout)  # 触发了,但 cc exit 1
+
+    skill = tmp_path / "my-skill"; skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
+    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    tr = TriggerRunner(skill, runs=1)
+    res = tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=True)], out_base=tmp_path / "out")
+    assert res["probes"][0]["verdict"] == "PASS"   # fired → 不因 exit!=0 丢
+    assert res["probes"][0]["trigger_rate"] == 1.0
+    assert res["unresolved"] == 0
+
+
+def test_trigger_runner_multi_run_aggregation(monkeypatch, tmp_path):
+    """runs=3:fired 序列 [True,False,True] → trigger_rate=2/3 → should-trigger ≥0.5 → PASS。
+
+    补多 run 聚合接线(fired_count/runs → _binary_verdict)的集成覆盖(单 run 测里聚合是平凡的)。
+    """
+    from skill_eval.execution.trigger_runner import TriggerRunner
+    from skill_eval.models.eval_models import TriggerProbe
+    from skill_eval.models.execution_models import RunOutput
+
+    fire_seq = iter([True, False, True])
+    skill_stdout_fire = ('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"my-skill"}}]}}\n'
+                         '{"type":"result","result":"x"}\n')
+    skill_stdout_nofire = '{"type":"result","result":"x"}\n'
+
+    def fake_run_trigger(self, prompt, cwd, env, **kw):
+        return RunOutput(exit_code=0,
+                         stdout=skill_stdout_fire if next(fire_seq) else skill_stdout_nofire)
+
+    skill = tmp_path / "my-skill"; skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
+    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    tr = TriggerRunner(skill, runs=3)
+    res = tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=True)], out_base=tmp_path / "out")
+    p1 = res["probes"][0]
+    assert abs(p1["trigger_rate"] - 2 / 3) < 1e-6
+    assert p1["verdict"] == "PASS"   # 2/3 ≥ 0.5
+    assert abs(res["recall"] - 2 / 3) < 1e-6
