@@ -126,12 +126,14 @@ class EvalInitGenerator:
         timeout: int = 120,
         config: EvalConfig | None = None,
         modes: list[str] | None = None,
+        focus: str | None = None,
     ) -> None:
         self.model = model
         self.timeout = timeout
         self.config = config
         self.modes = modes or []
         self._init_warnings: list[str] = []
+        self.focus = focus
 
     @property
     def init_warnings(self) -> list[str]:
@@ -207,7 +209,7 @@ class EvalInitGenerator:
         name, description, content, frontmatter, body = parse_skill_md(skill_path)
         is_procedural = self._is_procedural_skill(content, skill_path)
 
-        prompt = self._build_llm_prompt(name, description, content, is_procedural)
+        prompt = self._build_llm_prompt(name, description, content, is_procedural, focus=self.focus)
         try:
             response = call_claude(prompt, model=self.model, timeout=self.timeout)
         except RuntimeError:
@@ -592,10 +594,55 @@ class EvalInitGenerator:
     # LLM-based generation
     # ------------------------------------------------------------------
 
-    def _build_llm_prompt(self, name: str, description: str, content: str, is_procedural: bool = False) -> str:
+    # --focus 预设类:补 LLM 一次性生成整套时的通用盲区(预设兜无意识盲区,自由文本兜 skill 特定方向)
+    _FOCUS_PRESETS = {
+        "anti-triggers": (
+            "## Focus: Anti-trigger / negative scenarios\n\n"
+            "ONLY generate evals for scenarios where this skill should **NOT** be triggered, "
+            "or should **refuse / hand off / warn** — wrong input type, out-of-scope request, "
+            "ambiguous trigger, precondition not met. Default generation over-indexes on "
+            "happy-path / positive triggers; this run deliberately fills the negative-coverage gap.\n\n"
+        ),
+        "edge-cases": (
+            "## Focus: Edge cases & error handling\n\n"
+            "ONLY generate evals for boundary / error conditions: empty input, oversized input, "
+            "malformed / corrupted input, missing fields, abnormal values, failure recovery. "
+            "Default generation over-indexes on happy-path; this run deliberately fills the "
+            "edge / error-coverage gap.\n\n"
+        ),
+    }
+
+    @staticmethod
+    def _focus_directive(focus: str | None) -> str:
+        """--focus → 注入 prompt 的定向指令段(None/空 → "",默认生成整套不变)。
+
+        预设类(anti-triggers / edge-cases)补 LLM 生成整套时的**通用盲区**(prompt 精调,
+        强制反面 / 边界思维);其余当**自由文本**(补 skill 特定薄弱面,如"加密 PDF")。
+        通常配 ``--append`` 增量补到已有 evals.json(否则覆盖式只换套题,价值低)。
+        """
+        if not focus or not focus.strip():
+            return ""
+        key = focus.strip().lower()
+        if key in EvalInitGenerator._FOCUS_PRESETS:
+            return EvalInitGenerator._FOCUS_PRESETS[key]
+        return (
+            "## Focus: Targeted supplement (user-specified)\n\n"
+            "ONLY generate evals for this specific direction:\n"
+            f"> {focus.strip()}\n\n"
+            "Default generation may have under-covered this; this run targets it deliberately.\n\n"
+        )
+
+    def _build_llm_prompt(self, name: str, description: str, content: str,
+                          is_procedural: bool = False, focus: str | None = None) -> str:
         if is_procedural:
-            return self._build_procedural_prompt(name, description, content)
-        return self._build_knowledge_prompt(name, description, content)
+            prompt = self._build_procedural_prompt(name, description, content)
+        else:
+            prompt = self._build_knowledge_prompt(name, description, content)
+        directive = self._focus_directive(focus)
+        if directive:
+            # 注在 ## Output JSON 前(两个 builder 都有该锚点),改变这次生成目标
+            prompt = prompt.replace("## Output JSON", directive + "## Output JSON", 1)
+        return prompt
 
     def _build_knowledge_prompt(self, name: str, description: str, content: str) -> str:
         return (

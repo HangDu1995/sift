@@ -281,3 +281,95 @@ def test_init_lists_rationale_per_eval(monkeypatch, tmp_path):
     assert r.exit_code == 0, r.output
     assert any("对应 ## 决策逻辑 bullet 2" in p for p in printed), printed
     assert any("conf 0.85" in p for p in printed), printed
+
+
+def test_init_append_extends_existing_evals(monkeypatch, tmp_path):
+    """--append:已有 evals.json(id 1,2)+ 新生成 2 道 → 合并 4 道,新 eval id 接续 3,4(不覆盖旧题)。"""
+    import json
+    from skill_eval.models import EvalCase, EvalSet
+    sp = _skill_dir(tmp_path)
+    out = tmp_path / "out"; out.mkdir()
+    (out / "evals.json").write_text(json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "prompt": "old1", "level": "L1", "expectations": ["e"], "assertions": []},
+        {"id": 2, "prompt": "old2", "level": "L1", "expectations": ["e"], "assertions": []},
+    ]}), encoding="utf-8")
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp: EvalSet(skill_name="s", evals=[
+                            EvalCase(id=1, prompt="new1", level="L1", expectations=["e"]),
+                            EvalCase(id=2, prompt="new2", level="L1", expectations=["e"]),
+                        ]))
+    r = runner.invoke(app, ["init", str(sp), "--append", "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    merged = json.loads((out / "evals.json").read_text(encoding="utf-8"))
+    assert [e["id"] for e in merged["evals"]] == [1, 2, 3, 4]  # 旧 1,2 + 新接续 3,4
+    prompts = [e["prompt"] for e in merged["evals"]]
+    assert "old1" in prompts and "new1" in prompts  # 新旧都在(不覆盖)
+
+
+def test_init_append_no_existing_writes_fresh(monkeypatch, tmp_path):
+    """--append 但无已有 evals.json → 等同首次生成(id 从 1)。"""
+    import json
+    from skill_eval.models import EvalCase, EvalSet
+    sp = _skill_dir(tmp_path)
+    out = tmp_path / "out"; out.mkdir()
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp: EvalSet(skill_name="s", evals=[
+                            EvalCase(id=1, prompt="only", level="L1", expectations=["e"]),
+                        ]))
+    r = runner.invoke(app, ["init", str(sp), "--append", "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    data = json.loads((out / "evals.json").read_text(encoding="utf-8"))
+    assert [e["id"] for e in data["evals"]] == [1]
+    assert data["evals"][0]["prompt"] == "only"
+
+
+def test_init_without_append_overwrites_existing(monkeypatch, tmp_path):
+    """默认(无 --append)→ 覆盖:已有 evals.json 被新生成替换(旧题丢失)。"""
+    import json
+    from skill_eval.models import EvalCase, EvalSet
+    sp = _skill_dir(tmp_path)
+    out = tmp_path / "out"; out.mkdir()
+    (out / "evals.json").write_text(json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "prompt": "old", "level": "L1", "expectations": ["e"], "assertions": []},
+    ]}), encoding="utf-8")
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp: EvalSet(skill_name="s", evals=[
+                            EvalCase(id=1, prompt="new", level="L1", expectations=["e"]),
+                        ]))
+    r = runner.invoke(app, ["init", str(sp), "-o", str(out)])  # 无 --append
+    assert r.exit_code == 0, r.output
+    data = json.loads((out / "evals.json").read_text(encoding="utf-8"))
+    assert len(data["evals"]) == 1
+    assert data["evals"][0]["prompt"] == "new"  # "old" 被覆盖
+
+
+def test_init_threads_focus_flag_to_generator(monkeypatch, tmp_path):
+    """init --focus 接线:flag 须透到 EvalInitGenerator(focus=...)。"""
+    captured = {}
+
+    def fake_init(self, model=None, timeout=600, config=None, modes=None, focus=None, **_kw):
+        captured["focus"] = focus
+
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.__init__", fake_init)
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp: _fake_evalset())
+    sp = _skill_dir(tmp_path)
+    r = runner.invoke(app, ["init", str(sp), "--focus", "anti-triggers", "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert captured.get("focus") == "anti-triggers", f"--focus 没透到 generator: {captured}"
+
+
+def test_init_focus_directive_reaches_prompt(monkeypatch, tmp_path):
+    """--focus anti-triggers → 透到 generator → 发给 LLM 的 prompt 含反面场景指令。"""
+    captured = {}
+
+    def fake_call(prompt, *a, **k):
+        captured["prompt"] = prompt
+        return '{"skill_name": "s", "evals": [{"id": 1, "prompt": "p", "expectations": ["e"], "assertions": []}]}'
+
+    monkeypatch.setattr("skill_eval.evals.generator.call_claude", fake_call)
+    sp = _skill_dir(tmp_path)
+    r = runner.invoke(app, ["init", str(sp), "--focus", "anti-triggers", "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert "## Focus" in captured.get("prompt", ""), "focus 指令没进 prompt"
+    assert "NOT" in captured.get("prompt", "")  # anti-triggers 精调指令

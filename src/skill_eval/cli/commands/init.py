@@ -32,6 +32,15 @@ def init(
         600, "--timeout",
         help="LLM 调用超时秒数(mining 是单次大 prompt,默认 600;撞超时 → degraded fallback)",
     ),
+    append: bool = typer.Option(
+        False, "--append",
+        help="追加到已有 evals.json(不覆盖):新 eval 的 id 接续已有 max+1。常配 --focus 定向补薄弱面。",
+    ),
+    focus: Optional[str] = typer.Option(
+        None, "--focus",
+        help="定向生成某一类 eval 补盲区:预设 anti-triggers(反面场景)/ edge-cases(边界/错误),"
+             "或任意自由文本(skill 特定方向)。常配 --append 增量补到已有 evals.json。",
+    ),
 ):
     """Initialize evals.json for a Skill.
     
@@ -41,7 +50,7 @@ def init(
     from skill_eval.evals.generator import EvalInitGenerator
 
     try:
-        gen = EvalInitGenerator(model=model, timeout=timeout)
+        gen = EvalInitGenerator(model=model, timeout=timeout, focus=focus)
 
         if from_transcript:
             if kind is not None and kind not in ("skill", "agent"):
@@ -79,6 +88,21 @@ def init(
         elif output.is_dir():
             output = output / "evals.json"
 
+        appended = 0
+        if append and output.exists():
+            from skill_eval.models import EvalSet
+            try:
+                existing = EvalSet.model_validate(json.loads(output.read_text(encoding="utf-8")))
+                next_id = max((e.id for e in existing.evals), default=0) + 1
+                for e in eval_set.evals:
+                    e.id = next_id
+                    next_id += 1
+                appended = len(eval_set.evals)
+                existing.evals.extend(eval_set.evals)
+                eval_set = existing
+            except Exception:
+                console.print(f"[yellow]⚠️ 读已有 {output} 失败,改为覆盖写入。[/yellow]")
+
         data = eval_set.model_dump(mode="json")
         output.write_text(
             json.dumps(data, indent=2, ensure_ascii=False),
@@ -86,6 +110,8 @@ def init(
         )
 
         console.print(f"Generated [green]{len(eval_set.evals)}[/green] eval cases for [bold]{eval_set.skill_name}[/bold]")
+        if appended:
+            console.print(f"[green]Appended[/green] {appended} new evals to existing {output}(id 接续、原题保留)")
         degraded = [(e, f) for e in eval_set.evals for f in (e.flags or []) if f.startswith("degraded:")]
         if degraded:
             console.print(f"[yellow]⚠️  {len(degraded)} 个 eval 为 degraded fallback(LLM 失败,未挖到结构化信号,assertions 可能为空):[/yellow]")

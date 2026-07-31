@@ -276,7 +276,24 @@ skill-eval add pdf/ --idea "..." --dry-run                          # 预览不�
 
 `--idea` 模式下自动分配 id、自动推导 assertions 和 fixtures。
 
-### 3.4 inspect：题集体检（不下判决）
+### 3.4 定向补薄弱面：`--focus` + `--append`
+
+`init` 一次性生成整套时，LLM 有个系统性盲区——**倾向正面题 / happy path**，容易漏反面场景（skill 不该被触发的请求）、边界 / 错误处理（空输入、超大、损坏、异常）。`init --focus` + `--append` 帮你定向补这些盲区，且不丢之前生成 / 手改的题：
+
+```bash
+skill-eval init path/to/skill/ --focus anti-triggers --append   # 补反面场景,追加到已有考卷
+skill-eval init path/to/skill/ --focus edge-cases --append      # 补边界/错误处理
+skill-eval init path/to/skill/ --focus "加密/损坏 PDF" --append # 自由文本:skill 特定方向
+```
+
+- **`--focus <类>`** 决定这次生成什么：预设 `anti-triggers`（skill 不该被触发的反面场景）/ `edge-cases`（边界 / 错误处理）覆盖最常见的通用盲区；也接受**自由文本**（任意描述一个 skill 特定方向，如"加密 PDF""超大日志"），补通用类够不到的薄弱处。它往 prompt 注入一段定向指令，强制 LLM 进入反面 / 边界思维。
+- **`--append`** 决定怎么写：追加到已有 evals.json（新 eval 的 id 接续已有 `max+1`、不覆盖旧题）。不带 `--append` 则默认覆盖（首次出题或想重练一套时用）。
+
+**为什么用这个而不是 `add`**：`add`（3.3）是手动一道道加，得你自己想反面场景；`--focus` 让 LLM 在定向模式下批量生成一类，省掉手想的力气——尤其补的是你**没意识到的**盲区（通用预设类主动提示）。两者互补：`--focus` 批量铺面，`add` 精修单道。
+
+> `--focus` 只对 LLM 生成路径（默认 `init`）生效；`--from-transcript` 是从真实会话挖题，不适用 `--focus`。补完别忘了 `inspect`（3.5）体检、`freeze`（3.6）冻成基线再 `run`。
+
+### 3.5 inspect：题集体检（不下判决）
 
 ```bash
 skill-eval inspect path/to/evals.json        # 表格
@@ -285,7 +302,7 @@ skill-eval inspect path/to/evals.json --json  # 机器可读
 
 注意位置参数是 **evals.json 路径**（不是 skill 目录）。`inspect` 对已有考卷做静态体检：完整性、稳定性（programmatic/LLM 占比）、潜在问题 flag。它**不执行、不调 LLM、不下判决**——只报指标和关注点，帮你决定"这份卷子能不能冻结成基线"。
 
-### 3.5 freeze：冻结基线
+### 3.6 freeze：冻结基线
 
 ```bash
 skill-eval freeze path/to/evals.json                         # → baseline.json + baseline.meta.json
@@ -315,7 +332,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 
 ```bash
 skill-eval run path/to/skill/ --runs 3                       # with/without，跑 3 轮
-skill-eval run v2/ --skill-b v1/ --evals baseline.json        # v1/v2 回归对照（baseline.json 由 freeze 产生，见 3.5）
+skill-eval run v2/ --skill-b v1/ --evals baseline.json        # v1/v2 回归对照（baseline.json 由 freeze 产生，见 3.6）
 skill-eval run path/to/skill/ --scoring programmatic          # 仅程序化评分，零 LLM 成本
 ```
 

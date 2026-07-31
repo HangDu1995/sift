@@ -612,3 +612,49 @@ def test_merge_same_task_evals_preserves_rationale_confidence():
     assert len(out.evals) == 1
     assert out.evals[0].rationale == "## X"
     assert abs(out.evals[0].confidence - 0.7) < 1e-9
+
+
+# ---- --focus:定向补 LLM 生成整套时的盲区(预设类 anti-triggers/edge-cases + 自由文本)----
+
+def test_focus_directive_empty_when_no_focus():
+    """无 focus → 不注入(默认生成整套,行为不变)。"""
+    assert EvalInitGenerator._focus_directive(None) == ""
+    assert EvalInitGenerator._focus_directive("") == ""
+    assert EvalInitGenerator._focus_directive("   ") == ""
+
+
+def test_focus_directive_anti_triggers_preset():
+    """--focus anti-triggers → 精调反面场景指令(强制补"skill 不该被触发"盲区)。大小写不敏感。"""
+    d = EvalInitGenerator._focus_directive("anti-triggers")
+    assert "## Focus" in d
+    assert "NOT" in d  # 强调不该触发/refuse
+    assert "## Focus" in EvalInitGenerator._focus_directive("Anti-Triggers")  # 大小写不敏感
+
+
+def test_focus_directive_edge_cases_preset():
+    """--focus edge-cases → 精调边界/错误处理指令(强制补边界盲区)。"""
+    d = EvalInitGenerator._focus_directive("edge-cases")
+    assert "## Focus" in d
+    assert "error" in d.lower() or "boundary" in d.lower() or "edge" in d.lower()
+
+
+def test_focus_directive_free_text_fallback():
+    """--focus '加密 PDF'(非预设类名)→ 自由文本注入(skill 特定方向)。"""
+    d = EvalInitGenerator._focus_directive("加密 PDF")
+    assert "## Focus" in d
+    assert "加密 PDF" in d  # 用户原话进 prompt
+
+
+def test_build_llm_prompt_injects_focus_directive():
+    """--focus 注入到 prompt(## Output JSON 前),改变这次生成目标。"""
+    gen = EvalInitGenerator()
+    prompt = gen._build_llm_prompt("s", "d", "# b\n", is_procedural=False, focus="anti-triggers")
+    assert "## Focus" in prompt
+    assert prompt.index("## Focus") < prompt.index("## Output JSON")  # 注入在 Output JSON 前
+
+
+def test_build_llm_prompt_without_focus_unchanged():
+    """无 focus → prompt 不含 ## Focus(默认整套,行为不变)。"""
+    gen = EvalInitGenerator()
+    prompt = gen._build_llm_prompt("s", "d", "# b\n", is_procedural=False)
+    assert "## Focus" not in prompt
