@@ -41,6 +41,10 @@ def init(
         help="定向生成某一类 eval 补盲区:预设 anti-triggers(反面场景)/ edge-cases(边界/错误),"
              "或任意自由文本(skill 特定方向)。常配 --append 增量补到已有 evals.json。",
     ),
+    trigger_probes: bool = typer.Option(
+        False, "--trigger-probes",
+        help="生成 trigger-accuracy 探题(should/should-not 各 N 道)追加到 evals.json 的 trigger_probes 段。",
+    ),
 ):
     """Initialize evals.json for a Skill.
     
@@ -102,6 +106,32 @@ def init(
                 eval_set = existing
             except Exception:
                 console.print(f"[yellow]⚠️ 读已有 {output} 失败,改为覆盖写入。[/yellow]")
+
+        if trigger_probes:
+            # --trigger-probes 单用(无 --append)时默认覆盖会丢已有 scoring evals,
+            # 显式载入已有 evals.json 保留原题(不重生成 scoring);--append 已合并则跳过。
+            if output.exists() and not append:
+                from skill_eval.models import EvalSet
+                try:
+                    eval_set = EvalSet.model_validate(json.loads(output.read_text(encoding="utf-8")))
+                except Exception:
+                    console.print(f"[yellow]⚠️ 读已有 {output} 失败,trigger 探题将附加到新生成的 evals。[/yellow]")
+            new_probes = gen.generate_trigger_probes(skill_path, num_each=(num_evals or 5))
+            if num_evals:  # 每方向上限 trim(不补下限)
+                per = max(1, num_evals)
+                should = [p for p in new_probes if p.expect_trigger][:per]
+                should_not = [p for p in new_probes if not p.expect_trigger][:per]
+                new_probes = should + should_not
+            # id 接续已有 trigger_probes 的 max id + 1
+            existing_probes = list(eval_set.trigger_probes)
+            next_id = max((p.id for p in existing_probes), default=0) + 1
+            for p in new_probes:
+                p.id = next_id; next_id += 1
+            eval_set.trigger_probes = existing_probes + new_probes
+            if new_probes:
+                console.print(f"[green]Generated[/green] {len(new_probes)} trigger probes")
+            else:
+                console.print("[yellow]⚠️  未生成 trigger 探题(LLM 失败或解析空)。[/yellow]")
 
         data = eval_set.model_dump(mode="json")
         output.write_text(

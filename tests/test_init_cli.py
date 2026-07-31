@@ -373,3 +373,28 @@ def test_init_focus_directive_reaches_prompt(monkeypatch, tmp_path):
     assert r.exit_code == 0, r.output
     assert "## Focus" in captured.get("prompt", ""), "focus 指令没进 prompt"
     assert "NOT" in captured.get("prompt", "")  # anti-triggers 精调指令
+
+
+def test_init_trigger_probes_appends_to_trigger_probes_section(tmp_path, monkeypatch):
+    """--trigger-probes:保留原 scoring evals、追加 trigger_probes 段、id 接续。"""
+    import json
+    from typer.testing import CliRunner
+    from skill_eval.cli.main import app
+
+    skill = tmp_path / "skill"; skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: my\ndescription: does X\n---\n# My\nbody\n")
+    out = tmp_path / "out"; out.mkdir()
+    # 已有 evals.json:1 scoring eval、无 trigger_probes
+    (out / "evals.json").write_text('{"skill_name":"my","evals":[{"id":1,"prompt":"p"}]}')
+
+    monkeypatch.setattr("skill_eval.evals.generator.call_claude",
+        lambda *a, **k: '{"skill_name":"my","trigger_probes":['
+                        '{"id":1,"prompt":"q1","expect_trigger":true,"rationale":"r"},'
+                        '{"id":2,"prompt":"q2","expect_trigger":false,"rationale":"r"}]}')
+
+    r = CliRunner().invoke(app, ["init", str(skill), "-o", str(out), "--trigger-probes"])
+    assert r.exit_code == 0, r.output
+    data = json.loads((out / "evals.json").read_text())
+    assert len(data["evals"]) == 1                  # 原 scoring eval 保留(不重生成)
+    assert len(data["trigger_probes"]) == 2          # 新 trigger 段
+    assert data["trigger_probes"][0]["expect_trigger"] is True
