@@ -92,6 +92,8 @@ skill-eval init path/to/skill/ --from-transcript session.jsonl  # 从真实会�
 
 `--from-transcript` 解析 session transcript（模型、user turns、用到的 skill），重建 input_files / commands / produced_files，生成带结构化 assertions 的 eval。若 LLM 失败降级为 fallback eval，会带 `degraded:*` flag 并在终端告警（不再静默）。多 skill transcript 不传 `--kind` 时会把全部当本 skill 挖（可能串味）→ 终端告警，建议加 `--kind skill` 只挖本 skill 段。
 
+**字段名校验**：LLM 生成时若把字段名拼错（如 `expected_output`→`expected`、`assertions`→`assertion`），pydantic 默认会**静默丢弃**该字段——evals.json 看着生成成功、实则缺字段，`run` 时才暴雷。`init` 会在终端告警 `⚠️ N 条 eval 含未知字段(已忽略;可能拼错)`，逐条列出哪个 eval 的哪些字段可疑，免得考卷悄悄残缺。warn 不拒（拒绝会掉确定性模板 fallback，反而更差）。
+
 ### `add` — 追加评测用例
 
 LLM 辅助或手动添加单个 eval case 到已有 evals.json。

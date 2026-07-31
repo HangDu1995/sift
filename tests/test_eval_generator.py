@@ -553,6 +553,53 @@ def test_generate_with_llm_no_flag_when_rationale_present(monkeypatch, tmp_path)
     assert "review:no-rationale" not in (es.evals[0].flags or [])
 
 
+def test_collect_unknown_field_warnings_flags_typo():
+    """LLM 把 expected_output 写成 expected、assertions 写成 assertion → 抓出来。
+
+    pydantic extra=ignore 会静默丢这些字段,考卷看着生成成功实则缺字段;在 validate
+    前扫 raw dict 才能抓到(Waza KnownFields 思路,我们 warn 不拒)。
+    """
+    data = {"skill_name": "s", "evals": [
+        {"id": 1, "prompt": "p", "expected": "x",
+         "assertion": [{"name": "n", "type": "FILE_EXISTS"}]},
+    ]}
+    warns = EvalInitGenerator._collect_unknown_field_warnings(data)
+    assert len(warns) == 1
+    assert "expected" in warns[0]
+    assert "assertion" in warns[0]
+
+
+def test_collect_unknown_field_warnings_clean_when_all_known():
+    """全合法字段 → 不报警(已知字段集取自 EvalCase.model_fields,自动随 model 演化)。"""
+    data = {"skill_name": "s", "evals": [
+        {"id": 1, "prompt": "p", "expected_output": "x",
+         "assertions": [], "expectations": [], "rationale": "## X", "confidence": 0.8},
+    ]}
+    assert EvalInitGenerator._collect_unknown_field_warnings(data) == []
+
+
+def test_collect_unknown_field_warnings_locates_by_index_when_no_id():
+    """raw eval 没 id 时用序号定位(让人能找到是哪条)。"""
+    data = {"skill_name": "s", "evals": [
+        {"prompt": "p", "expected": "x"},
+    ]}
+    warns = EvalInitGenerator._collect_unknown_field_warnings(data)
+    assert len(warns) == 1
+    assert "expected" in warns[0]
+
+
+def test_parse_llm_response_records_unknown_field_warnings():
+    """端到端:_parse_llm_response 解析后 gen.init_warnings 含拼错字段(仍解析成功,不拒)。"""
+    import json
+    gen = EvalInitGenerator()
+    resp = json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "name": "n", "prompt": "p", "expected": "x",  # expected 拼错
+         "expectations": [], "assertions": [], "fixtures": []}]})
+    es = gen._parse_llm_response(resp, "s")
+    assert es is not None                      # extra=ignore → 仍解析成功
+    assert any("expected" in w for w in gen.init_warnings)
+
+
 def test_merge_same_task_evals_preserves_rationale_confidence():
     """合并同 prompt eval:rationale/confidence 取 first(同 prompt 同溯源),不丢。"""
     evals = [

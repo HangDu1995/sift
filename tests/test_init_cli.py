@@ -127,6 +127,43 @@ def test_init_kind_threads_flag(monkeypatch, tmp_path):
     assert captured.get("kind") == "skill", f"--kind 没透到 generator: {captured}"
 
 
+def test_init_prints_unknown_field_warning(monkeypatch, tmp_path):
+    """LLM 输出拼错字段(expected_output→expected)→ init 终端打印 unknown-field warn。
+
+    端到端:init → generate_with_llm → call_claude(mock)→ _parse_llm_response 收集
+    → gen.init_warnings → init 命令读去打印。pydantic extra=ignore 仍解析成功,但字段
+    被静默丢;warn 让人看见"考卷缺字段"。
+    """
+    import json
+    printed = []
+    monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
+                        lambda *a, **k: printed.append(str(a)))
+    fake = json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "name": "n", "prompt": "p", "expected": "x",  # expected 拼错
+         "expectations": ["e"], "assertions": [], "fixtures": []}]})
+    monkeypatch.setattr("skill_eval.evals.generator.call_claude", lambda *a, **k: fake)
+    sp = _skill_dir(tmp_path)
+    r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert any("未知字段" in p and "expected" in p for p in printed), printed
+
+
+def test_init_no_unknown_warning_when_fields_clean(monkeypatch, tmp_path):
+    """LLM 输出全合法字段 → 不打印 unknown-field warn(避免噪声)。"""
+    import json
+    printed = []
+    monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
+                        lambda *a, **k: printed.append(str(a)))
+    fake = json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "name": "n", "prompt": "p", "expected_output": "x",
+         "expectations": ["e"], "assertions": [], "fixtures": []}]})
+    monkeypatch.setattr("skill_eval.evals.generator.call_claude", lambda *a, **k: fake)
+    sp = _skill_dir(tmp_path)
+    r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert not any("未知字段" in p for p in printed), printed
+
+
 def test_init_warns_on_multiskill_without_kind(monkeypatch, tmp_path):
     """多 skill transcript + 不传 --kind → 警告(防静默串味:把别 skill 活动当本 skill 挖)。"""
     import json

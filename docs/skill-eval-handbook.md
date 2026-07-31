@@ -264,6 +264,8 @@ skill-eval init path/to/skill/ --from-transcript session.jsonl  # 从真实会�
 
 挖题/生成失败时（LLM 超时 / 限流 / 退出码，或返回了但解析不出结构化 eval）不会静默产空，而是产一个**兜底 eval**：prompt 退到最朴素形态（transcript 挖题用真实 user turns、LLM 生成退到模板），`assertions` 往往为空，并打 `degraded:*` flag（transcript 挖题是 `degraded:no-llm`）。`init` 检测到后黄色告警——`⚠️ N 个 eval 为 degraded fallback(LLM 失败,未挖到结构化信号,assertions 可能为空):`，逐条列出哪些 eval + flag，并提示`建议重跑,或检查 claude CLI 可用性`。这样既不因一次失败就产不出题，也不假装成功。
 
+**字段名拼错也会告警**：LLM 生成时如果把字段名写错（如 `expected_output`→`expected`、`assertions`→`assertion`），pydantic 默认会**悄悄丢掉**该字段——考卷看着生成成功、实则缺那块，`run` 时才暴雷。`init` 会校验 LLM 输出的字段名，发现不认识的就告警 `⚠️ N 条 eval 含未知字段(已忽略;可能拼错)`，逐条指出哪条 eval 的哪些字段可疑，免得拿着残缺考卷还以为没问题。同样 warn 不拒（拒绝会掉进纯模板兜底，反而更差）。
+
 ### 3.3 add：追加单道题
 
 ```bash

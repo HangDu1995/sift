@@ -92,6 +92,12 @@ def init(
             for e, f in degraded:
                 console.print(f"[yellow]   - {e.name}: {f}[/yellow]")
             console.print("[yellow]建议重跑,或检查 claude CLI 可用性。[/yellow]")
+        unknown_warns = gen.init_warnings
+        if unknown_warns:
+            console.print(f"[yellow]⚠️  {len(unknown_warns)} 条 eval 含未知字段"
+                          f"(LLM 写了 EvalCase 不认的字段,已忽略;可能拼错、考卷可能缺字段):[/yellow]")
+            for w in unknown_warns:
+                console.print(f"[yellow]   - {w}[/yellow]")
         for e in eval_set.evals:
             level = getattr(e, 'level', 'L1')
             line = (f"  [{level}] {e.name}: {len(e.assertions)} assertions, "

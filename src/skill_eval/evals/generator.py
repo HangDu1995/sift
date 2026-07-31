@@ -131,6 +131,15 @@ class EvalInitGenerator:
         self.timeout = timeout
         self.config = config
         self.modes = modes or []
+        self._init_warnings: list[str] = []
+
+    @property
+    def init_warnings(self) -> list[str]:
+        """LLM 生成时写了 EvalCase 不认的字段(拼错?)的警告;init 命令读去终端打印。
+
+        getattr 容错:测试 mock ``__init__`` 时不设 ``_init_warnings`` 也安全可读(返 [])。
+        """
+        return list(getattr(self, "_init_warnings", []))
 
     def generate_template(self, skill_path: Path) -> EvalSet:
         name, description, content, frontmatter, body = parse_skill_md(skill_path)
@@ -710,6 +719,7 @@ class EvalInitGenerator:
         try:
             data = json.loads(response)
             if "evals" in data:
+                self._init_warnings.extend(self._collect_unknown_field_warnings(data))
                 return EvalSet.model_validate(data)
         except (json.JSONDecodeError, Exception):
             pass
@@ -719,6 +729,7 @@ class EvalInitGenerator:
             try:
                 data = json.loads(match.group())
                 if "evals" in data:
+                    self._init_warnings.extend(self._collect_unknown_field_warnings(data))
                     return EvalSet.model_validate(data)
             except Exception:
                 pass
@@ -736,6 +747,31 @@ class EvalInitGenerator:
         for ev in eval_set.evals:
             if not (ev.rationale or "").strip():
                 ev.flags = list(dict.fromkeys([*(ev.flags or []), "review:no-rationale"]))
+
+    @staticmethod
+    def _collect_unknown_field_warnings(data: dict) -> list[str]:
+        """raw LLM 输出含 EvalCase 不认的字段 → 收集警告字符串列表。
+
+        EvalCase 走 pydantic 默认 extra='ignore',未知字段(如把 ``expected_output``
+        拼成 ``expected``、``assertions`` 拼成 ``assertion``)会被**静默丢弃** ——
+        init 看着生成成功、考卷实则缺字段,run 时才暴雷。本检查在 ``model_validate``
+        之前扫 raw dict,把可疑字段亮出来供 init 审阅(warn 不拒;拒会掉确定性
+        fallback 更差,同 ``_flag_missing_rationale`` 哲理)。已知字段集取自
+        ``EvalCase.model_fields``,自动随 model 演化,无需手维护。
+        """
+        known = set(EvalCase.model_fields.keys())
+        warns: list[str] = []
+        raw_evals = data.get("evals") if isinstance(data, dict) else None
+        if not isinstance(raw_evals, list):
+            return warns
+        for i, raw in enumerate(raw_evals):
+            if not isinstance(raw, dict):
+                continue
+            unknown = sorted(set(raw.keys()) - known)
+            if unknown:
+                ident = raw.get("id", f"第{i + 1}条")
+                warns.append(f"eval {ident}: 未知字段 {unknown}(已忽略;可能拼错)")
+        return warns
 
     # ------------------------------------------------------------------
     # Transcript-driven generation
