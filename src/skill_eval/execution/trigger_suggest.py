@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from skill_eval.models.trigger_report import Suggestion
+from skill_eval.utils import call_claude
 
 
 def _bullets(probes: list[dict]) -> str:
@@ -72,3 +73,56 @@ def build_rule_suggestions(probes: list[dict]) -> list[Suggestion]:
         ))
 
     return out
+
+
+def build_llm_suggestion(
+    description: str,
+    failed_should_trigger: list[dict],
+    failed_should_not: list[dict],
+    model: str | None = None,
+    timeout: int = 600,
+) -> tuple[Suggestion | None, dict]:
+    """有失败 probe 时,调一次 LLM 起草修订 description 草案。
+
+    - 全 PASS(无失败)→ ``(None, {})``,**不调** LLM(零成本)。
+    - 调用异常 / 返空 → ``(None, {})``(降级,规则建议照在;trigger.py 打一行提示)。
+    - 成功 → ``(Suggestion(category=llm_rewrite), usage_dict)``;``usage_dict`` 是本次
+      调用的 token 用量(供调用方累加进 report.token_usage)。
+
+    ``failed_*`` 是 per-probe dict 列表(含 ``id`` / ``prompt``)。相对 trigger 本体
+    (每 probe × run = 1 次完整 cc spawn)这是一次单轮 text 调用、开销 <5%,故默认开、
+    只在有失败时触发(全 PASS 跳过)。
+    """
+    if not failed_should_trigger and not failed_should_not:
+        return None, {}
+
+    should_lines = "\n".join(f"  - {p['prompt']}" for p in failed_should_trigger) or "  (无)"
+    should_not_lines = "\n".join(f"  - {p['prompt']}" for p in failed_should_not) or "  (无)"
+    prompt = (
+        "你在帮一个 Claude Code skill 作者改进 skill frontmatter 的 description 字段"
+        "(cc 据这个 description 决定是否自动触发本 skill)。\n\n"
+        f"当前 description:\n\"\"\"\n{description}\n\"\"\"\n\n"
+        "问题:\n"
+        "- 这些任务本 skill【应该】处理,但 cc 没触发它(description 没够到):\n"
+        f"{should_lines}\n"
+        "- 这些任务本 skill【不应该】处理,但 cc 误触发了(description 过宽):\n"
+        f"{should_not_lines}\n\n"
+        "请起草修订后的 description:直接给可用的 description 文本(不要 markdown 标题、"
+        "不要「以下是」之类开场),让它能触发上面「应该处理」的任务、不触发「不应该处理」"
+        "的任务。然后用一行「理由:」简述改了什么(≤2 句)。"
+    )
+
+    usage: dict = {}
+    try:
+        resp = call_claude(prompt, model=model, timeout=timeout, max_turns=1, on_usage=usage.update)
+    except Exception:
+        return None, {}
+
+    resp = (resp or "").strip()
+    if not resp:
+        return None, {}
+
+    failed_ids = [p["id"] for p in failed_should_trigger] + [p["id"] for p in failed_should_not]
+    return Suggestion(
+        category="llm_rewrite", source="llm", probe_ids=failed_ids, message=resp,
+    ), usage

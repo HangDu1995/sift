@@ -11,7 +11,7 @@ from skill_eval.parser import resolve_skill_dir, parse_skill_md
 from skill_eval.models import EvalSet
 from skill_eval.models.trigger_report import TriggerReport, ProbeResult
 from skill_eval.execution.trigger_runner import TriggerRunner
-from skill_eval.execution.trigger_suggest import build_rule_suggestions
+from skill_eval.execution.trigger_suggest import build_llm_suggestion, build_rule_suggestions
 
 
 @app.command()
@@ -52,7 +52,18 @@ def trigger(
                                 trigger_rate=p["trigger_rate"], verdict=p["verdict"],
                                 transcript_path=p["transcript_path"]) for p in res["probes"]],
         )
-        report.suggestions = build_rule_suggestions(res["probes"])
+        suggestions = build_rule_suggestions(res["probes"])
+        failed_st = [p for p in res["probes"] if p["expect_trigger"] and p["verdict"] == "FAIL"]
+        failed_sn = [p for p in res["probes"] if not p["expect_trigger"] and p["verdict"] == "FAIL"]
+        if failed_st or failed_sn:
+            llm_sugg, llm_usage = build_llm_suggestion(description, failed_st, failed_sn, model=model)
+            if llm_sugg is None:
+                console.print("[dim]LLM 建议生成失败/为空,仅显示规则建议。[/dim]")
+            else:
+                suggestions.append(llm_sugg)
+                if llm_usage:
+                    report.token_usage["suggest"] = llm_usage
+        report.suggestions = suggestions
         (out_dir / "trigger-report.json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
         recall_s = f"{res['recall']*100:.0f}%" if res["recall"] is not None else "N/A"
         ftr_s = f"{res['false_trigger_rate']*100:.0f}%" if res["false_trigger_rate"] is not None else "N/A"
