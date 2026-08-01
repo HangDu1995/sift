@@ -40,7 +40,7 @@ def trigger(
         out_dir.mkdir(parents=True, exist_ok=True)
         console.print(f"Trigger-testing [bold]{name}[/bold]({len(probes)} probes × {runs} runs)...")
         runner = TriggerRunner(skill_path, model=model, timeout=timeout, max_turns=max_turns, runs=runs)
-        res = runner.run(probes, out_dir)
+        res = runner.run(probes, out_dir, on_progress=lambda line: console.print(line))
         report = TriggerReport(
             skill_name=name,
             description=description,

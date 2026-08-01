@@ -140,7 +140,7 @@ class TriggerRunner:
                 shutil.copy2(item, target)
         return sandbox
 
-    def _run_probe_once(self, probe: TriggerProbe, out_base: Path, run: int) -> tuple[bool, str, int, int, int]:
+    def _run_probe_once(self, probe: TriggerProbe, out_base: Path, run: int, on_progress=None) -> tuple[bool, str, int, int, int]:
         """单 probe 单 run:建沙箱 → 干净 HOME → spawn → 写 transcript → 检测 fired。
 
         Returns:
@@ -165,6 +165,7 @@ class TriggerRunner:
                 model=self.model,
                 timeout=self.timeout,
                 max_turns=self.max_turns,
+                on_progress=(lambda line: on_progress(f"  {line}")) if on_progress else None,
             )
             transcript = sandbox / "transcript.jsonl"
             transcript.write_text(out.stdout, encoding="utf-8")
@@ -173,7 +174,7 @@ class TriggerRunner:
         finally:
             shutil.rmtree(env["HOME"], ignore_errors=True)  # 用完即清,别让 /tmp 堆 trigger-home-*
 
-    def run(self, probes: list[TriggerProbe], out_base: Path) -> dict:
+    def run(self, probes: list[TriggerProbe], out_base: Path, on_progress=None) -> dict:
         """跑全部探题、聚合 trigger 率。
 
         两种异常 → probe **任一** run 命中即整 probe 计 UNRESOLVED、不进聚合分母
@@ -193,7 +194,9 @@ class TriggerRunner:
         """
         results: list[dict] = []
         total_duration_ms = 0
-        for probe in probes:
+        for i, probe in enumerate(probes):
+            if on_progress:
+                on_progress(f"probe {i + 1}/{len(probes)} ({'该触发' if probe.expect_trigger else '不该触发'})")
             fired_count = 0
             unresolved = False
             tokens = 0
@@ -201,7 +204,7 @@ class TriggerRunner:
             transcript_path = ""
             for r in range(self.runs):
                 try:
-                    fired, path, tk, exit_code, dur = self._run_probe_once(probe, out_base, r)
+                    fired, path, tk, exit_code, dur = self._run_probe_once(probe, out_base, r, on_progress=on_progress)
                     fired_count += int(fired)
                     tokens += tk
                     duration_ms += dur

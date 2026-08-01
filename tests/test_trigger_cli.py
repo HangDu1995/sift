@@ -13,7 +13,7 @@ def test_trigger_command_runs_probes_and_writes_report(tmp_path, monkeypatch):
 
     fake = {"probes":[{"id":1,"expect_trigger":True,"prompt":"q1","trigger_rate":1.0,"verdict":"PASS","unresolved":False,"tokens":10,"duration_ms":1234,"transcript_path":"evals/probe-1/run-0/transcript.jsonl"}],
             "recall":1.0,"false_trigger_rate":None,"n_should_trigger":1,"n_should_not":0,"unresolved":0,"duration_ms":1234,"total_tokens":999}
-    monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run", lambda self, probes, base: fake)
+    monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run", lambda self, probes, base, **kw: fake)
 
     out = tmp_path / "out"
     r = CliRunner().invoke(app, ["trigger", str(skill), "-o", str(out), "--runs", "1"])
@@ -57,7 +57,7 @@ def test_trigger_command_renders_unresolved_probe_without_crash(tmp_path, monkey
             "recall": None, "false_trigger_rate": None,
             "n_should_trigger": 0, "n_should_not": 0, "unresolved": 1, "duration_ms": 0, "total_tokens": 0}
     monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run",
-                        lambda self, probes, base: fake)
+                        lambda self, probes, base, **kw: fake)
 
     out = tmp_path / "out"
     r = CliRunner().invoke(app, ["trigger", str(skill), "-o", str(out)])
@@ -87,7 +87,7 @@ def test_trigger_command_llm_suggestion_on_failure(tmp_path, monkeypatch):
             "recall": 0.0, "false_trigger_rate": None,
             "n_should_trigger": 1, "n_should_not": 0, "unresolved": 0, "duration_ms": 500, "total_tokens": 10}
     monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run",
-                        lambda self, probes, base: fake)
+                        lambda self, probes, base, **kw: fake)
 
     def fake_call_claude(prompt, *, on_usage=None, **kw):
         if on_usage:

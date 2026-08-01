@@ -294,6 +294,32 @@ def test_trigger_runner_duration_sums_across_runs(monkeypatch, tmp_path):
     assert res["duration_ms"] == 300
 
 
+def test_trigger_runner_progress_callback(monkeypatch, tmp_path):
+    """run(on_progress=...) 每个 probe 开头报位置(probe i/N + 方向)+ 透传 cc 动作给回调。"""
+    from skill_eval.execution.trigger_runner import TriggerRunner
+    from skill_eval.models.eval_models import TriggerProbe
+    from skill_eval.models.execution_models import RunOutput
+
+    received = []
+
+    def fake_run_trigger(self, prompt, cwd, env, on_progress=None, **kw):
+        if on_progress:
+            on_progress("🔧 Skill: my-skill")  # 模拟 cc 流式进度(_progress_from_event 产)
+        return RunOutput(exit_code=0, stdout='{"type":"result","result":"x"}\n')
+
+    skill = tmp_path / "my-skill"; skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
+    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    tr = TriggerRunner(skill, runs=1)
+    tr.run([
+        TriggerProbe(id=1, prompt="q", expect_trigger=True),
+        TriggerProbe(id=2, prompt="q", expect_trigger=False),
+    ], out_base=tmp_path / "out", on_progress=received.append)
+    assert any("probe 1/2" in x and "该触发" in x for x in received)   # probe 头 + 方向
+    assert any("probe 2/2" in x and "不该触发" in x for x in received)
+    assert any("🔧 Skill" in x for x in received)                       # cc 动作透传
+
+
 # ---------------------------------------------------------------------------
 # Part C — 干净 HOME 清理(M6:_run_probe_once 用完即清,不漏 /tmp/trigger-home-*)
 # ---------------------------------------------------------------------------

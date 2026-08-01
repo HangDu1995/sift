@@ -438,7 +438,7 @@ recall 75%(5 should-trigger) · false-trigger 10%(5 should-not) · 2 runs · 1 u
 Written to /tmp/out/trigger-report.json · /tmp/out/trigger-report.html
 ```
 
-写 `trigger-report.json`（机器读）+ `trigger-report.html`（人读，**always 写**，与 JSON 并列，对齐 audit）+ 终端摘要。汇总行：`recall`（绿）/ `false-trigger`（红）各带样本量 + runs + unresolved + 耗时 + 总 token；逐 probe `[+/-/?] probe-N: 触发率 → verdict (token · 耗时)`（UNRESOLVED 触发率显 `?`、消耗显 0）。
+写 `trigger-report.json`（机器读）+ `trigger-report.html`（人读，**always 写**，与 JSON 并列，对齐 audit）+ 终端进度（逐 probe 实时 `probe i/N` + cc 动作 `🔧/✓`，同 `run`）+ 跑完的摘要。汇总行：`recall`（绿）/ `false-trigger`（红）各带样本量 + runs + unresolved + 耗时 + 总 token；逐 probe `[+/-/?] probe-N: 触发率 → verdict (token · 耗时)`（UNRESOLVED 触发率显 `?`、消耗显 0）。
 
 **操作建议（怎么改 description 才更容易 / 更精准地被触发）**：报告 `suggestions[]` 给可直接照做的建议，两路——
 

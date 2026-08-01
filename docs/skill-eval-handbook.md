@@ -1433,7 +1433,7 @@ trigger-accuracy 是**诊断工具，不是门禁**：
 
 跑完 `trigger` 产三样：`trigger-report.json`（机器读）+ `trigger-report.html`（人读，**always 写**，与 JSON 并列、对齐 audit，`--open` 浏览器打开）+ 终端摘要。
 
-**终端摘要**——一行汇总 + 逐 probe + 操作建议：
+**终端进度 + 摘要**——跑的过程实时显示进度（每个 probe 开头 `probe i/N`（该触发 / 不该触发）+ cc 的实时动作 `🔧 …` / `✓ 完成`，同 `run` 命令）；跑完是一行汇总 + 逐 probe + 操作建议：
 
 ```
 recall 75%(5 should-trigger) · false-trigger 10%(5 should-not) · 2 runs · 1 unresolved · 耗时 12.3s · 28400 tok
