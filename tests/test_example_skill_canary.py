@@ -35,6 +35,18 @@ _SLOW = pytest.mark.skipif(
 )
 
 
+def test_incident_reporter_trigger_probes_load():
+    """incident-reporter(trigger 专用 example)trigger_probes 完整性:能加载 + 两方向都有。fast,不调 LLM。"""
+    import json
+    from skill_eval.models import EvalSet
+    es = EvalSet.model_validate(json.loads(
+        (_FIXTURES / "incident-reporter" / "evals" / "evals.json").read_text(encoding="utf-8")))
+    assert es.skill_name == "incident-reporter"
+    assert len(es.trigger_probes) == 5
+    assert any(p.expect_trigger for p in es.trigger_probes)       # 有 should-trigger
+    assert any(not p.expect_trigger for p in es.trigger_probes)   # 有 should-not
+
+
 @_SLOW
 class TestExampleSkillCanary:
     """真 LLM 在干净输入下抓植入违规(canary 回归)。中英对照 + 复杂容忍度。"""

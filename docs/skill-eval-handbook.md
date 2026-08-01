@@ -1421,7 +1421,7 @@ LLM 读 skill 的 description 生成两方向探题，追加到 evals.json 的 `
 
 ### 15.6 边界：诊断定位，无门禁
 
-trigger-accuracy v1 是**诊断工具，不是门禁**：
+trigger-accuracy 是**诊断工具，不是门禁**：
 
 - **无 gate / 不出 exit-code 判决**——只产 `trigger-report.json` + 终端摘要。recall 低或 false_trigger 高是"该改 description"的信号，不是合并阻断（那是 skill 内容要改、不是 PR 该卡的红灯）。
 - **独立 artifact，不并入 `benchmark.json`**——trigger 回答的是上游独立问题，和 scoring / compliance / calibration 不耦合，benchmark 的双率 delta / 盲评胜率都不含触发信号。

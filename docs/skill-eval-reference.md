@@ -388,7 +388,7 @@ skill-eval audit path/to/skill/ --db opencode.db
 
 > **transcript 来源标注（cc / opencode）**：JSON 的 `transcript_sources`(与 `transcripts` 同序并行)标每条 transcript 来自哪侧(`"cc"` / `"opencode"` / …,旧 report 无此字段 → 空,向后兼容);HTML 头部 transcript 列表 + 每条 finding 的 transcript 行都带来源徽章,CLI 摘要行显 `sources: …`。多 transcript 混合来源(同时审 cc + opencode)时一眼分清。
 
-> **「X 条由 transcript 反推」是什么**：findings 里 `derived_from_transcript: true` 的不是 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（只增不减）。v1 只补一类：transcript 里 agent 真实 Read 过的输入/参考文件（`digest.input_files`）→ 各补一条「读取 \<path\>」（REFERENCE_USAGE）。例：SKILL.md 只写"读用户指定的日志文件"不点名，transcript 实际读了 `app.log` → 反推一条「读取 app.log」并确认命中。这类由 Read 行为反推的 read 检查构造上即 PASS（不膨胀 fail），作用是把 agent 真碰过的输入文件记进报告。`required_tools`（Bash 命令分不清业务/通用）、`required_outputs`（历史 trace 产物未必还在盘）不反推。
+> **「X 条由 transcript 反推」是什么**：findings 里 `derived_from_transcript: true` 的不是 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（只增不减）。当前只补一类：transcript 里 agent 真实 Read 过的输入/参考文件（`digest.input_files`）→ 各补一条「读取 \<path\>」（REFERENCE_USAGE）。例：SKILL.md 只写"读用户指定的日志文件"不点名，transcript 实际读了 `app.log` → 反推一条「读取 app.log」并确认命中。这类由 Read 行为反推的 read 检查构造上即 PASS（不膨胀 fail），作用是把 agent 真碰过的输入文件记进报告。`required_tools`（Bash 命令分不清业务/通用）、`required_outputs`（历史 trace 产物未必还在盘）不反推。
 
 > **怎么看结果（别只数 fail）**：每条 finding 带 **#N 序号**。① **同文重复已去重**——同句被抽成 `CONSTRAINT` + `ANTI_FABRICATION` 的合并成一条、来源徽章显 `CONSTRAINT + ANTI_FABRICATION`（不再虚增 fail）。② **同行为跨类已关联**——同一行为（如没读某 reference）同时违反 条件性 + 步骤 两条**不同**规则的，仍是两条（确是两条规则），但互标 `↔ 同源违规 #N`（可点跳）；故 fail 条数仍可能 > 真实问题数，**逐条看 evidence 对照"哪个行为"**，别数条数。③ **没判成（UNRESOLVED）多 ≠ 全过**——LLM 没判成的一律 UNRESOLVED（见上），汇总成警告提示重跑；N/A（不适用）是已解决结论、不进警告。④ **对照预期**：自带 3 个 audit 示例的预期违规已逐条列明（见 [example-skills/README.md](../fixtures/example-skills/README.md)），跑完比对该抓的违规是否都出现在 FAIL、evidence 是否点中。⑤ **verdict 徽章 + method 标签**（每条）：左侧 verdict 五态图标（✓通过 / ✗失败 / ⊘不适用（场景不触发）/ ○没判成（可重跑）/ ?判不准（重跑无益）），右侧 method 标签「程序」（tool_trace 命中 / 子串匹配，不调 LLM）或「LLM」。⑥ **FAIL 噪声判别**（每条 FAIL + by_instruction 失败行）：`noise_label` 徽章（`tool_noise` 疑似工具噪声 / `skill_issue` 疑似 skill 问题 / `uncertain` 待确认）+ `noise_reasons`（hover 看理由）。fixture 下 FAIL 混着工具噪声（extractor 误提资源描述当步骤、evidence 自相矛盾、LLM 判定不稳）和真 skill 问题（硬约束程序判定 FAIL），判别帮区分、避免据噪声误改 skill。判别法见 handbook §7.12、诚实边界见 §7.14；治本仍 `--refine-instructions` / 结构化声明 / 真实 transcript audit。**source / category 徽章**：单次 audit-report、viewer per-run、整体汇总三处都显 `source`（InstructionSource，如 `CONSTRAINT` / `HEADING_STEP`）+ `category` —— `source` 比 `category` 细（6 vs 4），是判别噪声的关键信号（如 `HEADING_STEP` + 资源链接 → 疑似资源描述被当步骤）。
 
@@ -422,7 +422,7 @@ skill-eval trigger path/to/skill/ --evals path/to/evals.json --model claude-sonn
 
 **判定**：每条 probe 跨 N runs 算 `trigger_rate = fired 次数 / runs`，阈值 0.5 二值化 → PASS / FAIL；spawn 失败 / 超时 / **cc 非零退出且没触发**（限流 / 后端不可用：cc 实测 exit 1 + 错误打 stdout、stderr 空，`run_trigger` 不 raise 而返正常输出）→ 该 probe = `UNRESOLVED`（**不进率分母**、`trigger_rate` 置 `null`，宁少报不乱报）。聚合**分开报**（各带样本量）：`recall` = should-trigger 方向均值；`false_trigger_rate` = should-not 方向均值——两者是**不同失效模式、不合成一个分**。某方向 0 probe → 对应率 `null`（N/A，不是假 0.0）。
 
-> **诊断定位、无门禁**：v1 **无 gate / 不出 exit-code 判决**（纯诊断）。`trigger-report.json` 是独立 artifact，**不并入 `benchmark.json`**。用 [`init --trigger-probes`](#init--初始化评测定义) 生成探题。`description_hash` = sha256(frontmatter `description`)[:16]——锚定触发判定唯一依赖的输入，跨版本对比时判断 recall 变化是否源于 description 改动。成本：每 probe = 1 次 cc spawn（比 `run` 轻——无 with/without 双 spawn、无 grader、无 compliance judge）。
+> **诊断定位、无门禁**：**无 gate / 不出 exit-code 判决**（纯诊断）。`trigger-report.json` 是独立 artifact，**不并入 `benchmark.json`**。用 [`init --trigger-probes`](#init--初始化评测定义) 生成探题。`description_hash` = sha256(frontmatter `description`)[:16]——锚定触发判定唯一依赖的输入，跨版本对比时判断 recall 变化是否源于 description 改动。成本：每 probe = 1 次 cc spawn（比 `run` 轻——无 with/without 双 spawn、无 grader、无 compliance judge）。
 
 **终端输出 + 产物**：
 
@@ -542,7 +542,7 @@ skill-eval batch-report batch-workspace/ --open
 
 前三层都默认 skill 已"上场"——scoring 的 `_build_non_interactive_prompt` 把 skill body **强制注入** cc prompt + "Follow its instructions"，cc 对"要不要够这个 skill"没得选，**触发能力从不被测**。但真实会话里 cc 调不调用一个 skill，靠的**只有 frontmatter 的 `description`**——这一项三维都不评。一个永不触发的 skill，body 再好也是死重量。
 
-[`trigger`](#trigger--触发准确度第-4-维) 命令补这个上游缺口：把 skill 放进 `<cwd>/.claude/skills/`、给中性 prompt，测 cc 会不会仅凭 description 自动触发（干净 HOME 隔离全局 plugin）。产 `trigger-report.json` + `trigger-report.html` + 「怎么改 description」的操作建议（规则永远给 + 有失败自动起草 LLM 改写草案）——`recall`（漏召）+ `false_trigger_rate`（误触）分开报、各带样本量，独立 artifact（**不并入 `benchmark.json`**），v1 无 gate / 不进 exit-code 判决（诊断定位）。
+[`trigger`](#trigger--触发准确度第-4-维) 命令补这个上游缺口：把 skill 放进 `<cwd>/.claude/skills/`、给中性 prompt，测 cc 会不会仅凭 description 自动触发（干净 HOME 隔离全局 plugin）。产 `trigger-report.json` + `trigger-report.html` + 「怎么改 description」的操作建议（规则永远给 + 有失败自动起草 LLM 改写草案）——`recall`（漏召）+ `false_trigger_rate`（误触）分开报、各带样本量，独立 artifact（**不并入 `benchmark.json`**），无 gate / 不进 exit-code 判决（诊断定位）。
 
 ### 双率：客观侧 vs 主观侧
 
@@ -845,7 +845,7 @@ skill-eval batch-report batch-workspace/ --open
 | `suggestions[]` | 操作建议：`category`（`recall` / `false_trigger` / `unresolved` / `all_good` / `llm_rewrite`）+ `source`（`rule` / `llm`）+ `message`（中文文案，失败时带 probe 的 prompt 原文）+ `probe_ids`。规则建议永远给；`llm_rewrite` 仅在有失败时自动产生（见上「操作建议」） |
 | `probes[]` | 每条 probe：`id` / `expect_trigger` / `prompt`（中性请求原文）/ `trigger_rate`（fired / runs；UNRESOLVED 时 `null`）/ `verdict`（PASS / FAIL / UNRESOLVED）/ `tokens`（该 probe 各 run cc token 之和）/ `duration_seconds`（该 probe 各 run cc 耗时之和 / 1000）/ `transcript_path`（首个成功 run 的 transcript 路径 `probe-<id>/run-0/transcript.jsonl`，人审 / 重跑抓手；`--runs`>1 其余在同目录 `run-1…`，spawn 全失败则空） |
 
-> `recall` 与 `false_trigger_rate` 是**不同失效模式、分开报**（前者测漏召、后者测误触），不合成单一分。某方向 0 probe → 对应字段 `null`（N/A，不是假 0.0）。v1 **无 gate、不进 `benchmark.json`**（诊断定位，独立 artifact）。
+> `recall` 与 `false_trigger_rate` 是**不同失效模式、分开报**（前者测漏召、后者测误触），不合成单一分。某方向 0 probe → 对应字段 `null`（N/A，不是假 0.0）。**无 gate、不进 `benchmark.json`**（诊断定位，独立 artifact）。
 
 ### 输出文件说明
 

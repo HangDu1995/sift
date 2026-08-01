@@ -1,15 +1,16 @@
 # example-skills — 主力示例 skill
 
-4 个结构规整的示例 skill + 1 条多 skill `--kind skill` 切分 demo transcript,演示 skill-eval 的评测路径。**每个示例擅长的路径不同**(取决于自带 `evals.json` / `transcript` 与否),照下表选,照命令跑。
+5 个示例 skill + 1 条多 skill `--kind skill` 切分 demo transcript,演示 skill-eval 的评测路径。**每个示例擅长的路径不同**(取决于自带 `evals.json` / `transcript` / `trigger_probes` 与否),照下表选,照命令跑。
 
 ## 能力速查
 
-| skill | 领域 / 语言 | 路径3 `run`(evals.json) | 路径2 `audit`(transcript) | 路径1 `--task`(真任务) | analyze / vet |
-|---|---|---|---|---|---|
-| [log-error-analyzer/](log-error-analyzer/) | 日志分诊 / 英 | ✅ 自带 evals.json | ✅ 自带 transcript | — | ✅ |
-| [log-error-analyzer-zh/](log-error-analyzer-zh/) | 日志分诊 / 中 | ✅ 自带 evals.json | ✅ 自带 transcript | — | ✅ |
-| [code-review-auditor/](code-review-auditor/) | 代码 review / 英 | 需先 `init` | — | ✅ 专为真任务设计 | ✅ |
-| [release-checklist-zh/](release-checklist-zh/) | 发布自检 / 中 | 需先 `init` | ✅ 自带 transcript | — | ✅ |
+| skill | 领域 / 语言 | 路径3 `run`(evals.json) | 路径2 `audit`(transcript) | 路径1 `--task`(真任务) | 路径4 `trigger`(触发) | analyze / vet |
+|---|---|---|---|---|---|---|
+| [log-error-analyzer/](log-error-analyzer/) | 日志分诊 / 英 | ✅ 自带 evals.json | ✅ 自带 transcript | — | 需 `init --trigger-probes` | ✅ |
+| [log-error-analyzer-zh/](log-error-analyzer-zh/) | 日志分诊 / 中 | ✅ 自带 evals.json | ✅ 自带 transcript | — | 需 `init --trigger-probes` | ✅ |
+| [code-review-auditor/](code-review-auditor/) | 代码 review / 英 | 需先 `init` | — | ✅ 专为真任务设计 | 需 `init --trigger-probes` | ✅ |
+| [release-checklist-zh/](release-checklist-zh/) | 发布自检 / 中 | 需先 `init` | ✅ 自带 transcript | — | 需 `init --trigger-probes` | ✅ |
+| [incident-reporter/](incident-reporter/) | 事故分诊 / 中 | — | — | — | ✅ 自带 trigger_probes | ✅ |
 
 > **三条路径**:路径3 `run` 跑 evals.json 评测题 · 路径2 `audit` 对账历史 transcript(不 run)· 路径1 `--task --cwd` 跑真任务(不读 evals.json)。详见 [docs/example-skill.md](../../docs/example-skill.md)。
 
@@ -113,6 +114,22 @@ skill-eval init fixtures/example-skills/release-checklist-zh/ \
 > - **没生成 changelog、没更新 version.py** → **FAIL**
 >
 > 典型计数 **pass≈11 / fail≈12 / na≈5**(total≈28)。这个 skill 故意复杂(7 步骤 + 代码块 + 示例列表),extractor 会把"示例当步骤、代码块当输出格式"抽成噪音,所以信噪比低于简单 skill、会出现少量假 FAIL;但真违规仍穿透噪音被抓。同样别钉精确条数,对照"上面这些违规是否都出现在 FAIL"即可。
+
+### incident-reporter(`trigger` 触发准确度演示)
+
+上面 4 个演示 run / audit / task;这一个专为 [`trigger`](../../docs/skill-eval-reference.md)(第 4 维)演示——**frontmatter description 故意写得不精准**,让真跑容易暴露 description 的触发问题,演示 trigger 报告 + 改进建议怎么读。
+
+description = 「处理文本内容,生成结构化报告。」——真实 scope 是**事故报告**(见 body),但 description 没说「事故/incident」,且「文本内容/报告」过宽。自带 5 条 `trigger_probes`(2 条该触发的 incident 任务 + 3 条不该触发的相近文本任务):
+
+```bash
+skill-eval trigger fixtures/example-skills/incident-reporter/ --runs 2 -o /tmp/trig
+```
+
+> **trigger 真跑 cc、结果动态**(每 probe × run = 1 次 cc spawn,凭 description 决定是否触发)——不像 audit example 能列固定预期违规。这个 description **故意不精准**以提高演示 FAIL 的概率:
+> - **该触发的 incident 任务**(probe 1-2):description 没够到「事故/故障」措辞 → 可能**漏召**(recall 低 → FAIL);
+> - **不该触发的文本任务**(probe 3-5:转文字稿 / 摘要 / 周报):description「处理文本内容 / 生成报告」过宽 → 可能**误触**(false-trigger 高 → FAIL)。
+>
+> 跑完看 `trigger-report.json` + `trigger-report.html` + 终端:recall / false-trigger 各带样本量 + 耗时 + 总 token;per-probe verdict + 消耗;**操作建议**区——规则建议(漏召 → 补「事故/incident」关键词;误触 → 收窄到 incident scope)+ 有失败时自动起草的 LLM 改写 description 草案。**实际结果取决于 cc**(可能只看到误触、只看到漏召、或混合),核心学怎么读 recall / false-trigger + 用建议改 description。trigger 定位诊断、无 gate(不进 `benchmark.json`)。
 
 ### multi-skill-demo(`--kind skill` 多 skill 切分对账)
 
