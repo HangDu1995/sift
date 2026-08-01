@@ -207,6 +207,8 @@ skill-eval init   path/to/skill/ --trigger-probes    # 先生成探题(should/sh
 skill-eval trigger path/to/skill/ --runs 2 -o /tmp/out
 ```
 
+产出 `trigger-report.json` + `trigger-report.html`（人读，`--open` 浏览器打开）+ 终端摘要，**含「怎么改 description」的操作建议**：规则建议永远给（漏召→补关键词 / 误触→收窄），有失败时还自动跑一次 LLM 起草可抄改的 description 草案（全 PASS 跳过、无 flag）。终端输出 / JSON 字段 / 改法清单见 [handbook §15.7](docs/skill-eval-handbook.md) 与 [reference](docs/skill-eval-reference.md)。
+
 ### `report` — HTML 报告
 
 ```bash

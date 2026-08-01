@@ -1429,6 +1429,40 @@ trigger-accuracy v1 是**诊断工具，不是门禁**：
 
 > **成本**：每条 probe = 1 次 cc spawn（有 LLM 成本，但比 `run` 轻——无 with/without 双 spawn、无 grader、无 compliance judge）。配合前三层用：先 `trigger` 看 description 能不能让 cc 够到这个 skill，再 `run` 看上场后表现。
 
+### 15.7 怎么读报告 + 怎么改 description
+
+跑完 `trigger` 产三样：`trigger-report.json`（机器读）+ `trigger-report.html`（人读，**always 写**，与 JSON 并列、对齐 audit，`--open` 浏览器打开）+ 终端摘要。
+
+**终端摘要**——一行汇总 + 逐 probe + 操作建议：
+
+```
+recall 75%(5 should-trigger) · false-trigger 10%(5 should-not) · 2 runs · 1 unresolved · 耗时 12.3s
+  [+] probe-1: 100% → PASS (842 tok · 4.5s)
+  [-] probe-2: 0%   → FAIL (318 tok · 2.1s)
+  [?] probe-3: ?    → UNRESOLVED (0 tok · 0.0s)
+操作建议：
+  [rule:recall] 漏召:…考虑补触发关键词:
+    · probe-2:「…」
+  [llm:llm_rewrite] 修订 description:…\n理由:…
+Written to …/trigger-report.json · …/trigger-report.html
+```
+
+- 汇总行：`recall`（绿，越高越好）/ `false-trigger`（红，越低越好）各带样本量 + runs + unresolved + 耗时（cc spawn 总墙钟，不含 LLM 建议那次调用）。逐 probe `[+/-/?] probe-N: 触发率 → verdict (token · 耗时)`：`+` PASS、`-` FAIL、`?` UNRESOLVED（触发率显 `?`、消耗显 0，因为没判成）。
+
+**怎么改 description**——报告 `suggestions[]` 直接给方向，两路：
+
+| 信号 | 含义 | 怎么改 |
+|---|---|---|
+| `recall`（should-trigger FAIL） | 漏召：description 没够到该处理的任务 | 补与失败 prompt 匹配的触发关键词 / 动作动词 |
+| `false_trigger`（should-not FAIL） | 误触：description 过宽 | 收窄 scope / 加边界排除语（明确不处理这类） |
+| `unresolved` | 没判成（限流 / 异常） | 加大 `--runs` 重跑确认，别据未判成下结论 |
+| `all_good` | 零 FAIL 零 unresolved | description 触发边界够精准，无需改 |
+| `llm_rewrite`（source=llm） | LLM 起草的修订 description 草案 | 可直接抄改（有失败才自动产，带「理由:」） |
+
+规则建议（`recall`/`false_trigger`/`unresolved`/`all_good`）永远给、零成本；LLM 建议（`llm_rewrite`）**有失败才自动跑**（喂当前 description + 失败 probe 的 prompt，起草可抄改的 description + 一行理由），全 PASS 跳过。相对 trigger 本体（N probe × run 次完整 cc spawn）这是单次轻 LLM 调用、<5%，故默认开、无 flag；调用失败只丢这条、规则建议照在。
+
+> `trigger-report.json` 字段全表见 reference 的 `trigger-report.json` 段。建议口径是**诊断、不是门禁**——给「改 description 的方向」，不下 PASS/FAIL 判决（同 15.6）。
+
 ---
 
 ## 附录

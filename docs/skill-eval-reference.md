@@ -412,7 +412,8 @@ skill-eval trigger path/to/skill/ --evals path/to/evals.json --model claude-sonn
 | `--model` | 用户默认 | claude -p 模型 |
 | `--timeout` | 120 | 单次 spawn 超时（秒） |
 | `--max-turns` | 10 | claude -p 最大轮数 |
-| `--output` / `-o` | `<skill>/evals/` | 输出目录（写 `trigger-report.json` + 终端摘要） |
+| `--output` / `-o` | `<skill>/evals/` | 输出目录（写 `trigger-report.json` + `trigger-report.html` + 终端摘要） |
+| `--open` | 关 | 写完后用浏览器打开 `trigger-report.html` |
 
 **两种探题**：
 
@@ -422,6 +423,27 @@ skill-eval trigger path/to/skill/ --evals path/to/evals.json --model claude-sonn
 **判定**：每条 probe 跨 N runs 算 `trigger_rate = fired 次数 / runs`，阈值 0.5 二值化 → PASS / FAIL；spawn 失败 / 超时 / **cc 非零退出且没触发**（限流 / 后端不可用：cc 实测 exit 1 + 错误打 stdout、stderr 空，`run_trigger` 不 raise 而返正常输出）→ 该 probe = `UNRESOLVED`（**不进率分母**、`trigger_rate` 置 `null`，宁少报不乱报）。聚合**分开报**（各带样本量）：`recall` = should-trigger 方向均值；`false_trigger_rate` = should-not 方向均值——两者是**不同失效模式、不合成一个分**。某方向 0 probe → 对应率 `null`（N/A，不是假 0.0）。
 
 > **诊断定位、无门禁**：v1 **无 gate / 不出 exit-code 判决**（纯诊断）。`trigger-report.json` 是独立 artifact，**不并入 `benchmark.json`**。用 [`init --trigger-probes`](#init--初始化评测定义) 生成探题。`description_hash` = sha256(frontmatter `description`)[:16]——锚定触发判定唯一依赖的输入，跨版本对比时判断 recall 变化是否源于 description 改动。成本：每 probe = 1 次 cc spawn（比 `run` 轻——无 with/without 双 spawn、无 grader、无 compliance judge）。
+
+**终端输出 + 产物**：
+
+```
+recall 75%(5 should-trigger) · false-trigger 10%(5 should-not) · 2 runs · 1 unresolved · 耗时 12.3s
+  [+] probe-1: 100% → PASS (842 tok · 4.5s)
+  [-] probe-2: 0%   → FAIL (318 tok · 2.1s)
+  [?] probe-3: ?    → UNRESOLVED (0 tok · 0.0s)
+操作建议：
+  [rule:recall] 漏召:2 条该触发的任务 cc 没触发…考虑补触发关键词：
+    · probe-2:「…」
+  [llm:llm_rewrite] 修订 description:做 X…\n理由:收窄了 scope
+Written to /tmp/out/trigger-report.json · /tmp/out/trigger-report.html
+```
+
+写 `trigger-report.json`（机器读）+ `trigger-report.html`（人读，**always 写**，与 JSON 并列，对齐 audit）+ 终端摘要。汇总行：`recall`（绿）/ `false-trigger`（红）各带样本量 + runs + unresolved + 耗时；逐 probe `[+/-/?] probe-N: 触发率 → verdict (token · 耗时)`（UNRESOLVED 触发率显 `?`、消耗显 0）。
+
+**操作建议（怎么改 description 才更容易 / 更精准地被触发）**：报告 `suggestions[]` 给可直接照做的建议，两路——
+
+- **规则建议**（永远给、零成本）：`recall`（should-trigger FAIL=漏召）→ 列出没触发的 prompt +「补触发关键词 / 动作动词」；`false_trigger`（should-not FAIL=误触）→「收窄 scope / 加边界排除语」；`unresolved` →「加大 `--runs` 重跑确认」；零 FAIL 零 unresolved → `all_good`（无需改）。
+- **LLM 建议**（**有失败才自动跑、无 flag**）：喂当前 description + 失败 probe 的 prompt，起草一个修订 description 草案（可直接抄改）+ 一行理由。相对 trigger 本体（每 probe × run = 1 次完整 cc spawn）这是一次单轮 LLM 调用、开销 <5%，全 PASS 跳过（零成本），故默认开、不设 flag。LLM 调用失败只丢这条、规则建议照在（终端打一行提示）。
 
 ### `report` — HTML 报告
 
@@ -520,7 +542,7 @@ skill-eval batch-report batch-workspace/ --open
 
 前三层都默认 skill 已"上场"——scoring 的 `_build_non_interactive_prompt` 把 skill body **强制注入** cc prompt + "Follow its instructions"，cc 对"要不要够这个 skill"没得选，**触发能力从不被测**。但真实会话里 cc 调不调用一个 skill，靠的**只有 frontmatter 的 `description`**——这一项三维都不评。一个永不触发的 skill，body 再好也是死重量。
 
-[`trigger`](#trigger--触发准确度第-4-维) 命令补这个上游缺口：把 skill 放进 `<cwd>/.claude/skills/`、给中性 prompt，测 cc 会不会仅凭 description 自动触发（干净 HOME 隔离全局 plugin）。产 `trigger-report.json`——`recall`（漏召）+ `false_trigger_rate`（误触）分开报、各带样本量，独立 artifact（**不并入 `benchmark.json`**），v1 无 gate / 不进 exit-code 判决（诊断定位）。
+[`trigger`](#trigger--触发准确度第-4-维) 命令补这个上游缺口：把 skill 放进 `<cwd>/.claude/skills/`、给中性 prompt，测 cc 会不会仅凭 description 自动触发（干净 HOME 隔离全局 plugin）。产 `trigger-report.json` + `trigger-report.html` + 「怎么改 description」的操作建议（规则永远给 + 有失败自动起草 LLM 改写草案）——`recall`（漏召）+ `false_trigger_rate`（误触）分开报、各带样本量，独立 artifact（**不并入 `benchmark.json`**），v1 无 gate / 不进 exit-code 判决（诊断定位）。
 
 ### 双率：客观侧 vs 主观侧
 
@@ -787,6 +809,7 @@ skill-eval batch-report batch-workspace/ --open
 ```json
 {
   "skill_name": "my-skill",
+  "description": "分析日志、找出异常突增的时段",
   "description_hash": "a1b2c3d4e5f60718",
   "runs": 2,
   "recall": 0.75,
@@ -794,10 +817,15 @@ skill-eval batch-report batch-workspace/ --open
   "n_should_trigger": 5,
   "n_should_not": 5,
   "unresolved": 0,
-  "token_usage": {"total_tokens": 28400},
+  "token_usage": {"total_tokens": 28400, "suggest": {"input_tokens": 200, "output_tokens": 80, "total_cost_usd": 0.02}},
+  "duration_seconds": 12.3,
+  "suggestions": [
+    {"category": "recall", "source": "rule", "message": "漏召:…考虑补触发关键词:\n  · probe-N:「…」", "probe_ids": [3]},
+    {"category": "llm_rewrite", "source": "llm", "message": "修订 description:…\n理由:…", "probe_ids": [3]}
+  ],
   "probes": [
-    {"id": 1, "expect_trigger": true,  "trigger_rate": 1.0, "verdict": "PASS", "transcript_path": "evals/probe-1/run-0/transcript.jsonl"},
-    {"id": 2, "expect_trigger": false, "trigger_rate": 0.0, "verdict": "PASS", "transcript_path": "evals/probe-2/run-0/transcript.jsonl"}
+    {"id": 1, "expect_trigger": true,  "prompt": "把访问日志按端点聚合并标出异常时段", "trigger_rate": 1.0, "verdict": "PASS", "tokens": 842, "duration_seconds": 4.5, "transcript_path": "evals/probe-1/run-0/transcript.jsonl"},
+    {"id": 2, "expect_trigger": false, "prompt": "把这本小说翻译成英文", "trigger_rate": 0.0, "verdict": "PASS", "tokens": 318, "duration_seconds": 2.1, "transcript_path": "evals/probe-2/run-0/transcript.jsonl"}
   ]
 }
 ```
@@ -805,14 +833,17 @@ skill-eval batch-report batch-workspace/ --open
 | 字段 | 说明 |
 |------|------|
 | `skill_name` | 被测 skill 名（frontmatter `name`） |
+| `description` | 被测 skill 的 frontmatter description 原文（HTML 展示 + LLM 建议的输入；旧报告无此字段 → `""`） |
 | `description_hash` | sha256(frontmatter `description`)[:16]——触发判定唯一依赖输入的锚，跨版本对比 / 判断 recall 变化是否源于 description 改动 |
 | `runs` | 每条 probe 跑的次数 |
 | `recall` | should-trigger 方向 `trigger_rate` 均值；该方向 0 probe → `null`（N/A） |
 | `false_trigger_rate` | should-not 方向 `trigger_rate` 均值；该方向 0 probe → `null`（N/A） |
 | `n_should_trigger` / `n_should_not` | 两方向 probe 数（各自样本量） |
 | `unresolved` | spawn 异常 / cc 非零退出且没触发（限流）的 probe 数（**不进** recall / false_trigger_rate 分母） |
-| `token_usage` | `{total_tokens}`——所有 probe spawn 的 cc token 合计 |
-| `probes[]` | 每条 probe：`id` / `expect_trigger` / `trigger_rate`（fired / runs；UNRESOLVED 时 `null`）/ `verdict`（PASS / FAIL / UNRESOLVED）/ `transcript_path`（首个成功 run 的 transcript 路径 `probe-<id>/run-0/transcript.jsonl`，人审 / 重跑抓手；`--runs`>1 其余在同目录 `run-1…`，spawn 全失败则空） |
+| `token_usage` | `{total_tokens}`（所有 probe spawn 的 cc token 合计）+ 可选 `suggest`（LLM 建议那次调用的 input/output/cost，有失败才产生） |
+| `duration_seconds` | cc spawn 总墙钟（各 probe 各 run `RunOutput.duration_ms` 之和 / 1000；不含 LLM 建议那次调用；旧报告无此字段 → `0.0`） |
+| `suggestions[]` | 操作建议：`category`（`recall` / `false_trigger` / `unresolved` / `all_good` / `llm_rewrite`）+ `source`（`rule` / `llm`）+ `message`（中文文案，失败时带 probe 的 prompt 原文）+ `probe_ids`。规则建议永远给；`llm_rewrite` 仅在有失败时自动产生（见上「操作建议」） |
+| `probes[]` | 每条 probe：`id` / `expect_trigger` / `prompt`（中性请求原文）/ `trigger_rate`（fired / runs；UNRESOLVED 时 `null`）/ `verdict`（PASS / FAIL / UNRESOLVED）/ `tokens`（该 probe 各 run cc token 之和）/ `duration_seconds`（该 probe 各 run cc 耗时之和 / 1000）/ `transcript_path`（首个成功 run 的 transcript 路径 `probe-<id>/run-0/transcript.jsonl`，人审 / 重跑抓手；`--runs`>1 其余在同目录 `run-1…`，spawn 全失败则空） |
 
 > `recall` 与 `false_trigger_rate` 是**不同失效模式、分开报**（前者测漏召、后者测误触），不合成单一分。某方向 0 probe → 对应字段 `null`（N/A，不是假 0.0）。v1 **无 gate、不进 `benchmark.json`**（诊断定位，独立 artifact）。
 
