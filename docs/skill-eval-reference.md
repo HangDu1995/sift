@@ -17,6 +17,7 @@
   - [gate — 通过/失败判决](#gate--通过失败判决)
   - [audit — 真实 transcript 对账](#audit--真实-transcript-对账)
   - [trigger — 触发准确度（第 4 维）](#trigger--触发准确度第-4-维)
+  - [coverage — 出题漏测诊断](#coverage--出题漏测诊断)
   - [report — HTML 报告](#report--html-报告)
   - [batch — 批量评测](#batch--批量评测)
   - [batch-report — 批量 HTML 报告](#batch-report--批量-html-报告)
@@ -447,6 +448,56 @@ Written to /tmp/out/trigger-report.json · /tmp/out/trigger-report.html
 - **规则建议**（永远给、零成本）：`recall`（should-trigger FAIL=漏召）→ 列出没触发的 prompt +「补触发关键词 / 动作动词」；`false_trigger`（should-not FAIL=误触）→「收窄 scope / 加边界排除语」；`unresolved` →「加大 `--runs` 重跑确认」；零 FAIL 零 unresolved → `all_good`（无需改）。
 - **LLM 建议**（**有失败才自动跑、无 flag**）：喂当前 description + 失败 probe 的 prompt，起草一个修订 description 草案（可直接抄改）+ 一行理由。相对 trigger 本体（每 probe × run = 1 次完整 cc spawn）这是一次单轮 LLM 调用、开销 <5%，全 PASS 跳过（零成本），故默认开、不设 flag。LLM 调用失败自动重试 2 次（限流是瞬态——trigger 本体跑完紧接着调，常撞后端限流窗口）；重试耗尽只丢这条、规则建议照在，终端打失败原因（疑似限流 / 超时 / 空 result）让你判断是瞬态还是真问题。
 
+### `coverage` — 出题漏测诊断
+
+测 evals.json 对 SKILL.md **内容点**（可测的指令 / 步骤 / 能力 / 条件分支）的覆盖——`covered_by` 为空的内容点 = **漏测**（0 道题覆盖）。`run` 只能验证被考卷覆盖到的点；一个漏测点是 `run` 够不到的盲区，再跑多少轮也测不着。coverage 把这些盲区标出来。
+
+> **诊断定位、无门禁**（同 [`trigger`](#trigger--触发准确度第-4-维)）：**无 gate / 不出 exit-code 判决**，`coverage-report.json` 是独立 artifact，**不并入 `benchmark.json`**。不 re-run Claude 跑题——做的是**一次性 LLM 映射**：喂 SKILL.md 正文 + 各 eval 的 `id` / `prompt` / `rationale`，让 LLM 列出 SKILL.md 的可测内容点、并判断每点被哪几道 eval 真的**验证**（不是仅在 prompt 里提到）。`covered_by` 空 = 漏测。
+
+```bash
+skill-eval coverage path/to/skill/                       # 默认:诊断漏测,出 JSON + HTML
+skill-eval coverage path/to/skill/ --augment             # 漏测点自动补题(写回 evals.json,需人审)
+skill-eval coverage path/to/skill/ --evals path/to/evals.json
+```
+
+**参数**：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--evals` | 自动查找（`<skill>/evals/evals.json`） | evals.json 路径；不存在或无 eval → 友好警告 + exit 0 |
+| `--augment` | 关 | 自动补漏测题（见下） |
+| `--model` | 默认 | LLM 模型 |
+| `--timeout` | 120 | LLM 调用超时（秒） |
+| `--output` / `-o` | `<skill>/evals/` | 输出目录（写 `coverage-report.json` + `coverage-report.html`） |
+
+**内容点怎么来 + 为什么不建结构化表**：LLM 从 SKILL.md 列出**可测的指令点**（具体的规则 / 步骤 / 能力 / 条件分支——不含散文和示例），映射靠各 eval 的 `rationale`（`init` 自报的自由文本）+ `prompt` 的**语义**，**不建结构化 instruction_ref 表**——按 handbook §4.2 末尾「想要更可控的判定？」那段的逻辑：自动建的 eval↔指令对应表，准度和当场 LLM 判定（同一个 LLM）一样，却白搭维护复杂度；只有**人工逐条校对**的表才更准，而工具不做人工表。故 coverage 走 LLM 柔性映射。
+
+> **诚实：LLM 估、有噪声**。内容点清单的粒度（怎么切一个点）是主观的，映射是 LLM 判的——都抖。**「0 覆盖」的大漏测可靠**（一个内容点没任何 eval 碰，是明确的盲区信号）；边界态的「半覆盖」（点被部分 eval 碰到）噪声大。它是**漏测预警、不是精确度量**——拿它定位明显盲区，别对每条 covered_by 过度解读。
+
+**终端输出**（默认模式，无 `--augment`）：
+
+```
+内容点 12 · 漏测 3 · 耗时 8.4s · 4200 tok
+漏测点(0 道题覆盖):
+  · 安全事件分支
+      ↳ SKILL.md:「若日志含安全事件标记,先读 security-policy.md 再判断」
+  · 错误码不捏造
+      ↳ SKILL.md:「不得编造日志中不存在的错误码」
+  · 输出含时段聚合
+      ↳ SKILL.md:「报告必须按端点×小时聚合并标出异常时段」
+补题:逐条人工 review 后,用以下命令定向补(或加 --augment 自动补):
+  init path/to/skill/ --append --focus "安全事件分支"
+  init path/to/skill/ --append --focus "错误码不捏造"
+  init path/to/skill/ --append --focus "输出含时段聚合"
+Written to path/to/skill/evals/coverage-report.json · path/to/skill/evals/coverage-report.html
+```
+
+汇总行：内容点数 · 漏测数（红）· 耗时 · LLM token；逐漏测点列 `label` + SKILL.md 原文片段（`source_quote`，截断 120 字）；末尾给每个漏测点一条 `init --append --focus "<label>"` 处方（人工定向补，复用 [`init`](#init--初始化评测定义) 的 `--focus` 机制）。无漏测时显 ✓ 绿（`✓ 无漏测:SKILL.md 内容点均有 eval 覆盖。`）。
+
+**`--augment`（自动补题）**：每个漏测点复用 `init` 的生成器（`EvalInitGenerator(focus=<label>)`）自动补 eval——新 eval 带 `review:coverage-augment` flag（标记待人审）、按 `prompt` 与现有 eval 去重（重复的跳过计数）、id 接续已有 `max+1`，写回 evals.json。某漏测点补题失败（限流 / 异常）逐条跳过、不中断整体。补完打印 `--augment:补 N 题(带 review:coverage-augment,需人审)`（有跳过则附 `· 跳过 M 题(与现有 prompt 重复)`）。
+
+> **`--augment` 补题必须人审**：自动生成的 eval 质量不保证——`review:coverage-augment` flag 标着等审，人确认"这题真测到了那个漏测点、且不是凑数题"后再接受。别直接拿 `--augment` 的结果跑 `run`。
+
 ### `report` — HTML 报告
 
 ```bash
@@ -848,6 +899,29 @@ skill-eval batch-report batch-workspace/ --open
 | `probes[]` | 每条 probe：`id` / `expect_trigger` / `prompt`（中性请求原文）/ `trigger_rate`（fired / runs；UNRESOLVED 时 `null`）/ `verdict`（PASS / FAIL / UNRESOLVED）/ `tokens`（该 probe 各 run cc token 之和）/ `duration_seconds`（该 probe 各 run cc 耗时之和 / 1000）/ `transcript_path`（首个成功 run 的 transcript 路径 `probe-<id>/run-0/transcript.jsonl`，人审 / 重跑抓手；`--runs`>1 其余在同目录 `run-1…`，spawn 全失败则空） |
 
 > `recall` 与 `false_trigger_rate` 是**不同失效模式、分开报**（前者测漏召、后者测误触），不合成单一分。某方向 0 probe → 对应字段 `null`（N/A，不是假 0.0）。**无 gate、不进 `benchmark.json`**（诊断定位，独立 artifact）。
+
+### coverage-report.json（`coverage` 命令产出）
+
+```json
+{
+  "skill_name": "my-skill",
+  "points": [
+    {"label": "按端点聚合", "source_quote": "报告必须按端点聚合并标出异常时段", "covered_by": [1, 3]},
+    {"label": "安全事件分支", "source_quote": "若日志含安全事件标记,先读 security-policy.md", "covered_by": []}
+  ],
+  "token_usage": {"input_tokens": 3000, "output_tokens": 1200, "total_cost_usd": 0.04},
+  "duration_seconds": 8.4
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `skill_name` | 被测 skill 名 |
+| `points[]` | 内容点清单（LLM 从 SKILL.md 列出），每条：`label`（短名，截断 200 字）/ `source_quote`（SKILL.md 原文片段，LLM 自报、mostly-verbatim 非保证逐字）/ `covered_by`（覆盖该点的 eval id 列表，**空 = 漏测**） |
+| `token_usage` | 这次 LLM 映射调用的 `{input_tokens, output_tokens, total_cost_usd}`（LLM 失败降级空报告时为 `{}`） |
+| `duration_seconds` | LLM 调用墙钟（秒） |
+
+> **`gaps` 是派生属性、不存 JSON**：`coverage-report.json` 只存 `points[]`；「漏测」= `covered_by` 为空的 point，读取时派生（`report.gaps = [p for p in points if not p.covered_by]`），不冗余存进 JSON（避免与 points 失同步）。`coverage-report.html` 渲染同一份 points，漏测行（`covered_by` 空）高亮红色。
 
 ### 输出文件说明
 

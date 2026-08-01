@@ -209,6 +209,15 @@ skill-eval trigger path/to/skill/ --runs 2 -o /tmp/out
 
 产出 `trigger-report.json` + `trigger-report.html`（人读，`--open` 浏览器打开）+ 终端摘要，**含「怎么改 description」的操作建议**：规则建议永远给（漏召→补关键词 / 误触→收窄），有失败时还自动跑一次 LLM 起草可抄改的 description 草案（全 PASS 跳过、无 flag）。终端输出 / JSON 字段 / 改法清单见 [handbook §15.7](docs/skill-eval-handbook.md) 与 [reference](docs/skill-eval-reference.md)。
 
+### `coverage` — 出题漏测诊断
+
+诊断 evals.json 对 SKILL.md **内容点**的覆盖——`covered_by` 空的内容点 = **漏测**（0 道题覆盖），是 `run` 够不到的盲区。一次 LLM 映射（喂 SKILL.md + 各 eval 的 prompt / rationale），不 re-run Claude。诊断定位、无门禁、独立 artifact（同 trigger，不并入 benchmark）；`--augment` 可自动补漏测题（带 `review:coverage-augment`、需人审）。详见 [handbook 第 16 章](docs/skill-eval-handbook.md) 与 [reference](docs/skill-eval-reference.md)。
+
+```bash
+skill-eval coverage path/to/skill/              # 诊断漏测,出 JSON + HTML
+skill-eval coverage path/to/skill/ --augment    # 漏测点自动补题(写回 evals.json,需人审)
+```
+
 ### `report` — HTML 报告
 
 ```bash

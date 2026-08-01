@@ -23,6 +23,7 @@
 - [第十三章 路径 1：真任务模式（live）](#第十三章-路径-1真任务模式live)
 - [第十四章 batch / batch-report](#第十四章-batch--batch-report)
 - [第十五章 触发准确度（trigger-accuracy，第 4 维）](#第十五章-触发准确度trigger-accuracy第-4-维)
+- [第十六章 coverage：出题漏测诊断](#第十六章-coverage出题漏测诊断)
 - [附录](#附录)
 
 ---
@@ -102,7 +103,7 @@ skill-eval 不是一条路，而是三条，按"怎么产生 Claude 的执行"�
 > | 阶段 | 命令 | 干什么 | 详 |
 > |---|---|---|---|
 > | 静态体检（不跑 cc） | `analyze` / `vet` | skill 本身 11 项体检 + 4 扫描器安全审查 | 第 2 章 |
-> | 出题 | `init` / `add` / `inspect` / `freeze` | 生成 / 追加 / 体检（不下判决）/ 冻结基线 | 第 3 章 |
+> | 出题 | `init` / `add` / `inspect` / `freeze` / `coverage` | 生成 / 追加 / 体检（不下判决）/ 冻结基线 / **漏测诊断（eval 覆盖 SKILL.md 内容点）** | 第 3、16 章 |
 > | 跑测 | `run` / `run --task --cwd` | A/B 对照（路径 3）/ 真任务（路径 1） | 第 4、13 章 |
 > | 判决 | `gate` | post-hoc 门禁（CI 用，毫秒级） | 第 11 章 |
 > | 对账 | `audit` | 历史 transcript 遵循性（路径 2） | 第 7 章 |
@@ -1465,6 +1466,55 @@ Written to …/trigger-report.json · …/trigger-report.html
 
 ---
 
+## 第十六章 coverage：出题漏测诊断
+
+前三层 + trigger（第 4 维）回答的是"skill 上场后表现如何"和"会不会上场"。coverage 补一个相邻问题：**你出的考卷（evals.json）覆盖了 SKILL.md 的多少内容点？** init 出题是 LLM 生成的（见 §3.2，出卷噪声 C），会系统性漏掉某些指令 / 条件分支——这些漏测点是 `run` 够不到的盲区（跑多少轮也测不着）。coverage 把它们亮出来。
+
+### 16.1 怎么测：一次 LLM 映射，不 re-run Claude
+
+```bash
+skill-eval coverage path/to/skill/                # 默认:诊断漏测
+skill-eval coverage path/to/skill/ --augment      # 漏测点自动补题(写回 evals.json,需人审)
+```
+
+coverage 不 spawn Claude 跑题——它做的是**一次性 LLM 映射**：喂 SKILL.md 正文 + 各 eval 的 `id` / `prompt` / `rationale`，让 LLM 列出 SKILL.md 的**可测内容点**（具体的规则 / 步骤 / 能力 / 条件分支，不含散文和示例），再判断每点被哪几道 eval 真的**验证**（不是仅在 prompt 里提到）。`covered_by` 为空的内容点 = **漏测**。
+
+产 `coverage-report.json`（机器读）+ `coverage-report.html`（人读，always 写，漏测行高亮红）+ 终端摘要（内容点 N · 漏测 M · 耗时 · token），并给每个漏测点一条 `init <skill> --append --focus "<label>"` 处方（人工定向补，复用 §3.4 的 `--focus` 机制）。
+
+### 16.2 怎么读报告
+
+- **内容点 N / 漏测 M**：内容点是 LLM 从 SKILL.md 切出的可测点（粒度主观，见 16.4），漏测是其中 `covered_by` 空的点。
+- **逐漏测点**：每个漏测点列 `label` + SKILL.md 原文片段（`source_quote`），帮你判断"这点 SKILL.md 真这么要求吗、漏得对不对"——LLM 偶尔会把示例 / 散文误当内容点，看 `source_quote` 能秒辨。
+- **HTML** 漏测行（`covered_by` 空）整行高亮红色，一眼定位。
+
+### 16.3 补漏测：人工定向（推荐）/ `--augment` 自动
+
+两条路：
+
+- **人工定向**（推荐）：逐条看漏测点的 `source_quote`，确认是真盲区后，照终端处方跑 `init path/to/skill/ --append --focus "<label>"`（§3.4 的 `--focus`：定向补某一类、`--append` 追加不覆盖旧题、id 接续）。每条都过一遍人脑，质量最稳。
+- **`coverage --augment`**（自动）：每个漏测点复用 `init` 的生成器（`EvalInitGenerator(focus=<label>)`）自动补 eval，新题带 `review:coverage-augment` flag、按 `prompt` 与现有 eval 去重、id 接续，写回 evals.json。**质量不保证、必须人审**：自动补的 eval 只是"贴着那个 label 生成的题"，不一定真测到那个点、也可能是凑数题——`review:coverage-augment` flag 标着等审，人确认"这题真测到了、且不是凑数"后再接受，别直接拿去跑 `run`。某点补题失败（限流 / 异常）逐条跳过、不中断。
+
+### 16.4 诚实：LLM 估、有噪声、无 gate
+
+- **LLM 估、有噪声**：内容点清单的粒度（一个点怎么切）是主观的，映射是 LLM 判的——都抖。**「0 覆盖」的大漏测可靠**（一个内容点没任何 eval 碰，是明确的盲区信号）；边界态的「半覆盖」（点被部分 eval 碰到）噪声大。coverage 是**漏测预警、不是精确度量**——拿它定位明显盲区，别对每条 `covered_by` 过度解读。LLM 调用整体失败时降级为空报告（exit 0，不炸）。
+- **无 gate、独立 artifact**（同 trigger 第 4 维）：**无 gate / 不出 exit-code 判决**，`coverage-report.json` 不并入 `benchmark.json`。coverage 只产诊断报告，不挡 CI、不改 `run` 结果。
+
+### 16.5 与 §4.2 的关系：都摸 eval↔指令，都不建结构化表
+
+coverage 和 §4.2（`--changed-from`）都碰 eval↔指令映射，但问的问题不同、做法同源——都**不建结构化 instruction_ref 表**：
+
+| | coverage | §4.2 `--changed-from` |
+|---|---|---|
+| 问什么 | 每个内容点被哪几道 eval 覆盖（漏测诊断） | 改 skill 后哪些 eval 受影响（回归探针） |
+| 怎么映射 | 当场一次 LLM 判（喂 rationale + prompt 语义） | 当场一次 LLM 判（喂 diff + eval 语义） |
+| 建表吗 | 不建 | 不建 |
+
+为什么不建表，理由就是 §4.2 末尾「想要更可控的判定？」那段：自动建的 eval↔指令对应表，准度和当场 LLM 判定（同一个 LLM）一样，却白搭维护复杂度——只有**人工逐条校对**的表才更准，而工具不做人工表。故 coverage 走 LLM 柔性映射，靠 eval 的 `rationale`（`init` 自报的"这题对应 SKILL.md 哪段"，见 §3.1）做语义桥梁。
+
+> coverage 和 trigger 一样是**诊断维度**：前四维（scoring / compliance / calibration / trigger）评 skill 的能力和行为，coverage 退一步评**考卷本身**——考卷覆盖不全，前四维的结论就只能覆盖考卷够到的部分。先 `coverage` 看考卷有没有大盲区，补全后再 `run` / `trigger`，前四维的信号才扎实。
+
+---
+
 ## 附录
 
 ### A. 命令速查
@@ -1481,6 +1531,7 @@ Written to …/trigger-report.json · …/trigger-report.html
 | `gate` | post-hoc 门禁判决 | 零 API，毫秒 |
 | `audit` | 真实 transcript 对账 | LLM |
 | `trigger` | 触发准确度（第 4 维，诊断、无门禁） | Claude spawn |
+| `coverage` | 漏测诊断（eval 覆盖 SKILL.md 内容点，诊断、无门禁） | LLM（一次映射） |
 | `report` | 生成 HTML 报告 | 零 API |
 | `batch` | 批量评测（DAG） | Claude + LLM |
 | `batch-report` | 批量对比 HTML | 零 API |
@@ -1492,6 +1543,7 @@ Written to …/trigger-report.json · …/trigger-report.html
 | `gate` | PASS | FAIL | N/A / UNCLEAR / 使用错误 | — |
 | `run` | 产数据成功 | （`--security-gate` 触发） | 输入错误 | 执行错误 |
 | `trigger` | 跑完（诊断，无门禁） | — | 输入错误 | 执行错误（cc 缺失/超时） |
+| `coverage` | 跑完（诊断，无门禁；LLM 失败降级空报告） | — | 输入错误 | — |
 | `vet` | SAFE / REVIEW_NEEDED | BLOCKED | 输入错误 | — |
 | `analyze` | score 满 | score 未满 | 输入错误 | — |
 | `init`/`inspect`/`freeze`/`report` | 成功 | — | 输入错误 | — |
