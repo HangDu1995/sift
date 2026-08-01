@@ -11,8 +11,8 @@ def test_trigger_command_runs_probes_and_writes_report(tmp_path, monkeypatch):
         '{"skill_name":"my-skill","evals":[],'
         '"trigger_probes":[{"id":1,"prompt":"q1","expect_trigger":true,"rationale":""}]}')
 
-    fake = {"probes":[{"id":1,"expect_trigger":True,"prompt":"q1","trigger_rate":1.0,"verdict":"PASS","unresolved":False,"tokens":10,"transcript_path":"evals/probe-1/run-0/transcript.jsonl"}],
-            "recall":1.0,"false_trigger_rate":None,"n_should_trigger":1,"n_should_not":0,"unresolved":0}
+    fake = {"probes":[{"id":1,"expect_trigger":True,"prompt":"q1","trigger_rate":1.0,"verdict":"PASS","unresolved":False,"tokens":10,"duration_ms":1234,"transcript_path":"evals/probe-1/run-0/transcript.jsonl"}],
+            "recall":1.0,"false_trigger_rate":None,"n_should_trigger":1,"n_should_not":0,"unresolved":0,"duration_ms":1234}
     monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run", lambda self, probes, base: fake)
 
     out = tmp_path / "out"
@@ -26,6 +26,9 @@ def test_trigger_command_runs_probes_and_writes_report(tmp_path, monkeypatch):
     assert rep["suggestions"] and rep["suggestions"][0]["category"] == "all_good"
     # T4:HTML 报告也写了(always-write,与 JSON 并列)
     assert (out / "trigger-report.html").exists()
+    # 耗时:duration_ms / 1000 → duration_seconds;终端打「耗时 Xs」
+    assert rep["duration_seconds"] == 1.234
+    assert "耗时" in r.output
 
 
 def test_trigger_command_renders_unresolved_probe_without_crash(tmp_path, monkeypatch):
@@ -42,10 +45,10 @@ def test_trigger_command_renders_unresolved_probe_without_crash(tmp_path, monkey
         '"trigger_probes":[{"id":1,"prompt":"q","expect_trigger":true}]}')
 
     fake = {"probes": [{"id": 1, "expect_trigger": True, "trigger_rate": None,
-                        "verdict": "UNRESOLVED", "unresolved": True, "tokens": 0,
+                        "verdict": "UNRESOLVED", "unresolved": True, "tokens": 0, "duration_ms": 0,
                         "transcript_path": "", "prompt": "q"}],
             "recall": None, "false_trigger_rate": None,
-            "n_should_trigger": 0, "n_should_not": 0, "unresolved": 1}
+            "n_should_trigger": 0, "n_should_not": 0, "unresolved": 1, "duration_ms": 0}
     monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run",
                         lambda self, probes, base: fake)
 
@@ -72,10 +75,10 @@ def test_trigger_command_llm_suggestion_on_failure(tmp_path, monkeypatch):
 
     # 一条 should-trigger FAIL → 触发 LLM 建议
     fake = {"probes": [{"id": 1, "expect_trigger": True, "prompt": "q", "trigger_rate": 0.0,
-                        "verdict": "FAIL", "unresolved": False, "tokens": 10,
+                        "verdict": "FAIL", "unresolved": False, "tokens": 10, "duration_ms": 500,
                         "transcript_path": ""}],
             "recall": 0.0, "false_trigger_rate": None,
-            "n_should_trigger": 1, "n_should_not": 0, "unresolved": 0}
+            "n_should_trigger": 1, "n_should_not": 0, "unresolved": 0, "duration_ms": 500}
     monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run",
                         lambda self, probes, base: fake)
 

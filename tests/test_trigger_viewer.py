@@ -28,6 +28,7 @@ def _sample_report(with_suggestions=True, with_fail=True):
         n_should_trigger=1, n_should_not=1, unresolved=0,
         token_usage={"total_tokens": 28400,
                      "suggest": {"input_tokens": 200, "output_tokens": 80, "total_cost_usd": 0.02}},
+        duration_seconds=12.3,
         suggestions=suggestions, probes=probes,
     )
 
@@ -46,6 +47,7 @@ def test_html_embeds_data_fields():
     assert '"category": "recall"' in html
     assert '"llm_rewrite"' in html
     assert '"suggest"' in html                          # token_usage.suggest
+    assert '"duration_seconds": 12.3' in html           # 耗时字段进了 embedded JSON
 
 
 def test_html_renders_with_no_suggestions():
@@ -72,3 +74,24 @@ def test_html_script_passes_node_check():
         js = f.name
     r = subprocess.run(["node", "--check", js], capture_output=True, text=True)
     assert r.returncode == 0, f"node --check failed:\n{r.stderr}"
+
+
+def test_html_js_renders_duration_badge():
+    """端到端验 JS 渲染:node 里跑 <script>,注入 EMBEDDED_DATA + document stub,断言渲染出的
+    innerHTML 含 fmtDur(12.3) →「12.3s」(验读取路径 + 格式化,render-smoke 抓不到)。"""
+    html = TriggerReportGenerator().generate_html(_sample_report())
+    m = re.search(r"<script>(.*)</script>", html, re.S)
+    assert m, "no <script> block"
+    harness = (
+        "var __rendered = '';\n"
+        "var document = { getElementById: function () {"
+        "  return { set innerHTML(v) { __rendered = v; }, get innerHTML() { return __rendered; } };"
+        " } };\n"
+        + m.group(1) + "\nprocess.stdout.write(__rendered);\n"
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(harness)
+        js = f.name
+    r = subprocess.run(["node", js], capture_output=True, text=True)
+    assert r.returncode == 0, f"node failed:\n{r.stderr}"
+    assert "耗时" in r.stdout and "12.3s" in r.stdout     # fmtDur(12.3) → 耗时徽章

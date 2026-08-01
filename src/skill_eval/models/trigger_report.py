@@ -33,5 +33,6 @@ class TriggerReport(BaseModel):
     n_should_not: int
     unresolved: int = 0          # spawn 异常 / cc 非零退出没触发 的 probe 数(不进分母)
     token_usage: dict = {}       # 合计 token(各 probe cc spawn + LLM 建议)
+    duration_seconds: float = 0.0  # cc spawn 总墙钟(各 probe 各 run RunOutput.duration_ms 之和 / 1000)
     suggestions: list[Suggestion] = Field(default_factory=list)  # 操作建议(规则 + 可选 LLM)
     probes: list[ProbeResult]

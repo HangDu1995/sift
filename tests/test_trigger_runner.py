@@ -165,6 +165,7 @@ def test_trigger_runner_spawn_failure_is_unresolved_excluded_from_rates(monkeypa
     assert res["probes"][0]["verdict"] == "UNRESOLVED"
     assert res["probes"][0]["trigger_rate"] is None  # M2:没判成不显假数值率
     assert res["probes"][0]["transcript_path"] == ""  # M1:spawn 全失败 → 无 transcript
+    assert res["probes"][0]["duration_ms"] == 0       # spawn 抛 → 该 run 无 cc 耗时
     assert res["unresolved"] == 1
     assert res["recall"] is None  # 唯一 should-trigger 探题 UNRESOLVED → 该方向空 → N/A
 
@@ -244,6 +245,52 @@ def test_trigger_runner_multi_run_aggregation(monkeypatch, tmp_path):
     assert abs(p1["trigger_rate"] - 2 / 3) < 1e-6
     assert p1["verdict"] == "PASS"   # 2/3 ≥ 0.5
     assert abs(res["recall"] - 2 / 3) < 1e-6
+
+
+def test_trigger_runner_tracks_duration_ms(monkeypatch, tmp_path):
+    """per-probe duration_ms = 各 run 的 cc spawn 耗时(RunOutput.duration_ms)之和;
+    run() 返回 duration_ms = 所有 probe 之和。对齐 run 用 RunOutput.duration_ms 口径。"""
+    from skill_eval.execution.trigger_runner import TriggerRunner
+    from skill_eval.models.eval_models import TriggerProbe
+    from skill_eval.models.execution_models import RunOutput
+
+    dur_seq = iter([100, 200, 300])
+
+    def fake_run_trigger(self, prompt, cwd, env, **kw):
+        return RunOutput(exit_code=0, stdout='{"type":"result","result":"x"}\n',
+                         duration_ms=next(dur_seq))
+
+    skill = tmp_path / "my-skill"; skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
+    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    tr = TriggerRunner(skill, runs=1)
+    res = tr.run([
+        TriggerProbe(id=1, prompt="q", expect_trigger=True),
+        TriggerProbe(id=2, prompt="q", expect_trigger=True),
+        TriggerProbe(id=3, prompt="q", expect_trigger=False),
+    ], out_base=tmp_path / "out")
+    assert res["probes"][0]["duration_ms"] == 100
+    assert res["probes"][1]["duration_ms"] == 200
+    assert res["probes"][2]["duration_ms"] == 300
+    assert res["duration_ms"] == 600            # 总和
+
+
+def test_trigger_runner_duration_sums_across_runs(monkeypatch, tmp_path):
+    """runs=2:同 probe 多 run 的 duration_ms 累加进该 probe(per-probe = runs × 每次)。"""
+    from skill_eval.execution.trigger_runner import TriggerRunner
+    from skill_eval.models.eval_models import TriggerProbe
+    from skill_eval.models.execution_models import RunOutput
+
+    def fake_run_trigger(self, prompt, cwd, env, **kw):
+        return RunOutput(exit_code=0, stdout='{"type":"result","result":"x"}\n', duration_ms=150)
+
+    skill = tmp_path / "my-skill"; skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
+    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    tr = TriggerRunner(skill, runs=2)
+    res = tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=True)], out_base=tmp_path / "out")
+    assert res["probes"][0]["duration_ms"] == 300   # 150 × 2
+    assert res["duration_ms"] == 300
 
 
 # ---------------------------------------------------------------------------

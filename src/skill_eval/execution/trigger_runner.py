@@ -140,15 +140,17 @@ class TriggerRunner:
                 shutil.copy2(item, target)
         return sandbox
 
-    def _run_probe_once(self, probe: TriggerProbe, out_base: Path, run: int) -> tuple[bool, str, int, int]:
+    def _run_probe_once(self, probe: TriggerProbe, out_base: Path, run: int) -> tuple[bool, str, int, int, int]:
         """单 probe 单 run:建沙箱 → 干净 HOME → spawn → 写 transcript → 检测 fired。
 
         Returns:
-            ``(fired, transcript_path, total_tokens, exit_code)``。``fired`` = 被测 skill 名
+            ``(fired, transcript_path, total_tokens, exit_code, duration_ms)``。``fired`` = 被测 skill 名
             (frontmatter name)出现在 ``invoked_skills`` 检出列表里。``exit_code`` 透传给
             ``run()`` 判非零退出(cc 撞限流 / 异常退出常 exit 1 + 错误打 stdout、stderr 空,
-            此时 ``run_trigger`` 不 raise,须据此判 UNRESOLVED,见 ``run()``)。干净 HOME
-            临时目录在返回 / 抛异常后由 ``finally`` 清掉,别让 /tmp 堆 ``trigger-home-*``。
+            此时 ``run_trigger`` 不 raise,须据此判 UNRESOLVED,见 ``run()``)。``duration_ms``
+            是这次 cc spawn 的墙钟(``RunOutput.duration_ms``,cli_runner 计量),``run()`` 累加成
+            per-probe / 全局耗时(对齐 run 口径)。干净 HOME 临时目录在返回 / 抛异常后由
+            ``finally`` 清掉,别让 /tmp 堆 ``trigger-home-*``。
         """
         sandbox = self._sandbox_with_skill(out_base, probe.id, run)
         # 干净 HOME 压全局 plugin:claude_cli_env 补身份/auth,再覆 HOME 为临时空目录,
@@ -167,7 +169,7 @@ class TriggerRunner:
             transcript = sandbox / "transcript.jsonl"
             transcript.write_text(out.stdout, encoding="utf-8")
             fired = self.name in invoked_skills(transcript)
-            return fired, str(transcript), out.total_tokens, out.exit_code
+            return fired, str(transcript), out.total_tokens, out.exit_code, out.duration_ms
         finally:
             shutil.rmtree(env["HOME"], ignore_errors=True)  # 用完即清,别让 /tmp 堆 trigger-home-*
 
@@ -190,16 +192,19 @@ class TriggerRunner:
              "n_should_trigger", "n_should_not", "unresolved"}
         """
         results: list[dict] = []
+        total_duration_ms = 0
         for probe in probes:
             fired_count = 0
             unresolved = False
             tokens = 0
+            duration_ms = 0
             transcript_path = ""
             for r in range(self.runs):
                 try:
-                    fired, path, tk, exit_code = self._run_probe_once(probe, out_base, r)
+                    fired, path, tk, exit_code, dur = self._run_probe_once(probe, out_base, r)
                     fired_count += int(fired)
                     tokens += tk
+                    duration_ms += dur
                     if not transcript_path:
                         transcript_path = path   # 人审入口:首个成功 run 的 transcript
                     if not fired and exit_code != 0:
@@ -218,12 +223,15 @@ class TriggerRunner:
                 "verdict": verdict,
                 "unresolved": unresolved,
                 "tokens": tokens,
+                "duration_ms": duration_ms,
                 "transcript_path": transcript_path,
             })
+            total_duration_ms += duration_ms
         resolved = [r for r in results if not r["unresolved"]]
         agg = aggregate_rates([
             {"expect_trigger": r["expect_trigger"], "trigger_rate": r["trigger_rate"]}
             for r in resolved
         ])
         agg["unresolved"] = sum(1 for r in results if r["unresolved"])
+        agg["duration_ms"] = total_duration_ms
         return {"probes": results, **agg}

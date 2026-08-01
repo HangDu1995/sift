@@ -93,6 +93,10 @@
       function rateTR(x) {
         return (x === null || x === undefined) ? '?' : pct(x);
       }
+      function fmtDur(sec) {
+        if (sec === null || sec === undefined || sec === 0) return '';
+        return sec >= 60 ? (sec / 60).toFixed(1) + 'min' : sec.toFixed(1) + 's';
+      }
 
       var D = EMBEDDED_DATA;
       var tu = D.token_usage || {};
@@ -116,6 +120,10 @@
       }
       if (tu.suggest && tu.suggest.input_tokens) {
         html += '<span class="badge-tokens">建议 LLM in ' + tu.suggest.input_tokens + ' / out ' + (tu.suggest.output_tokens || 0) + '</span>';
+      }
+      var dur = fmtDur(D.duration_seconds);
+      if (dur) {
+        html += '<span class="badge-tokens">耗时 ' + dur + '</span>';
       }
       html += '</div>';
 

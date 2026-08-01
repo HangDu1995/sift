@@ -416,3 +416,17 @@ def test_trigger_report_legacy_json_without_new_fields_loads():
     }
     r = TriggerReport.model_validate(legacy)
     assert r.description == "" and r.suggestions == [] and r.probes[0].prompt == ""
+
+
+def test_trigger_report_duration_seconds_roundtrip():
+    """duration_seconds(cc spawn 总墙钟)roundtrip + 旧报告(无此字段)兜默认 0.0。"""
+    from skill_eval.models.trigger_report import TriggerReport, ProbeResult
+    r = TriggerReport(skill_name="x", description_hash="h", runs=1,
+                      recall=1.0, false_trigger_rate=None, n_should_trigger=1, n_should_not=0,
+                      duration_seconds=12.5,
+                      probes=[ProbeResult(id=1, expect_trigger=True, trigger_rate=1.0, verdict="PASS")])
+    assert r.duration_seconds == 12.5
+    assert TriggerReport.model_validate_json(r.model_dump_json()).duration_seconds == 12.5
+    d = json.loads(r.model_dump_json())
+    d.pop("duration_seconds", None)
+    assert TriggerReport.model_validate(d).duration_seconds == 0.0   # 旧报告无此字段 → 默认 0.0
