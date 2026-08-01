@@ -243,3 +243,71 @@ def test_trigger_runner_multi_run_aggregation(monkeypatch, tmp_path):
     assert abs(p1["trigger_rate"] - 2 / 3) < 1e-6
     assert p1["verdict"] == "PASS"   # 2/3 ≥ 0.5
     assert abs(res["recall"] - 2 / 3) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Part C — 干净 HOME 清理(M6:_run_probe_once 用完即清,不漏 /tmp/trigger-home-*)
+# ---------------------------------------------------------------------------
+
+def test_run_probe_once_cleans_temp_home(monkeypatch, tmp_path):
+    """spawn 正常返回后,干净 HOME 临时目录被 finally 清掉。"""
+    import os
+    import tempfile as _tf
+    from skill_eval.execution.trigger_runner import TriggerRunner
+    from skill_eval.models.eval_models import TriggerProbe
+    from skill_eval.models.execution_models import RunOutput
+
+    created = {}
+    real_mkdtemp = _tf.mkdtemp
+
+    def spy_mkdtemp(*a, **k):
+        d = real_mkdtemp(*a, **k)
+        created["path"] = d
+        return d
+
+    monkeypatch.setattr("skill_eval.execution.trigger_runner.tempfile.mkdtemp", spy_mkdtemp)
+
+    def fake_run_trigger(self, prompt, cwd, env, **kw):
+        return RunOutput(exit_code=0, stdout='{"type":"result","result":"x"}\n')
+
+    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+
+    skill = tmp_path / "my-skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
+    tr = TriggerRunner(skill, runs=1)
+    tr._run_probe_once(TriggerProbe(id=1, prompt="q", expect_trigger=True), tmp_path / "out", 0)
+    assert not os.path.exists(created["path"])  # 干净 HOME 已清
+
+
+def test_run_probe_once_cleans_temp_home_even_on_error(monkeypatch, tmp_path):
+    """spawn 抛异常时,finally 仍清干净 HOME(异常照样向上抛)。"""
+    import os
+    import tempfile as _tf
+    import pytest
+    from skill_eval.execution.cli_runner import ClaudeRunnerError
+    from skill_eval.execution.trigger_runner import TriggerRunner
+    from skill_eval.models.eval_models import TriggerProbe
+
+    created = {}
+    real_mkdtemp = _tf.mkdtemp
+
+    def spy_mkdtemp(*a, **k):
+        d = real_mkdtemp(*a, **k)
+        created["path"] = d
+        return d
+
+    monkeypatch.setattr("skill_eval.execution.trigger_runner.tempfile.mkdtemp", spy_mkdtemp)
+
+    def fake_run_trigger(self, prompt, cwd, env, **kw):
+        raise ClaudeRunnerError("boom")
+
+    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+
+    skill = tmp_path / "my-skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
+    tr = TriggerRunner(skill, runs=1)
+    with pytest.raises(ClaudeRunnerError):
+        tr._run_probe_once(TriggerProbe(id=1, prompt="q", expect_trigger=True), tmp_path / "out", 0)
+    assert not os.path.exists(created["path"])  # 异常路径也清

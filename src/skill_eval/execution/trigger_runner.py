@@ -140,32 +140,36 @@ class TriggerRunner:
                 shutil.copy2(item, target)
         return sandbox
 
-    def _run_probe_once(self, probe: TriggerProbe, out_base: Path, run: int) -> tuple[bool, str, int]:
+    def _run_probe_once(self, probe: TriggerProbe, out_base: Path, run: int) -> tuple[bool, str, int, int]:
         """单 probe 单 run:建沙箱 → 干净 HOME → spawn → 写 transcript → 检测 fired。
 
         Returns:
             ``(fired, transcript_path, total_tokens, exit_code)``。``fired`` = 被测 skill 名
             (frontmatter name)出现在 ``invoked_skills`` 检出列表里。``exit_code`` 透传给
             ``run()`` 判非零退出(cc 撞限流 / 异常退出常 exit 1 + 错误打 stdout、stderr 空,
-            此时 ``run_trigger`` 不 raise,须据此判 UNRESOLVED,见 ``run()``)。
+            此时 ``run_trigger`` 不 raise,须据此判 UNRESOLVED,见 ``run()``)。干净 HOME
+            临时目录在返回 / 抛异常后由 ``finally`` 清掉,别让 /tmp 堆 ``trigger-home-*``。
         """
         sandbox = self._sandbox_with_skill(out_base, probe.id, run)
         # 干净 HOME 压全局 plugin:claude_cli_env 补身份/auth,再覆 HOME 为临时空目录,
         # 让 cc 只看 sandbox/.claude/skills/(自动发现) + 不加载用户 ~/.claude 全局插件。
         env = claude_cli_env()
         env["HOME"] = tempfile.mkdtemp(prefix="trigger-home-")
-        out = self.runner.run_trigger(
-            prompt=probe.prompt,
-            cwd=sandbox,
-            env=env,
-            model=self.model,
-            timeout=self.timeout,
-            max_turns=self.max_turns,
-        )
-        transcript = sandbox / "transcript.jsonl"
-        transcript.write_text(out.stdout, encoding="utf-8")
-        fired = self.name in invoked_skills(transcript)
-        return fired, str(transcript), out.total_tokens, out.exit_code
+        try:
+            out = self.runner.run_trigger(
+                prompt=probe.prompt,
+                cwd=sandbox,
+                env=env,
+                model=self.model,
+                timeout=self.timeout,
+                max_turns=self.max_turns,
+            )
+            transcript = sandbox / "transcript.jsonl"
+            transcript.write_text(out.stdout, encoding="utf-8")
+            fired = self.name in invoked_skills(transcript)
+            return fired, str(transcript), out.total_tokens, out.exit_code
+        finally:
+            shutil.rmtree(env["HOME"], ignore_errors=True)  # 用完即清,别让 /tmp 堆 trigger-home-*
 
     def run(self, probes: list[TriggerProbe], out_base: Path) -> dict:
         """跑全部探题、聚合 trigger 率。
