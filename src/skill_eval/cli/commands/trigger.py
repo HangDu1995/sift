@@ -46,7 +46,8 @@ def trigger(
             unresolved=res["unresolved"],
             token_usage={"total_tokens": sum(p["tokens"] for p in res["probes"])},
             probes=[ProbeResult(id=p["id"], expect_trigger=p["expect_trigger"],
-                                trigger_rate=p["trigger_rate"], verdict=p["verdict"]) for p in res["probes"]],
+                                trigger_rate=p["trigger_rate"], verdict=p["verdict"],
+                                transcript_path=p["transcript_path"]) for p in res["probes"]],
         )
         (out_dir / "trigger-report.json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
         recall_s = f"{res['recall']*100:.0f}%" if res["recall"] is not None else "N/A"

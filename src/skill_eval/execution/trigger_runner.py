@@ -190,11 +190,14 @@ class TriggerRunner:
             fired_count = 0
             unresolved = False
             tokens = 0
+            transcript_path = ""
             for r in range(self.runs):
                 try:
-                    fired, _path, tk, exit_code = self._run_probe_once(probe, out_base, r)
+                    fired, path, tk, exit_code = self._run_probe_once(probe, out_base, r)
                     fired_count += int(fired)
                     tokens += tk
+                    if not transcript_path:
+                        transcript_path = path   # 人审入口:首个成功 run 的 transcript
                     if not fired and exit_code != 0:
                         unresolved = True   # cc 异常退出且没触发 → 无法判定,计 UNRESOLVED
                 except Exception:
@@ -210,6 +213,7 @@ class TriggerRunner:
                 "verdict": verdict,
                 "unresolved": unresolved,
                 "tokens": tokens,
+                "transcript_path": transcript_path,
             })
         resolved = [r for r in results if not r["unresolved"]]
         agg = aggregate_rates([

@@ -117,6 +117,7 @@ def test_trigger_runner_detects_invocation_end_to_end(monkeypatch, tmp_path):
     p1 = res["probes"][0]
     assert p1["trigger_rate"] == 1.0 and p1["verdict"] == "PASS"
     assert res["recall"] == 1.0 and res["n_should_trigger"] == 1
+    assert p1["transcript_path"].endswith("probe-1/run-0/transcript.jsonl")  # M1:人审入口
 
 
 def test_trigger_runner_should_not_triggered_is_fail(monkeypatch, tmp_path):
@@ -162,6 +163,7 @@ def test_trigger_runner_spawn_failure_is_unresolved_excluded_from_rates(monkeypa
     res = tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=True)], out_base=tmp_path / "out")
     assert res["probes"][0]["verdict"] == "UNRESOLVED"
     assert res["probes"][0]["trigger_rate"] is None  # M2:没判成不显假数值率
+    assert res["probes"][0]["transcript_path"] == ""  # M1:spawn 全失败 → 无 transcript
     assert res["unresolved"] == 1
     assert res["recall"] is None  # 唯一 should-trigger 探题 UNRESOLVED → 该方向空 → N/A
 

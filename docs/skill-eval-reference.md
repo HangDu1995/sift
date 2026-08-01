@@ -796,8 +796,8 @@ skill-eval batch-report batch-workspace/ --open
   "unresolved": 0,
   "token_usage": {"total_tokens": 28400},
   "probes": [
-    {"id": 1, "expect_trigger": true,  "trigger_rate": 1.0, "verdict": "PASS", "transcript_path": ""},
-    {"id": 2, "expect_trigger": false, "trigger_rate": 0.0, "verdict": "PASS", "transcript_path": ""}
+    {"id": 1, "expect_trigger": true,  "trigger_rate": 1.0, "verdict": "PASS", "transcript_path": "evals/probe-1/run-0/transcript.jsonl"},
+    {"id": 2, "expect_trigger": false, "trigger_rate": 0.0, "verdict": "PASS", "transcript_path": "evals/probe-2/run-0/transcript.jsonl"}
   ]
 }
 ```
@@ -812,7 +812,7 @@ skill-eval batch-report batch-workspace/ --open
 | `n_should_trigger` / `n_should_not` | 两方向 probe 数（各自样本量） |
 | `unresolved` | spawn 异常 / cc 非零退出且没触发（限流）的 probe 数（**不进** recall / false_trigger_rate 分母） |
 | `token_usage` | `{total_tokens}`——所有 probe spawn 的 cc token 合计 |
-| `probes[]` | 每条 probe：`id` / `expect_trigger` / `trigger_rate`（fired / runs；UNRESOLVED 时 `null`）/ `verdict`（PASS / FAIL / UNRESOLVED）/ `transcript_path`（人审抓手） |
+| `probes[]` | 每条 probe：`id` / `expect_trigger` / `trigger_rate`（fired / runs；UNRESOLVED 时 `null`）/ `verdict`（PASS / FAIL / UNRESOLVED）/ `transcript_path`（首个成功 run 的 transcript 路径 `probe-<id>/run-0/transcript.jsonl`，人审 / 重跑抓手；`--runs`>1 其余在同目录 `run-1…`，spawn 全失败则空） |
 
 > `recall` 与 `false_trigger_rate` 是**不同失效模式、分开报**（前者测漏召、后者测误触），不合成单一分。某方向 0 probe → 对应字段 `null`（N/A，不是假 0.0）。v1 **无 gate、不进 `benchmark.json`**（诊断定位，独立 artifact）。
 
