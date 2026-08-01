@@ -88,7 +88,10 @@ def coverage(
                           f"{f' · 跳过 {skipped} 题(与现有 prompt 重复)' if skipped else ''}")
             console.print("[dim]补题已写回 evals.json;请人审 review:coverage-augment 题后接受。[/dim]")
 
-        console.print(f"Written to {out_dir / 'coverage-report.json'}")
+        from skill_eval.reporting.coverage_viewer import CoverageReportGenerator
+        html_path = out_dir / "coverage-report.html"
+        CoverageReportGenerator().write_html(report, html_path)
+        console.print(f"Written to {out_dir / 'coverage-report.json'} · {html_path}")
     except SkillEvalError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=getattr(exc, "exit_code", 1))
