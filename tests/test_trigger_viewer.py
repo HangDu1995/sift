@@ -12,9 +12,9 @@ def _sample_report(with_suggestions=True, with_fail=True):
     probes = [
         ProbeResult(id=1, expect_trigger=True, prompt="分析这份日志",
                     trigger_rate=0.0 if with_fail else 1.0,
-                    verdict="FAIL" if with_fail else "PASS"),
+                    verdict="FAIL" if with_fail else "PASS", tokens=842, duration_seconds=4.5),
         ProbeResult(id=2, expect_trigger=False, prompt="翻译小说",
-                    trigger_rate=0.0, verdict="PASS"),
+                    trigger_rate=0.0, verdict="PASS", tokens=318, duration_seconds=2.1),
     ]
     suggestions = [
         Suggestion(category="recall", source="rule",
@@ -48,6 +48,7 @@ def test_html_embeds_data_fields():
     assert '"llm_rewrite"' in html
     assert '"suggest"' in html                          # token_usage.suggest
     assert '"duration_seconds": 12.3' in html           # 耗时字段进了 embedded JSON
+    assert '"tokens": 842' in html                      # per-probe token 进了 embedded JSON
 
 
 def test_html_renders_with_no_suggestions():
@@ -76,9 +77,9 @@ def test_html_script_passes_node_check():
     assert r.returncode == 0, f"node --check failed:\n{r.stderr}"
 
 
-def test_html_js_renders_duration_badge():
+def test_html_js_renders_badges_and_per_probe_usage():
     """端到端验 JS 渲染:node 里跑 <script>,注入 EMBEDDED_DATA + document stub,断言渲染出的
-    innerHTML 含 fmtDur(12.3) →「12.3s」(验读取路径 + 格式化,render-smoke 抓不到)。"""
+    innerHTML 含 汇总耗时徽章 + per-probe 消耗列(tokens + 耗时)(验读取路径 + 格式化,render-smoke 抓不到)。"""
     html = TriggerReportGenerator().generate_html(_sample_report())
     m = re.search(r"<script>(.*)</script>", html, re.S)
     assert m, "no <script> block"
@@ -94,4 +95,5 @@ def test_html_js_renders_duration_badge():
         js = f.name
     r = subprocess.run(["node", js], capture_output=True, text=True)
     assert r.returncode == 0, f"node failed:\n{r.stderr}"
-    assert "耗时" in r.stdout and "12.3s" in r.stdout     # fmtDur(12.3) → 耗时徽章
+    assert "耗时" in r.stdout and "12.3s" in r.stdout     # 汇总耗时徽章(fmtDur)
+    assert "842 tok" in r.stdout and "4.5s" in r.stdout   # per-probe 消耗列

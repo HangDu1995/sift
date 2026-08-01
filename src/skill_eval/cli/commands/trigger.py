@@ -53,7 +53,8 @@ def trigger(
             probes=[ProbeResult(id=p["id"], expect_trigger=p["expect_trigger"],
                                 prompt=p["prompt"],
                                 trigger_rate=p["trigger_rate"], verdict=p["verdict"],
-                                transcript_path=p["transcript_path"]) for p in res["probes"]],
+                                transcript_path=p["transcript_path"],
+                                tokens=p["tokens"], duration_seconds=p["duration_ms"] / 1000) for p in res["probes"]],
         )
         suggestions = build_rule_suggestions(res["probes"])
         failed_st = [p for p in res["probes"] if p["expect_trigger"] and p["verdict"] == "FAIL"]
@@ -77,7 +78,7 @@ def trigger(
         for p in res["probes"]:
             rate_s = f"{p['trigger_rate']:.0%}" if p["trigger_rate"] is not None else "?"
             console.print(f"  [{'+' if p['verdict']=='PASS' else '-' if p['verdict']=='FAIL' else '?'}] "
-                          f"probe-{p['id']}: {rate_s} → {p['verdict']}")
+                          f"probe-{p['id']}: {rate_s} → {p['verdict']} ({p['tokens']} tok · {p['duration_ms'] / 1000:.1f}s)")
         if report.suggestions:
             console.print("[bold]操作建议:[/bold]")
             for s in report.suggestions:

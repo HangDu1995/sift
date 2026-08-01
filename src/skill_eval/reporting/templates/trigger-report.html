@@ -71,6 +71,7 @@
     .probes th { background: var(--bg); font-weight: 600; }
     .probes td.prompt { max-width: 360px; }
     .probes td.trace { color: var(--text-muted); font-size: 0.8rem; word-break: break-all; }
+    .probes td.usage { white-space: nowrap; color: var(--text-muted); font-size: 0.8rem; }
     .verdict-PASS { color: var(--green); font-weight: 600; }
     .verdict-FAIL { color: var(--red); font-weight: 600; }
     .verdict-UNRESOLVED { color: var(--text-muted); font-weight: 600; }
@@ -95,6 +96,10 @@
       }
       function fmtDur(sec) {
         if (sec === null || sec === undefined || sec === 0) return '';
+        return sec >= 60 ? (sec / 60).toFixed(1) + 'min' : sec.toFixed(1) + 's';
+      }
+      function fmtCellDur(sec) {
+        if (sec === null || sec === undefined) return '—';
         return sec >= 60 ? (sec / 60).toFixed(1) + 'min' : sec.toFixed(1) + 's';
       }
 
@@ -140,7 +145,7 @@
 
       if (D.probes && D.probes.length) {
         html += '<div class="probes"><h2>探题明细</h2><table>';
-        html += '<tr><th>#</th><th>方向</th><th>prompt</th><th>触发率</th><th>verdict</th><th>transcript</th></tr>';
+        html += '<tr><th>#</th><th>方向</th><th>prompt</th><th>触发率</th><th>verdict</th><th>消耗</th><th>transcript</th></tr>';
         for (var j = 0; j < D.probes.length; j++) {
           var p = D.probes[j];
           html += '<tr>'
@@ -149,6 +154,7 @@
                + '<td class="prompt">' + escapeHtml(p.prompt) + '</td>'
                + '<td>' + rateTR(p.trigger_rate) + '</td>'
                + '<td class="verdict-' + escapeHtml(p.verdict) + '">' + escapeHtml(p.verdict) + '</td>'
+               + '<td class="usage">' + (p.tokens ? (p.tokens + ' tok') : '—') + ' · ' + fmtCellDur(p.duration_seconds) + '</td>'
                + '<td class="trace">' + (p.transcript_path ? escapeHtml(p.transcript_path) : '—') + '</td>'
                + '</tr>';
         }

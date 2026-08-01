@@ -29,6 +29,10 @@ def test_trigger_command_runs_probes_and_writes_report(tmp_path, monkeypatch):
     # 耗时:duration_ms / 1000 → duration_seconds;终端打「耗时 Xs」
     assert rep["duration_seconds"] == 1.234
     assert "耗时" in r.output
+    # per-probe 消耗(tokens + 耗时)进 JSON + 终端 per-probe 行
+    assert rep["probes"][0]["tokens"] == 10
+    assert rep["probes"][0]["duration_seconds"] == 1.234
+    assert "10 tok" in r.output
 
 
 def test_trigger_command_renders_unresolved_probe_without_crash(tmp_path, monkeypatch):

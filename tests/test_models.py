@@ -430,3 +430,22 @@ def test_trigger_report_duration_seconds_roundtrip():
     d = json.loads(r.model_dump_json())
     d.pop("duration_seconds", None)
     assert TriggerReport.model_validate(d).duration_seconds == 0.0   # 旧报告无此字段 → 默认 0.0
+
+
+def test_probe_result_tokens_and_duration_roundtrip():
+    """ProbeResult per-probe 消耗(tokens + duration_seconds)roundtrip + 旧报告兜默认。"""
+    from skill_eval.models.trigger_report import TriggerReport, ProbeResult
+    r = TriggerReport(
+        skill_name="x", description_hash="h", runs=2,
+        recall=1.0, false_trigger_rate=None, n_should_trigger=1, n_should_not=0,
+        probes=[ProbeResult(id=1, expect_trigger=True, trigger_rate=1.0, verdict="PASS",
+                            tokens=842, duration_seconds=4.5)],
+    )
+    r2 = TriggerReport.model_validate_json(r.model_dump_json())
+    assert r2.probes[0].tokens == 842 and r2.probes[0].duration_seconds == 4.5
+    legacy = json.loads(r.model_dump_json())
+    for p in legacy["probes"]:
+        p.pop("tokens", None)
+        p.pop("duration_seconds", None)
+    r3 = TriggerReport.model_validate(legacy)
+    assert r3.probes[0].tokens == 0 and r3.probes[0].duration_seconds == 0.0   # 旧 probe 无字段 → 默认

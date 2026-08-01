@@ -19,6 +19,8 @@ class ProbeResult(BaseModel):
     trigger_rate: float | None  # 跨 N runs 触发率(fired 次 / runs);UNRESOLVED(没判成)→ None
     verdict: str                # PASS / FAIL / UNRESOLVED
     transcript_path: str = ""   # 首个成功 run 的 transcript(人审/重跑抓手)
+    tokens: int = 0             # 该 probe 各 run cc token 之和
+    duration_seconds: float = 0.0  # 该 probe 各 run cc 耗时之和 / 1000
 
 
 class TriggerReport(BaseModel):
