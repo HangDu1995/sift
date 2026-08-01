@@ -9,6 +9,8 @@ class Suggestion(BaseModel):
     source: str                 # rule(规则,总在)/ llm(有失败时自动调 LLM 起草)
     message: str                # 中文、可直接照做的建议文案
     probe_ids: list[int] = []   # 关联的 probe id(哪些 probe 触发了这条建议)
+    tokens: int = 0             # LLM 建议那次 call_claude 的 token(input+output);rule=0
+    duration_seconds: float = 0.0  # LLM 建议那次调用墙钟(含重试);rule=0
 
 
 class ProbeResult(BaseModel):

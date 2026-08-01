@@ -86,6 +86,7 @@ def test_llm_suggestion_called_when_failures(monkeypatch):
     assert "当前 desc" in captured["prompt"]                 # 当前 description 喂进去了
     assert usage["input_tokens"] == 100 and usage["total_cost_usd"] == 0.01
     assert reason is None                                    # 成功 → 无失败原因
+    assert sugg.tokens == 150 and sugg.duration_seconds >= 0.0  # LLM 消耗进 suggestion(100+50)
 
 
 def test_llm_suggestion_skipped_when_all_pass(monkeypatch):

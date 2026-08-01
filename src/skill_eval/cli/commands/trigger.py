@@ -83,7 +83,9 @@ def trigger(
         if report.suggestions:
             console.print("[bold]操作建议:[/bold]")
             for s in report.suggestions:
-                console.print(f"  [dim][{s.source}:{s.category}][/dim] {s.message}")
+                usage_s = f" ({s.tokens} tok · {s.duration_seconds:.1f}s)" if s.tokens else ""
+                # markup=False:[source:category] 的方括号字面输出,不被 rich 当样式标记吞掉
+                console.print(f"  [{s.source}:{s.category}] {s.message}{usage_s}", markup=False)
         from skill_eval.reporting.trigger_viewer import TriggerReportGenerator
         html_path = out_dir / "trigger-report.html"
         TriggerReportGenerator().write_html(report, html_path)

@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import time
+
 from skill_eval.models.trigger_report import Suggestion
 from skill_eval.utils import call_claude
 
@@ -129,6 +131,7 @@ def build_llm_suggestion(
     )
 
     usage: dict = {}
+    start = time.perf_counter()
     last_reason: str | None = None
     for _attempt in range(retries + 1):  # 初次 + retries 次重试
         try:
@@ -141,7 +144,9 @@ def build_llm_suggestion(
             last_reason = "空 result(cc 返回空文本,可能拒答/限流)"
             continue
         failed_ids = [p["id"] for p in failed_should_trigger] + [p["id"] for p in failed_should_not]
+        toks = (usage.get("input_tokens", 0) or 0) + (usage.get("output_tokens", 0) or 0)
         return Suggestion(
             category="llm_rewrite", source="llm", probe_ids=failed_ids, message=resp,
+            tokens=toks, duration_seconds=time.perf_counter() - start,
         ), usage, None
     return None, usage, last_reason

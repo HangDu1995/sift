@@ -138,6 +138,7 @@
           var s = D.suggestions[i];
           html += '<div class="suggestion ' + escapeHtml(s.category) + '">'
                + '<span class="cat">' + escapeHtml(s.source) + ' / ' + escapeHtml(s.category) + '</span>'
+               + (s.tokens ? ' <span class="badge-tokens">' + s.tokens + ' tok · ' + fmtCellDur(s.duration_seconds) + '</span>' : '')
                + '<div class="msg">' + escapeHtml(s.message) + '</div>'
                + '</div>';
         }

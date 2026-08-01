@@ -844,7 +844,7 @@ skill-eval batch-report batch-workspace/ --open
 | `unresolved` | spawn 异常 / cc 非零退出且没触发（限流）的 probe 数（**不进** recall / false_trigger_rate 分母） |
 | `token_usage` | `{total_tokens}`（所有 probe spawn 的 cc token 合计）+ 可选 `suggest`（LLM 建议那次调用的 input/output/cost，有失败才产生） |
 | `duration_seconds` | cc spawn 总墙钟（各 probe 各 run `RunOutput.duration_ms` 之和 / 1000；不含 LLM 建议那次调用；旧报告无此字段 → `0.0`） |
-| `suggestions[]` | 操作建议：`category`（`recall` / `false_trigger` / `unresolved` / `all_good` / `llm_rewrite`）+ `source`（`rule` / `llm`）+ `message`（中文文案，失败时带 probe 的 prompt 原文）+ `probe_ids`。规则建议永远给；`llm_rewrite` 仅在有失败时自动产生（见上「操作建议」） |
+| `suggestions[]` | 操作建议：`category`（`recall` / `false_trigger` / `unresolved` / `all_good` / `llm_rewrite`）+ `source`（`rule` / `llm`）+ `message`（中文文案，失败时带 probe 的 prompt 原文）+ `probe_ids` + `tokens` / `duration_seconds`（LLM 建议那次 `call_claude` 的消耗，含重试；`rule` 建议为 0）。规则建议永远给；`llm_rewrite` 仅在有失败时自动产生（见上「操作建议」） |
 | `probes[]` | 每条 probe：`id` / `expect_trigger` / `prompt`（中性请求原文）/ `trigger_rate`（fired / runs；UNRESOLVED 时 `null`）/ `verdict`（PASS / FAIL / UNRESOLVED）/ `tokens`（该 probe 各 run cc token 之和）/ `duration_seconds`（该 probe 各 run cc 耗时之和 / 1000）/ `transcript_path`（首个成功 run 的 transcript 路径 `probe-<id>/run-0/transcript.jsonl`，人审 / 重跑抓手；`--runs`>1 其余在同目录 `run-1…`，spawn 全失败则空） |
 
 > `recall` 与 `false_trigger_rate` 是**不同失效模式、分开报**（前者测漏召、后者测误触），不合成单一分。某方向 0 probe → 对应字段 `null`（N/A，不是假 0.0）。**无 gate、不进 `benchmark.json`**（诊断定位，独立 artifact）。

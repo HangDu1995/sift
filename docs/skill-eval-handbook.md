@@ -1443,7 +1443,7 @@ recall 75%(5 should-trigger) · false-trigger 10%(5 should-not) · 2 runs · 1 u
 操作建议：
   [rule:recall] 漏召:…考虑补触发关键词:
     · probe-2:「…」
-  [llm:llm_rewrite] 修订 description:…\n理由:…
+  [llm:llm_rewrite] 修订 description:…\n理由:… (480 tok · 3.1s)
 Written to …/trigger-report.json · …/trigger-report.html
 ```
 

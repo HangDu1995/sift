@@ -103,3 +103,7 @@ def test_trigger_command_llm_suggestion_on_failure(tmp_path, monkeypatch):
     cats = [s["category"] for s in rep["suggestions"]]
     assert "recall" in cats and "llm_rewrite" in cats        # 规则 + LLM 都在
     assert rep["token_usage"]["suggest"]["input_tokens"] == 200
+    # 前缀可见:[llm:llm_rewrite] 的方括号不被 rich markup 吞(旧版整段前缀消失)
+    assert "[llm:llm_rewrite]" in r.output
+    # LLM 建议消耗显(200 input + 80 output = 280 tok)
+    assert "280 tok" in r.output

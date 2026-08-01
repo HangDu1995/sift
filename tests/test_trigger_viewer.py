@@ -20,7 +20,8 @@ def _sample_report(with_suggestions=True, with_fail=True):
         Suggestion(category="recall", source="rule",
                    message="漏召:补关键词\n  · probe-1:「分析这份日志」", probe_ids=[1]),
         Suggestion(category="llm_rewrite", source="llm",
-                   message="修订 description:做日志分析\n理由:补了关键词", probe_ids=[1]),
+                   message="修订 description:做日志分析\n理由:补了关键词", probe_ids=[1],
+                   tokens=280, duration_seconds=3.1),
     ] if with_suggestions else []
     return TriggerReport(
         skill_name="my-skill", description="分析日志找异常", description_hash="a1b2c3d4e5f60718",
@@ -97,3 +98,4 @@ def test_html_js_renders_badges_and_per_probe_usage():
     assert r.returncode == 0, f"node failed:\n{r.stderr}"
     assert "耗时" in r.stdout and "12.3s" in r.stdout     # 汇总耗时徽章(fmtDur)
     assert "842 tok" in r.stdout and "4.5s" in r.stdout   # per-probe 消耗列
+    assert "280 tok" in r.stdout and "3.1s" in r.stdout   # LLM suggestion 消耗(tokens>0 才显)
