@@ -1,0 +1,74 @@
+"""trigger-accuracy 操作建议:据触发结果给出「怎么改 description」的可执行建议。
+
+两路:
+- ``build_rule_suggestions``:纯规则、永远生成(零成本、确定性)。按 per-probe 结果
+  聚合成 recall(漏召)/ false_trigger(误触)/ unresolved(没判成)/ all_good 四类,
+  失败时附上 probe 的 prompt 原文,让用户直接看到 description 没够到 / 过宽的具体措辞。
+- ``build_llm_suggestion``(同文件,见下):有失败 probe 时自动调一次 LLM 起草修订
+  description 草案。
+
+口径:诊断、不变成 gate——文案只给「改 description 的方向」,不下 PASS/FAIL 判决
+(同 handbook 15.6 / 遵循性「宁少报不乱报」哲学)。
+"""
+
+from __future__ import annotations
+
+from skill_eval.models.trigger_report import Suggestion
+
+
+def _bullets(probes: list[dict]) -> str:
+    """拼「  · probe-<id>:「<prompt>」」列表(message 里列出失败 probe 的具体措辞)。"""
+    return "".join(f"\n  · probe-{p['id']}:「{p['prompt']}」" for p in probes)
+
+
+def build_rule_suggestions(probes: list[dict]) -> list[Suggestion]:
+    """按 per-probe 结果生成规则建议(0-4 条,永远生成)。
+
+    ``probes`` 元素是 ``trigger_runner.run()`` 返回的 per-probe dict,须含
+    ``id`` / ``expect_trigger`` / ``prompt`` / ``verdict``。``verdict`` 取
+    ``PASS`` / ``FAIL`` / ``UNRESOLVED``。
+    """
+    failed_recall = [p for p in probes if p["expect_trigger"] and p["verdict"] == "FAIL"]
+    failed_ftr = [p for p in probes if not p["expect_trigger"] and p["verdict"] == "FAIL"]
+    unresolved = [p for p in probes if p["verdict"] == "UNRESOLVED"]
+
+    out: list[Suggestion] = []
+
+    if failed_recall:
+        out.append(Suggestion(
+            category="recall", source="rule", probe_ids=[p["id"] for p in failed_recall],
+            message=(
+                f"漏召:{len(failed_recall)} 条该触发的任务 cc 没触发,说明 description "
+                f"没够到这类措辞。考虑在 description 里补与这些请求匹配的触发关键词 / "
+                f"动作动词:{_bullets(failed_recall)}"
+            ),
+        ))
+
+    if failed_ftr:
+        out.append(Suggestion(
+            category="false_trigger", source="rule", probe_ids=[p["id"] for p in failed_ftr],
+            message=(
+                f"误触:{len(failed_ftr)} 条不该触发的任务 cc 却触发了,说明 description "
+                f"过宽。考虑收窄 scope / 加边界排除语(明确写「不处理这类」):{_bullets(failed_ftr)}"
+            ),
+        ))
+
+    if unresolved:
+        out.append(Suggestion(
+            category="unresolved", source="rule", probe_ids=[p["id"] for p in unresolved],
+            message=(
+                f"{len(unresolved)} 条探题没判成(cc 异常 / 限流),结果可能不完整。"
+                f"建议加大 --runs 重跑确认,别据未判成的条下结论。"
+            ),
+        ))
+
+    if not failed_recall and not failed_ftr and not unresolved:
+        out.append(Suggestion(
+            category="all_good", source="rule", probe_ids=[],
+            message=(
+                "触发准确度良好:该触发的都触发、不该的没误触、无未判成。"
+                "description 的触发边界当前够精准,无需改动。"
+            ),
+        ))
+
+    return out

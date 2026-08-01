@@ -11,6 +11,7 @@ from skill_eval.parser import resolve_skill_dir, parse_skill_md
 from skill_eval.models import EvalSet
 from skill_eval.models.trigger_report import TriggerReport, ProbeResult
 from skill_eval.execution.trigger_runner import TriggerRunner
+from skill_eval.execution.trigger_suggest import build_rule_suggestions
 
 
 @app.command()
@@ -51,6 +52,7 @@ def trigger(
                                 trigger_rate=p["trigger_rate"], verdict=p["verdict"],
                                 transcript_path=p["transcript_path"]) for p in res["probes"]],
         )
+        report.suggestions = build_rule_suggestions(res["probes"])
         (out_dir / "trigger-report.json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
         recall_s = f"{res['recall']*100:.0f}%" if res["recall"] is not None else "N/A"
         ftr_s = f"{res['false_trigger_rate']*100:.0f}%" if res["false_trigger_rate"] is not None else "N/A"
@@ -61,6 +63,10 @@ def trigger(
             rate_s = f"{p['trigger_rate']:.0%}" if p["trigger_rate"] is not None else "?"
             console.print(f"  [{'+' if p['verdict']=='PASS' else '-' if p['verdict']=='FAIL' else '?'}] "
                           f"probe-{p['id']}: {rate_s} → {p['verdict']}")
+        if report.suggestions:
+            console.print("[bold]操作建议:[/bold]")
+            for s in report.suggestions:
+                console.print(f"  [dim][{s.source}:{s.category}][/dim] {s.message}")
         console.print(f"Written to {out_dir / 'trigger-report.json'}")
     except SkillEvalError as exc:
         console.print(f"[red]Error:[/red] {exc}")

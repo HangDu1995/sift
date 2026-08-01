@@ -22,6 +22,8 @@ def test_trigger_command_runs_probes_and_writes_report(tmp_path, monkeypatch):
     assert rep["skill_name"] == "my-skill"
     assert rep["recall"] == 1.0
     assert len(rep["description_hash"]) == 16
+    # T2:规则建议进 JSON(全 PASS → all_good)
+    assert rep["suggestions"] and rep["suggestions"][0]["category"] == "all_good"
 
 
 def test_trigger_command_renders_unresolved_probe_without_crash(tmp_path, monkeypatch):
