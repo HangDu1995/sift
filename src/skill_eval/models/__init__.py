@@ -87,6 +87,7 @@ from skill_eval.models.grading_models import (
 )
 from skill_eval.models.trigger_report import (
     ProbeResult,
+    Suggestion,
     TriggerReport,
 )
 
@@ -169,5 +170,6 @@ __all__ = [
     "SkillsManifest",
     # Trigger-accuracy report
     "ProbeResult",
+    "Suggestion",
     "TriggerReport",
 ]

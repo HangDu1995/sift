@@ -213,6 +213,7 @@ class TriggerRunner:
             results.append({
                 "id": probe.id,
                 "expect_trigger": probe.expect_trigger,
+                "prompt": probe.prompt,
                 "trigger_rate": None if unresolved else trigger_rate,
                 "verdict": verdict,
                 "unresolved": unresolved,

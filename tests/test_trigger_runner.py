@@ -118,6 +118,7 @@ def test_trigger_runner_detects_invocation_end_to_end(monkeypatch, tmp_path):
     assert p1["trigger_rate"] == 1.0 and p1["verdict"] == "PASS"
     assert res["recall"] == 1.0 and res["n_should_trigger"] == 1
     assert p1["transcript_path"].endswith("probe-1/run-0/transcript.jsonl")  # M1:人审入口
+    assert p1["prompt"] == "q"  # T1:prompt 透传进 per-probe dict(建议文案要用)
 
 
 def test_trigger_runner_should_not_triggered_is_fail(monkeypatch, tmp_path):

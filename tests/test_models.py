@@ -382,3 +382,37 @@ def test_trigger_report_optional_rates_can_be_none():
                       n_should_trigger=0, n_should_not=0, probes=[])
     r2 = TriggerReport.model_validate_json(r.model_dump_json())
     assert r2.recall is None and r2.false_trigger_rate is None
+
+
+def test_trigger_report_description_prompt_suggestions_roundtrip():
+    """description / prompt / suggestions 新字段 roundtrip + 旧报告(无这些字段)兜默认。"""
+    from skill_eval.models.trigger_report import TriggerReport, ProbeResult, Suggestion
+    r = TriggerReport(
+        skill_name="x", description="does X for logs", description_hash="abc", runs=2,
+        recall=0.5, false_trigger_rate=0.0, n_should_trigger=2, n_should_not=1,
+        suggestions=[
+            Suggestion(category="recall", source="rule", message="补关键词", probe_ids=[1, 3]),
+            Suggestion(category="llm_rewrite", source="llm", message="改写草案…"),
+        ],
+        probes=[ProbeResult(id=1, expect_trigger=True, prompt="分析日志", trigger_rate=0.0, verdict="FAIL")],
+    )
+    r2 = TriggerReport.model_validate_json(r.model_dump_json())
+    assert r2.description == "does X for logs"
+    assert r2.probes[0].prompt == "分析日志"
+    assert len(r2.suggestions) == 2
+    assert r2.suggestions[0].category == "recall" and r2.suggestions[0].probe_ids == [1, 3]
+    assert r2.suggestions[1].source == "llm"
+
+
+def test_trigger_report_legacy_json_without_new_fields_loads():
+    """旧 trigger-report.json(无 description/prompt/suggestions)→ 兜默认,不炸。"""
+    from skill_eval.models.trigger_report import TriggerReport
+    legacy = {
+        "skill_name": "x", "description_hash": "abc", "runs": 1,
+        "recall": 1.0, "false_trigger_rate": None, "n_should_trigger": 1, "n_should_not": 0,
+        "unresolved": 0, "token_usage": {}, "probes": [
+            {"id": 1, "expect_trigger": True, "trigger_rate": 1.0, "verdict": "PASS", "transcript_path": ""},
+        ],
+    }
+    r = TriggerReport.model_validate(legacy)
+    assert r.description == "" and r.suggestions == [] and r.probes[0].prompt == ""

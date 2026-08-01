@@ -40,12 +40,14 @@ def trigger(
         res = runner.run(probes, out_dir)
         report = TriggerReport(
             skill_name=name,
+            description=description,
             description_hash=hashlib.sha256(description.encode()).hexdigest()[:16],
             runs=runs, recall=res["recall"], false_trigger_rate=res["false_trigger_rate"],
             n_should_trigger=res["n_should_trigger"], n_should_not=res["n_should_not"],
             unresolved=res["unresolved"],
             token_usage={"total_tokens": sum(p["tokens"] for p in res["probes"])},
             probes=[ProbeResult(id=p["id"], expect_trigger=p["expect_trigger"],
+                                prompt=p["prompt"],
                                 trigger_rate=p["trigger_rate"], verdict=p["verdict"],
                                 transcript_path=p["transcript_path"]) for p in res["probes"]],
         )
