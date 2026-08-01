@@ -90,6 +90,10 @@ from skill_eval.models.trigger_report import (
     Suggestion,
     TriggerReport,
 )
+from skill_eval.models.coverage_report import (
+    CoveragePoint,
+    CoverageReport,
+)
 
 __all__ = [
     # Audit models
@@ -172,4 +176,7 @@ __all__ = [
     "ProbeResult",
     "Suggestion",
     "TriggerReport",
+    # Coverage grid report
+    "CoveragePoint",
+    "CoverageReport",
 ]
