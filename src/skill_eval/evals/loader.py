@@ -47,11 +47,16 @@ class EvalLoader:
         # trigger_probes 段(可选,纯 scoring 卷无此段 → []):逐条校验后透传,
         # 否则 loader 重建 EvalSet 时会丢掉它(inspect/freeze 等走 loader 的路径就看不到)。
         trigger_probes: list[TriggerProbe] = []
+        seen_tp_ids: set[int] = set()
         for raw_tp in data.get("trigger_probes", []):
             for req in ("id", "prompt", "expect_trigger"):
                 if req not in raw_tp:
                     raise EvalValidationError(
                         f"Trigger probe {raw_tp.get('id', '?')}: missing '{req}'")
+            tpid = raw_tp["id"]
+            if tpid in seen_tp_ids:
+                raise EvalValidationError(f"Duplicate trigger probe id: {tpid}")
+            seen_tp_ids.add(tpid)
             trigger_probes.append(TriggerProbe(**raw_tp))
 
         return EvalSet(skill_name=data["skill_name"], evals=cases,

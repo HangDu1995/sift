@@ -103,6 +103,21 @@ class TestEvalLoader:
         with pytest.raises(EvalValidationError, match="expect_trigger"):
             loader.load(p)
 
+    def test_load_trigger_probe_duplicate_ids(self, tmp_path: Path):
+        """trigger_probes 重复 id 也要拦(镜像 evals 的 seen_ids;doc 称 id「唯一」)。"""
+        p = tmp_path / "evals.json"
+        p.write_text(json.dumps({
+            "skill_name": "test",
+            "evals": [{"id": 1, "prompt": "a"}],
+            "trigger_probes": [
+                {"id": 1, "prompt": "q1", "expect_trigger": True},
+                {"id": 1, "prompt": "q2", "expect_trigger": False},  # 重复 id
+            ],
+        }), encoding="utf-8")
+        loader = EvalLoader()
+        with pytest.raises(EvalValidationError, match="Duplicate trigger probe id"):
+            loader.load(p)
+
     def test_load_no_trigger_probes_defaults_empty(self, tmp_path: Path):
         """旧 evals.json 无 trigger_probes 段 → [](向后兼容)。"""
         p = tmp_path / "evals.json"
