@@ -166,3 +166,41 @@ def test_coverage_missing_evals_json_warns(tmp_path):
     r = runner.invoke(cov_cmd.app, ["coverage", str(skill)])
     assert r.exit_code == 0
     assert "不存在" in r.output or "先跑 init" in r.output
+
+
+def test_coverage_augment_appends_flagged_dedup_evals(monkeypatch, tmp_path):
+    from skill_eval.cli.commands import coverage as cov_cmd
+    from skill_eval.evals.generator import EvalInitGenerator
+    runner = CliRunner()
+
+    skill = tmp_path / "sk"; edir = skill / "evals"; edir.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    (edir / "evals.json").write_text(json.dumps({
+        "skill_name": "sk",
+        "evals": [{"id": 1, "prompt": "已存在 prompt", "rationale": "r"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    def fake_analyze(skill_path, eval_set, *, model=None, timeout=120):
+        from skill_eval.models.coverage_report import CoveragePoint, CoverageReport
+        return CoverageReport(skill_name="sk", points=[
+            CoveragePoint(label="安全事件升级", source_quote="q", covered_by=[])])  # 1 个漏测点
+    monkeypatch.setattr(cov_cmd, "analyze_coverage", fake_analyze)
+
+    # fake generate_with_llm:返回 2 道新题,其中一道 prompt 与已有重复(应被去重)
+    def fake_gen(self, skill_path):
+        from skill_eval.models import EvalSet, EvalCase
+        return EvalSet(skill_name="sk", evals=[
+            EvalCase(id=0, name="new1", prompt="测安全事件", rationale="auto"),
+            EvalCase(id=0, name="dup", prompt="已存在 prompt", rationale="auto"),  # 重复→跳过
+        ])
+    monkeypatch.setattr(EvalInitGenerator, "generate_with_llm", fake_gen)
+
+    r = runner.invoke(cov_cmd.app, ["coverage", str(skill), "-o", str(tmp_path / "out"), "--augment"])
+    assert r.exit_code == 0, r.output
+    assert "补 1" in r.output and "跳过 1" in r.output   # 去重:1 补 1 跳
+
+    saved = json.loads((edir / "evals.json").read_text(encoding="utf-8"))
+    assert len(saved["evals"]) == 2                       # 原 1 + 新 1
+    new_e = [e for e in saved["evals"] if e["prompt"] == "测安全事件"][0]
+    assert new_e["id"] == 2                                # id 接续 max+1
+    assert "review:coverage-augment" in new_e["flags"]     # 带 review flag

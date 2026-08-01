@@ -18,6 +18,10 @@ def coverage(
     model: Optional[str] = typer.Option(None, "--model"),
     timeout: int = typer.Option(120, "--timeout"),
     evals_file: Optional[Path] = typer.Option(None, "--evals", help="evals.json 路径(默认 skill/evals/evals.json)"),
+    augment: bool = typer.Option(
+        False, "--augment",
+        help="自动补漏测题:每个漏测点调 init 生成逻辑补题(带 review:coverage-augment flag,按 prompt 去重),写回 evals.json。",
+    ),
 ):
     """诊断 evals.json 对 SKILL.md 内容点的覆盖(漏测=0 覆盖的点;纯诊断无 gate)。"""
     skill_path = resolve_skill_dir(skill_path)
@@ -55,6 +59,34 @@ def coverage(
             console.print("[dim]补题:逐条人工 review 后,用以下命令定向补(或加 --augment 自动补):[/dim]")
             for g in gaps:
                 console.print(f'  init {skill_path} --append --focus "{g.label}"', markup=False)
+
+        if augment and gaps:
+            from skill_eval.evals.generator import EvalInitGenerator
+            existing_prompts = {e.prompt for e in eval_set.evals}
+            next_id = max((e.id for e in eval_set.evals), default=0) + 1
+            added, skipped = 0, 0
+            for g in gaps:
+                gen = EvalInitGenerator(model=model, timeout=timeout, focus=g.label)
+                try:
+                    new_set = gen.generate_with_llm(skill_path)
+                except RuntimeError:
+                    console.print(f"[dim]补「{g.label}」失败(限流/异常),跳过。[/dim]")
+                    continue
+                for e in new_set.evals:
+                    if e.prompt in existing_prompts:
+                        skipped += 1
+                        continue
+                    e.id = next_id
+                    next_id += 1
+                    e.flags = list(e.flags or []) + ["review:coverage-augment"]
+                    eval_set.evals.append(e)
+                    existing_prompts.add(e.prompt)
+                    added += 1
+            if added:
+                ef.write_text(eval_set.model_dump_json(indent=2), encoding="utf-8")
+            console.print(f"[green]--augment:补 {added} 题[/green](带 review:coverage-augment,需人审)"
+                          f"{f' · 跳过 {skipped} 题(与现有 prompt 重复)' if skipped else ''}")
+            console.print("[dim]补题已写回 evals.json;请人审 review:coverage-augment 题后接受。[/dim]")
 
         console.print(f"Written to {out_dir / 'coverage-report.json'}")
     except SkillEvalError as exc:
