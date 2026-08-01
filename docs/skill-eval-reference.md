@@ -415,6 +415,8 @@ skill-eval trigger path/to/skill/ --evals path/to/evals.json --model claude-sonn
 | `--output` / `-o` | `<skill>/evals/` | 输出目录（写 `trigger-report.json` + `trigger-report.html` + 终端摘要） |
 | `--open` | 关 | 写完后用浏览器打开 `trigger-report.html` |
 
+**输出目录**：`trigger-report.json`（机器读）+ `trigger-report.html`（人读，always 写）+ `probe-<id>/run-<r>/` 沙箱（每条 probe 每次 run 一个，含 cc 的 `transcript.jsonl` 供人审）。**重跑自动清**：再跑同一 `-o` 目录时，开跑前先删旧的 `probe-*` 沙箱（report 靠覆盖），不留过期 transcript；`evals.json` 等非 trigger 产物不动。
+
 **两种探题**：
 
 - **should-trigger**（`expect_trigger: true`）：该 skill 该处理的真任务，措辞**中性**（prompt 里点名 skill 就只是测字面匹配，不是测触发）。

@@ -353,3 +353,42 @@ def test_run_probe_once_uses_real_home_for_auth(monkeypatch, tmp_path):
     tr._run_probe_once(TriggerProbe(id=1, prompt="q", expect_trigger=True), tmp_path / "out", 0)
     # 不覆盖 HOME → 透传真实 HOME,cc 才能读认证文件/keyring(终端无 env token 兜底)
     assert captured["env"].get("HOME") == os.environ.get("HOME")
+
+
+def test_run_clears_stale_probe_sandboxes(monkeypatch, tmp_path):
+    """run() 开头清 out_base 下残留的 probe-* 沙箱(重跑不叠上次的;保留非 trigger 产物)。
+
+    回归:trigger 不清理输出目录 → 改小 runs / 删 probe 后,上次的 run-N / probe-N 残留,
+    人审翻目录看到过期 transcript。run() 开头清 out_base/probe-*;report 由 CLI 覆盖。
+    """
+    from skill_eval.execution.trigger_runner import TriggerRunner
+    from skill_eval.models.eval_models import TriggerProbe
+    from skill_eval.models.execution_models import RunOutput
+
+    out_base = tmp_path / "out"
+    out_base.mkdir()
+    # 上次残留:probe-1/run-9(上次 runs 更大)+ probe-9(上次 probe 更多)
+    stale_run9 = out_base / "probe-1" / "run-9"
+    stale_run9.mkdir(parents=True)
+    (stale_run9 / "transcript.jsonl").write_text("OLD")
+    stale_probe9 = out_base / "probe-9" / "run-0"
+    stale_probe9.mkdir(parents=True)
+    (stale_probe9 / "transcript.jsonl").write_text("OLD")
+    # 非 trigger 产物,不该被清
+    (out_base / "evals.json").write_text("{}")
+    (out_base / "not-a-probe").mkdir()
+
+    def fake_run_trigger(self, prompt, cwd, env, **kw):
+        return RunOutput(exit_code=0, stdout='{"type":"result","result":"x"}\n')
+
+    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    skill = tmp_path / "my-skill"; skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: X\n---\n# body\n")
+    tr = TriggerRunner(skill, runs=1)
+    tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=True)], out_base=out_base)
+
+    assert not stale_run9.exists()                         # 上次 run-9 残留已清
+    assert not stale_probe9.exists()                       # 上次 probe-9 残留已清
+    assert (out_base / "evals.json").exists()              # 非 probe-* 保留
+    assert (out_base / "not-a-probe").exists()             # 非 probe-* 目录保留
+    assert (out_base / "probe-1" / "run-0").exists()       # 本次重建的沙箱在

@@ -195,7 +195,15 @@ class TriggerRunner:
 
             {"probes": [per-probe dict], "recall", "false_trigger_rate",
              "n_should_trigger", "n_should_not", "unresolved"}
+
+        重跑清理:开头删 ``out_base`` 下残留的 ``probe-*`` 沙箱(report 由 CLI 覆盖,沙箱
+        靠这里清)。否则改小 ``--runs`` / 删 probe 后,上次的 ``run-N`` / ``probe-N`` 残留,
+        人审翻目录看到过期 transcript。idempotent(首次无 ``probe-*`` 不影响);只清
+        ``probe-*``(trigger 专属),不动 ``evals.json`` 等。
         """
+        for stale in Path(out_base).glob("probe-*"):
+            if stale.is_dir():
+                shutil.rmtree(stale, ignore_errors=True)
         results: list[dict] = []
         total_duration_ms = 0
         for i, probe in enumerate(probes):
