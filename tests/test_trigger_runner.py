@@ -161,6 +161,7 @@ def test_trigger_runner_spawn_failure_is_unresolved_excluded_from_rates(monkeypa
     tr = TriggerRunner(skill, runs=1)
     res = tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=True)], out_base=tmp_path / "out")
     assert res["probes"][0]["verdict"] == "UNRESOLVED"
+    assert res["probes"][0]["trigger_rate"] is None  # M2:没判成不显假数值率
     assert res["unresolved"] == 1
     assert res["recall"] is None  # 唯一 should-trigger 探题 UNRESOLVED → 该方向空 → N/A
 
@@ -186,6 +187,7 @@ def test_trigger_runner_nonzero_exit_without_fire_is_unresolved(monkeypatch, tmp
     tr = TriggerRunner(skill, runs=1)
     res = tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=True)], out_base=tmp_path / "out")
     assert res["probes"][0]["verdict"] == "UNRESOLVED"
+    assert res["probes"][0]["trigger_rate"] is None  # M2:没判成不显假数值率(不是假 0.0)
     assert res["unresolved"] == 1
     assert res["recall"] is None  # 唯一 should-trigger 探题 UNRESOLVED → N/A,不是假 0.0
 

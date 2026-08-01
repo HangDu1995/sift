@@ -419,7 +419,7 @@ skill-eval trigger path/to/skill/ --evals path/to/evals.json --model claude-sonn
 - **should-trigger**（`expect_trigger: true`）：该 skill 该处理的真任务，措辞**中性**（prompt 里点名 skill 就只是测字面匹配，不是测触发）。
 - **should-not-trigger**（`expect_trigger: false`）：看着相关但 skill **不该**触发的任务——测误触发 / description 过宽。
 
-**判定**：每条 probe 跨 N runs 算 `trigger_rate = fired 次数 / runs`，阈值 0.5 二值化 → PASS / FAIL；spawn 失败 / 超时 → 该 probe = `UNRESOLVED`（**不进率分母**，宁少报不乱报）。聚合**分开报**（各带样本量）：`recall` = should-trigger 方向均值；`false_trigger_rate` = should-not 方向均值——两者是**不同失效模式、不合成一个分**。某方向 0 probe → 对应率 `null`（N/A，不是假 0.0）。
+**判定**：每条 probe 跨 N runs 算 `trigger_rate = fired 次数 / runs`，阈值 0.5 二值化 → PASS / FAIL；spawn 失败 / 超时 / **cc 非零退出且没触发**（限流 / 后端不可用：cc 实测 exit 1 + 错误打 stdout、stderr 空，`run_trigger` 不 raise 而返正常输出）→ 该 probe = `UNRESOLVED`（**不进率分母**、`trigger_rate` 置 `null`，宁少报不乱报）。聚合**分开报**（各带样本量）：`recall` = should-trigger 方向均值；`false_trigger_rate` = should-not 方向均值——两者是**不同失效模式、不合成一个分**。某方向 0 probe → 对应率 `null`（N/A，不是假 0.0）。
 
 > **诊断定位、无门禁**：v1 **无 gate / 不出 exit-code 判决**（纯诊断）。`trigger-report.json` 是独立 artifact，**不并入 `benchmark.json`**。用 [`init --trigger-probes`](#init--初始化评测定义) 生成探题。`description_hash` = sha256(frontmatter `description`)[:16]——锚定触发判定唯一依赖的输入，跨版本对比时判断 recall 变化是否源于 description 改动。成本：每 probe = 1 次 cc spawn（比 `run` 轻——无 with/without 双 spawn、无 grader、无 compliance judge）。
 
@@ -810,9 +810,9 @@ skill-eval batch-report batch-workspace/ --open
 | `recall` | should-trigger 方向 `trigger_rate` 均值；该方向 0 probe → `null`（N/A） |
 | `false_trigger_rate` | should-not 方向 `trigger_rate` 均值；该方向 0 probe → `null`（N/A） |
 | `n_should_trigger` / `n_should_not` | 两方向 probe 数（各自样本量） |
-| `unresolved` | spawn 异常的 probe 数（**不进** recall / false_trigger_rate 分母） |
+| `unresolved` | spawn 异常 / cc 非零退出且没触发（限流）的 probe 数（**不进** recall / false_trigger_rate 分母） |
 | `token_usage` | `{total_tokens}`——所有 probe spawn 的 cc token 合计 |
-| `probes[]` | 每条 probe：`id` / `expect_trigger` / `trigger_rate`（fired / runs）/ `verdict`（PASS / FAIL / UNRESOLVED）/ `transcript_path`（人审抓手） |
+| `probes[]` | 每条 probe：`id` / `expect_trigger` / `trigger_rate`（fired / runs；UNRESOLVED 时 `null`）/ `verdict`（PASS / FAIL / UNRESOLVED）/ `transcript_path`（人审抓手） |
 
 > `recall` 与 `false_trigger_rate` 是**不同失效模式、分开报**（前者测漏召、后者测误触），不合成单一分。某方向 0 probe → 对应字段 `null`（N/A，不是假 0.0）。v1 **无 gate、不进 `benchmark.json`**（诊断定位，独立 artifact）。
 

@@ -7,7 +7,7 @@ class ProbeResult(BaseModel):
     """单条 trigger 探题的结果。"""
     id: int
     expect_trigger: bool
-    trigger_rate: float          # 该 probe 跨 N runs 的触发率(fired 次 / runs)
+    trigger_rate: float | None   # 跨 N runs 触发率(fired 次 / runs);UNRESOLVED(没判成)→ None
     verdict: str                 # PASS / FAIL / UNRESOLVED
     transcript_path: str = ""    # 该 probe 的 transcript(人审/重跑抓手)
 

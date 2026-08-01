@@ -55,8 +55,9 @@ def trigger(
                       f" · false-trigger [red]{ftr_s}[/red]({res['n_should_not']} should-not)"
                       f" · {runs} runs · {res['unresolved']} unresolved")
         for p in res["probes"]:
+            rate_s = f"{p['trigger_rate']:.0%}" if p["trigger_rate"] is not None else "?"
             console.print(f"  [{'+' if p['verdict']=='PASS' else '-' if p['verdict']=='FAIL' else '?'}] "
-                          f"probe-{p['id']}: {p['trigger_rate']:.0%} → {p['verdict']}")
+                          f"probe-{p['id']}: {rate_s} → {p['verdict']}")
         console.print(f"Written to {out_dir / 'trigger-report.json'}")
     except SkillEvalError as exc:
         console.print(f"[red]Error:[/red] {exc}")

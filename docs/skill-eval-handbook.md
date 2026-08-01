@@ -1404,7 +1404,7 @@ trigger 探题分两个方向，各测一种失效：
 
 ### 15.4 判定与样本
 
-每条 probe 跨 N runs 算 `trigger_rate = fired 次数 / runs`（触发带随机性，`--runs` 多跑聚合成率更可信），阈值 0.5 二值化 → PASS / FAIL。spawn 失败 / 超时 → 该 probe = `UNRESOLVED`，**不进 recall / false_trigger_rate 的分母**（宁少报不乱报，避免单次异常污染率——同遵循性"没判成不乱报"的哲学）。某方向 0 probe → 对应率 `null`（N/A，不是假 0.0）。
+每条 probe 跨 N runs 算 `trigger_rate = fired 次数 / runs`（触发带随机性，`--runs` 多跑聚合成率更可信），阈值 0.5 二值化 → PASS / FAIL。spawn 失败 / 超时 / **cc 非零退出且没触发**（限流 / 后端不可用：cc 实测 exit 1 + 错误打 stdout、stderr 空，`run_trigger` 不 raise 而返正常输出）→ 该 probe = `UNRESOLVED`，**不进 recall / false_trigger_rate 的分母**，且其 `trigger_rate` 置 `null`（没判成、不显假数值率，避免把"没跑出来"误读成"触发率 0"）——宁少报不乱报，避免单次异常污染率（同遵循性"没判成不乱报"的哲学）。某方向 0 probe → 对应率 `null`（N/A，不是假 0.0）。
 
 每个率都带自己的样本量（`n_should_trigger` / `n_should_not`），别脱离样本量解读一个率：init 默认每方向 5 道，<3 道会告警"样本少"。同 1.6 的噪声分工，trigger 侧也有"答题噪声 B"（cc 触发带随机性）——靠 `--runs` 多跑抹平。
 

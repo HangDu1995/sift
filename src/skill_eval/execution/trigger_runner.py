@@ -178,6 +178,8 @@ class TriggerRunner:
           限流时实测 exit 1 + 错误打 stdout、stderr 空,``run_trigger`` 不 raise 而返正常
           RunOutput;若不判会把它当「正常没触发」→ should-trigger 假 FAIL / should-not
           假 PASS,静默污染双率。skill 先触发后 cc 崩(``fired=True``)则照算,不丢 fire。
+          UNRESOLVED probe 的 ``trigger_rate`` 置 ``None``(没判成、不显假数值率,
+          避免把「没跑出来」误读成「触发率 0」)。
           返回结构::
 
             {"probes": [per-probe dict], "recall", "false_trigger_rate",
@@ -204,7 +206,7 @@ class TriggerRunner:
             results.append({
                 "id": probe.id,
                 "expect_trigger": probe.expect_trigger,
-                "trigger_rate": trigger_rate,
+                "trigger_rate": None if unresolved else trigger_rate,
                 "verdict": verdict,
                 "unresolved": unresolved,
                 "tokens": tokens,
