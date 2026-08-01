@@ -58,7 +58,8 @@ def coverage(
                     console.print(f"      ↳ SKILL.md:「{g.source_quote[:120]}」", markup=False)
             console.print("[dim]补题:逐条人工 review 后,用以下命令定向补(或加 --augment 自动补):[/dim]")
             for g in gaps:
-                console.print(f'  init {skill_path} --append --focus "{g.label}"', markup=False)
+                safe_label = g.label.replace('"', "'")
+                console.print(f'  init {skill_path} --append --focus "{safe_label}"', markup=False)
 
         if augment and gaps:
             from skill_eval.evals.generator import EvalInitGenerator

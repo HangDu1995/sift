@@ -178,6 +178,7 @@ def test_coverage_augment_appends_flagged_dedup_evals(monkeypatch, tmp_path):
     (edir / "evals.json").write_text(json.dumps({
         "skill_name": "sk",
         "evals": [{"id": 1, "prompt": "已存在 prompt", "rationale": "r"}],
+        "trigger_probes": [{"id": 1, "prompt": "tp", "expect_trigger": True}],
     }, ensure_ascii=False), encoding="utf-8")
 
     def fake_analyze(skill_path, eval_set, *, model=None, timeout=120):
@@ -204,3 +205,5 @@ def test_coverage_augment_appends_flagged_dedup_evals(monkeypatch, tmp_path):
     new_e = [e for e in saved["evals"] if e["prompt"] == "测安全事件"][0]
     assert new_e["id"] == 2                                # id 接续 max+1
     assert "review:coverage-augment" in new_e["flags"]     # 带 review flag
+    assert len(saved["trigger_probes"]) == 1              # 顶层字段写回保全(防回归)
+    assert saved["trigger_probes"][0]["prompt"] == "tp"
