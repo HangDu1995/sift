@@ -443,7 +443,7 @@ Written to /tmp/out/trigger-report.json · /tmp/out/trigger-report.html
 **操作建议（怎么改 description 才更容易 / 更精准地被触发）**：报告 `suggestions[]` 给可直接照做的建议，两路——
 
 - **规则建议**（永远给、零成本）：`recall`（should-trigger FAIL=漏召）→ 列出没触发的 prompt +「补触发关键词 / 动作动词」；`false_trigger`（should-not FAIL=误触）→「收窄 scope / 加边界排除语」；`unresolved` →「加大 `--runs` 重跑确认」；零 FAIL 零 unresolved → `all_good`（无需改）。
-- **LLM 建议**（**有失败才自动跑、无 flag**）：喂当前 description + 失败 probe 的 prompt，起草一个修订 description 草案（可直接抄改）+ 一行理由。相对 trigger 本体（每 probe × run = 1 次完整 cc spawn）这是一次单轮 LLM 调用、开销 <5%，全 PASS 跳过（零成本），故默认开、不设 flag。LLM 调用失败只丢这条、规则建议照在（终端打一行提示）。
+- **LLM 建议**（**有失败才自动跑、无 flag**）：喂当前 description + 失败 probe 的 prompt，起草一个修订 description 草案（可直接抄改）+ 一行理由。相对 trigger 本体（每 probe × run = 1 次完整 cc spawn）这是一次单轮 LLM 调用、开销 <5%，全 PASS 跳过（零成本），故默认开、不设 flag。LLM 调用失败自动重试 2 次（限流是瞬态——trigger 本体跑完紧接着调，常撞后端限流窗口）；重试耗尽只丢这条、规则建议照在，终端打失败原因（疑似限流 / 超时 / 空 result）让你判断是瞬态还是真问题。
 
 ### `report` — HTML 报告
 

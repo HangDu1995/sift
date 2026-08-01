@@ -75,26 +75,42 @@ def build_rule_suggestions(probes: list[dict]) -> list[Suggestion]:
     return out
 
 
+def _classify_call_failure(exc: Exception) -> str:
+    """把 call_claude 的异常分类成给用户看的失败原因(限流/超时/cc 非零退出)。
+
+    ``_spawn_claude`` 失败时 raise 的 ``RuntimeError`` 消息含原始 stdout/stderr 片段;
+    智谱后端限流(过载)常含 529 / overloaded / 访问量过大,超时消息含 "timed out"。
+    """
+    msg = str(exc)
+    if "timed out" in msg:
+        return "超时"
+    low = msg.lower()
+    if any(k in low for k in ("529", "overloaded", "rate limit", "访问量过大", "限流", "too many")):
+        return "疑似限流(cc 非零退出)"
+    return "cc 非零退出"
+
+
 def build_llm_suggestion(
     description: str,
     failed_should_trigger: list[dict],
     failed_should_not: list[dict],
     model: str | None = None,
     timeout: int = 600,
-) -> tuple[Suggestion | None, dict]:
-    """有失败 probe 时,调一次 LLM 起草修订 description 草案。
+    retries: int = 2,
+) -> tuple[Suggestion | None, dict, str | None]:
+    """有失败 probe 时,调 LLM 起草修订 description 草案(限流自动重试)。
 
-    - 全 PASS(无失败)→ ``(None, {})``,**不调** LLM(零成本)。
-    - 调用异常 / 返空 → ``(None, {})``(降级,规则建议照在;trigger.py 打一行提示)。
-    - 成功 → ``(Suggestion(category=llm_rewrite), usage_dict)``;``usage_dict`` 是本次
-      调用的 token 用量(供调用方累加进 report.token_usage)。
+    - 全 PASS(无失败)→ ``(None, {}, None)``,**不调** LLM(零成本)。
+    - 成功 → ``(Suggestion(category=llm_rewrite), usage, None)``。
+    - 重试耗尽 → ``(None, {}, reason)``:``reason`` 描述失败类目(限流/超时/空 result/cc 非
+      零退出),供 CLI 打印让用户判断是瞬态还是真问题。规则建议不受影响(调用方照给)。
 
-    ``failed_*`` 是 per-probe dict 列表(含 ``id`` / ``prompt``)。相对 trigger 本体
-    (每 probe × run = 1 次完整 cc spawn)这是一次单轮 text 调用、开销 <5%,故默认开、
-    只在有失败时触发(全 PASS 跳过)。
+    限流是瞬态:trigger 本体跑完 10 万 token 后紧接着调,常撞智谱后端限流窗口 → cc 非零
+    退出。故默认重试 2 次(初次 + 2);每次失败本身耗时(超时/退出要几秒),充作重试间隔。
+    ``failed_*`` 是 per-probe dict 列表(含 ``id`` / ``prompt``)。
     """
     if not failed_should_trigger and not failed_should_not:
-        return None, {}
+        return None, {}, None
 
     should_lines = "\n".join(f"  - {p['prompt']}" for p in failed_should_trigger) or "  (无)"
     should_not_lines = "\n".join(f"  - {p['prompt']}" for p in failed_should_not) or "  (无)"
@@ -113,16 +129,19 @@ def build_llm_suggestion(
     )
 
     usage: dict = {}
-    try:
-        resp = call_claude(prompt, model=model, timeout=timeout, max_turns=1, on_usage=usage.update)
-    except Exception:
-        return None, {}
-
-    resp = (resp or "").strip()
-    if not resp:
-        return None, {}
-
-    failed_ids = [p["id"] for p in failed_should_trigger] + [p["id"] for p in failed_should_not]
-    return Suggestion(
-        category="llm_rewrite", source="llm", probe_ids=failed_ids, message=resp,
-    ), usage
+    last_reason: str | None = None
+    for _attempt in range(retries + 1):  # 初次 + retries 次重试
+        try:
+            resp = call_claude(prompt, model=model, timeout=timeout, max_turns=1, on_usage=usage.update)
+        except Exception as exc:
+            last_reason = _classify_call_failure(exc)
+            continue
+        resp = (resp or "").strip()
+        if not resp:
+            last_reason = "空 result(cc 返回空文本,可能拒答/限流)"
+            continue
+        failed_ids = [p["id"] for p in failed_should_trigger] + [p["id"] for p in failed_should_not]
+        return Suggestion(
+            category="llm_rewrite", source="llm", probe_ids=failed_ids, message=resp,
+        ), usage, None
+    return None, usage, last_reason

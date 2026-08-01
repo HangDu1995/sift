@@ -60,9 +60,10 @@ def trigger(
         failed_st = [p for p in res["probes"] if p["expect_trigger"] and p["verdict"] == "FAIL"]
         failed_sn = [p for p in res["probes"] if not p["expect_trigger"] and p["verdict"] == "FAIL"]
         if failed_st or failed_sn:
-            llm_sugg, llm_usage = build_llm_suggestion(description, failed_st, failed_sn, model=model)
+            llm_sugg, llm_usage, llm_reason = build_llm_suggestion(description, failed_st, failed_sn, model=model)
             if llm_sugg is None:
-                console.print("[dim]LLM 建议生成失败/为空,仅显示规则建议。[/dim]")
+                why = f"({llm_reason})" if llm_reason else ""
+                console.print(f"[dim]LLM 建议生成失败{why},仅显示规则建议。[/dim]")
             else:
                 suggestions.append(llm_sugg)
                 if llm_usage:

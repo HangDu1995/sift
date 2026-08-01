@@ -1459,7 +1459,7 @@ Written to …/trigger-report.json · …/trigger-report.html
 | `all_good` | 零 FAIL 零 unresolved | description 触发边界够精准，无需改 |
 | `llm_rewrite`（source=llm） | LLM 起草的修订 description 草案 | 可直接抄改（有失败才自动产，带「理由:」） |
 
-规则建议（`recall`/`false_trigger`/`unresolved`/`all_good`）永远给、零成本；LLM 建议（`llm_rewrite`）**有失败才自动跑**（喂当前 description + 失败 probe 的 prompt，起草可抄改的 description + 一行理由），全 PASS 跳过。相对 trigger 本体（N probe × run 次完整 cc spawn）这是单次轻 LLM 调用、<5%，故默认开、无 flag；调用失败只丢这条、规则建议照在。
+规则建议（`recall`/`false_trigger`/`unresolved`/`all_good`）永远给、零成本；LLM 建议（`llm_rewrite`）**有失败才自动跑**（喂当前 description + 失败 probe 的 prompt，起草可抄改的 description + 一行理由），全 PASS 跳过。相对 trigger 本体（N probe × run 次完整 cc spawn）这是单次轻 LLM 调用、<5%，故默认开、无 flag；调用失败自动重试 2 次（限流瞬态），重试耗尽只丢这条、规则建议照在，终端打失败原因（疑似限流 / 超时 / 空 result）让你判断是瞬态还是真问题。
 
 > `trigger-report.json` 字段全表见 reference 的 `trigger-report.json` 段。建议口径是**诊断、不是门禁**——给「改 description 的方向」，不下 PASS/FAIL 判决（同 15.6）。
 

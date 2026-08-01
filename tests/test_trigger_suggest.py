@@ -66,7 +66,7 @@ from skill_eval.execution.trigger_suggest import build_llm_suggestion  # noqa: E
 
 
 def test_llm_suggestion_called_when_failures(monkeypatch):
-    """有失败 probe → 调一次 LLM → 返 llm_rewrite suggestion + usage(token 计入用)。"""
+    """有失败 probe → 调 LLM → 返 llm_rewrite suggestion + usage + reason=None。"""
     captured = {}
 
     def fake(prompt, *, model=None, timeout=120, max_turns=None, on_usage=None):
@@ -76,7 +76,7 @@ def test_llm_suggestion_called_when_failures(monkeypatch):
         return "修订 description:做日志分析、不翻译\n理由:收窄了 scope"
 
     monkeypatch.setattr("skill_eval.execution.trigger_suggest.call_claude", fake)
-    sugg, usage = build_llm_suggestion(
+    sugg, usage, reason = build_llm_suggestion(
         "当前 desc", [{"id": 1, "prompt": "分析日志"}, {"id": 3, "prompt": "查异常"}],
         [{"id": 2, "prompt": "翻译小说"}], model="m")
     assert sugg is not None
@@ -85,6 +85,7 @@ def test_llm_suggestion_called_when_failures(monkeypatch):
     assert "修订 description" in sugg.message
     assert "当前 desc" in captured["prompt"]                 # 当前 description 喂进去了
     assert usage["input_tokens"] == 100 and usage["total_cost_usd"] == 0.01
+    assert reason is None                                    # 成功 → 无失败原因
 
 
 def test_llm_suggestion_skipped_when_all_pass(monkeypatch):
@@ -96,31 +97,71 @@ def test_llm_suggestion_skipped_when_all_pass(monkeypatch):
         return "x"
 
     monkeypatch.setattr("skill_eval.execution.trigger_suggest.call_claude", fake)
-    sugg, usage = build_llm_suggestion("desc", [], [])       # 无失败
-    assert sugg is None and usage == {}
+    sugg, usage, reason = build_llm_suggestion("desc", [], [])       # 无失败
+    assert sugg is None and usage == {} and reason is None
     assert calls["n"] == 0                                   # 没调
 
 
-def test_llm_suggestion_degrades_on_exception(monkeypatch):
-    """call_claude 抛异常 → (None, {}),不炸(规则建议照在)。"""
+def test_llm_suggestion_retries_then_succeeds(monkeypatch):
+    """限流重试:call_claude 前 2 次抛异常、第 3 次成功 → 重试后返 suggestion + reason=None。"""
+    calls = {"n": 0}
+    seq = [RuntimeError("claude CLI failed (exit 1): 529 访问量过大"),
+           RuntimeError("claude CLI failed (exit 1): overloaded"),
+           "修订 desc\n理由:补关键词"]
 
     def fake(prompt, **kw):
+        calls["n"] += 1
+        item = seq[calls["n"] - 1]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr("skill_eval.execution.trigger_suggest.call_claude", fake)
+    sugg, usage, reason = build_llm_suggestion("desc", [{"id": 1, "prompt": "p"}], [], retries=2)
+    assert calls["n"] == 3                                   # 初次 + 2 次重试
+    assert sugg is not None and sugg.category == "llm_rewrite"
+    assert reason is None
+
+
+def test_llm_suggestion_degrades_on_exception(monkeypatch):
+    """call_claude 一直抛 → 重试耗尽 → (None, {}, reason),reason 非空、不炸。"""
+    calls = {"n": 0}
+
+    def fake(prompt, **kw):
+        calls["n"] += 1
         raise RuntimeError("boom")
 
     monkeypatch.setattr("skill_eval.execution.trigger_suggest.call_claude", fake)
-    sugg, usage = build_llm_suggestion("desc", [{"id": 1, "prompt": "p"}], [])
+    sugg, usage, reason = build_llm_suggestion("desc", [{"id": 1, "prompt": "p"}], [], retries=2)
     assert sugg is None and usage == {}
+    assert calls["n"] == 3                                   # 重试 3 次都炸
+    assert reason                                            # 带失败原因
+
+
+def test_llm_suggestion_reason_classifies_throttle(monkeypatch):
+    """失败原因识别限流:异常消息含 529/overloaded → reason 标注「限流」。"""
+
+    def fake(prompt, **kw):
+        raise RuntimeError("claude CLI failed (exit 1): Error 529 访问量过大")
+
+    monkeypatch.setattr("skill_eval.execution.trigger_suggest.call_claude", fake)
+    _, _, reason = build_llm_suggestion("desc", [{"id": 1, "prompt": "p"}], [], retries=0)
+    assert reason and "限流" in reason
 
 
 def test_llm_suggestion_degrades_on_empty_response(monkeypatch):
-    """LLM 返空 → (None, {})。"""
+    """LLM 返空 → 重试耗尽 → reason 标注「空」。"""
+    calls = {"n": 0}
 
     def fake(prompt, *, on_usage=None, **kw):
+        calls["n"] += 1
         if on_usage:
             on_usage({"input_tokens": 1})
         return "   "                                          # 空白
 
     monkeypatch.setattr("skill_eval.execution.trigger_suggest.call_claude", fake)
-    sugg, usage = build_llm_suggestion("desc", [{"id": 1, "prompt": "p"}], [])
+    sugg, usage, reason = build_llm_suggestion("desc", [{"id": 1, "prompt": "p"}], [], retries=2)
     assert sugg is None
+    assert reason and "空" in reason
+    assert calls["n"] == 3
 
