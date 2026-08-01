@@ -1,5 +1,6 @@
 import hashlib
 import json
+import webbrowser
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +24,7 @@ def trigger(
     timeout: int = typer.Option(120, "--timeout"),
     max_turns: int = typer.Option(10, "--max-turns"),
     evals_file: Optional[Path] = typer.Option(None, "--evals", help="evals.json 路径(默认 skill/evals/evals.json)"),
+    open_report: bool = typer.Option(False, "--open", help="写完后用浏览器打开 HTML 报告"),
 ):
     """测 cc 会不会按 skill description 自然触发(第 4 维 trigger-accuracy)。"""
     skill_path = resolve_skill_dir(skill_path)
@@ -78,7 +80,12 @@ def trigger(
             console.print("[bold]操作建议:[/bold]")
             for s in report.suggestions:
                 console.print(f"  [dim][{s.source}:{s.category}][/dim] {s.message}")
-        console.print(f"Written to {out_dir / 'trigger-report.json'}")
+        from skill_eval.reporting.trigger_viewer import TriggerReportGenerator
+        html_path = out_dir / "trigger-report.html"
+        TriggerReportGenerator().write_html(report, html_path)
+        console.print(f"Written to {out_dir / 'trigger-report.json'} · {html_path}")
+        if open_report:
+            webbrowser.open(html_path.as_uri())
     except SkillEvalError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=getattr(exc, "exit_code", 1))

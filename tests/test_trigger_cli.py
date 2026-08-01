@@ -24,6 +24,8 @@ def test_trigger_command_runs_probes_and_writes_report(tmp_path, monkeypatch):
     assert len(rep["description_hash"]) == 16
     # T2:规则建议进 JSON(全 PASS → all_good)
     assert rep["suggestions"] and rep["suggestions"][0]["category"] == "all_good"
+    # T4:HTML 报告也写了(always-write,与 JSON 并列)
+    assert (out / "trigger-report.html").exists()
 
 
 def test_trigger_command_renders_unresolved_probe_without_crash(tmp_path, monkeypatch):

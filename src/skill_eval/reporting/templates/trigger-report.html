@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>trigger report</title>
+  <style>
+    /* :root 变量拷自 viewer.html / audit-report.html,保持同一套配色 */
+    :root {
+      --bg: #faf9f5;
+      --surface: #ffffff;
+      --border: #e8e6dc;
+      --text: #141413;
+      --text-muted: #b0aea5;
+      --accent: #d97757;
+      --accent-hover: #c4613f;
+      --green: #788c5d;
+      --green-bg: #eef2e8;
+      --red: #c44;
+      --red-bg: #fceaea;
+      --header-bg: #141413;
+      --header-text: #faf9f5;
+      --radius: 6px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Lora', Georgia, serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 2rem;
+    }
+
+    #trigger-root {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem;
+      max-width: 960px;
+    }
+
+    h1 { font-family: 'Poppins', system-ui, sans-serif; font-size: 1.5rem; font-weight: 600; margin-bottom: 0.5rem; }
+    h2 { font-family: 'Poppins', system-ui, sans-serif; font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+
+    .meta { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.25rem; word-break: break-all; }
+    .meta code { background: var(--bg); padding: 0.05rem 0.35rem; border-radius: 3px; }
+
+    .description { background: var(--bg); border-left: 3px solid var(--accent); padding: 0.75rem 1rem; border-radius: var(--radius); margin-bottom: 1.25rem; }
+    .description .label { display: block; color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.25rem; }
+    .description .body { font-size: 0.9rem; white-space: pre-wrap; }
+
+    .summary { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; font-size: 0.95rem; margin-bottom: 0.5rem; }
+    .summary span { margin-right: 0.8rem; }
+    .badge-pass { color: var(--green); font-weight: 600; }
+    .badge-fail { color: var(--red); font-weight: 600; }
+    .badge-na { color: var(--accent); font-weight: 600; }
+    .badge-unresolved { color: var(--text-muted); font-weight: 600; }
+    .badge-tokens { color: var(--text-muted); font-weight: normal; }
+
+    .suggestion { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem 1rem; margin-bottom: 0.5rem; }
+    .suggestion .cat { color: var(--text-muted); background: var(--bg); padding: 0.05rem 0.4rem; border-radius: 3px; font-size: 0.75rem; margin-right: 0.5rem; }
+    .suggestion .msg { white-space: pre-wrap; margin-top: 0.35rem; font-size: 0.9rem; }
+    .suggestion.recall, .suggestion.false_trigger { border-left: 3px solid var(--red); }
+    .suggestion.unresolved { border-left: 3px dotted var(--text-muted); }
+    .suggestion.all_good { border-left: 3px solid var(--green); }
+    .suggestion.llm_rewrite { border-left: 3px solid var(--accent); }
+
+    .probes table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+    .probes th, .probes td { border: 1px solid var(--border); padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+    .probes th { background: var(--bg); font-weight: 600; }
+    .probes td.prompt { max-width: 360px; }
+    .probes td.trace { color: var(--text-muted); font-size: 0.8rem; word-break: break-all; }
+    .verdict-PASS { color: var(--green); font-weight: 600; }
+    .verdict-FAIL { color: var(--red); font-weight: 600; }
+    .verdict-UNRESOLVED { color: var(--text-muted); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div id="trigger-root"></div>
+  <script>
+    /*__EMBEDDED_DATA__*/;
+    (function () {
+      // escapeHtml:防 prompt/description/message 里的 < > & " ' 破坏页面。
+      function escapeHtml(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+      }
+      function pct(x) {
+        return (x === null || x === undefined) ? 'N/A' : (Math.round(x * 100) + '%');
+      }
+      function rateTR(x) {
+        return (x === null || x === undefined) ? '?' : pct(x);
+      }
+
+      var D = EMBEDDED_DATA;
+      var tu = D.token_usage || {};
+
+      var html = '';
+      html += '<div class="header"><h1>' + escapeHtml(D.skill_name) + ' · trigger 报告</h1></div>';
+      html += '<div class="meta">description_hash: <code>' + escapeHtml(D.description_hash) + '</code>'
+           + ' · runs: ' + D.runs + '</div>';
+
+      html += '<div class="description"><span class="label">当前 description(触发判定的唯一输入)</span>'
+           + '<div class="body">' + escapeHtml(D.description) + '</div></div>';
+
+      html += '<div class="summary">';
+      html += '<span>recall <b class="badge-pass">' + pct(D.recall) + '</b> (' + D.n_should_trigger + ' should-trigger)</span>';
+      html += '<span>false-trigger <b class="badge-fail">' + pct(D.false_trigger_rate) + '</b> (' + D.n_should_not + ' should-not)</span>';
+      if (D.unresolved) {
+        html += '<span class="badge-unresolved">' + D.unresolved + ' unresolved</span>';
+      }
+      if (tu.total_tokens) {
+        html += '<span class="badge-tokens">spawn tokens ' + tu.total_tokens + '</span>';
+      }
+      if (tu.suggest && tu.suggest.input_tokens) {
+        html += '<span class="badge-tokens">建议 LLM in ' + tu.suggest.input_tokens + ' / out ' + (tu.suggest.output_tokens || 0) + '</span>';
+      }
+      html += '</div>';
+
+      if (D.suggestions && D.suggestions.length) {
+        html += '<h2>操作建议</h2>';
+        for (var i = 0; i < D.suggestions.length; i++) {
+          var s = D.suggestions[i];
+          html += '<div class="suggestion ' + escapeHtml(s.category) + '">'
+               + '<span class="cat">' + escapeHtml(s.source) + ' / ' + escapeHtml(s.category) + '</span>'
+               + '<div class="msg">' + escapeHtml(s.message) + '</div>'
+               + '</div>';
+        }
+      }
+
+      if (D.probes && D.probes.length) {
+        html += '<div class="probes"><h2>探题明细</h2><table>';
+        html += '<tr><th>#</th><th>方向</th><th>prompt</th><th>触发率</th><th>verdict</th><th>transcript</th></tr>';
+        for (var j = 0; j < D.probes.length; j++) {
+          var p = D.probes[j];
+          html += '<tr>'
+               + '<td>' + p.id + '</td>'
+               + '<td>' + (p.expect_trigger ? '该触发' : '不该触发') + '</td>'
+               + '<td class="prompt">' + escapeHtml(p.prompt) + '</td>'
+               + '<td>' + rateTR(p.trigger_rate) + '</td>'
+               + '<td class="verdict-' + escapeHtml(p.verdict) + '">' + escapeHtml(p.verdict) + '</td>'
+               + '<td class="trace">' + (p.transcript_path ? escapeHtml(p.transcript_path) : '—') + '</td>'
+               + '</tr>';
+        }
+        html += '</table></div>';
+      }
+
+      document.getElementById('trigger-root').innerHTML = html;
+    })();
+  </script>
+</body>
+</html>
