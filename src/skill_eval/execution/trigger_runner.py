@@ -8,9 +8,11 @@ ClaudeRunner.run_trigger spawn 路径)编排成端到端流水线:
     1. 建隔离沙箱 ``out_base/probe-<id>/run-<r>/``,把被测 skill 拷进
        ``<sandbox>/.claude/skills/<name>/`` —— cc 在 sandbox 启动后会扫此目录、按
        description 决定是否触发(详见 CLAUDE.md「cc -p 自动触发 skill」记忆条)。
-    2. 干净 HOME(``tempfile.mkdtemp``)压掉用户全局 plugin,只留自动发现机制 +
-       调用方传入的 auth/身份(``claude_cli_env``),确保触发**只由 sandbox 里的
-       本 skill description** 决定、不受用户环境噪声干扰。
+    2. ``run_trigger`` spawn 用**真实 HOME**(不隔离,详见 ``_run_probe_once``):
+       cc 2.x 全局 plugin 不随 HOME(换空 HOME 也隔不掉),覆 HOME 只会断掉 cc 的文件/
+       keyring 认证源 → 终端撞 'Not logged in';``claude_cli_env`` 补身份头 + 继承终端
+       env(含真实 HOME)。触发布尔只看本 skill 名是否在 ``invoked_skills``,全局 skill
+       参与发现不影响判定。
     3. ``run_trigger`` spawn(prompt 原样、不灌 body、不关 slash)→ stdout(流式 json)
        写 ``<sandbox>/transcript.jsonl``。
     4. 复用 ``audit/slice.invoked_skills`` 检出 transcript 里出现的 skill 名,判定本
@@ -28,7 +30,6 @@ ClaudeRunner.run_trigger spawn 路径)编排成端到端流水线:
 from __future__ import annotations
 
 import shutil
-import tempfile
 from pathlib import Path
 
 from skill_eval.audit.slice import invoked_skills
@@ -141,7 +142,7 @@ class TriggerRunner:
         return sandbox
 
     def _run_probe_once(self, probe: TriggerProbe, out_base: Path, run: int, on_progress=None) -> tuple[bool, str, int, int, int]:
-        """单 probe 单 run:建沙箱 → 干净 HOME → spawn → 写 transcript → 检测 fired。
+        """单 probe 单 run:建沙箱 → spawn(真实 HOME)→ 写 transcript → 检测 fired。
 
         Returns:
             ``(fired, transcript_path, total_tokens, exit_code, duration_ms)``。``fired`` = 被测 skill 名
@@ -149,30 +150,33 @@ class TriggerRunner:
             ``run()`` 判非零退出(cc 撞限流 / 异常退出常 exit 1 + 错误打 stdout、stderr 空,
             此时 ``run_trigger`` 不 raise,须据此判 UNRESOLVED,见 ``run()``)。``duration_ms``
             是这次 cc spawn 的墙钟(``RunOutput.duration_ms``,cli_runner 计量),``run()`` 累加成
-            per-probe / 全局耗时(对齐 run 口径)。干净 HOME 临时目录在返回 / 抛异常后由
-            ``finally`` 清掉,别让 /tmp 堆 ``trigger-home-*``。
+            per-probe / 全局耗时(对齐 run 口径)。
+
+        **不隔离 HOME**(对齐 run/audit):cc 2.x 的全局 plugin 不随 HOME(实测换空 HOME 后
+        全局 plugin skill 照样加载,没隔掉),而 cc 的文件/keyring 认证源在 HOME 里——覆
+        HOME 为空目录会把认证一起隔离掉,终端 shell(无 IDE 注入的 ``ANTHROPIC_AUTH_TOKEN``)
+        撞 'Not logged in' → cc 非零退出、0 token → 全 probe UNRESOLVED。故用真实 HOME
+        (``claude_cli_env`` 继承终端 env,含真实 HOME)。隔离全局 skill 的顾虑不成立:
+        ``fired`` 判定只看被测 skill 名是否出现在 ``invoked_skills``(见上),别的 skill 参
+        与发现不改变这个布尔。
         """
         sandbox = self._sandbox_with_skill(out_base, probe.id, run)
-        # 干净 HOME 压全局 plugin:claude_cli_env 补身份/auth,再覆 HOME 为临时空目录,
-        # 让 cc 只看 sandbox/.claude/skills/(自动发现) + 不加载用户 ~/.claude 全局插件。
+        # claude_cli_env 补身份头(治限流)+ 继承终端 env(含真实 HOME → cc 能读认证文件/keyring)。
+        # 不覆 HOME:cc 2.x plugin 不随 HOME(隔不掉),覆了反断认证(见 docstring)。
         env = claude_cli_env()
-        env["HOME"] = tempfile.mkdtemp(prefix="trigger-home-")
-        try:
-            out = self.runner.run_trigger(
-                prompt=probe.prompt,
-                cwd=sandbox,
-                env=env,
-                model=self.model,
-                timeout=self.timeout,
-                max_turns=self.max_turns,
-                on_progress=(lambda line: on_progress(f"  {line}")) if on_progress else None,
-            )
-            transcript = sandbox / "transcript.jsonl"
-            transcript.write_text(out.stdout, encoding="utf-8")
-            fired = self.name in invoked_skills(transcript)
-            return fired, str(transcript), out.total_tokens, out.exit_code, out.duration_ms
-        finally:
-            shutil.rmtree(env["HOME"], ignore_errors=True)  # 用完即清,别让 /tmp 堆 trigger-home-*
+        out = self.runner.run_trigger(
+            prompt=probe.prompt,
+            cwd=sandbox,
+            env=env,
+            model=self.model,
+            timeout=self.timeout,
+            max_turns=self.max_turns,
+            on_progress=(lambda line: on_progress(f"  {line}")) if on_progress else None,
+        )
+        transcript = sandbox / "transcript.jsonl"
+        transcript.write_text(out.stdout, encoding="utf-8")
+        fired = self.name in invoked_skills(transcript)
+        return fired, str(transcript), out.total_tokens, out.exit_code, out.duration_ms
 
     def run(self, probes: list[TriggerProbe], out_base: Path, on_progress=None) -> dict:
         """跑全部探题、聚合 trigger 率。

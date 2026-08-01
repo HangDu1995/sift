@@ -396,7 +396,7 @@ skill-eval audit path/to/skill/ --db opencode.db
 
 测 cc 会不会**仅凭 skill 的 `description` 自然调用本 skill**——不评输出对错、只看触发。前三层（scoring / compliance / calibration）都默认 skill 已"上场"：scoring 的 `_build_non_interactive_prompt` 把 skill body 强制注入 cc prompt + "Follow its instructions" → cc 对"要不要够这个 skill"没得选，**触发能力从不被测**。一个永不触发的 skill，body 再好也是死重量；trigger-accuracy 补的就是这个上游缺口。
 
-> skill 放进 `<cwd>/.claude/skills/<name>/`、给 cc 一条**中性 prompt**（不点名 skill），看 cc 按描述自动发现并调用。检测复用 `audit/slice.invoked_skills`（扫 transcript 里的 `Skill` tool_use）。**干净 HOME 隔离**：spawn 时 `HOME=<temp>` 压掉用户全局 plugin（否则结果依赖测试机装了啥 → 不可移植 / CI 不稳）；cc 内置 skill 仍在（恒定基线），auth 走 env 不受影响。
+> skill 放进 `<cwd>/.claude/skills/<name>/`、给 cc 一条**中性 prompt**（不点名 skill），看 cc 按描述自动发现并调用。检测复用 `audit/slice.invoked_skills`（扫 transcript 里的 `Skill` tool_use）。**用真实 HOME、不隔离**（对齐 run/audit）：cc 2.x 的全局 plugin 不随 HOME（实测换空 HOME 后全局 plugin skill 照样加载，没隔掉），而 cc 的文件/keyring 认证源在 HOME 里——覆 `HOME=<temp>` 会把认证一起断掉，终端 shell（无 IDE 注入的 token）撞 "Not logged in" → 全 probe UNRESOLVED。故 spawn 用真实 HOME（`claude_cli_env` 补身份头 + 继承终端 env）。可信度不靠 HOME 隔离撑：`fired` 只看本 skill 名在不在 `invoked_skills`，别的 skill 参与发现不改变这个布尔。
 
 ```bash
 skill-eval trigger path/to/skill/ --runs 2 -o /tmp/out
@@ -542,7 +542,7 @@ skill-eval batch-report batch-workspace/ --open
 
 前三层都默认 skill 已"上场"——scoring 的 `_build_non_interactive_prompt` 把 skill body **强制注入** cc prompt + "Follow its instructions"，cc 对"要不要够这个 skill"没得选，**触发能力从不被测**。但真实会话里 cc 调不调用一个 skill，靠的**只有 frontmatter 的 `description`**——这一项三维都不评。一个永不触发的 skill，body 再好也是死重量。
 
-[`trigger`](#trigger--触发准确度第-4-维) 命令补这个上游缺口：把 skill 放进 `<cwd>/.claude/skills/`、给中性 prompt，测 cc 会不会仅凭 description 自动触发（干净 HOME 隔离全局 plugin）。产 `trigger-report.json` + `trigger-report.html` + 「怎么改 description」的操作建议（规则永远给 + 有失败自动起草 LLM 改写草案）——`recall`（漏召）+ `false_trigger_rate`（误触）分开报、各带样本量，独立 artifact（**不并入 `benchmark.json`**），无 gate / 不进 exit-code 判决（诊断定位）。
+[`trigger`](#trigger--触发准确度第-4-维) 命令补这个上游缺口：把 skill 放进 `<cwd>/.claude/skills/`、给中性 prompt，测 cc 会不会仅凭 description 自动触发（用真实 HOME、不隔离）。产 `trigger-report.json` + `trigger-report.html` + 「怎么改 description」的操作建议（规则永远给 + 有失败自动起草 LLM 改写草案）——`recall`（漏召）+ `false_trigger_rate`（误触）分开报、各带样本量，独立 artifact（**不并入 `benchmark.json`**），无 gate / 不进 exit-code 判决（诊断定位）。
 
 ### 双率：客观侧 vs 主观侧
 

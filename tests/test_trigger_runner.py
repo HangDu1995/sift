@@ -321,28 +321,27 @@ def test_trigger_runner_progress_callback(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Part C — 干净 HOME 清理(M6:_run_probe_once 用完即清,不漏 /tmp/trigger-home-*)
+# Part C — HOME 不隔离(_run_probe_once 用真实 HOME,对齐 run/audit)
 # ---------------------------------------------------------------------------
 
-def test_run_probe_once_cleans_temp_home(monkeypatch, tmp_path):
-    """spawn 正常返回后,干净 HOME 临时目录被 finally 清掉。"""
+def test_run_probe_once_uses_real_home_for_auth(monkeypatch, tmp_path):
+    """_run_probe_once 不覆盖 HOME:cc 用真实 HOME 读文件/keyring 认证(对齐 run/audit)。
+
+    回归终端全 UNRESOLVED:旧版把 HOME 换成空临时目录「隔离全局 plugin」,但 cc 2.x 的
+    plugin 不随 HOME(空 HOME 下全局 plugin skill 照在,没隔掉),反而把 cc 的文件/keyring
+    认证源一起隔离 → 终端 shell(无 IDE 注入的 ANTHROPIC_AUTH_TOKEN)撞 'Not logged in'
+    → cc 非零退出且没触发 → 整 probe UNRESOLVED。run/audit 用真实 HOME 所以能认证;
+    trigger 对齐之。fired 只看被测 skill 名(invoked_skills),全局 skill 参与不影响判定。
+    """
     import os
-    import tempfile as _tf
     from skill_eval.execution.trigger_runner import TriggerRunner
     from skill_eval.models.eval_models import TriggerProbe
     from skill_eval.models.execution_models import RunOutput
 
-    created = {}
-    real_mkdtemp = _tf.mkdtemp
-
-    def spy_mkdtemp(*a, **k):
-        d = real_mkdtemp(*a, **k)
-        created["path"] = d
-        return d
-
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.tempfile.mkdtemp", spy_mkdtemp)
+    captured = {}
 
     def fake_run_trigger(self, prompt, cwd, env, **kw):
+        captured["env"] = env
         return RunOutput(exit_code=0, stdout='{"type":"result","result":"x"}\n')
 
     monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
@@ -352,37 +351,5 @@ def test_run_probe_once_cleans_temp_home(monkeypatch, tmp_path):
     (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
     tr = TriggerRunner(skill, runs=1)
     tr._run_probe_once(TriggerProbe(id=1, prompt="q", expect_trigger=True), tmp_path / "out", 0)
-    assert not os.path.exists(created["path"])  # 干净 HOME 已清
-
-
-def test_run_probe_once_cleans_temp_home_even_on_error(monkeypatch, tmp_path):
-    """spawn 抛异常时,finally 仍清干净 HOME(异常照样向上抛)。"""
-    import os
-    import tempfile as _tf
-    import pytest
-    from skill_eval.execution.cli_runner import ClaudeRunnerError
-    from skill_eval.execution.trigger_runner import TriggerRunner
-    from skill_eval.models.eval_models import TriggerProbe
-
-    created = {}
-    real_mkdtemp = _tf.mkdtemp
-
-    def spy_mkdtemp(*a, **k):
-        d = real_mkdtemp(*a, **k)
-        created["path"] = d
-        return d
-
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.tempfile.mkdtemp", spy_mkdtemp)
-
-    def fake_run_trigger(self, prompt, cwd, env, **kw):
-        raise ClaudeRunnerError("boom")
-
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
-
-    skill = tmp_path / "my-skill"
-    skill.mkdir()
-    (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
-    tr = TriggerRunner(skill, runs=1)
-    with pytest.raises(ClaudeRunnerError):
-        tr._run_probe_once(TriggerProbe(id=1, prompt="q", expect_trigger=True), tmp_path / "out", 0)
-    assert not os.path.exists(created["path"])  # 异常路径也清
+    # 不覆盖 HOME → 透传真实 HOME,cc 才能读认证文件/keyring(终端无 env token 兜底)
+    assert captured["env"].get("HOME") == os.environ.get("HOME")

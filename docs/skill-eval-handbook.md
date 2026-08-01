@@ -1376,7 +1376,7 @@ skill-eval batch-report batch-workspace/ --open
 
 `description` 这一触发判定唯一依赖的输入，三维都不评。trigger-accuracy 补的就是这个缺口——它和前三层正交：前三层评"上场后表现如何"，trigger 评"会不会上场"。
 
-### 15.2 怎么测：中性 prompt + 干净 HOME
+### 15.2 怎么测：中性 prompt + 真实 HOME
 
 ```bash
 skill-eval trigger path/to/skill/ --runs 2 -o /tmp/out
@@ -1384,7 +1384,7 @@ skill-eval trigger path/to/skill/ --runs 2 -o /tmp/out
 
 `trigger` 命令把被测 skill 放进 `<cwd>/.claude/skills/<name>/`，给 cc 一条**中性 prompt**——不点名 skill、不暗示该用它，就是一个普通用户请求。然后看 cc 会不会仅凭 description 自动发现并调用本 skill。检测复用遵循性引擎的 `audit/slice.invoked_skills`（扫 transcript 里的 `Skill` tool_use，看本 skill 名在不在里面）。
 
-**干净 HOME 隔离**：spawn 时把 `HOME` 指向一个临时空目录，压掉用户全局 plugin——否则结果就依赖"测试机今天装了哪些 plugin"，换台机器 / 上 CI 就变，不可移植。隔离后 cc 只看到沙箱里的本 skill（按 description 自动发现）+ 内置 skill（恒定基线）；auth 走 env、不受影响。这条隔离是 trigger 可信的前提：确保触发**只由沙箱里本 skill 的 description 决定**，不被用户环境的其它 skill / plugin 噪声干扰。
+**用真实 HOME、不隔离**（对齐 run/audit）：spawn 用 `claude_cli_env` 补身份头 + 继承终端 env（含真实 HOME），不把 `HOME` 指向临时空目录。曾尝试用空 HOME 隔离用户全局 plugin，但实测两点推翻：① cc 2.x 的全局 plugin 不随 HOME——换空 HOME 后全局 plugin skill 照样加载，没隔掉；② cc 的文件/keyring 认证源在 HOME 里，覆空 HOME 会把认证一起断掉，终端 shell（无 IDE 注入的 token）撞 "Not logged in" → 全 probe UNRESOLVED。trigger 可信不靠 HOME 隔离撑：`fired` 判定只看本 skill 名在不在 `invoked_skills`（扫 transcript 的 `Skill` tool_use），别的 skill 参与发现不改变这个布尔——触发是否成立由 transcript 里有没有本 skill 的调用决定，与测试机装了哪些别的 skill 无关。
 
 ### 15.3 两种探题：recall 与 false-trigger 是不同失效模式
 
