@@ -48,7 +48,7 @@ def trigger(
             runs=runs, recall=res["recall"], false_trigger_rate=res["false_trigger_rate"],
             n_should_trigger=res["n_should_trigger"], n_should_not=res["n_should_not"],
             unresolved=res["unresolved"],
-            token_usage={"total_tokens": sum(p["tokens"] for p in res["probes"])},
+            token_usage={"total_tokens": res["total_tokens"]},
             duration_seconds=res["duration_ms"] / 1000,
             probes=[ProbeResult(id=p["id"], expect_trigger=p["expect_trigger"],
                                 prompt=p["prompt"],
@@ -74,7 +74,7 @@ def trigger(
         console.print(f"recall [green]{recall_s}[/green]({res['n_should_trigger']} should-trigger)"
                       f" · false-trigger [red]{ftr_s}[/red]({res['n_should_not']} should-not)"
                       f" · {runs} runs · {res['unresolved']} unresolved"
-                      f" · 耗时 {res['duration_ms'] / 1000:.1f}s")
+                      f" · 耗时 {res['duration_ms'] / 1000:.1f}s · {res['total_tokens']} tok")
         for p in res["probes"]:
             rate_s = f"{p['trigger_rate']:.0%}" if p["trigger_rate"] is not None else "?"
             console.print(f"  [{'+' if p['verdict']=='PASS' else '-' if p['verdict']=='FAIL' else '?'}] "

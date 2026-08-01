@@ -1436,7 +1436,7 @@ trigger-accuracy v1 是**诊断工具，不是门禁**：
 **终端摘要**——一行汇总 + 逐 probe + 操作建议：
 
 ```
-recall 75%(5 should-trigger) · false-trigger 10%(5 should-not) · 2 runs · 1 unresolved · 耗时 12.3s
+recall 75%(5 should-trigger) · false-trigger 10%(5 should-not) · 2 runs · 1 unresolved · 耗时 12.3s · 28400 tok
   [+] probe-1: 100% → PASS (842 tok · 4.5s)
   [-] probe-2: 0%   → FAIL (318 tok · 2.1s)
   [?] probe-3: ?    → UNRESOLVED (0 tok · 0.0s)
@@ -1447,7 +1447,7 @@ recall 75%(5 should-trigger) · false-trigger 10%(5 should-not) · 2 runs · 1 u
 Written to …/trigger-report.json · …/trigger-report.html
 ```
 
-- 汇总行：`recall`（绿，越高越好）/ `false-trigger`（红，越低越好）各带样本量 + runs + unresolved + 耗时（cc spawn 总墙钟，不含 LLM 建议那次调用）。逐 probe `[+/-/?] probe-N: 触发率 → verdict (token · 耗时)`：`+` PASS、`-` FAIL、`?` UNRESOLVED（触发率显 `?`、消耗显 0，因为没判成）。
+- 汇总行：`recall`（绿，越高越好）/ `false-trigger`（红，越低越好）各带样本量 + runs + unresolved + 耗时（cc spawn 总墙钟，不含 LLM 建议那次调用）+ 总 token。逐 probe `[+/-/?] probe-N: 触发率 → verdict (token · 耗时)`：`+` PASS、`-` FAIL、`?` UNRESOLVED（触发率显 `?`、消耗显 0，因为没判成）。
 
 **怎么改 description**——报告 `suggestions[]` 直接给方向，两路：
 

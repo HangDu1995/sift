@@ -12,7 +12,7 @@ def test_trigger_command_runs_probes_and_writes_report(tmp_path, monkeypatch):
         '"trigger_probes":[{"id":1,"prompt":"q1","expect_trigger":true,"rationale":""}]}')
 
     fake = {"probes":[{"id":1,"expect_trigger":True,"prompt":"q1","trigger_rate":1.0,"verdict":"PASS","unresolved":False,"tokens":10,"duration_ms":1234,"transcript_path":"evals/probe-1/run-0/transcript.jsonl"}],
-            "recall":1.0,"false_trigger_rate":None,"n_should_trigger":1,"n_should_not":0,"unresolved":0,"duration_ms":1234}
+            "recall":1.0,"false_trigger_rate":None,"n_should_trigger":1,"n_should_not":0,"unresolved":0,"duration_ms":1234,"total_tokens":999}
     monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run", lambda self, probes, base: fake)
 
     out = tmp_path / "out"
@@ -33,6 +33,9 @@ def test_trigger_command_runs_probes_and_writes_report(tmp_path, monkeypatch):
     assert rep["probes"][0]["tokens"] == 10
     assert rep["probes"][0]["duration_seconds"] == 1.234
     assert "10 tok" in r.output
+    # 汇总行总 token(读 res total_tokens,≠ per-probe 10,证汇总行读的是顶层聚合)
+    assert rep["token_usage"]["total_tokens"] == 999
+    assert "999 tok" in r.output
 
 
 def test_trigger_command_renders_unresolved_probe_without_crash(tmp_path, monkeypatch):
@@ -52,7 +55,7 @@ def test_trigger_command_renders_unresolved_probe_without_crash(tmp_path, monkey
                         "verdict": "UNRESOLVED", "unresolved": True, "tokens": 0, "duration_ms": 0,
                         "transcript_path": "", "prompt": "q"}],
             "recall": None, "false_trigger_rate": None,
-            "n_should_trigger": 0, "n_should_not": 0, "unresolved": 1, "duration_ms": 0}
+            "n_should_trigger": 0, "n_should_not": 0, "unresolved": 1, "duration_ms": 0, "total_tokens": 0}
     monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run",
                         lambda self, probes, base: fake)
 
@@ -82,7 +85,7 @@ def test_trigger_command_llm_suggestion_on_failure(tmp_path, monkeypatch):
                         "verdict": "FAIL", "unresolved": False, "tokens": 10, "duration_ms": 500,
                         "transcript_path": ""}],
             "recall": 0.0, "false_trigger_rate": None,
-            "n_should_trigger": 1, "n_should_not": 0, "unresolved": 0, "duration_ms": 500}
+            "n_should_trigger": 1, "n_should_not": 0, "unresolved": 0, "duration_ms": 500, "total_tokens": 10}
     monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run",
                         lambda self, probes, base: fake)
 

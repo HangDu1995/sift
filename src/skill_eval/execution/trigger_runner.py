@@ -234,4 +234,5 @@ class TriggerRunner:
         ])
         agg["unresolved"] = sum(1 for r in results if r["unresolved"])
         agg["duration_ms"] = total_duration_ms
+        agg["total_tokens"] = sum(r["tokens"] for r in results)
         return {"probes": results, **agg}

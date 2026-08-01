@@ -247,9 +247,9 @@ def test_trigger_runner_multi_run_aggregation(monkeypatch, tmp_path):
     assert abs(res["recall"] - 2 / 3) < 1e-6
 
 
-def test_trigger_runner_tracks_duration_ms(monkeypatch, tmp_path):
-    """per-probe duration_ms = 各 run 的 cc spawn 耗时(RunOutput.duration_ms)之和;
-    run() 返回 duration_ms = 所有 probe 之和。对齐 run 用 RunOutput.duration_ms 口径。"""
+def test_trigger_runner_aggregates_duration_and_tokens(monkeypatch, tmp_path):
+    """run() 顶层聚合:duration_ms + total_tokens 都是各 probe 各 run 的 RunOutput 之和(对称)。
+    汇总行 / 报告消耗都从这两个顶层聚合取,不在 CLI 层重复 sum。"""
     from skill_eval.execution.trigger_runner import TriggerRunner
     from skill_eval.models.eval_models import TriggerProbe
     from skill_eval.models.execution_models import RunOutput
@@ -258,7 +258,7 @@ def test_trigger_runner_tracks_duration_ms(monkeypatch, tmp_path):
 
     def fake_run_trigger(self, prompt, cwd, env, **kw):
         return RunOutput(exit_code=0, stdout='{"type":"result","result":"x"}\n',
-                         duration_ms=next(dur_seq))
+                         duration_ms=next(dur_seq), total_tokens=10)
 
     skill = tmp_path / "my-skill"; skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
@@ -269,10 +269,11 @@ def test_trigger_runner_tracks_duration_ms(monkeypatch, tmp_path):
         TriggerProbe(id=2, prompt="q", expect_trigger=True),
         TriggerProbe(id=3, prompt="q", expect_trigger=False),
     ], out_base=tmp_path / "out")
-    assert res["probes"][0]["duration_ms"] == 100
+    assert res["probes"][0]["duration_ms"] == 100 and res["probes"][0]["tokens"] == 10
     assert res["probes"][1]["duration_ms"] == 200
     assert res["probes"][2]["duration_ms"] == 300
-    assert res["duration_ms"] == 600            # 总和
+    assert res["duration_ms"] == 600            # 耗时总和
+    assert res["total_tokens"] == 30            # token 总和(3 probe × 10),与 duration_ms 对称
 
 
 def test_trigger_runner_duration_sums_across_runs(monkeypatch, tmp_path):
