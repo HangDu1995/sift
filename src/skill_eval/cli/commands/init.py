@@ -140,6 +140,9 @@ def init(
         )
 
         console.print(f"Generated [green]{len(eval_set.evals)}[/green] eval cases for [bold]{eval_set.skill_name}[/bold]")
+        tok = gen.llm_usage.get("input_tokens", 0) + gen.llm_usage.get("output_tokens", 0)
+        if gen.llm_duration > 0 or tok:
+            console.print(f"耗时 [bold]{gen.llm_duration:.1f}s[/bold] · {tok} tok")
         if appended:
             console.print(f"[green]Appended[/green] {appended} new evals to existing {output}(id 接续、原题保留)")
         degraded = [(e, f) for e in eval_set.evals for f in (e.flags or []) if f.startswith("degraded:")]
@@ -156,7 +159,7 @@ def init(
                 console.print(f"[yellow]   - {w}[/yellow]")
         for e in eval_set.evals:
             level = getattr(e, 'level', 'L1')
-            line = (f"  [{level}] {e.name}: {len(e.assertions)} assertions, "
+            line = (f"  [{e.id}] [{level}] {e.name}: {len(e.assertions)} assertions, "
                     f"{len(e.expectations)} expectations"
                     + (f", {len(e.fixtures)} fixtures" if e.fixtures else ""))
             if e.confidence is not None:

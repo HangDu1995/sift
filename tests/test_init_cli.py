@@ -398,3 +398,41 @@ def test_init_trigger_probes_appends_to_trigger_probes_section(tmp_path, monkeyp
     assert len(data["evals"]) == 1                  # 原 scoring eval 保留(不重生成)
     assert len(data["trigger_probes"]) == 2          # 新 trigger 段
     assert data["trigger_probes"][0]["expect_trigger"] is True
+
+
+def test_init_prints_token_and_duration(monkeypatch, tmp_path):
+    """generate_with_llm 走真 call_claude(mock 带 on_usage)→ gen 累加 token/耗时 → init 终端显示。
+    对照 coverage/trigger/audit 都显示 LLM 消耗,init 之前漏了。"""
+    import json
+    printed = []
+    monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
+                        lambda *a, **k: printed.append(str(a)))
+    fake = json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "name": "n", "prompt": "p", "expectations": ["e"], "assertions": [], "fixtures": []}]})
+
+    def fake_call(prompt, *a, **k):
+        on_usage = k.get("on_usage")
+        if on_usage:
+            on_usage({"input_tokens": 200, "output_tokens": 80})
+        return fake
+
+    monkeypatch.setattr("skill_eval.evals.generator.call_claude", fake_call)
+    sp = _skill_dir(tmp_path)
+    r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert any("耗时" in p and "tok" in p for p in printed), printed
+    assert any("280" in p for p in printed), printed  # 200 + 80
+
+
+def test_init_lists_eval_id_per_eval(monkeypatch, tmp_path):
+    """逐条输出显示 eval id(对照 evals.json 用,不用数位置猜;id 本就按显示顺序递增)。"""
+    evalset = EvalSet(skill_name="s", evals=[EvalCase(id=7, name="n", prompt="p", level="L1")])
+    printed = []
+    monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
+                        lambda *a, **k: printed.append(str(a)))
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp: evalset)
+    sp = _skill_dir(tmp_path)
+    r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert any("[7]" in p for p in printed), printed

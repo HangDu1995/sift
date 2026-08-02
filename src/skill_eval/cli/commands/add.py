@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -51,7 +52,11 @@ def add(
 
     if idea:
         _check_claude_or_exit()
-        new_case = _generate_from_idea(skill_path, idea, level, model)
+        usage: dict = {}
+        start = time.perf_counter()
+        new_case = _generate_from_idea(skill_path, idea, level, model, on_usage=usage.update)
+        tok = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        console.print(f"耗时 [bold]{time.perf_counter() - start:.1f}s[/bold] · {tok} tok")
     elif prompt:
         expectations = list(expectation) if expectation else []
         new_case = EvalCase(
@@ -81,7 +86,8 @@ def add(
     console.print(f"[green]Added[/green] eval #{new_case.id} ({new_case.name or new_case.get_name()}) to {evals_path}")
 
 
-def _generate_from_idea(skill_path: Path, idea: str, level: str, model: str | None) -> EvalCase:
+def _generate_from_idea(skill_path: Path, idea: str, level: str, model: str | None,
+                        *, on_usage=None) -> EvalCase:
     name, description, content, *_ = parse_skill_md(skill_path)
     is_l2 = level == "L2"
 
@@ -133,7 +139,7 @@ def _generate_from_idea(skill_path: Path, idea: str, level: str, model: str | No
     )
 
     try:
-        response = call_claude(prompt, model=model, timeout=120)
+        response = call_claude(prompt, model=model, timeout=120, on_usage=on_usage)
     except RuntimeError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=3)

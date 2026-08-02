@@ -101,6 +101,8 @@ skill-eval init path/to/skill/ --from-transcript session.jsonl  # 从真实会�
 
 **定向补薄弱面（`--focus` + `--append`）**：LLM 一次性生成整套时倾向正面题 / happy path，系统性漏反面场景、边界 / 错误处理。`--focus` 定向补这些盲区——预设 `negative-cases`（反面：skill 不该被触发的场景）/ `edge-cases`（边界/错误处理），或任意自由文本（skill 特定方向，如"加密 PDF"）。配 `--append` 增量补到已有 evals.json（新 eval id 接续已有 `max+1`、不覆盖旧题）。典型用法：`skill-eval init path/to/skill/ --focus negative-cases --append`。（`anti-triggers` 是旧名，仍作静默别名兼容，避免老脚本静默退化为自由文本回退。）
 
+**终端输出**：生成后逐条列 eval（`[id] [level] name: N assertions, M expectations[, K fixtures] · conf X · ↳ rationale 溯源 SKILL.md 原文）——`[id]` 对照 evals.json 用（id 本就按显示顺序递增，不用数位置猜）；汇总行 `耗时 X.Xs · N tok`（LLM 生成消耗，同 coverage/trigger；确定性 template fallback 无 LLM 则不显）。
+
 ### `add` — 追加评测用例
 
 LLM 辅助或手动添加单个 eval case 到已有 evals.json。
@@ -127,7 +129,7 @@ skill-eval add pdf/ --idea "..." --dry-run
 | `--dry-run` | false | 仅预览，不写入 |
 | `--model` | 默认 | LLM 模型（用于 --idea） |
 
-`--idea` 模式下，自动分配 id、自动推导 assertions 和 fixtures。`--idea` 与 `--prompt` 必须给其一。
+`--idea` 模式下，自动分配 id、自动推导 assertions 和 fixtures，生成后显示 `耗时 X.Xs · N tok`（LLM 消耗）。`--idea` 与 `--prompt` 必须给其一（手动 `--prompt` 模式无 LLM、不显示消耗）。
 
 ### `analyze` — 静态分析
 

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Callable, TYPE_CHECKING
 
@@ -133,6 +134,8 @@ class EvalInitGenerator:
         self.config = config
         self.modes = modes or []
         self._init_warnings: list[str] = []
+        self._llm_usage: dict = {}
+        self._llm_duration: float = 0.0
         self.focus = focus
 
     @property
@@ -142,6 +145,28 @@ class EvalInitGenerator:
         getattr 容错:测试 mock ``__init__`` 时不设 ``_init_warnings`` 也安全可读(返 [])。
         """
         return list(getattr(self, "_init_warnings", []))
+
+    @property
+    def llm_usage(self) -> dict:
+        """各 generate_* 的 call_claude 累计 token(on_usage 累加);init 终端显示用。"""
+        return dict(getattr(self, "_llm_usage", {}))
+
+    @property
+    def llm_duration(self) -> float:
+        """各 generate_* 的 call_claude 累计墙钟秒(含失败那次);init 终端显示用。"""
+        return float(getattr(self, "_llm_duration", 0.0))
+
+    def _llm_call(self, prompt: str) -> str:
+        """call_claude + 累加 token/耗时到实例(init 终端显示用)。RuntimeError 透传调用方处理。"""
+        usage: dict = {}
+        start = time.perf_counter()
+        try:
+            return call_claude(prompt, model=self.model, timeout=self.timeout, on_usage=usage.update)
+        finally:
+            self._llm_duration += time.perf_counter() - start
+            for k, v in usage.items():
+                if v:
+                    self._llm_usage[k] = self._llm_usage.get(k, 0) + v
 
     def generate_template(self, skill_path: Path) -> EvalSet:
         name, description, content, frontmatter, body = parse_skill_md(skill_path)
@@ -211,7 +236,7 @@ class EvalInitGenerator:
 
         prompt = self._build_llm_prompt(name, description, content, is_procedural, focus=self.focus)
         try:
-            response = call_claude(prompt, model=self.model, timeout=self.timeout)
+            response = self._llm_call(prompt)
         except RuntimeError:
             return self.generate_template(skill_path)
 
@@ -241,7 +266,7 @@ class EvalInitGenerator:
         name, description, *_ = parse_skill_md(skill_path)
         prompt = self._build_trigger_prompt(name, description, num_each)
         try:
-            response = call_claude(prompt, model=self.model, timeout=self.timeout)
+            response = self._llm_call(prompt)
         except RuntimeError:
             return []
         return self._parse_trigger_response(response)
@@ -1057,7 +1082,7 @@ Output JSON ONLY:
                     on_heartbeat(f"  …仍在调用 LLM 挖考卷({int(secs)}s)")
             threading.Thread(target=_beat, daemon=True).start()
         try:
-            response = call_claude(prompt, model=self.model, timeout=self.timeout)
+            response = self._llm_call(prompt)
         except RuntimeError:
             stop.set()
             return self._transcript_fallback(name, description, digest)
