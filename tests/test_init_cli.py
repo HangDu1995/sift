@@ -413,7 +413,10 @@ def test_init_prints_token_and_duration(monkeypatch, tmp_path):
     def fake_call(prompt, *a, **k):
         on_usage = k.get("on_usage")
         if on_usage:
-            on_usage({"input_tokens": 200, "output_tokens": 80})
+            # 真实 claude json 的 usage 含非数字字段(server_tool_use dict / service_tier
+            # str)——累加只取数字,否则 int+dict 会 TypeError。
+            on_usage({"input_tokens": 200, "output_tokens": 80,
+                      "server_tool_use": {"web_search": 3}, "service_tier": "standard"})
         return fake
 
     monkeypatch.setattr("skill_eval.evals.generator.call_claude", fake_call)
@@ -436,3 +439,48 @@ def test_init_lists_eval_id_per_eval(monkeypatch, tmp_path):
     r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
     assert any("[7]" in p for p in printed), printed
+
+
+def test_init_append_preserves_existing_unknown_fields(monkeypatch, tmp_path):
+    """A:append 不重序列化原有题——原有 evals.json 的未知字段(EvalCase 不认)须保留,
+    不被 model_dump 丢。读 raw dict 追加新题,原有字节不动(否则 pydantic extra=ignore 会丢)。"""
+    import json
+    from skill_eval.models import EvalCase, EvalSet
+    sp = _skill_dir(tmp_path)
+    out = tmp_path / "out"; out.mkdir()
+    (out / "evals.json").write_text(json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "name": "old", "prompt": "old", "level": "L1",
+         "expectations": ["e"], "assertions": [],
+         "custom_unknown_field": "MUST_PRESERVE"},  # EvalCase 不认的未知字段
+    ]}), encoding="utf-8")
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp: EvalSet(skill_name="s", evals=[
+                            EvalCase(id=1, name="new", prompt="new", level="L1", expectations=["e"])]))
+    r = runner.invoke(app, ["init", str(sp), "--append", "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    merged = json.loads((out / "evals.json").read_text(encoding="utf-8"))
+    assert merged["evals"][0]["custom_unknown_field"] == "MUST_PRESERVE"  # 原有未知字段保留
+    assert [e["id"] for e in merged["evals"]] == [1, 2]  # 原有 1 + 新接续 2
+    assert merged["evals"][1]["prompt"] == "new"
+
+
+def test_init_append_lists_only_new_evals(monkeypatch, tmp_path):
+    """B:append 模式终端只列新增 eval,不全量重列原有(聚焦这次补了啥)。"""
+    import json
+    from skill_eval.models import EvalCase, EvalSet
+    printed = []
+    monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
+                        lambda *a, **k: printed.append(str(a)))
+    sp = _skill_dir(tmp_path)
+    out = tmp_path / "out"; out.mkdir()
+    (out / "evals.json").write_text(json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "name": "OLD_NAME_KEEP", "prompt": "old", "level": "L1",
+         "expectations": ["e"], "assertions": []},
+    ]}), encoding="utf-8")
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp: EvalSet(skill_name="s", evals=[
+                            EvalCase(id=1, name="NEW_NAME_SHOW", prompt="new", level="L1", expectations=["e"])]))
+    r = runner.invoke(app, ["init", str(sp), "--append", "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    assert any("NEW_NAME_SHOW" in p for p in printed), printed    # 新增列了
+    assert not any("OLD_NAME_KEEP" in p for p in printed), printed  # 原有不全量重列

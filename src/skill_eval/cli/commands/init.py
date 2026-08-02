@@ -75,8 +75,8 @@ def init(
                 on_heartbeat=lambda m: console.print(m), kind=kind,
             )
         elif generate_prompts:
-            console.print("Generating L1 unit-level evals with LLM...")
-            eval_set = gen.generate_with_llm(skill_path)
+            with console.status("正在用 LLM 生成 L1 unit-level evals…", spinner="dots"):
+                eval_set = gen.generate_with_llm(skill_path)
         else:
             console.print("Generating template evals...")
             eval_set = gen.generate_template(skill_path)
@@ -93,17 +93,28 @@ def init(
             output = output / "evals.json"
 
         appended = 0
+        new_evals_display: list = []   # append 模式:终端只列这些新增(B);非 append 为空 → 列全量
+        _write_raw = None              # append 模式:保留原有字节的 raw dict(A);非 append 为 None → model_dump 写
         if append and output.exists():
             from skill_eval.models import EvalSet
             try:
-                existing = EvalSet.model_validate(json.loads(output.read_text(encoding="utf-8")))
+                raw = json.loads(output.read_text(encoding="utf-8"))
+                existing = EvalSet.model_validate(raw)
                 next_id = max((e.id for e in existing.evals), default=0) + 1
-                for e in eval_set.evals:
+                new_evals = list(eval_set.evals)
+                for e in new_evals:
                     e.id = next_id
                     next_id += 1
-                appended = len(eval_set.evals)
-                existing.evals.extend(eval_set.evals)
+                appended = len(new_evals)
+                # A:原有 raw evals 字节保留,只追加新题 model_dump(不重序列化原有 →
+                # diff 干净、不丢 EvalCase 不认的未知字段)。
+                raw.setdefault("evals", []).extend(
+                    e.model_dump(mode="json") for e in new_evals
+                )
                 eval_set = existing
+                eval_set.evals.extend(new_evals)
+                _write_raw = raw
+                new_evals_display = new_evals
             except Exception:
                 console.print(f"[yellow]⚠️ 读已有 {output} 失败,改为覆盖写入。[/yellow]")
 
@@ -116,7 +127,8 @@ def init(
                     eval_set = EvalSet.model_validate(json.loads(output.read_text(encoding="utf-8")))
                 except Exception:
                     console.print(f"[yellow]⚠️ 读已有 {output} 失败,trigger 探题将附加到新生成的 evals。[/yellow]")
-            new_probes = gen.generate_trigger_probes(skill_path, num_each=(num_evals or 5))
+            with console.status("正在生成 trigger 探题…", spinner="dots"):
+                new_probes = gen.generate_trigger_probes(skill_path, num_each=(num_evals or 5))
             if num_evals:  # 每方向上限 trim(不补下限)
                 per = max(1, num_evals)
                 should = [p for p in new_probes if p.expect_trigger][:per]
@@ -128,16 +140,23 @@ def init(
             for p in new_probes:
                 p.id = next_id; next_id += 1
             eval_set.trigger_probes = existing_probes + new_probes
+            if _write_raw is not None:  # append 模式:新 probe 也追加到 raw(保留原有 probe 字节)
+                _write_raw.setdefault("trigger_probes", []).extend(
+                    p.model_dump(mode="json") for p in new_probes
+                )
             if new_probes:
                 console.print(f"[green]Generated[/green] {len(new_probes)} trigger probes")
             else:
                 console.print("[yellow]⚠️  未生成 trigger 探题(LLM 失败或解析空)。[/yellow]")
 
-        data = eval_set.model_dump(mode="json")
+        # append 模式写 _write_raw(原有字节保留 + 新追加);否则 model_dump 全量。
+        data = _write_raw if _write_raw is not None else eval_set.model_dump(mode="json")
         output.write_text(
             json.dumps(data, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+        # B:append 模式终端只列新增(degraded / per-eval);非 append 列全量。
+        display_evals = new_evals_display if new_evals_display else eval_set.evals
 
         console.print(f"Generated [green]{len(eval_set.evals)}[/green] eval cases for [bold]{eval_set.skill_name}[/bold]")
         tok = gen.llm_usage.get("input_tokens", 0) + gen.llm_usage.get("output_tokens", 0)
@@ -145,7 +164,7 @@ def init(
             console.print(f"耗时 [bold]{gen.llm_duration:.1f}s[/bold] · {tok} tok")
         if appended:
             console.print(f"[green]Appended[/green] {appended} new evals to existing {output}(id 接续、原题保留)")
-        degraded = [(e, f) for e in eval_set.evals for f in (e.flags or []) if f.startswith("degraded:")]
+        degraded = [(e, f) for e in display_evals for f in (e.flags or []) if f.startswith("degraded:")]
         if degraded:
             console.print(f"[yellow]⚠️  {len(degraded)} 个 eval 为 degraded fallback(LLM 失败,未挖到结构化信号,assertions 可能为空):[/yellow]")
             for e, f in degraded:
@@ -157,7 +176,7 @@ def init(
                           f"(LLM 写了 EvalCase 不认的字段,已忽略;可能拼错、考卷可能缺字段):[/yellow]")
             for w in unknown_warns:
                 console.print(f"[yellow]   - {w}[/yellow]")
-        for e in eval_set.evals:
+        for e in display_evals:
             level = getattr(e, 'level', 'L1')
             line = (f"  [{e.id}] [{level}] {e.name}: {len(e.assertions)} assertions, "
                     f"{len(e.expectations)} expectations"

@@ -164,8 +164,11 @@ class EvalInitGenerator:
             return call_claude(prompt, model=self.model, timeout=self.timeout, on_usage=usage.update)
         finally:
             self._llm_duration += time.perf_counter() - start
+            # 真实 claude json 的 usage 含非数字字段(server_tool_use dict / service_tier
+            # str 等),只累加数字 value,否则 int+dict 会 TypeError(测试 mock 用简化
+            # payload 抓不到,须实跑或模拟真实结构)。
             for k, v in usage.items():
-                if v:
+                if isinstance(v, (int, float)) and not isinstance(v, bool) and v:
                     self._llm_usage[k] = self._llm_usage.get(k, 0) + v
 
     def generate_template(self, skill_path: Path) -> EvalSet:
