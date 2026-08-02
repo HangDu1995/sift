@@ -76,7 +76,9 @@ def coverage(
                 gen = EvalInitGenerator(model=model, timeout=timeout, focus=g.label)
                 try:
                     with console.status(f"正在为「{g.label}」生成补题…", spinner="dots"):
-                        new_set = gen.generate_with_llm(skill_path)
+                        # 喂现有 evals(含本批已补题)→ 共享内核定向补题 + 语义去重;
+                        # 下面的 prompt 字面去重作兜底。
+                        new_set = gen.generate_with_llm(skill_path, existing_evals=eval_set.evals)
                 except RuntimeError:
                     console.print(f"[dim]补「{g.label}」失败(限流/异常),跳过。[/dim]")
                     continue

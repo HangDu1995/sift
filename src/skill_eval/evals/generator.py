@@ -233,11 +233,13 @@ class EvalInitGenerator:
 
         return EvalSet(skill_name=name, evals=cases)
 
-    def generate_with_llm(self, skill_path: Path) -> EvalSet:
+    def generate_with_llm(self, skill_path: Path,
+                          existing_evals: list[EvalCase] | None = None) -> EvalSet:
         name, description, content, frontmatter, body = parse_skill_md(skill_path)
         is_procedural = self._is_procedural_skill(content, skill_path)
 
-        prompt = self._build_llm_prompt(name, description, content, is_procedural, focus=self.focus)
+        prompt = self._build_llm_prompt(name, description, content, is_procedural,
+                                        focus=self.focus, existing_evals=existing_evals)
         try:
             response = self._llm_call(prompt)
         except RuntimeError:
@@ -738,13 +740,50 @@ Output JSON ONLY:
             "Default generation may have under-covered this; this run targets it deliberately.\n\n"
         )
 
+    def _supplement_directive(self, focus: str | None, existing_evals) -> str:
+        """定向补题指令:有现有题(init --append / coverage --augment)→ 硬化;无 → 退回软 _focus_directive。
+
+        治 init --append --focus 半聚焦 + 不去重:旧版只把 focus 作软 directive 注到「生成整套」
+        prompt 前,LLM 仍端到端生成一遍、且与现有题重复。有现有题时改用纯补题指令——明确
+        「只补 focus 这一面、且现有未覆盖的」,并把现有题清单(name + prompt + rationale)喂进去
+        让 LLM 语义避重(对照 prompt **和** rationale,不只字面)。init / coverage --augment 共用
+        此路径(_build_llm_prompt 一处改,两路达标)。
+        """
+        if not existing_evals:
+            # 无现有题(覆盖式 init)→ 行为不变,走软 focus directive
+            return self._focus_directive(focus)
+        lines = []
+        for e in existing_evals[:30]:
+            rat = (e.rationale or "").strip().replace("\n", " ")
+            prm = (e.prompt or "").strip().replace("\n", " ")
+            lines.append(f'- [{e.id}] "{e.name}" — prompt: {prm[:90]} | rationale: {rat[:110]}')
+        existing_block = "\n".join(lines)
+        focus_line = (f"**Targeted gap to fill THIS run:** {focus.strip()}\n\n"
+                      if (focus and focus.strip()) else "")
+        return (
+            "## THIS IS A TARGETED SUPPLEMENT, NOT a fresh full suite\n\n"
+            "evals.json already has the existing evals listed below. DO NOT regenerate or "
+            "duplicate them. Generate ONLY new evals that:\n"
+            "1. directly test the targeted gap named below, AND\n"
+            "2. are NOT already covered by any existing eval — compare BOTH the prompt AND the "
+            "rationale of each existing eval, because different wording can still test the same "
+            "rule (e.g. an existing 'empty log → total_errors=0' eval already covers that edge).\n"
+            "Every assertion MUST verify the targeted gap. If a candidate eval is really about a "
+            "different rule (categorization, output format, fabrication guard, …) that the existing "
+            "evals already cover, DROP it — do not pad the suite with off-topic cases.\n"
+            "Keep it tight: 2-5 high-quality gap-filling evals, not a fresh full set.\n\n"
+            f"{focus_line}"
+            f"**Existing evals already cover (DO NOT duplicate):**\n{existing_block}\n\n"
+        )
+
     def _build_llm_prompt(self, name: str, description: str, content: str,
-                          is_procedural: bool = False, focus: str | None = None) -> str:
+                          is_procedural: bool = False, focus: str | None = None,
+                          existing_evals: list[EvalCase] | None = None) -> str:
         if is_procedural:
             prompt = self._build_procedural_prompt(name, description, content)
         else:
             prompt = self._build_knowledge_prompt(name, description, content)
-        directive = self._focus_directive(focus)
+        directive = self._supplement_directive(focus, existing_evals)
         if directive:
             # 注在 ## Output JSON 前(两个 builder 都有该锚点),改变这次生成目标
             prompt = prompt.replace("## Output JSON", directive + "## Output JSON", 1)

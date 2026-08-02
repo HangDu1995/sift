@@ -92,14 +92,14 @@ skill-eval init path/to/skill/ --from-transcript session.jsonl  # 从真实会�
 | `--kind` | (无) | `skill`\|`agent`：只挖本 skill/agent 被调用/被 dispatch 期间段（同 audit --kind）；不传 + 检测到多 skill → 警告 |
 | `--timeout` | 600 | LLM 调用超时秒数（mining 是单次大 prompt；撞超时 → degraded fallback） |
 | `--focus` | (无) | 定向生成某一类 eval 补盲区：`negative-cases`（反面场景）/ `edge-cases`（边界/错误）/ 任意自由文本（skill 特定方向）；常配 `--append`。`anti-triggers` 是旧名，保留为静默别名 |
-| `--append` | 关 | 追加到已有 evals.json（不覆盖），新 eval id 接续已有 `max+1` |
+| `--append` | 关 | 追加到已有 evals.json（不覆盖）：读现有 evals 喂 LLM 定向补题（只补 `--focus` 面、与现有题语义去重），新 eval id 接续已有 `max+1` |
 | `--trigger-probes` | 关 | 生成 trigger-accuracy 探题（should-trigger / should-not-trigger），追加到 evals.json 的 `trigger_probes` 段（见 [evals-format.md](evals-format.md)）。LLM 读 description 出题；默认每方向 5 道，`--num-evals` = 每方向**上限**（trim 多余、不补下限）。不重生成已有 scoring evals（载入已有 evals.json 保留原题）；新探题 id 接续已有 trigger_probes `max+1`。配合 [`trigger`](#trigger--触发准确度第-4-维) 跑 |
 
 `--from-transcript` 解析 session transcript（模型、user turns、用到的 skill），重建 input_files / commands / produced_files，生成带结构化 assertions 的 eval。若 LLM 失败降级为 fallback eval，会带 `degraded:*` flag 并在终端告警（不再静默）。多 skill transcript 不传 `--kind` 时会把全部当本 skill 挖（可能串味）→ 终端告警，建议加 `--kind skill` 只挖本 skill 段。
 
 **字段名校验**：LLM 生成时若把字段名拼错（如 `expected_output`→`expected`、`assertions`→`assertion`），pydantic 默认会**静默丢弃**该字段——evals.json 看着生成成功、实则缺字段，`run` 时才暴雷。`init` 会在终端告警 `⚠️ N 条 eval 含未知字段(已忽略;可能拼错)`，逐条列出哪个 eval 的哪些字段可疑，免得考卷悄悄残缺。warn 不拒（拒绝会掉确定性模板 fallback，反而更差）。
 
-**定向补薄弱面（`--focus` + `--append`）**：LLM 一次性生成整套时倾向正面题 / happy path，系统性漏反面场景、边界 / 错误处理。`--focus` 定向补这些盲区——预设 `negative-cases`（反面：skill 不该被触发的场景）/ `edge-cases`（边界/错误处理），或任意自由文本（skill 特定方向，如"加密 PDF"）。配 `--append` 增量补到已有 evals.json（新 eval id 接续已有 `max+1`、不覆盖旧题；**保留原有题原始字节**——只追加新题、不重序列化原有，故不丢未知字段、git diff 干净；终端**只列新增** eval、原有不全量重列）。典型用法：`skill-eval init path/to/skill/ --focus negative-cases --append`。（`anti-triggers` 是旧名，仍作静默别名兼容，避免老脚本静默退化为自由文本回退。）
+**定向补薄弱面（`--focus` + `--append`）**：LLM 一次性生成整套时倾向正面题 / happy path，系统性漏反面场景、边界 / 错误处理。`--focus` 定向补这些盲区——预设 `negative-cases`（反面：skill 不该被触发的场景）/ `edge-cases`（边界/错误处理），或任意自由文本（skill 特定方向，如"加密 PDF"）。配 `--append` 增量补到已有 evals.json：生成阶段**读现有 evals 喂给 LLM**——走定向补题指令（只补 `--focus` 这一面、每个 assertion 直接验证它；并与现有题**语义去重**：对照现有题的 prompt 和 rationale，不同措辞测同一点的也不重复出），不再盲生成整套蹭 focus 前缀；新 eval id 接续已有 `max+1`、不覆盖旧题；**保留原有题原始字节**——只追加新题、不重序列化原有，故不丢未知字段、git diff 干净；终端**只列新增** eval、原有不全量重列）。典型用法：`skill-eval init path/to/skill/ --focus negative-cases --append`。（`anti-triggers` 是旧名，仍作静默别名兼容，避免老脚本静默退化为自由文本回退。）
 
 **终端输出**：生成后逐条列 eval（`[id] [level] name: N assertions, M expectations[, K fixtures] · conf X · ↳ rationale 溯源 SKILL.md 原文）——`[id]` 对照 evals.json 用（id 本就按显示顺序递增，不用数位置猜）；汇总行 `耗时 X.Xs · N tok`（LLM 生成消耗，同 coverage/trigger；确定性 template fallback 无 LLM 则不显）。
 
@@ -496,7 +496,7 @@ Written to path/to/skill/evals/coverage-report.json · path/to/skill/evals/cover
 
 汇总行：内容点数 · 漏测数（红）· 耗时 · LLM token；逐漏测点列 `label` + SKILL.md 原文片段（`source_quote`，截断 120 字）；末尾给每个漏测点一条 `init --append --focus "<label>"` 处方（人工定向补，复用 [`init`](#init--初始化评测定义) 的 `--focus` 机制）。无漏测时显 ✓ 绿（`✓ 无漏测:SKILL.md 内容点均有 eval 覆盖。`）。
 
-**`--augment`（自动补题）**：每个漏测点复用 `init` 的生成器（`EvalInitGenerator(focus=<label>)`）自动补 eval——新 eval 带 `review:coverage-augment` flag（标记待人审）、按 `prompt` 与现有 eval 去重（重复的跳过计数）、id 接续已有 `max+1`，写回 evals.json。某漏测点补题失败（限流 / 异常）逐条跳过、不中断整体。补完打印 `--augment:补 N 题(带 review:coverage-augment,需人审)`（有跳过则附 `· 跳过 M 题(与现有 prompt 重复)`）。
+**`--augment`（自动补题）**：每个漏测点复用 `init` 的生成器（`EvalInitGenerator(focus=<label>)`）自动补 eval——生成时**喂现有 evals**（含本批已补题），走与 `init --append --focus` **同一个定向补题内核**（只补该漏测点这一面、与现有题语义去重），不再盲生成整套；新 eval 带 `review:coverage-augment` flag（标记待人审）、再按 `prompt` 字面去重作兜底（重复的跳过计数）、id 接续已有 `max+1`，写回 evals.json。某漏测点补题失败（限流 / 异常）逐条跳过、不中断整体。补完打印 `--augment:补 N 题(带 review:coverage-augment,需人审)`（有跳过则附 `· 跳过 M 题(与现有 prompt 重复)`）。
 
 > **`--augment` 补题必须人审**：自动生成的 eval 质量不保证——`review:coverage-augment` flag 标着等审，人确认"这题真测到了那个漏测点、且不是凑数题"后再接受。别直接拿 `--augment` 的结果跑 `run`。
 

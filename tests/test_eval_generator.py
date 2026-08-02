@@ -721,3 +721,75 @@ def test_generate_trigger_probes_empty_on_llm_failure(tmp_path):
     with patch("skill_eval.evals.generator.call_claude", side_effect=boom):
         probes = gen.generate_trigger_probes(_skill(tmp_path))
     assert probes == []
+
+
+# ---------------------------------------------------------------------------
+# 共享内核:定向补题(_supplement_directive)
+# 有现有题(init --append / coverage --augment)→ 硬化 focus + 喂现有题清单做语义去重;
+# 治「半聚焦 + 不去重」(旧 _focus_directive 软提示,LLM 端到端生成、与现有题重复)。
+# ---------------------------------------------------------------------------
+
+def test_supplement_directive_falls_back_to_focus_when_no_existing():
+    """无现有题(覆盖式 init)→ 退回软 _focus_directive,行为不变。"""
+    gen = EvalInitGenerator()
+    assert gen._supplement_directive("加密 PDF", None) == gen._focus_directive("加密 PDF")
+    assert gen._supplement_directive("加密 PDF", []) == gen._focus_directive("加密 PDF")
+    assert gen._supplement_directive(None, None) == ""
+
+
+def test_supplement_directive_lists_existing_evals_for_dedup():
+    """有现有题 → 注入清单(name/prompt/rationale)让 LLM 语义避重(不只字面)。"""
+    gen = EvalInitGenerator()
+    existing = [
+        EvalCase(id=2, name="empty_log", prompt="分析空日志", level="L1",
+                 rationale="## total-errors-count 空日志→0"),
+    ]
+    d = gen._supplement_directive("read-log-file", existing)
+    assert "empty_log" in d and "分析空日志" in d and "total-errors-count" in d
+
+
+def test_supplement_directive_strong_constraint_and_focus():
+    """有现有题 → 硬约束(非整套/不重复/assertion 验证 gap)+ focus 注入。"""
+    gen = EvalInitGenerator()
+    d = gen._supplement_directive("read-log-file", [EvalCase(id=1, prompt="x")])
+    assert "TARGETED SUPPLEMENT" in d
+    assert "NOT a fresh full suite" in d
+    assert "duplicate" in d.lower()
+    assert "read-log-file" in d
+
+
+def test_build_llm_prompt_supplement_when_existing_evals():
+    """_build_llm_prompt(existing_evals=...) → 注入补题指令(含现有题),在 Output JSON 前。"""
+    gen = EvalInitGenerator()
+    p = gen._build_llm_prompt("s", "d", "# b\n", is_procedural=False, focus="read-log-file",
+                              existing_evals=[EvalCase(id=1, name="old", prompt="p")])
+    assert "TARGETED SUPPLEMENT" in p
+    assert "old" in p
+    assert p.index("TARGETED SUPPLEMENT") < p.index("## Output JSON")
+
+
+def test_build_llm_prompt_no_supplement_without_existing():
+    """无 existing + focus → 仍是软 _focus_directive(不硬化,覆盖式 init 行为不变)。"""
+    gen = EvalInitGenerator()
+    p = gen._build_llm_prompt("s", "d", "# b\n", is_procedural=False, focus="negative-cases")
+    assert "TARGETED SUPPLEMENT" not in p
+    assert "## Focus" in p
+
+
+def test_generate_with_llm_passes_existing_into_prompt(monkeypatch, tmp_path):
+    """generate_with_llm(existing_evals=[...]) → 喂进 call_claude 的 prompt(含现有题 + 硬约束)。"""
+    import json
+    sp = tmp_path / "skill"; sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n", encoding="utf-8")
+    captured = {}
+
+    def fake(prompt, *a, **k):
+        captured["prompt"] = prompt
+        return json.dumps({"skill_name": "s", "evals": [
+            {"id": 1, "name": "n", "level": "L1", "prompt": "p", "rationale": "## r",
+             "expectations": [], "assertions": [], "fixtures": []}]})
+    monkeypatch.setattr("skill_eval.evals.generator.call_claude", fake)
+    EvalInitGenerator(focus="read-log-file").generate_with_llm(
+        sp, existing_evals=[EvalCase(id=7, name="SENTRY", prompt="old-prompt")])
+    assert "SENTRY" in captured["prompt"]
+    assert "TARGETED SUPPLEMENT" in captured["prompt"]

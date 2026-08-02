@@ -16,7 +16,7 @@ def _skill_dir(tmp_path):
 def test_init_without_flag_calls_generate_with_llm(monkeypatch, tmp_path):
     called = {}
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: called.__setitem__("default", True) or _fake_evalset())
+                        lambda self, sp, **k: called.__setitem__("default", True) or _fake_evalset())
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript",
                         lambda self, sp, tp, on_heartbeat=None, kind=None: called.__setitem__("transcript", True) or _fake_evalset())
     sp = _skill_dir(tmp_path)
@@ -29,7 +29,7 @@ def test_init_with_from_transcript_routes(monkeypatch, tmp_path):
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript",
                         lambda self, sp, tp, on_heartbeat=None, kind=None: called.__setitem__("tp", tp) or _fake_evalset())
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: called.__setitem__("default", True) or _fake_evalset())
+                        lambda self, sp, **k: called.__setitem__("default", True) or _fake_evalset())
     sp = _skill_dir(tmp_path)
     tp = tmp_path / "t.jsonl"; tp.write_text("{}", encoding="utf-8")
     r = runner.invoke(app, ["init", str(sp), "--from-transcript", str(tp), "-o", str(tmp_path / "out")])
@@ -79,7 +79,7 @@ def test_init_threads_model_flag_to_generator(monkeypatch, tmp_path):
 
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.__init__", fake_init)
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: _fake_evalset())
+                        lambda self, sp, **k: _fake_evalset())
     sp = _skill_dir(tmp_path)
     r = runner.invoke(app, ["init", str(sp), "--model", "sonnet", "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
@@ -95,7 +95,7 @@ def test_init_threads_timeout_flag_to_generator(monkeypatch, tmp_path):
 
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.__init__", fake_init)
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: _fake_evalset())
+                        lambda self, sp, **k: _fake_evalset())
     sp = _skill_dir(tmp_path)
     # 显式传 --timeout
     r = runner.invoke(app, ["init", str(sp), "--timeout", "300", "-o", str(tmp_path / "out")])
@@ -118,7 +118,7 @@ def test_init_kind_threads_flag(monkeypatch, tmp_path):
 
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript", fake)
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: _fake_evalset())
+                        lambda self, sp, **k: _fake_evalset())
     sp = _skill_dir(tmp_path)
     tp = tmp_path / "t.jsonl"; tp.write_text("{}", encoding="utf-8")
     r = runner.invoke(app, ["init", str(sp), "--from-transcript", str(tp), "--kind", "skill",
@@ -219,7 +219,7 @@ def test_init_notes_same_prompt_group(monkeypatch, tmp_path):
     monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
                         lambda *a, **k: printed.append(str(a)))
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: evalset)
+                        lambda self, sp, **k: evalset)
     sp = _skill_dir(tmp_path)
     r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
@@ -235,7 +235,7 @@ def test_init_no_note_when_prompts_unique(monkeypatch, tmp_path):
     monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
                         lambda *a, **k: printed.append(str(a)))
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: evalset)
+                        lambda self, sp, **k: evalset)
     sp = _skill_dir(tmp_path)
     r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
@@ -258,7 +258,7 @@ def test_init_lists_programmatic_count_per_eval(monkeypatch, tmp_path):
                     Assertion(name="b", type=AssertionType.CONTAINS_PATTERN)],
     )])
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: evalset)
+                        lambda self, sp, **k: evalset)
     sp = _skill_dir(tmp_path)
     r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
@@ -275,7 +275,7 @@ def test_init_lists_rationale_per_eval(monkeypatch, tmp_path):
     monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
                         lambda *a, **k: printed.append(str(a)))
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: evalset)
+                        lambda self, sp, **k: evalset)
     sp = _skill_dir(tmp_path)
     r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
@@ -294,7 +294,7 @@ def test_init_append_extends_existing_evals(monkeypatch, tmp_path):
         {"id": 2, "prompt": "old2", "level": "L1", "expectations": ["e"], "assertions": []},
     ]}), encoding="utf-8")
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: EvalSet(skill_name="s", evals=[
+                        lambda self, sp, **k: EvalSet(skill_name="s", evals=[
                             EvalCase(id=1, prompt="new1", level="L1", expectations=["e"]),
                             EvalCase(id=2, prompt="new2", level="L1", expectations=["e"]),
                         ]))
@@ -306,6 +306,79 @@ def test_init_append_extends_existing_evals(monkeypatch, tmp_path):
     assert "old1" in prompts and "new1" in prompts  # 新旧都在(不覆盖)
 
 
+def test_init_append_feeds_existing_evals_to_generation(monkeypatch, tmp_path):
+    """--append + 已有 evals.json → 生成阶段喂现有题(定向补题 + 去重),不再盲生成。
+    治半聚焦/不去重:init --append --focus 应让 LLM 看到现有题、只补 focus 且不重叠。"""
+    import json
+    from skill_eval.models import EvalCase, EvalSet
+    sp = _skill_dir(tmp_path)
+    out = tmp_path / "out"; out.mkdir()
+    (out / "evals.json").write_text(json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "name": "OLD", "prompt": "old", "level": "L1",
+         "rationale": "## covered-point", "expectations": ["e"], "assertions": []}]}),
+        encoding="utf-8")
+    captured = {}
+
+    def fake_gen(self, sp, existing_evals=None):
+        captured["existing"] = existing_evals
+        return EvalSet(skill_name="s", evals=[EvalCase(id=1, prompt="new", level="L1", expectations=["e"])])
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm", fake_gen)
+    r = runner.invoke(app, ["init", str(sp), "--append", "--focus", "read-log-file", "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    assert captured["existing"] is not None
+    assert len(captured["existing"]) == 1
+    assert captured["existing"][0].name == "OLD"      # 现有题喂进去了
+
+
+def test_init_append_no_existing_feeds_none(monkeypatch, tmp_path):
+    """--append 但无已有 evals.json → 喂 None(退回软 focus directive,覆盖式行为不变)。"""
+    from skill_eval.models import EvalCase, EvalSet
+    sp = _skill_dir(tmp_path)
+    out = tmp_path / "out"; out.mkdir()
+    captured = {}
+
+    def fake_gen(self, sp, existing_evals=None):
+        captured["existing"] = existing_evals
+        return EvalSet(skill_name="s", evals=[EvalCase(id=1, prompt="only", level="L1", expectations=["e"])])
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm", fake_gen)
+    r = runner.invoke(app, ["init", str(sp), "--append", "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    assert captured["existing"] is None
+
+
+def test_init_append_shows_new_and_merged_count(monkeypatch, tmp_path):
+    """append 模式:汇总行显「本次新增 N · 合并后 M」,不把合并总数当生成数(原 'Generated 12' 误导)。"""
+    import json
+    from skill_eval.models import EvalCase, EvalSet
+    sp = _skill_dir(tmp_path)
+    out = tmp_path / "out"; out.mkdir()
+    (out / "evals.json").write_text(json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "prompt": "old", "level": "L1", "expectations": ["e"], "assertions": []}]}), encoding="utf-8")
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp, **k: EvalSet(skill_name="s", evals=[
+                            EvalCase(id=1, prompt="new1", level="L1", expectations=["e"]),
+                            EvalCase(id=2, prompt="new2", level="L1", expectations=["e"]),
+                        ]))
+    r = runner.invoke(app, ["init", str(sp), "--append", "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    assert "本次新增" in r.output and "合并后" in r.output
+
+
+def test_init_without_append_shows_generated_count(monkeypatch, tmp_path):
+    """非 append(覆盖式)→ 仍显 'Generated N eval cases'(措辞不变)。"""
+    from skill_eval.models import EvalCase, EvalSet
+    sp = _skill_dir(tmp_path)
+    out = tmp_path / "out"; out.mkdir()
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp, **k: EvalSet(skill_name="s", evals=[
+                            EvalCase(id=1, prompt="only", level="L1", expectations=["e"]),
+                            EvalCase(id=2, prompt="two", level="L1", expectations=["e"]),
+                        ]))
+    r = runner.invoke(app, ["init", str(sp), "-o", str(out)])  # 无 --append
+    assert r.exit_code == 0, r.output
+    assert "Generated" in r.output and "本次新增" not in r.output
+
+
 def test_init_append_no_existing_writes_fresh(monkeypatch, tmp_path):
     """--append 但无已有 evals.json → 等同首次生成(id 从 1)。"""
     import json
@@ -313,7 +386,7 @@ def test_init_append_no_existing_writes_fresh(monkeypatch, tmp_path):
     sp = _skill_dir(tmp_path)
     out = tmp_path / "out"; out.mkdir()
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: EvalSet(skill_name="s", evals=[
+                        lambda self, sp, **k: EvalSet(skill_name="s", evals=[
                             EvalCase(id=1, prompt="only", level="L1", expectations=["e"]),
                         ]))
     r = runner.invoke(app, ["init", str(sp), "--append", "-o", str(out)])
@@ -333,7 +406,7 @@ def test_init_without_append_overwrites_existing(monkeypatch, tmp_path):
         {"id": 1, "prompt": "old", "level": "L1", "expectations": ["e"], "assertions": []},
     ]}), encoding="utf-8")
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: EvalSet(skill_name="s", evals=[
+                        lambda self, sp, **k: EvalSet(skill_name="s", evals=[
                             EvalCase(id=1, prompt="new", level="L1", expectations=["e"]),
                         ]))
     r = runner.invoke(app, ["init", str(sp), "-o", str(out)])  # 无 --append
@@ -352,7 +425,7 @@ def test_init_threads_focus_flag_to_generator(monkeypatch, tmp_path):
 
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.__init__", fake_init)
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: _fake_evalset())
+                        lambda self, sp, **k: _fake_evalset())
     sp = _skill_dir(tmp_path)
     r = runner.invoke(app, ["init", str(sp), "--focus", "negative-cases", "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
@@ -434,7 +507,7 @@ def test_init_lists_eval_id_per_eval(monkeypatch, tmp_path):
     monkeypatch.setattr("skill_eval.cli.commands.init.console.print",
                         lambda *a, **k: printed.append(str(a)))
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: evalset)
+                        lambda self, sp, **k: evalset)
     sp = _skill_dir(tmp_path)
     r = runner.invoke(app, ["init", str(sp), "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
@@ -454,7 +527,7 @@ def test_init_append_preserves_existing_unknown_fields(monkeypatch, tmp_path):
          "custom_unknown_field": "MUST_PRESERVE"},  # EvalCase 不认的未知字段
     ]}), encoding="utf-8")
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: EvalSet(skill_name="s", evals=[
+                        lambda self, sp, **k: EvalSet(skill_name="s", evals=[
                             EvalCase(id=1, name="new", prompt="new", level="L1", expectations=["e"])]))
     r = runner.invoke(app, ["init", str(sp), "--append", "-o", str(out)])
     assert r.exit_code == 0, r.output
@@ -478,7 +551,7 @@ def test_init_append_lists_only_new_evals(monkeypatch, tmp_path):
          "expectations": ["e"], "assertions": []},
     ]}), encoding="utf-8")
     monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
-                        lambda self, sp: EvalSet(skill_name="s", evals=[
+                        lambda self, sp, **k: EvalSet(skill_name="s", evals=[
                             EvalCase(id=1, name="NEW_NAME_SHOW", prompt="new", level="L1", expectations=["e"])]))
     r = runner.invoke(app, ["init", str(sp), "--append", "-o", str(out)])
     assert r.exit_code == 0, r.output

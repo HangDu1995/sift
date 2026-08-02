@@ -188,7 +188,7 @@ def test_coverage_augment_appends_flagged_dedup_evals(monkeypatch, tmp_path):
     monkeypatch.setattr(cov_cmd, "analyze_coverage", fake_analyze)
 
     # fake generate_with_llm:返回 2 道新题,其中一道 prompt 与已有重复(应被去重)
-    def fake_gen(self, skill_path):
+    def fake_gen(self, skill_path, existing_evals=None):
         from skill_eval.models import EvalSet, EvalCase
         return EvalSet(skill_name="sk", evals=[
             EvalCase(id=0, name="new1", prompt="测安全事件", rationale="auto"),
@@ -208,3 +208,36 @@ def test_coverage_augment_appends_flagged_dedup_evals(monkeypatch, tmp_path):
     assert "review:coverage-augment" in new_e["flags"]     # 带 review flag
     assert len(saved["trigger_probes"]) == 1              # 顶层字段写回保全(防回归)
     assert saved["trigger_probes"][0]["prompt"] == "tp"
+
+
+def test_coverage_augment_feeds_existing_evals(monkeypatch, tmp_path):
+    """--augment 调 generate_with_llm 时喂现有 evals(共享内核定向补题 + 去重),不盲生成。"""
+    from skill_eval.cli.commands import coverage as cov_cmd
+    from skill_eval.evals.generator import EvalInitGenerator
+    runner = CliRunner()
+
+    skill = tmp_path / "sk"; edir = skill / "evals"; edir.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    (edir / "evals.json").write_text(json.dumps({
+        "skill_name": "sk",
+        "evals": [{"id": 1, "name": "EXISTING", "prompt": "p", "rationale": "## r"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    def fake_analyze(skill_path, eval_set, *, model=None, timeout=120):
+        from skill_eval.models.coverage_report import CoveragePoint, CoverageReport
+        return CoverageReport(skill_name="sk", points=[
+            CoveragePoint(label="漏测点A", source_quote="q", covered_by=[])])
+    monkeypatch.setattr(cov_cmd, "analyze_coverage", fake_analyze)
+
+    captured = {}
+
+    def fake_gen(self, skill_path, existing_evals=None):
+        captured["existing"] = existing_evals
+        from skill_eval.models import EvalSet, EvalCase
+        return EvalSet(skill_name="sk", evals=[EvalCase(id=0, name="new", prompt="补题", rationale="r")])
+    monkeypatch.setattr(EvalInitGenerator, "generate_with_llm", fake_gen)
+
+    r = runner.invoke(cov_cmd.app, ["coverage", str(skill), "-o", str(tmp_path / "out"), "--augment"])
+    assert r.exit_code == 0, r.output
+    assert captured["existing"] is not None
+    assert any(getattr(e, "name", None) == "EXISTING" for e in captured["existing"])

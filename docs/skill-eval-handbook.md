@@ -289,7 +289,7 @@ skill-eval init path/to/skill/ --focus "加密/损坏 PDF" --append # 自由文�
 ```
 
 - **`--focus <类>`** 决定这次生成什么：预设 `negative-cases`（skill 不该被触发的反面场景）/ `edge-cases`（边界 / 错误处理）覆盖最常见的通用盲区；也接受**自由文本**（任意描述一个 skill 特定方向，如"加密 PDF""超大日志"），补通用类够不到的薄弱处。它往 prompt 注入一段定向指令，强制 LLM 进入反面 / 边界思维。（`anti-triggers` 是旧名，仍作静默别名兼容。）
-- **`--append`** 决定怎么写：追加到已有 evals.json（新 eval 的 id 接续已有 `max+1`、不覆盖旧题）。不带 `--append` 则默认覆盖（首次出题或想重练一套时用）。
+- **`--append`** 决定怎么写：追加到已有 evals.json——生成时**读现有 evals 喂给 LLM**（走定向补题：只补 `--focus` 这一面、与现有题**语义去重**——对照现有题的 prompt 和 rationale，不同措辞测同一点的也不重复），新 eval 的 id 接续已有 `max+1`、不覆盖旧题。不带 `--append` 则默认覆盖（首次出题或想重练一套时用，此时无现有题可对照、focus 仍定向但不去重）。
 
 **为什么用这个而不是 `add`**：`add`（3.3）是手动一道道加，得你自己想反面场景；`--focus` 让 LLM 在定向模式下批量生成一类，省掉手想的力气——尤其补的是你**没意识到的**盲区（通用预设类主动提示）。两者互补：`--focus` 批量铺面，`add` 精修单道。
 
@@ -1492,7 +1492,7 @@ coverage 不 spawn Claude 跑题——它做的是**一次性 LLM 映射**：喂
 两条路：
 
 - **人工定向**（推荐）：逐条看漏测点的 `source_quote`，确认是真盲区后，照终端处方跑 `init path/to/skill/ --append --focus "<label>"`（§3.4 的 `--focus`：定向补某一类、`--append` 追加不覆盖旧题、id 接续）。每条都过一遍人脑，质量最稳。
-- **`coverage --augment`**（自动）：每个漏测点复用 `init` 的生成器（`EvalInitGenerator(focus=<label>)`）自动补 eval，新题带 `review:coverage-augment` flag、按 `prompt` 与现有 eval 去重、id 接续，写回 evals.json。**质量不保证、必须人审**：自动补的 eval 只是"贴着那个 label 生成的题"，不一定真测到那个点、也可能是凑数题——`review:coverage-augment` flag 标着等审，人确认"这题真测到了、且不是凑数"后再接受，别直接拿去跑 `run`。某点补题失败（限流 / 异常）逐条跳过、不中断。
+- **`coverage --augment`**（自动）：每个漏测点复用 `init` 的生成器（`EvalInitGenerator(focus=<label>)`）自动补 eval——生成时**喂现有 evals**（含本批已补题），走与 §3.4 `--append --focus` **同一个定向补题内核**（只补该漏测点、与现有题语义去重），新题带 `review:coverage-augment` flag、再按 `prompt` 字面去重兜底、id 接续，写回 evals.json。**质量不保证、必须人审**：自动补的 eval 只是"贴着那个 label 生成的题"，不一定真测到那个点、也可能是凑数题——`review:coverage-augment` flag 标着等审，人确认"这题真测到了、且不是凑数"后再接受，别直接拿去跑 `run`。某点补题失败（限流 / 异常）逐条跳过、不中断。
 
 ### 16.4 诚实：LLM 估、有噪声、无 gate
 

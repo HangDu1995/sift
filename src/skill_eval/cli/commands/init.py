@@ -56,6 +56,26 @@ def init(
     try:
         gen = EvalInitGenerator(model=model, timeout=timeout, focus=focus)
 
+        # 提前算 output 路径:append 模式要在生成前读已有 evals.json(喂定向补题 + 去重)
+        if output is None:
+            evals_dir = skill_path / "evals"
+            evals_dir.mkdir(exist_ok=True)
+            output = evals_dir / "evals.json"
+        elif output.is_dir():
+            output = output / "evals.json"
+
+        # append 模式:提前读现有 evals。生成阶段喂 _existing_evals(定向补题 + 语义去重,
+        # 治半聚焦/不去重);合并阶段复用 _existing_raw 保原题字节。读失败 → 降级覆盖写。
+        _existing_raw = None
+        _existing_evals = None
+        if append and output.exists():
+            from skill_eval.models import EvalSet
+            try:
+                _existing_raw = json.loads(output.read_text(encoding="utf-8"))
+                _existing_evals = EvalSet.model_validate(_existing_raw).evals
+            except Exception:
+                console.print(f"[yellow]⚠️ 读已有 {output} 失败,改为覆盖写入。[/yellow]")
+
         if from_transcript:
             if kind is not None and kind not in ("skill", "agent"):
                 console.print(f"[red]Error:[/red] --kind 只接受 skill / agent,收到 {kind!r}")
@@ -76,7 +96,7 @@ def init(
             )
         elif generate_prompts:
             with console.status("正在用 LLM 生成 L1 unit-level evals…", spinner="dots"):
-                eval_set = gen.generate_with_llm(skill_path)
+                eval_set = gen.generate_with_llm(skill_path, existing_evals=_existing_evals)
         else:
             console.print("Generating template evals...")
             eval_set = gen.generate_template(skill_path)
@@ -85,38 +105,27 @@ def init(
             console.print(f"  Trimming to {num_evals} evals (from {len(eval_set.evals)})")
             eval_set.evals = eval_set.evals[:num_evals]
 
-        if output is None:
-            evals_dir = skill_path / "evals"
-            evals_dir.mkdir(exist_ok=True)
-            output = evals_dir / "evals.json"
-        elif output.is_dir():
-            output = output / "evals.json"
-
         appended = 0
         new_evals_display: list = []   # append 模式:终端只列这些新增(B);非 append 为空 → 列全量
         _write_raw = None              # append 模式:保留原有字节的 raw dict(A);非 append 为 None → model_dump 写
-        if append and output.exists():
+        if append and _existing_raw is not None:
             from skill_eval.models import EvalSet
-            try:
-                raw = json.loads(output.read_text(encoding="utf-8"))
-                existing = EvalSet.model_validate(raw)
-                next_id = max((e.id for e in existing.evals), default=0) + 1
-                new_evals = list(eval_set.evals)
-                for e in new_evals:
-                    e.id = next_id
-                    next_id += 1
-                appended = len(new_evals)
-                # A:原有 raw evals 字节保留,只追加新题 model_dump(不重序列化原有 →
-                # diff 干净、不丢 EvalCase 不认的未知字段)。
-                raw.setdefault("evals", []).extend(
-                    e.model_dump(mode="json") for e in new_evals
-                )
-                eval_set = existing
-                eval_set.evals.extend(new_evals)
-                _write_raw = raw
-                new_evals_display = new_evals
-            except Exception:
-                console.print(f"[yellow]⚠️ 读已有 {output} 失败,改为覆盖写入。[/yellow]")
+            existing = EvalSet.model_validate(_existing_raw)
+            next_id = max((e.id for e in existing.evals), default=0) + 1
+            new_evals = list(eval_set.evals)
+            for e in new_evals:
+                e.id = next_id
+                next_id += 1
+            appended = len(new_evals)
+            # A:原有 raw evals 字节保留,只追加新题 model_dump(不重序列化原有 →
+            # diff 干净、不丢 EvalCase 不认的未知字段)。
+            _existing_raw.setdefault("evals", []).extend(
+                e.model_dump(mode="json") for e in new_evals
+            )
+            eval_set = existing
+            eval_set.evals.extend(new_evals)
+            _write_raw = _existing_raw
+            new_evals_display = new_evals
 
         if trigger_probes:
             # --trigger-probes 单用(无 --append)时默认覆盖会丢已有 scoring evals,
@@ -158,7 +167,11 @@ def init(
         # B:append 模式终端只列新增(degraded / per-eval);非 append 列全量。
         display_evals = new_evals_display if new_evals_display else eval_set.evals
 
-        console.print(f"Generated [green]{len(eval_set.evals)}[/green] eval cases for [bold]{eval_set.skill_name}[/bold]")
+        if appended:
+            # append 模式:显示「本次新增 N · 合并后 M」,不把合并总数当生成数(原 "Generated 12" 误导)
+            console.print(f"本次新增 [green]{appended}[/green] eval · 合并后共 [bold]{len(eval_set.evals)}[/bold] 道 for [bold]{eval_set.skill_name}[/bold]")
+        else:
+            console.print(f"Generated [green]{len(eval_set.evals)}[/green] eval cases for [bold]{eval_set.skill_name}[/bold]")
         tok = gen.llm_usage.get("input_tokens", 0) + gen.llm_usage.get("output_tokens", 0)
         if gen.llm_duration > 0 or tok:
             console.print(f"耗时 [bold]{gen.llm_duration:.1f}s[/bold] · {tok} tok")
