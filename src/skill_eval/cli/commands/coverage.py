@@ -36,8 +36,12 @@ def coverage(
             console.print(f"[yellow]⚠️ {ef} 无 eval,先跑 init 生成考题。[/yellow]")
             raise typer.Exit(code=0)
 
-        console.print(f"Analyzing coverage for [bold]{name}[/bold]({len(eval_set.evals)} evals)...")
-        report = analyze_coverage(skill_path, eval_set, model=model, timeout=timeout)
+        # 单次阻塞 LLM 调用(call_claude 非流式),用 spinner 给「分析中」反馈;非交互终端自动降级。
+        with console.status(
+            f"正在分析 {name} 的内容点 × eval 覆盖({len(eval_set.evals)} evals)…",
+            spinner="dots",
+        ):
+            report = analyze_coverage(skill_path, eval_set, model=model, timeout=timeout)
 
         out_dir = output or (skill_path / "evals")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -66,10 +70,13 @@ def coverage(
             existing_prompts = {e.prompt for e in eval_set.evals}
             next_id = max((e.id for e in eval_set.evals), default=0) + 1
             added, skipped = 0, 0
-            for g in gaps:
+            n_gaps = len(gaps)
+            for idx, g in enumerate(gaps, 1):
+                console.print(f"[bold]补题 {idx}/{n_gaps}[/bold] · {g.label}")
                 gen = EvalInitGenerator(model=model, timeout=timeout, focus=g.label)
                 try:
-                    new_set = gen.generate_with_llm(skill_path)
+                    with console.status(f"正在为「{g.label}」生成补题…", spinner="dots"):
+                        new_set = gen.generate_with_llm(skill_path)
                 except RuntimeError:
                     console.print(f"[dim]补「{g.label}」失败(限流/异常),跳过。[/dim]")
                     continue

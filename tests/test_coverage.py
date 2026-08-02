@@ -199,6 +199,7 @@ def test_coverage_augment_appends_flagged_dedup_evals(monkeypatch, tmp_path):
     r = runner.invoke(cov_cmd.app, ["coverage", str(skill), "-o", str(tmp_path / "out"), "--augment"])
     assert r.exit_code == 0, r.output
     assert "补 1" in r.output and "跳过 1" in r.output   # 去重:1 补 1 跳
+    assert "1/1" in r.output                            # per-gap 进度行(1 个漏测点)
 
     saved = json.loads((edir / "evals.json").read_text(encoding="utf-8"))
     assert len(saved["evals"]) == 2                       # 原 1 + 新 1
