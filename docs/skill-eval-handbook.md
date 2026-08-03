@@ -1042,6 +1042,15 @@ trigger 探题分两个方向，各测一种失效：
 
 每个率都带自己的样本量（`n_should_trigger` / `n_should_not`），别脱离样本量解读一个率：init 默认每方向 5 道，<3 道会告警"样本少"。同 1.6 的噪声分工，trigger 侧也有"答题噪声 B"（cc 触发带随机性）——靠 `--runs` 多跑抹平。
 
+### 9.4.1 分层诊断：cc 靠字面还是语义触发？
+
+除 `recall` / `false_trigger_rate` 两个主指标，每条 probe 报告期再标两个**派生维度**（不进 evals.json，从 prompt + description 算出）：
+
+- **`phrase_type`**（`literal` / `paraphrase`）：anti-leakage 子串检查——prompt 含 description 的 ≥15 字符连续子串（归一化：去标点 / 空白 / 大小写）→ `literal`（词面命中），否则 `paraphrase`（语义改写）。
+- **`length_bucket`**（`short` / `medium` / `long`）：prompt 按字符数分桶（<30 / 30–80 / >80）。
+
+`trigger-report.json` 的 `breakdown` 把 `recall` / `false_trigger_rate` 再按这两个维度切。最有诊断价值的一刀：**词面命中 recall** vs **语义改写 recall**——前者远高于后者，说明 cc 主要靠字面匹配触发（抄了 description 的词就触发），不是真理解了意图。终端打一行 `分层 recall`，HTML 报告给两维度 × 两方向的完整分层。
+
 ### 9.5 出题：`init --trigger-probes`
 
 ```bash
@@ -1050,6 +1059,8 @@ skill-eval init path/to/skill/ --trigger-probes --num-evals 8   # 每方向上�
 ```
 
 LLM 读 skill 的 description 生成两方向探题，追加到 evals.json 的 `trigger_probes` 段（新 id 接续已有 `max+1`）。**不重生成已有 scoring evals**——载入已有 evals.json、只加 trigger 探题（`--trigger-probes` 单用、不加 `--append` 也保留原 scoring 题）。
+
+**anti-leakage（防词面命中）**：生成 prompt 强制探题 paraphrase description、不照抄措辞；生成后还做一道校验——should-trigger 探题若含 description 的 ≥15 字符连续子串，init 打「⚠ N/M 道探题为词面命中」让用户复核。词面命中的探题测的是 cc 字面匹配（抄了词就触发），不是语义触发 → recall 虚高、诊断失真。**只标记、不 retry**（词面命中探题仍有诊断价值：它告诉你 cc 对字面重叠敏感），报告里按 `phrase_type` 分层体现（见 9.4.1）。
 
 **`--num-evals` 是每方向上限、不是下限**（关键）：LLM 生成的探题多于这个数会被 trim，少于这个数**原样保留**、不强行凑满——硬凑会出重复 / 充数题，反而劣化信号质量。这是有意的"欠交付"：宁可少几道真信号，不要凑数的噪声。所以实际跑出来某方向可能少于你给的 `--num-evals`，别当成 bug。
 
@@ -1071,6 +1082,7 @@ trigger-accuracy 是**诊断工具，不是门禁**：
 
 ```
 recall 75%(5 should-trigger) · false-trigger 10%(5 should-not) · 2 runs · 1 unresolved · 耗时 12.3s · 28400 tok
+分层 recall: 措辞 词面 90% · 语义 40% | 长度 短 80% · 中 70% · 长 60%
   [+] probe-1: 100% → PASS (842 tok · 4.5s)
   [-] probe-2: 0%   → FAIL (318 tok · 2.1s)
   [?] probe-3: ?    → UNRESOLVED (0 tok · 0.0s)
@@ -1081,7 +1093,7 @@ recall 75%(5 should-trigger) · false-trigger 10%(5 should-not) · 2 runs · 1 u
 Written to …/trigger-report.json · …/trigger-report.html
 ```
 
-- 汇总行：`recall`（绿，越高越好）/ `false-trigger`（红，越低越好）各带样本量 + runs + unresolved + 耗时（cc spawn 总墙钟，不含 LLM 建议那次调用）+ 总 token。逐 probe `[+/-/?] probe-N: 触发率 → verdict (token · 耗时)`：`+` PASS、`-` FAIL、`?` UNRESOLVED（触发率显 `?`、消耗显 0，因为没判成）。
+- 汇总行：`recall`（绿，越高越好）/ `false-trigger`（红，越低越好）各带样本量 + runs + unresolved + 耗时（cc spawn 总墙钟，不含 LLM 建议那次调用）+ 总 token。有 should-trigger 时还打一行**分层 recall**（措辞 词面 / 语义 · 长度 短 / 中 / 长，纯诊断；详见 9.4.1）。逐 probe `[+/-/?] probe-N: 触发率 → verdict (token · 耗时)`：`+` PASS、`-` FAIL、`?` UNRESOLVED（触发率显 `?`、消耗显 0，因为没判成）。
 
 **怎么改 description**——报告 `suggestions[]` 直接给方向，两路：
 

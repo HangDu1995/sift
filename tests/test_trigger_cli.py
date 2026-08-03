@@ -107,3 +107,44 @@ def test_trigger_command_llm_suggestion_on_failure(tmp_path, monkeypatch):
     assert "[llm:llm_rewrite]" in r.output
     # LLM 建议消耗显(200 input + 80 output = 280 tok)
     assert "280 tok" in r.output
+
+
+def test_trigger_command_prints_breakdown_and_stores_labels(tmp_path, monkeypatch):
+    """分层:run() 返 by_phrase/by_length + per-probe phrase_type/length_bucket
+    → 终端打分层行 + report 存 breakdown/标签(纯诊断)。"""
+    from typer.testing import CliRunner
+    from skill_eval.cli.main import app
+
+    skill = tmp_path / "skill"; skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
+    (skill / "evals").mkdir()
+    (skill / "evals" / "evals.json").write_text(
+        '{"skill_name":"my-skill","evals":[],'
+        '"trigger_probes":[{"id":1,"prompt":"q","expect_trigger":true}]}')
+
+    fake = {"probes": [{"id": 1, "expect_trigger": True, "prompt": "q",
+                        "phrase_type": "literal", "length_bucket": "short",
+                        "trigger_rate": 1.0, "verdict": "PASS", "unresolved": False,
+                        "tokens": 5, "duration_ms": 100, "transcript_path": ""}],
+            "recall": 1.0, "false_trigger_rate": None,
+            "n_should_trigger": 1, "n_should_not": 0, "unresolved": 0,
+            "duration_ms": 100, "total_tokens": 5,
+            "by_phrase": {"recall": {"literal": 1.0, "paraphrase": None},
+                          "false_trigger": {"literal": None, "paraphrase": None}},
+            "by_length": {"recall": {"short": 1.0, "medium": None, "long": None},
+                          "false_trigger": {"short": None, "medium": None, "long": None}}}
+    monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run",
+                        lambda self, probes, base, **kw: fake)
+
+    out = tmp_path / "out"
+    r = CliRunner().invoke(app, ["trigger", str(skill), "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    rep = json.loads((out / "trigger-report.json").read_text())
+    # report 存 breakdown + per-probe 标签
+    assert rep["breakdown"]["by_phrase"]["recall"]["literal"] == 1.0
+    assert rep["probes"][0]["phrase_type"] == "literal"
+    assert rep["probes"][0]["length_bucket"] == "short"
+    # 终端分层行(词面 100% / 语义 - / 短 100%)
+    assert "分层 recall" in r.output
+    assert "词面 100%" in r.output and "语义 -" in r.output
+    assert "短 100%" in r.output

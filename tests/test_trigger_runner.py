@@ -88,6 +88,101 @@ def test_aggregate_zero_direction_is_na():
 
 
 # ---------------------------------------------------------------------------
+# Part A2 — phrase_type / length_bucket(anti-leakage + 长度分层)
+# ---------------------------------------------------------------------------
+
+def test_classify_phrase_literal_copies_description_substring():
+    from skill_eval.execution.trigger_runner import classify_phrase
+    desc = "generates structured incident reports from raw text"
+    prompt = "please generates structured incident reports from raw text for me"  # 逐字抄片段
+    assert classify_phrase(prompt, desc) == "literal"
+
+
+def test_classify_phrase_paraphrase_no_substring():
+    from skill_eval.execution.trigger_runner import classify_phrase
+    desc = "generates structured incident reports from raw text"
+    prompt = "we had an outage last night, write up a postmortem"  # 语义对、无字面子串
+    assert classify_phrase(prompt, desc) == "paraphrase"
+
+
+def test_classify_phrase_description_too_short_is_paraphrase():
+    from skill_eval.execution.trigger_runner import classify_phrase
+    # description 短于阈值 → 无法判定词面命中,不误报
+    assert classify_phrase("does X quickly", "does X") == "paraphrase"
+
+
+def test_classify_phrase_normalizes_case_and_punctuation():
+    from skill_eval.execution.trigger_runner import classify_phrase
+    desc = "Generate structured incident reports from raw text"
+    prompt = "Please, GENERATE structured incident reports from raw text!!"  # 大小写 + 标点差异
+    assert classify_phrase(prompt, desc) == "literal"
+
+
+def test_classify_phrase_custom_min_chars_threshold():
+    from skill_eval.execution.trigger_runner import classify_phrase
+    desc = "abcdefghijklmnopqrstuvwxyz"  # 26 字符
+    prompt = "middle bit: " + desc[3:15] + " end"  # 含 12 字符连续子串 desc[3:15]
+    assert classify_phrase(prompt, desc, min_chars=10) == "literal"     # 12 ≥ 10 → 命中
+    assert classify_phrase(prompt, desc, min_chars=15) == "paraphrase"  # 只 12 字符公共 < 15 → 不命中
+
+
+def test_length_bucket_thresholds():
+    from skill_eval.execution.trigger_runner import length_bucket
+    assert length_bucket("x" * 29) == "short"
+    assert length_bucket("x" * 30) == "medium"   # 边界:30 = medium
+    assert length_bucket("x" * 80) == "medium"   # 边界:80 = medium
+    assert length_bucket("x" * 81) == "long"
+
+
+def test_aggregate_by_phrase_and_length():
+    """带 phrase_type/length_bucket 的 probe → recall/ftr 主指标照算 + 分层 rollup。"""
+    from skill_eval.execution.trigger_runner import aggregate_rates
+    probes = [
+        {"expect_trigger": True, "trigger_rate": 1.0, "phrase_type": "literal", "length_bucket": "short"},
+        {"expect_trigger": True, "trigger_rate": 0.0, "phrase_type": "paraphrase", "length_bucket": "long"},
+        {"expect_trigger": False, "trigger_rate": 0.5, "phrase_type": "literal", "length_bucket": "medium"},
+    ]
+    r = aggregate_rates(probes)
+    assert r["recall"] == 0.5                                    # (1.0+0.0)/2
+    assert r["false_trigger_rate"] == 0.5
+    assert r["by_phrase"]["recall"] == {"literal": 1.0, "paraphrase": 0.0}
+    assert r["by_phrase"]["false_trigger"] == {"literal": 0.5, "paraphrase": None}  # 无 paraphrase should-not
+    assert r["by_length"]["recall"] == {"short": 1.0, "medium": None, "long": 0.0}
+    assert r["by_length"]["false_trigger"] == {"short": None, "medium": 0.5, "long": None}
+
+
+def test_aggregate_backward_compat_no_labels():
+    """旧入参(无 phrase_type/length_bucket)→ 主指标不变,分层全 None(不炸)。"""
+    from skill_eval.execution.trigger_runner import aggregate_rates
+    probes = [
+        {"expect_trigger": True, "trigger_rate": 1.0},
+        {"expect_trigger": True, "trigger_rate": 0.5},
+    ]
+    r = aggregate_rates(probes)
+    assert r["recall"] == 0.75
+    assert r["by_phrase"]["recall"] == {"literal": None, "paraphrase": None}
+    assert r["by_length"]["recall"] == {"short": None, "medium": None, "long": None}
+
+
+def test_probe_result_backward_compat_missing_labels():
+    """旧 probe 结果(无 phrase_type/length_bucket)→ 默认空串,不炸。"""
+    from skill_eval.models.trigger_report import ProbeResult
+    p = ProbeResult.model_validate({"id": 1, "expect_trigger": True, "trigger_rate": 1.0, "verdict": "PASS"})
+    assert p.phrase_type == "" and p.length_bucket == ""
+
+
+def test_trigger_report_backward_compat_missing_breakdown():
+    """旧 trigger-report.json(无 breakdown)→ 默认 {},不炸。"""
+    from skill_eval.models.trigger_report import TriggerReport
+    r = TriggerReport.model_validate({
+        "skill_name": "x", "description_hash": "abc", "runs": 1,
+        "recall": 1.0, "false_trigger_rate": None,
+        "n_should_trigger": 1, "n_should_not": 0, "probes": [],
+    })
+    assert r.breakdown == {}
+
+
+# ---------------------------------------------------------------------------
 # Part B — TriggerRunner integration (run_trigger mocked, not real cc)
 # ---------------------------------------------------------------------------
 
@@ -318,6 +413,39 @@ def test_trigger_runner_progress_callback(monkeypatch, tmp_path):
     assert any("probe 1/2" in x and "该触发" in x for x in received)   # probe 头 + 方向
     assert any("probe 2/2" in x and "不该触发" in x for x in received)
     assert any("🔧 Skill" in x for x in received)                       # cc 动作透传
+
+
+def test_run_emits_phrase_type_length_and_breakdown(monkeypatch, tmp_path):
+    """run() 每 probe dict 带 phrase_type/length_bucket(报告期推断),顶层带 by_phrase/by_length。"""
+    from skill_eval.execution.trigger_runner import TriggerRunner
+    from skill_eval.models.eval_models import TriggerProbe
+    from skill_eval.models.execution_models import RunOutput
+
+    skill_stdout = ('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"my-skill"}}]}}\n'
+                    '{"type":"result","result":"x"}\n')
+
+    def fake_run_trigger(self, prompt, cwd, env, **kw):
+        return RunOutput(exit_code=0, stdout=skill_stdout)
+
+    skill = tmp_path / "my-skill"; skill.mkdir()
+    (skill / "SKILL.md").write_text(
+        "---\nname: my-skill\ndescription: generates structured incident reports\n---\n# body\n")
+    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    tr = TriggerRunner(skill, runs=1)
+    res = tr.run([
+        # 照抄 description 措辞 → literal;语义改写 → paraphrase
+        TriggerProbe(id=1, prompt="generates structured incident reports please", expect_trigger=True),
+        TriggerProbe(id=2, prompt="we had an outage, write a postmortem", expect_trigger=True),
+    ], out_base=tmp_path / "out")
+    p1, p2 = res["probes"]
+    assert p1["phrase_type"] == "literal"
+    assert p2["phrase_type"] == "paraphrase"
+    for lb in (p1["length_bucket"], p2["length_bucket"]):
+        assert lb in ("short", "medium", "long")
+    assert "by_phrase" in res and "by_length" in res
+    # 两道都 fired(trigger_rate=1.0)→ 分层 recall 各 1.0
+    assert res["by_phrase"]["recall"]["literal"] == 1.0
+    assert res["by_phrase"]["recall"]["paraphrase"] == 1.0
 
 
 # ---------------------------------------------------------------------------

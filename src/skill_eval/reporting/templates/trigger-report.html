@@ -132,6 +132,21 @@
       }
       html += '</div>';
 
+      // 分层诊断(纯诊断):词面/语义 + 短/中/长 × recall/false_trigger
+      if (D.breakdown && (D.breakdown.by_phrase || D.breakdown.by_length)) {
+        var brk = function (x) { return (x === null || x === undefined) ? '-' : pct(x); };
+        var bpr = (D.breakdown.by_phrase || {}).recall || {};
+        var bpf = (D.breakdown.by_phrase || {}).false_trigger || {};
+        var blr = (D.breakdown.by_length || {}).recall || {};
+        var blf = (D.breakdown.by_length || {}).false_trigger || {};
+        html += '<div class="summary">';
+        html += '<span>分层 recall:词面 ' + brk(bpr.literal) + ' · 语义 ' + brk(bpr.paraphrase)
+             + ' | 短 ' + brk(blr.short) + ' · 中 ' + brk(blr.medium) + ' · 长 ' + brk(blr.long) + '</span>';
+        html += '<span>分层 false-trigger:词面 ' + brk(bpf.literal) + ' · 语义 ' + brk(bpf.paraphrase)
+             + ' | 短 ' + brk(blf.short) + ' · 中 ' + brk(blf.medium) + ' · 长 ' + brk(blf.long) + '</span>';
+        html += '</div>';
+      }
+
       if (D.suggestions && D.suggestions.length) {
         html += '<h2>操作建议</h2>';
         for (var i = 0; i < D.suggestions.length; i++) {
@@ -146,12 +161,14 @@
 
       if (D.probes && D.probes.length) {
         html += '<div class="probes"><h2>探题明细</h2><table>';
-        html += '<tr><th>#</th><th>方向</th><th>prompt</th><th>触发率</th><th>verdict</th><th>消耗</th><th>transcript</th></tr>';
+        html += '<tr><th>#</th><th>方向</th><th>措辞</th><th>长度</th><th>prompt</th><th>触发率</th><th>verdict</th><th>消耗</th><th>transcript</th></tr>';
         for (var j = 0; j < D.probes.length; j++) {
           var p = D.probes[j];
           html += '<tr>'
                + '<td>' + p.id + '</td>'
                + '<td>' + (p.expect_trigger ? '该触发' : '不该触发') + '</td>'
+               + '<td>' + (p.phrase_type ? escapeHtml(p.phrase_type) : '-') + '</td>'
+               + '<td>' + (p.length_bucket ? escapeHtml(p.length_bucket) : '-') + '</td>'
                + '<td class="prompt">' + escapeHtml(p.prompt) + '</td>'
                + '<td>' + rateTR(p.trigger_rate) + '</td>'
                + '<td class="verdict-' + escapeHtml(p.verdict) + '">' + escapeHtml(p.verdict) + '</td>'

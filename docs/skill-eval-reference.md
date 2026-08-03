@@ -429,10 +429,12 @@ skill-eval trigger path/to/skill/ --evals path/to/evals.json --model claude-sonn
 
 **两种探题**：
 
-- **should-trigger**（`expect_trigger: true`）：该 skill 该处理的真任务，措辞**中性**（prompt 里点名 skill 就只是测字面匹配，不是测触发）。
+- **should-trigger**（`expect_trigger: true`）：该 skill 该处理的真任务，措辞**中性**——不点名 skill、也**不照抄 description 原文**（生成时 prompt 强制 paraphrase；生成后还做一道 anti-leakage 校验：逐条检查 prompt 是否含 description 的 ≥15 字符连续子串，命中则报「词面命中」让用户复核）。照抄措辞测的是字面匹配，不是语义触发。
 - **should-not-trigger**（`expect_trigger: false`）：看着相关但 skill **不该**触发的任务——测误触发 / description 过宽。
 
 **判定**：每条 probe 跨 N runs 算 `trigger_rate = fired 次数 / runs`，阈值 0.5 二值化 → PASS / FAIL；spawn 失败 / 超时 / **cc 非零退出且没触发**（限流 / 后端不可用：cc 实测 exit 1 + 错误打 stdout、stderr 空，`run_trigger` 不 raise 而返正常输出）→ 该 probe = `UNRESOLVED`（**不进率分母**、`trigger_rate` 置 `null`，宁少报不乱报）。聚合**分开报**（各带样本量）：`recall` = should-trigger 方向均值；`false_trigger_rate` = should-not 方向均值——两者是**不同失效模式、不合成一个分**。某方向 0 probe → 对应率 `null`（N/A，不是假 0.0）。
+
+**分层诊断（纯诊断，主指标之外）**：每条 probe 报告期再标两个派生维度（不进 evals.json）——`phrase_type`（`literal` 词面命中 / `paraphrase` 语义改写，由 anti-leakage 子串检查定）+ `length_bucket`（`short` / `medium` / `long`，按 prompt 字符数）。`trigger-report.json` 的 `breakdown` 字段把 `recall` / `false_trigger_rate` 再按这两个维度切：例如「词面命中 recall 90% · 语义改写 recall 40%」→ cc 主要靠字面匹配触发，不是真懂。终端打一行 `分层 recall`，HTML 报告给两维度 × 两方向完整分层（详见 [handbook §9.4.1](docs/skill-eval-handbook.md)）。
 
 > **诊断定位、无门禁**：**无 gate / 不出 exit-code 判决**（纯诊断）。`trigger-report.json` 是独立 artifact，**不并入 `benchmark.json`**。用 [`init --trigger-probes`](#init--初始化评测定义) 生成探题。`description_hash` = sha256(frontmatter `description`)[:16]——锚定触发判定唯一依赖的输入，跨版本对比时判断 recall 变化是否源于 description 改动。成本：每 probe = 1 次 cc spawn（比 `run` 轻——无 with/without 双 spawn、无 grader、无 compliance judge）。
 
@@ -440,6 +442,7 @@ skill-eval trigger path/to/skill/ --evals path/to/evals.json --model claude-sonn
 
 ```
 recall 75%(5 should-trigger) · false-trigger 10%(5 should-not) · 2 runs · 1 unresolved · 耗时 12.3s · 28400 tok
+分层 recall: 措辞 词面 90% · 语义 40% | 长度 短 80% · 中 70% · 长 60%
   [+] probe-1: 100% → PASS (842 tok · 4.5s)
   [-] probe-2: 0%   → FAIL (318 tok · 2.1s)
   [?] probe-3: ?    → UNRESOLVED (0 tok · 0.0s)
@@ -450,7 +453,7 @@ recall 75%(5 should-trigger) · false-trigger 10%(5 should-not) · 2 runs · 1 u
 Written to /tmp/out/trigger-report.json · /tmp/out/trigger-report.html
 ```
 
-写 `trigger-report.json`（机器读）+ `trigger-report.html`（人读，**always 写**，与 JSON 并列，对齐 audit）+ 终端进度（逐 probe 实时 `probe i/N` + cc 动作 `🔧/✓`，同 `run`）+ 跑完的摘要。汇总行：`recall`（绿）/ `false-trigger`（红）各带样本量 + runs + unresolved + 耗时 + 总 token；逐 probe `[+/-/?] probe-N: 触发率 → verdict (token · 耗时)`（UNRESOLVED 触发率显 `?`、消耗显 0）。
+写 `trigger-report.json`（机器读）+ `trigger-report.html`（人读，**always 写**，与 JSON 并列，对齐 audit）+ 终端进度（逐 probe 实时 `probe i/N` + cc 动作 `🔧/✓`，同 `run`）+ 跑完的摘要。汇总行：`recall`（绿）/ `false-trigger`（红）各带样本量 + runs + unresolved + 耗时 + 总 token；有 should-trigger 时还打一行**分层 recall**（措辞 词面 / 语义 · 长度 短 / 中 / 长，纯诊断）；逐 probe `[+/-/?] probe-N: 触发率 → verdict (token · 耗时)`（UNRESOLVED 触发率显 `?`、消耗显 0）。
 
 **操作建议（怎么改 description 才更容易 / 更精准地被触发）**：报告 `suggestions[]` 给可直接照做的建议，两路——
 
@@ -890,9 +893,11 @@ skill-eval batch-report batch-workspace/ --open
     {"category": "llm_rewrite", "source": "llm", "message": "修订 description:…\n理由:…", "probe_ids": [3]}
   ],
   "probes": [
-    {"id": 1, "expect_trigger": true,  "prompt": "把访问日志按端点聚合并标出异常时段", "trigger_rate": 1.0, "verdict": "PASS", "tokens": 842, "duration_seconds": 4.5, "transcript_path": "evals/probe-1/run-0/transcript.jsonl"},
-    {"id": 2, "expect_trigger": false, "prompt": "把这本小说翻译成英文", "trigger_rate": 0.0, "verdict": "PASS", "tokens": 318, "duration_seconds": 2.1, "transcript_path": "evals/probe-2/run-0/transcript.jsonl"}
-  ]
+    {"id": 1, "expect_trigger": true,  "prompt": "把访问日志按端点聚合并标出异常时段", "phrase_type": "paraphrase", "length_bucket": "medium", "trigger_rate": 1.0, "verdict": "PASS", "tokens": 842, "duration_seconds": 4.5, "transcript_path": "evals/probe-1/run-0/transcript.jsonl"},
+    {"id": 2, "expect_trigger": false, "prompt": "把这本小说翻译成英文", "phrase_type": "paraphrase", "length_bucket": "short", "trigger_rate": 0.0, "verdict": "PASS", "tokens": 318, "duration_seconds": 2.1, "transcript_path": "evals/probe-2/run-0/transcript.jsonl"}
+  ],
+  "breakdown": {"by_phrase": {"recall": {"literal": 0.9, "paraphrase": 0.4}, "false_trigger": {"literal": null, "paraphrase": 0.1}},
+                "by_length": {"recall": {"short": 0.8, "medium": 0.7, "long": 0.6}, "false_trigger": {"short": null, "medium": 0.1, "long": null}}}
 }
 ```
 
@@ -909,7 +914,8 @@ skill-eval batch-report batch-workspace/ --open
 | `token_usage` | `{total_tokens}`（所有 probe spawn 的 cc token 合计）+ 可选 `suggest`（LLM 建议那次调用的 input/output/cost，有失败才产生） |
 | `duration_seconds` | cc spawn 总墙钟（各 probe 各 run `RunOutput.duration_ms` 之和 / 1000；不含 LLM 建议那次调用；旧报告无此字段 → `0.0`） |
 | `suggestions[]` | 操作建议：`category`（`recall` / `false_trigger` / `unresolved` / `all_good` / `llm_rewrite`）+ `source`（`rule` / `llm`）+ `message`（中文文案，失败时带 probe 的 prompt 原文）+ `probe_ids` + `tokens` / `duration_seconds`（LLM 建议那次 `call_claude` 的消耗，含重试；`rule` 建议为 0）。规则建议永远给；`llm_rewrite` 仅在有失败时自动产生（见上「操作建议」） |
-| `probes[]` | 每条 probe：`id` / `expect_trigger` / `prompt`（中性请求原文）/ `trigger_rate`（fired / runs；UNRESOLVED 时 `null`）/ `verdict`（PASS / FAIL / UNRESOLVED）/ `tokens`（该 probe 各 run cc token 之和）/ `duration_seconds`（该 probe 各 run cc 耗时之和 / 1000）/ `transcript_path`（首个成功 run 的 transcript 路径 `probe-<id>/run-0/transcript.jsonl`，人审 / 重跑抓手；`--runs`>1 其余在同目录 `run-1…`，spawn 全失败则空） |
+| `probes[]` | 每条 probe：`id` / `expect_trigger` / `prompt`（中性请求原文）/ `phrase_type`（`literal` 词面命中 / `paraphrase` 语义改写，anti-leakage 子串检查定）/ `length_bucket`（`short` / `medium` / `long`）/ `trigger_rate`（fired / runs；UNRESOLVED 时 `null`）/ `verdict`（PASS / FAIL / UNRESOLVED）/ `tokens` / `duration_seconds` / `transcript_path`（首个成功 run 的 transcript 路径 `probe-<id>/run-0/transcript.jsonl`，人审 / 重跑抓手；`--runs`>1 其余在同目录 `run-1…`，spawn 全失败则空） |
+| `breakdown` | 分层 rollup（纯诊断）：`by_phrase` / `by_length` 各含 `recall` / `false_trigger` 两方向，把主指标再按措辞（词面 / 语义）、长度（短 / 中 / 长）切；某组无 probe → `null`。旧报告无此字段 → `{}` |
 
 > `recall` 与 `false_trigger_rate` 是**不同失效模式、分开报**（前者测漏召、后者测误触），不合成单一分。某方向 0 probe → 对应字段 `null`（N/A，不是假 0.0）。**无 gate、不进 `benchmark.json`**（诊断定位，独立 artifact）。
 

@@ -202,7 +202,7 @@ skill-eval audit path/to/skill/ --db opencode.db                            # �
 
 ### `trigger` — 触发准确度（第 4 维）
 
-测 cc 会不会**仅凭 skill 的 `description` 自然触发**（不评输出对错）。前三层都假设 skill 已"上场"——scoring 强制注入 body，触发能力从不被测；trigger 补这个上游缺口：中性 prompt，看 cc 仅凭描述自动发现（用真实 HOME、不隔离——对齐 run/audit）。诊断定位、无门禁、独立 artifact（不并入 benchmark）。
+测 cc 会不会**仅凭 skill 的 `description` 自然触发**（不评输出对错）。前三层都假设 skill 已"上场"——scoring 强制注入 body，触发能力从不被测；trigger 补这个上游缺口：中性 prompt，看 cc 仅凭描述自动发现（用真实 HOME、不隔离——对齐 run/audit）。诊断定位、无门禁、独立 artifact（不并入 benchmark）。**生成时做 anti-leakage 校验**（探题不应照抄 description 措辞，防词面匹配虚高 recall），报告还按**措辞（词面 / 语义）+ 长度（短 / 中 / 长）分层**诊断——看 cc 是真懂还是靠字面命中触发。
 
 ```bash
 skill-eval init   path/to/skill/ --trigger-probes    # 先生成探题(should/should-not 各 5)

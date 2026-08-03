@@ -113,7 +113,7 @@ skill-eval 在此基础上新增了批量评估、结果×过程 coherence 校�
 | **refine + per-SKILL hash 缓存** | 原创 | LLM 精筛 extractor 误抽的伪指令（教程示例被当指令），按 SKILL.md hash 缓存 |
 | **FAIL 噪声判别** | 原创 | 区分"工具噪声 / 疑似 skill 问题 / 待确认"，避免读者误把工具噪声当 skill 缺陷 |
 | **结构化 records transcript** | 原创 | canonical 三源统一（cc / structured / opencode），供 audit 消费外部 producer |
-| **trigger-accuracy（第 4 维）** | 原创 | 测 cc 仅凭 description 是否自然触发 skill（should / should-not 两类探题），而非测 body 质量——前三层 force-inject body 测不到的触发面；纯诊断无 gate |
+| **trigger-accuracy（第 4 维）** | 原创 | 测 cc 仅凭 description 是否自然触发 skill（should / should-not 两类探题），而非测 body 质量——前三层 force-inject body 测不到的触发面；纯诊断无 gate。含 anti-leakage 词面命中校验（探题不照抄 description）+ 措辞 / 长度分层诊断（看 cc 真懂还是靠字面命中触发） |
 | **coverage（出题漏测诊断）** | 原创 | 一次性 LLM 把 SKILL.md 内容点 × evals 做覆盖映射，`covered_by` 空 = 漏测盲区（`run` 够不到，再跑多少轮也测不着），`--augment` 复用 init 生成器自动补题；纯诊断无 gate |
 
 ---

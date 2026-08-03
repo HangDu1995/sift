@@ -701,6 +701,7 @@ def test_trigger_probe_prompt_is_neutral_and_does_not_name_skill(tmp_path):
         sent = mc.call_args.args[0]
     assert "neutral" in sent.lower()
     assert "do not name" in sent.lower()
+    assert "paraphrase" in sent.lower()  # anti-leakage:不许照抄 description 措辞
 
 
 def test_generate_trigger_probes_extracts_json_embedded_in_prose(tmp_path):

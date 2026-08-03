@@ -29,6 +29,7 @@ ClaudeRunner.run_trigger spawn 路径)编排成端到端流水线:
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -37,6 +38,15 @@ from skill_eval.execution.cli_runner import ClaudeRunner
 from skill_eval.models.eval_models import TriggerProbe
 from skill_eval.parser import parse_skill_md
 from skill_eval.utils import claude_cli_env
+
+
+# anti-leakage + 长度分层诊断(纯诊断,trigger 第 4 维细化;报告期推断,不进 evals.json)。
+# PHRASE_LEAK_MIN_CHARS:prompt 含 description 的 ≥此值连续子串 → 判「词面命中」(literal);
+#   中英兼顾的初值,跑真实探题分布后可调。
+# LENGTH_SHORT / LENGTH_LONG:prompt 按字符数分短/中/长(诊断 cc 触发对长度的敏感)。
+PHRASE_LEAK_MIN_CHARS = 15
+LENGTH_SHORT = 30
+LENGTH_LONG = 80
 
 
 # ---------------------------------------------------------------------------
@@ -63,26 +73,93 @@ def _binary_verdict(expect_trigger: bool, trigger_rate: float, threshold: float 
     return probe_verdict(expect_trigger, fired)
 
 
-def aggregate_rates(probes: list[dict]) -> dict:
-    """按方向聚合 trigger_rate → recall / false_trigger_rate。
+def _group_mean(values: list[float]) -> float | None:
+    """trigger_rate 均值;空(无该组探题)→ None(N/A,报告层显「-」,不显假 0.0)。"""
+    return sum(values) / len(values) if values else None
 
-    ``probes`` 元素形如 ``{"expect_trigger": bool, "trigger_rate": float}``;
-    **UNRESOLVED 探题不传进来**(调用方先过滤,避免它们的假 0 拉低 recall)。
+
+def aggregate_rates(probes: list[dict]) -> dict:
+    """按方向聚合 trigger_rate → recall / false_trigger_rate(+ 诊断性分层 by_phrase / by_length)。
+
+    ``probes`` 元素形如 ``{"expect_trigger": bool, "trigger_rate": float,
+    "phrase_type"?: str, "length_bucket"?: str}``;**UNRESOLVED 探题不传进来**(调用方先过滤)。
 
     - ``recall``:should-trigger 方向 trigger_rate 均值(越高越好)。
     - ``false_trigger_rate``:should-not 方向 trigger_rate 均值(越低越好)。
-    - 某方向空(无该类探题)→ 对应率 None(N/A,报告层显「-」,不是假 0.0)。
+    - 某方向空 → 对应率 None(N/A,报告层显「-」,不是假 0.0)。
+    - ``by_phrase`` / ``by_length``:在 recall / false_trigger 两方向内再按措辞(词面/语义)、
+      长度(短/中/长)细分均值 → 诊断「cc 靠字面还是语义触发」「对长度敏感否」。**缺标签的
+      probe 不进对应分组**(向后兼容旧入参);某组无 probe → None。
     """
     should = [p["trigger_rate"] for p in probes if p["expect_trigger"]]
     should_not = [p["trigger_rate"] for p in probes if not p["expect_trigger"]]
-    recall = sum(should) / len(should) if should else None
-    ftr = sum(should_not) / len(should_not) if should_not else None
+    recall = _group_mean(should)
+    ftr = _group_mean(should_not)
+
+    def by_group(expect: bool, key: str, values: tuple[str, ...]) -> dict[str, float | None]:
+        return {
+            v: _group_mean([
+                p["trigger_rate"] for p in probes
+                if p["expect_trigger"] == expect and p.get(key) == v
+            ])
+            for v in values
+        }
+
     return {
         "recall": recall,
         "false_trigger_rate": ftr,
         "n_should_trigger": len(should),
         "n_should_not": len(should_not),
+        "by_phrase": {
+            "recall": by_group(True, "phrase_type", ("literal", "paraphrase")),
+            "false_trigger": by_group(False, "phrase_type", ("literal", "paraphrase")),
+        },
+        "by_length": {
+            "recall": by_group(True, "length_bucket", ("short", "medium", "long")),
+            "false_trigger": by_group(False, "length_bucket", ("short", "medium", "long")),
+        },
     }
+
+
+_PUNCT_WS = re.compile(r"\W+", re.UNICODE)  # 非单词字符(标点 / 空白 / 符号);\w 默认含中文
+
+
+def _normalize_text(text: str) -> str:
+    """小写 + 去标点/空白/符号 → 只剩中英文字母数字(子串比对前抹掉大小写与标点差异)。"""
+    return _PUNCT_WS.sub("", (text or "").lower())
+
+
+def classify_phrase(prompt: str, description: str, min_chars: int = PHRASE_LEAK_MIN_CHARS) -> str:
+    """探题 prompt 是否照抄了 description 的措辞 → ``"literal"``(词面命中)/ ``"paraphrase"``(语义改写)。
+
+    trigger-accuracy 的 anti-leakage:若 cc 触发靠的是 prompt 与 description 的字面重叠而非
+    语义理解,recall 会虚高。本函数 normalize(小写 + 去标点/空白)后,检查 prompt 是否含
+    description 的 ≥``min_chars`` 字符**连续子串**:命中 → ``"literal"``;否则 ``"paraphrase"``。
+    description 空或 normalize 后短于 ``min_chars`` → ``"paraphrase"``(无法判定词面命中,不误报)。
+
+    滑窗定长 ``min_chars`` 足够:任何 ≥``min_chars`` 的公共子串必包含一个 ``min_chars`` 窗口。
+    """
+    desc_n = _normalize_text(description)
+    if len(desc_n) < min_chars:
+        return "paraphrase"
+    prompt_n = _normalize_text(prompt)
+    for i in range(len(desc_n) - min_chars + 1):
+        if desc_n[i:i + min_chars] in prompt_n:
+            return "literal"
+    return "paraphrase"
+
+
+def length_bucket(prompt: str) -> str:
+    """prompt 按字符数分 ``"short"`` / ``"medium"`` / ``"long"``(诊断 cc 触发对长度的敏感)。
+
+    ``< LENGTH_SHORT`` → short / ``≤ LENGTH_LONG`` → medium / 余 → long。
+    """
+    n = len(prompt or "")
+    if n < LENGTH_SHORT:
+        return "short"
+    if n <= LENGTH_LONG:
+        return "medium"
+    return "long"
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +271,9 @@ class TriggerRunner:
           返回结构::
 
             {"probes": [per-probe dict], "recall", "false_trigger_rate",
-             "n_should_trigger", "n_should_not", "unresolved"}
+             "n_should_trigger", "n_should_not", "unresolved",
+             "by_phrase": {...}, "by_length": {...}}
+          per-probe dict 含 ``phrase_type`` / ``length_bucket``(报告期推断,不进 evals.json)。
 
         重跑清理:开头删 ``out_base`` 下残留的 ``probe-*`` 沙箱(report 由 CLI 覆盖,沙箱
         靠这里清)。否则改小 ``--runs`` / 删 probe 后,上次的 ``run-N`` / ``probe-N`` 残留,
@@ -234,6 +313,8 @@ class TriggerRunner:
                 "id": probe.id,
                 "expect_trigger": probe.expect_trigger,
                 "prompt": probe.prompt,
+                "phrase_type": classify_phrase(probe.prompt, self.description),
+                "length_bucket": length_bucket(probe.prompt),
                 "trigger_rate": None if unresolved else trigger_rate,
                 "verdict": verdict,
                 "unresolved": unresolved,
@@ -243,10 +324,7 @@ class TriggerRunner:
             })
             total_duration_ms += duration_ms
         resolved = [r for r in results if not r["unresolved"]]
-        agg = aggregate_rates([
-            {"expect_trigger": r["expect_trigger"], "trigger_rate": r["trigger_rate"]}
-            for r in resolved
-        ])
+        agg = aggregate_rates(resolved)
         agg["unresolved"] = sum(1 for r in results if r["unresolved"])
         agg["duration_ms"] = total_duration_ms
         agg["total_tokens"] = sum(r["tokens"] for r in results)

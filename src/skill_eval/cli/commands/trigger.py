@@ -52,9 +52,11 @@ def trigger(
             duration_seconds=res["duration_ms"] / 1000,
             probes=[ProbeResult(id=p["id"], expect_trigger=p["expect_trigger"],
                                 prompt=p["prompt"],
+                                phrase_type=p.get("phrase_type", ""), length_bucket=p.get("length_bucket", ""),
                                 trigger_rate=p["trigger_rate"], verdict=p["verdict"],
                                 transcript_path=p["transcript_path"],
                                 tokens=p["tokens"], duration_seconds=p["duration_ms"] / 1000) for p in res["probes"]],
+            breakdown={"by_phrase": res.get("by_phrase", {}), "by_length": res.get("by_length", {})},
         )
         suggestions = build_rule_suggestions(res["probes"])
         failed_st = [p for p in res["probes"] if p["expect_trigger"] and p["verdict"] == "FAIL"]
@@ -76,6 +78,16 @@ def trigger(
                       f" · false-trigger [red]{ftr_s}[/red]({res['n_should_not']} should-not)"
                       f" · {runs} runs · {res['unresolved']} unresolved"
                       f" · 耗时 {res['duration_ms'] / 1000:.1f}s · {res['total_tokens']} tok")
+        # 分层诊断(纯诊断):recall 拆 词面/语义 + 短/中/长 → 看 cc 靠字面还是语义、对长度敏感否
+        if res.get("n_should_trigger", 0) > 0:
+            def _pct(x):
+                return f"{x * 100:.0f}%" if x is not None else "-"
+            _bp = res.get("by_phrase", {}).get("recall", {})
+            _bl = res.get("by_length", {}).get("recall", {})
+            console.print(
+                f"分层 recall: 措辞 词面 {_pct(_bp.get('literal'))} · 语义 {_pct(_bp.get('paraphrase'))}"
+                f" | 长度 短 {_pct(_bl.get('short'))} · 中 {_pct(_bl.get('medium'))} · 长 {_pct(_bl.get('long'))}"
+            )
         for p in res["probes"]:
             rate_s = f"{p['trigger_rate']:.0%}" if p["trigger_rate"] is not None else "?"
             console.print(f"  [{'+' if p['verdict']=='PASS' else '-' if p['verdict']=='FAIL' else '?'}] "

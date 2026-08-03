@@ -473,6 +473,27 @@ def test_init_trigger_probes_appends_to_trigger_probes_section(tmp_path, monkeyp
     assert data["trigger_probes"][0]["expect_trigger"] is True
 
 
+def test_init_trigger_probes_warns_on_literal_leakage(tmp_path, monkeypatch):
+    """should-trigger 探题照抄 description 措辞 → init 打印词面命中警告(anti-leakage 反馈,不 retry)。"""
+    from typer.testing import CliRunner
+    from skill_eval.cli.main import app
+
+    skill = tmp_path / "skill"; skill.mkdir()
+    desc = "generates structured incident reports from raw text"
+    (skill / "SKILL.md").write_text(f"---\nname: my\ndescription: {desc}\n---\n# body\n")
+
+    # should-trigger 探题逐字抄了 description 子串 → literal;should-not 无关 → 不计
+    monkeypatch.setattr("skill_eval.evals.generator.call_claude",
+        lambda *a, **k: '{"skill_name":"my","trigger_probes":['
+                        '{"id":1,"prompt":"please generates structured incident reports from raw text now","expect_trigger":true,"rationale":"r"},'
+                        '{"id":2,"prompt":"unrelated task here","expect_trigger":false,"rationale":"r"}]}')
+
+    r = CliRunner().invoke(app, ["init", str(skill), "-o", str(tmp_path / "out"), "--trigger-probes"])
+    assert r.exit_code == 0, r.output
+    assert "词面命中" in r.output
+    assert "1/2" in r.output   # 1 道 literal(should-trigger)/ 2 道总数
+
+
 def test_init_prints_token_and_duration(monkeypatch, tmp_path):
     """generate_with_llm 走真 call_claude(mock 带 on_usage)→ gen 累加 token/耗时 → init 终端显示。
     对照 coverage/trigger/audit 都显示 LLM 消耗,init 之前漏了。"""

@@ -286,7 +286,9 @@ Skill description: {description}
 Generate {num_each} should-trigger prompts + {num_each} should-not-trigger prompts.
 - should-trigger (expect_trigger=true): a REAL task this skill should handle, written as a
   user request. CRITICAL: use neutral wording — DO NOT name or hint at the skill in the prompt
-  (the test is whether the model reaches for the skill from its description alone).
+  (the test is whether the model reaches for the skill from its description alone). Paraphrase
+  the description's intent — do NOT copy phrases from it verbatim (word-for-word overlap would
+  test literal matching, not whether the model understands the intent).
 - should-not-trigger (expect_trigger=false): a task that looks plausibly related but where
   this skill should NOT fire (tests false-trigger / over-broad description).
 

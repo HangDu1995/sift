@@ -155,6 +155,20 @@ def init(
                 )
             if new_probes:
                 console.print(f"[green]Generated[/green] {len(new_probes)} trigger probes")
+                # anti-leakage:should-trigger 探题若照抄 description 措辞,cc 可能靠字面匹配
+                # 触发而非语义理解 → recall 虚高。只反馈(词面命中探题仍有诊断价值),不 retry。
+                from skill_eval.parser import parse_skill_md
+                from skill_eval.execution.trigger_runner import classify_phrase, PHRASE_LEAK_MIN_CHARS
+                _desc = parse_skill_md(skill_path)[1]
+                if _desc:
+                    leaks = [p for p in new_probes
+                             if p.expect_trigger and classify_phrase(p.prompt, _desc) == "literal"]
+                    if leaks:
+                        console.print(
+                            f"[yellow]⚠ {len(leaks)}/{len(new_probes)} 道探题为词面命中"
+                            f"(照抄 description ≥{PHRASE_LEAK_MIN_CHARS} 字符),"
+                            f"建议人工复核或收紧 description。[/yellow]"
+                        )
             else:
                 console.print("[yellow]⚠️  未生成 trigger 探题(LLM 失败或解析空)。[/yellow]")
 
