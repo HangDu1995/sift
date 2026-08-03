@@ -13,6 +13,8 @@
 - **多作用域 transcript 审计 audit** — 把生产会话 transcript（cc / opencode 双源）与 SKILL.md 逐条对账；按 **skill / agent / root** 三种作用域切分：审被 `Skill` 调用的 skill 段、被 dispatch 的子 agent（`--kind agent`）、或顶层主 agent / 编排者（`--kind root`，整 workflow 审计的地基）；多 transcript 聚合可反推 skill 设计本身有没有问题
 - **路径1 真任务 + 批量** — `--task/--cwd` spawn 真任务（cc / opencode 双执行器）；`batch` DAG 调度多 skill
 - **基准题集冻结** — `freeze` 不可变签名 + skill_name 校验，跨 run / CI 复用同一份题
+- **触发准确度 trigger（第 4 维）** — 测 cc 仅凭 description 会不会自然触发 skill（前三层都 force-inject body、测不到的触发面）；纯诊断、不出 gate
+- **出题漏测诊断 coverage** — SKILL.md 内容点 × evals 覆盖映射，亮出 `run` 够不到的漏测盲区，`--augment` 复用 init 生成器自动补题；纯诊断、不出 gate
 
 > 第一次接触想系统了解每个功能的设计与用法，读 [使用手册](docs/skill-eval-handbook.md)（深入浅出，概念优先）；完整命令参数、字段定义、JSON schema 查 [参考手册](docs/skill-eval-reference.md)；方法论依据见 [方法论溯源](docs/skill-eval-principles.md)。
 

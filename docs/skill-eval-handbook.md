@@ -10,20 +10,19 @@
 
 - [第一章 建立直觉：skill-eval 在做什么](#第一章-建立直觉skill-eval-在做什么)
 - [第二章 静态体检：不跑 Claude 先看 skill](#第二章-静态体检不跑-claude-先看-skill)
-- [第三章 考卷：出题、体检、冻结](#第三章-考卷出题体检冻结)
+- [第三章 考卷：出题、补题、体检、漏测诊断、冻结](#第三章-考卷出题补题体检漏测诊断冻结)
 - [第四章 动态评测主流程：run](#第四章-动态评测主流程run)
 - [第五章 评分引擎](#第五章-评分引擎)
 - [第六章 盲比较](#第六章-盲比较)
 - [第七章 遵循性与 audit](#第七章-遵循性与-audit)
 - [第八章 校准](#第八章-校准)
-- [第九章 run 过程与产物解析](#第九章-run-过程与产物解析)
-- [第十章 重跑归档](#第十章-重跑归档)
-- [第十一章 门禁 gate](#第十一章-门禁-gate)
-- [第十二章 report HTML 布局](#第十二章-report-html-布局)
-- [第十三章 路径 1：真任务模式（live）](#第十三章-路径-1真任务模式live)
-- [第十四章 batch / batch-report](#第十四章-batch--batch-report)
-- [第十五章 触发准确度（trigger-accuracy，第 4 维）](#第十五章-触发准确度trigger-accuracy第-4-维)
-- [第十六章 coverage：出题漏测诊断](#第十六章-coverage出题漏测诊断)
+- [第九章 触发准确度（trigger-accuracy，第 4 维）](#第九章-触发准确度trigger-accuracy第-4-维)
+- [第十章 run 过程与产物解析](#第十章-run-过程与产物解析)
+- [第十一章 重跑归档](#第十一章-重跑归档)
+- [第十二章 门禁 gate](#第十二章-门禁-gate)
+- [第十三章 report HTML 布局](#第十三章-report-html-布局)
+- [第十四章 路径 1：真任务模式（live）](#第十四章-路径-1真任务模式live)
+- [第十五章 batch / batch-report](#第十五章-batch--batch-report)
 - [附录](#附录)
 
 ---
@@ -75,6 +74,8 @@ skill-eval 的三层架构正是为了把这两件事分别测清楚，再由"�
 ```
 
 > 盲比较是评分层的主观侧主信号（对比两侧 outputs），不是独立第四层；校准读「评分 × 遵循性」交叉；gate 读评分两轴（客观 delta + 主观胜率）定 decision + 校准 HIGH_SCORE_SUSPECT 作 soft warning（不进 decision）。
+>
+> 这个框图画的是主流程的三层。还有一个正交的诊断维度画不进来：**触发准确度（trigger，第 4 维）**评的是"cc 会不会按 description 自然触发这个 skill"（见第九章）——前三层都假设 skill 已上场，trigger 补的是更上游的"会不会上场"，只诊断、不出 gate。（`coverage` 也是诊断工具，但它评的是考卷本身、属第 3 章出卷环节，不在这张主流程图里。）
 
 三个关键设计原则贯穿全书，先记住：
 
@@ -94,7 +95,7 @@ skill-eval 不是一条路，而是三条，按"怎么产生 Claude 的执行"�
 
 - 路径 3 是日常主路：你出一份考卷（evals.json），skill-eval 让 Claude 在两种配置下各答一遍——同一 skill 开/关对照（with/without），或两个版本对照（v1/v2），评分 + 查遵循性 + 校准，聚合出 benchmark。
 - 路径 2（audit）不重跑，直接拿真实会话的 transcript（**可一份或多份**，多份做指令级聚合）跟 SKILL.md 对账。它回答两类问题：① 这一段执行有没有按 skill 做（审一次会话）；② 多段真实会话聚合后，这个 skill 在实际使用中遵循得怎么样——反过来反映 skill 的指令设计清不清晰、容不容易被遵循。
-- 路径 1（live）spawn 执行器（默认 `cc`，可选 `opencode`，见第十三章）在真实代码库/数据目录里跑一个真任务，产出的 transcript 既能直接看，也能喂给 audit。它和路径 2 闭环：路径 1 产 transcript，路径 2 审 transcript。
+- 路径 1（live）spawn 执行器（默认 `cc`，可选 `opencode`，见第十四章）在真实代码库/数据目录里跑一个真任务，产出的 transcript 既能直接看，也能喂给 audit。它和路径 2 闭环：路径 1 产 transcript，路径 2 审 transcript。
 
 这三条路的**遵循性判定引擎是同一套**（`TranscriptAuditor`），只是喂给它的 transcript 来源不同。
 
@@ -103,12 +104,13 @@ skill-eval 不是一条路，而是三条，按"怎么产生 Claude 的执行"�
 > | 阶段 | 命令 | 干什么 | 详 |
 > |---|---|---|---|
 > | 静态体检（不跑 cc） | `analyze` / `vet` | skill 本身 11 项体检 + 4 扫描器安全审查 | 第 2 章 |
-> | 出题 | `init` / `add` / `inspect` / `freeze` / `coverage` | 生成 / 追加 / 体检（不下判决）/ 冻结基线 / **漏测诊断（eval 覆盖 SKILL.md 内容点）** | 第 3、16 章 |
-> | 跑测 | `run` / `run --task --cwd` | A/B 对照（路径 3）/ 真任务（路径 1） | 第 4、13 章 |
-> | 判决 | `gate` | post-hoc 门禁（CI 用，毫秒级） | 第 11 章 |
+> | 出题 | `init` / `add` / `inspect` / `freeze` / `coverage` | 生成 / 追加 / 体检（不下判决）/ 冻结基线 / 漏测诊断（eval 覆盖 SKILL.md 内容点） | 第 3 章 |
+> | 跑测 | `run` / `run --task --cwd` | A/B 对照（路径 3）/ 真任务（路径 1） | 第 4、14 章 |
+> | 判决 | `gate` | post-hoc 门禁（CI 用，毫秒级） | 第 12 章 |
 > | 对账 | `audit` | 历史 transcript 遵循性（路径 2） | 第 7 章 |
-> | 看结果 | `report` | HTML 报告（读 benchmark/gate/previous） | 第 12 章 |
-> | 批量 | `batch` / `batch-report` | 多 skill DAG 并行 / 批量对比 | 第 14 章 |
+> | 触发 | `trigger` | 触发准确度（第 4 维，诊断、无门禁） | 第 9 章 |
+> | 看结果 | `report` | HTML 报告（读 benchmark/gate/previous） | 第 13 章 |
+> | 批量 | `batch` / `batch-report` | 多 skill DAG 并行 / 批量对比 | 第 15 章 |
 >
 > 典型顺序：`analyze`/`vet`（skill 健不健康）→ `init`/`inspect`/`freeze`（出一份好考卷）→ `run`（跑测产 benchmark）→ `gate`（出判决）+ `audit`（查过程）→ `report`（看全貌）。前三步治出卷噪声 C，`run` 内治答题噪声 B，评分时治阅卷噪声 A（见 1.6）。
 
@@ -116,7 +118,7 @@ skill-eval 不是一条路，而是三条，按"怎么产生 Claude 的执行"�
 
 这是理解后续所有数字的钥匙。
 
-**双率**：评分时每条被判项都按**判定方式**带一个 `source`——`programmatic`（程序判定）或 `llm`（LLM 语义判定）。大致对应：`expectations`（自然语言预期语句）一律 LLM 判；`assertions`（结构化断言）主要由程序判（Tier 1 类型，如 `FILE_EXISTS`），少数语义类型（Tier 3，如 `LLM_GRADE`）仍由 LLM 判（第 5 章细讲）。汇总时按 source 分桶，得到三个率：
+**双率**：评分时每条被判项都按**判定方式**带一个 `source`——`programmatic`（程序判定）或 `llm`（LLM 语义判定）。大致对应：`expectations`（自然语言预期语句）一律 LLM 判；`assertions`（结构化断言）主要由程序判（Tier 1 类型，如 `FILE_EXISTS`），少数语义类型（Tier 3，如 `LLM_GRADE`）仍由 LLM 判（第 5 章细讲）。汇总时按 source 分别统计，得到三个率：
 
 | 率 | 来源 | 稳定性 | 信任度 |
 |---|---|---|---|
@@ -131,7 +133,7 @@ skill-eval 不是一条路，而是三条，按"怎么产生 Claude 的执行"�
 
 `gate` 门禁正是按这两轴判决：客观侧读 `delta.pass_rate_programmatic`，主观侧读盲比较胜率。后面会展开。
 
-> 遵循性**不分** source 双率——它按指令的语义类别（条件性/禁令/步骤/输出格式）判，产的是**遵循性五态**计数（`PASS`/`FAIL`/`N/A`/`UNRESOLVED`/`INDETERMINATE`，见第七章），不存在 programmatic/llm 分桶。双率是评分侧的概念。注意：这里的"遵循性五态"和评分侧的"评分五态"（`PASS`/`FAIL`/`UNEVAL`/`TIMEOUT`/`ERROR`，见 5.4）是**两套不同的状态集**，别混。
+> 遵循性**不分** source 双率——它按指令的语义类别（条件性/禁令/步骤/输出格式）判，产的是**遵循性五态**计数（`PASS`/`FAIL`/`N/A`/`UNRESOLVED`/`INDETERMINATE`，见第七章），不区分 programmatic/llm。双率是评分侧的概念。注意：这里的"遵循性五态"和评分侧的"评分五态"（`PASS`/`FAIL`/`UNEVAL`/`TIMEOUT`/`ERROR`，见 5.4）是**两套不同的状态集**，别混。
 
 ### 1.6 三层噪声，各治各的
 
@@ -141,13 +143,15 @@ skill-eval 不是一条路，而是三条，按"怎么产生 Claude 的执行"�
 |------|-----------|---------|------|
 | **A 阅卷噪声** | 打分（LLM 判分时） | 同一个判官今天判 PASS、明天判 FAIL；或整批偏严/偏松 | 客观题交给代码（`programmatic`，噪声归零）+ 主观题盲比较（相对判断，系统偏差相减抵消） |
 | **B 答题噪声** | Claude 答题时 | 同一个 skill + 同一道题，这次写了文件、下次只口头总结；这次写 192KB、下次没写 | `--runs N` 多跑几次取聚合 |
-| **C 出卷噪声** | init 出题时 | evals.json 本身是 LLM 生成的，会抖：这套题断言全太松 → 两边假高分；出题器漏抽 skill 该用的工具 → 考卷没覆盖关键点 | `inspect`（题集体检）+ `freeze`（冻结同一份基线，跨 run/CI 复用）+ `--from-transcript`（从一份真实好会话挖题，源头降噪） |
+| **C 出卷噪声** | init 出题时 | evals.json 本身是 LLM 生成的，会抖：每套出得不一样；这套题断言全太松 → 两边假高分；漏抽 skill 该用的能力 → 考卷没覆盖关键点 | `inspect`（题集体体检）+ `freeze`（锁基线跨 run 复用）+ `--from-transcript`（真实挖题，源头降噪）+ `coverage`（漏测诊断：查 eval 覆盖了 SKILL.md 哪些点）+ 补题（`coverage --augment` / `init --append --focus`，定向补盲区，见第 3 章） |
 
 三个要分清的点：
 
 - **A 和 B 是两回事，别混**。`--scoring programmatic` 消的是阅卷噪声 A（LLM 改卷波动），`--runs 3` 消的是答题噪声 B（Claude 每次产出不一样）。所以 `programmatic` + `runs 3` 才是稳的组合，缺一不可——光选 programmatic 不多跑，Claude 这次答对、下次答错，客观率照样跟着波动。
-- **C 藏在 benchmark 之外**。A、B 都在 `run` 内部，能测、能消；C 是出题环节的偏差，`run` 里看不出来——两边跑同一份"坏卷子"，delta 照样漂，你却以为稳了。所以 C 只能在出题时防。它有两面，三个手段各治一面：这套题**每次 init 出得不一样**（逐套抖动）→ `freeze` 锁定一份基线跨 run 复用；这套题**本身可能不真实、断言太松**（单套偏差）→ `inspect` 体检发现问题，或 `--from-transcript` 干脆从一份真实好会话挖题（场景真、断言从真实产物里抽，不让 LLM 凭空捏），从源头避开。
-- **每一章都在治其中一层**：第 5 章 programmatic（治 A）、第 6 章盲比较（治 A 里独立打分抹不掉的系统偏差）、`--runs`（治 B）、第 3 章 inspect/freeze（治 C）。
+- **C 藏在 benchmark 之外**。A、B 都在 `run` 内部，能测、能消；C 是出题环节的偏差，`run` 里看不出来——两边跑同一份“坏卷子”，delta 照样漂，你却以为稳了。所以 C 只能在出题时防。它有三面，各靠不同手段：这套题**每次 init 出得不一样**（逐套抖动）→ `freeze` 锁定一份基线跨 run 复用；这套题**本身可能不真实、断言太松**（单套偏差）→ `inspect` 体检发现问题，或 `--from-transcript` 干脆从一份真实好会话挖题（场景真、断言从真实产物里抽，不让 LLM 凭空捏），从源头避开；这套题**漏测关键点**（出题器没覆盖 skill 的某些能力）→ `coverage` 把 eval 逐条对回 SKILL.md、报漏测点，再用 `coverage --augment` / `init --append --focus` 定向补上（见第 3 章）。
+- **每一章都在治其中一层**：第 5 章 programmatic（治 A）、第 6 章盲比较（治 A 里独立打分抹不掉的系统偏差）、`--runs`（治 B）、第 3 章 inspect/freeze/coverage（治 C）。
+
+audit 命令（路径 2）的噪声是另一套——它不靠“消噪”，而靠诚实标注可信度（`UNRESOLVED` / `INDETERMINATE` / `noise_label`），见第七章开头的噪声地图。
 
 ---
 
@@ -213,9 +217,9 @@ skill-eval vet path/to/skill/ --skip-external # 只跑内置 2 个扫描器
 
 ---
 
-## 第三章 考卷：出题、体检、冻结
+## 第三章 考卷：出题、补题、体检、漏测诊断、冻结
 
-动态评测的前提是有一份"考卷"——`evals.json`。这一章讲怎么造卷、怎么体检、怎么冻结成基线。
+动态评测的前提是有一份"考卷"——`evals.json`。这一章讲考卷的完整生命周期：怎么**出题**（`init`）、怎么**补题**（`add` / `--focus`）、怎么**体检**（`inspect`）、怎么查**漏测**（`coverage`）、最后怎么**冻结**成基线（`freeze`）。一份好考卷是后续所有评测的前提——考卷本身有盲区，`run` 再多轮也测不到。
 
 ### 3.1 evals.json 长什么样
 
@@ -293,7 +297,7 @@ skill-eval init path/to/skill/ --focus "加密/损坏 PDF" --append # 自由文�
 
 **为什么用这个而不是 `add`**：`add`（3.3）是手动一道道加，得你自己想反面场景；`--focus` 让 LLM 在定向模式下批量生成一类，省掉手想的力气——尤其补的是你**没意识到的**盲区（通用预设类主动提示）。两者互补：`--focus` 批量铺面，`add` 精修单道。
 
-> `--focus` 只对 LLM 生成路径（默认 `init`）生效；`--from-transcript` 是从真实会话挖题，不适用 `--focus`。补完别忘了 `inspect`（3.5）体检、`freeze`（3.6）冻成基线再 `run`。
+> `--focus` 只对 LLM 生成路径（默认 `init`）生效；`--from-transcript` 是从真实会话挖题，不适用 `--focus`。补完别忘了 `inspect`（3.5）体检、`freeze`（3.7）冻成基线再 `run`。
 
 ### 3.5 inspect：题集体检（不下判决）
 
@@ -304,7 +308,54 @@ skill-eval inspect path/to/evals.json --json  # 机器可读
 
 注意位置参数是 **evals.json 路径**（不是 skill 目录）。`inspect` 对已有考卷做静态体检：完整性、稳定性（programmatic/LLM 占比）、潜在问题 flag。它**不执行、不调 LLM、不下判决**——只报指标和关注点，帮你决定"这份卷子能不能冻结成基线"。
 
-### 3.6 freeze：冻结基线
+### 3.6 coverage：出题漏测诊断
+
+出完题、补完薄弱面，还要回头看一眼：**这份考卷覆盖了 SKILL.md 的多少内容点？** `init` 出题是 LLM 生成的（见 §3.2，出卷噪声 C），会系统性漏掉某些指令 / 条件分支——这些漏测点是 `run` 够不到的盲区（跑多少轮也测不着）。coverage 把它们亮出来，是考卷上线前的最后一道体检。
+
+**怎么测：一次 LLM 映射，不 re-run Claude**
+
+```bash
+skill-eval coverage path/to/skill/                # 默认:诊断漏测
+skill-eval coverage path/to/skill/ --augment      # 漏测点自动补题(写回 evals.json,需人审)
+```
+
+coverage 不 spawn Claude 跑题——它做的是**一次性 LLM 映射**：喂 SKILL.md 正文 + 各 eval 的 `id` / `prompt` / `rationale`，让 LLM 列出 SKILL.md 的**可测内容点**（具体的规则 / 步骤 / 能力 / 条件分支，不含散文和示例），再判断每点被哪几道 eval 真的**验证**（不是仅在 prompt 里提到）。`covered_by` 为空的内容点 = **漏测**。
+
+产 `coverage-report.json`（机器读）+ `coverage-report.html`（人读，always 写，漏测行高亮红）+ 终端摘要（内容点 N · 漏测 M · 耗时 · token），并给每个漏测点一条 `init <skill> --append --focus "<label>"` 处方（人工定向补，复用 §3.4 的 `--focus` 机制）。
+
+**怎么读报告**
+
+- **内容点 N / 漏测 M**：内容点是 LLM 从 SKILL.md 切出的可测点（粒度主观，见下），漏测是其中 `covered_by` 空的点。
+- **逐漏测点**：每个漏测点列 `label` + SKILL.md 原文片段（`source_quote`），帮你判断"这点 SKILL.md 真这么要求吗、漏得对不对"——LLM 偶尔会把示例 / 散文误当内容点，看 `source_quote` 能秒辨。
+- **HTML** 漏测行（`covered_by` 空）整行高亮红色，一眼定位。
+
+**补漏测：人工定向（推荐）/ `--augment` 自动**
+
+两条路：
+
+- **人工定向**（推荐）：逐条看漏测点的 `source_quote`，确认是真盲区后，照终端处方跑 `init path/to/skill/ --append --focus "<label>"`（§3.4 的 `--focus`：定向补某一类、`--append` 追加不覆盖旧题、id 接续）。每条都过一遍人脑，质量最稳。
+- **`coverage --augment`**（自动）：每个漏测点复用 `init` 的生成器（`EvalInitGenerator(focus=<label>)`）自动补 eval——生成时**喂现有 evals**（含本批已补题），走与 §3.4 `--append --focus` **同一个定向补题内核**（只补该漏测点、与现有题语义去重），新题带 `review:coverage-augment` flag、再按 `prompt` 字面去重兜底、id 接续，写回 evals.json。**质量不保证、必须人审**：自动补的 eval 只是"贴着那个 label 生成的题"，不一定真测到那个点、也可能是凑数题——`review:coverage-augment` flag 标着等审，人确认"这题真测到了、且不是凑数"后再接受，别直接拿去跑 `run`。某点补题失败（限流 / 异常）逐条跳过、不中断。
+
+**诚实：LLM 估、有噪声、无 gate**
+
+- **LLM 估、有噪声**：内容点清单的粒度（一个点怎么切）是主观的，映射是 LLM 判的——都抖。**「0 覆盖」的大漏测可靠**（一个内容点没任何 eval 碰，是明确的盲区信号）；边界态的「半覆盖」（点被部分 eval 碰到）噪声大。coverage 是**漏测预警、不是精确度量**——拿它定位明显盲区，别对每条 `covered_by` 过度解读。LLM 调用整体失败时降级为空报告（exit 0，不炸）。
+- **无 gate、独立 artifact**（同 trigger 第 4 维）：**无 gate / 不出 exit-code 判决**，`coverage-report.json` 不并入 `benchmark.json`。coverage 只产诊断报告，不挡 CI、不改 `run` 结果。
+
+**与 §4.2 的关系：都摸 eval↔指令，都不建结构化表**
+
+coverage 和 §4.2（`--changed-from`）都碰 eval↔指令映射，但问的问题不同、做法同源——都**不建结构化 instruction_ref 表**：
+
+| | coverage | §4.2 `--changed-from` |
+|---|---|---|
+| 问什么 | 每个内容点被哪几道 eval 覆盖（漏测诊断） | 改 skill 后哪些 eval 受影响（回归探针） |
+| 怎么映射 | 当场一次 LLM 判（喂 rationale + prompt 语义） | 当场一次 LLM 判（喂 diff + eval 语义） |
+| 建表吗 | 不建 | 不建 |
+
+为什么不建表，理由就是 §4.2 末尾「想要更可控的判定？」那段：自动建的 eval↔指令对应表，准度和当场 LLM 判定（同一个 LLM）一样，却白搭维护复杂度——只有**人工逐条校对**的表才更准，而工具不做人工表。故 coverage 走 LLM 柔性映射，靠 eval 的 `rationale`（`init` 自报的"这题对应 SKILL.md 哪段"，见 §3.1）做语义桥梁。
+
+> coverage 是诊断维度：前四维（scoring / compliance / calibration / trigger）评 skill 的能力和行为，coverage 退一步评**考卷本身**——考卷覆盖不全，前四维的结论就只能覆盖考卷够到的部分。先 `coverage` 看考卷有没有大盲区，补全后再 `run` / `trigger`，前四维的信号才扎实。
+
+### 3.7 freeze：冻结基线
 
 ```bash
 skill-eval freeze path/to/evals.json                         # → baseline.json + baseline.meta.json
@@ -334,7 +385,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 
 ```bash
 skill-eval run path/to/skill/ --runs 3                       # with/without，跑 3 轮
-skill-eval run v2/ --skill-b v1/ --evals baseline.json        # v1/v2 回归对照（baseline.json 由 freeze 产生，见 3.6）
+skill-eval run v2/ --skill-b v1/ --evals baseline.json        # v1/v2 回归对照（baseline.json 由 freeze 产生，见 3.7）
 skill-eval run path/to/skill/ --scoring programmatic          # 仅程序化评分，零 LLM 成本
 ```
 
@@ -367,7 +418,7 @@ skill-eval run path/to/skill/ --changed-from v1/             # 改 skill 后只�
 
 > **想要更可控的判定？** `--changed-from` 现在靠 LLM 每次自动判受影响 eval（够用，但每次重判、不保证确定）。若需要更精确、可复现的判定，一个思路是**手工给每道 eval 标注它考的是 skill 的哪条指令**（存一张 eval↔指令对应表），改 skill 后直接查表得出受影响 eval——确定性、可审计，但这张表只有人工逐条校对维护时才比自动判定强；若也让 LLM 自动建、没人管，准度和自动判定（同一个 LLM 判断）一样，却白搭维护复杂度——权衡后当前未采用。自动判定不敷用时再考虑。
 
-> 路径1 真任务模式（`--task`）不读 evals.json、没有 id 概念，`--eval-ids`、`--eval-samples`、`--changed-from` 对它都无效（见第十三章）。
+> 路径1 真任务模式（`--task`）不读 evals.json、没有 id 概念，`--eval-ids`、`--eval-samples`、`--changed-from` 对它都无效（见第十四章）。
 
 ### 4.3 一次 run 的完整流程
 
@@ -418,7 +469,7 @@ output/
     └── eval-<id>/run-<n>/  # 同上，但无 compliance / 无 calibration
 ```
 
-各文件的字段级含义见[第九章](#第九章-run-过程与产物解析)和参考手册。
+各文件的字段级含义见[第十章](#第十章-run-过程与产物解析)和参考手册。
 
 > `run` 是纯数据生产者——exit 0 只代表产数据成功，**通过/失败判决由 `gate` 出**，不再由 run 的退出码决定（旧版读混合 delta 退 1 的逻辑已退役）。
 
@@ -469,7 +520,7 @@ output/
 
 ### 5.4 双率怎么算出来
 
-每条 expectation/assertion 判完带一个 `verdict`（`PASS`/`FAIL`/`UNEVAL`/`TIMEOUT`/`ERROR`）和一个 `source`（`programmatic`/`llm`）。`grading.json` 的 `summary` 按 source 分桶：
+每条 expectation/assertion 判完带一个 `verdict`（`PASS`/`FAIL`/`UNEVAL`/`TIMEOUT`/`ERROR`）和一个 `source`（`programmatic`/`llm`）。`grading.json` 的 `summary` 按 source 分别统计：
 
 ```json
 "summary": {
@@ -568,13 +619,28 @@ cache_key = sha256(SKILL 正文 + eval 全身 + 模型/配置 + skill-eval 代�
 
 v1/v2 是盲比较的**杀手级应用——CI 回归门禁**：skill 提 PR（v1 = main 旧版、v2 = PR 新版），CI 拉同一份冻结的 eval 基线，分别 spawn with v1 / with v2 各跑 runs N，每条 eval 盲比较两版产出，汇总 v2 胜率——v2 胜率明显高 → 正收益（CI 绿）；v1 胜 → 回归（CI 红）；大量平手 → 改了寂寞（更新没触及实际产出）。
 
-这正是第十一章 gate 把盲比较胜率做成可选门禁轴（`--min-win-rate`）的用意：它天然适合"PR 不许回归"的 CI 用法。换 `--skill-b` 指向另一个 skill 路径就切到 v1/v2 模式（见 4.1）。
+这正是第十二章 gate 把盲比较胜率做成可选门禁轴（`--min-win-rate`）的用意：它天然适合"PR 不许回归"的 CI 用法。换 `--skill-b` 指向另一个 skill 路径就切到 v1/v2 模式（见 4.1）。
 
 ---
 
 ## 第七章 遵循性与 audit
 
 遵循性回答"过程有没有按 SKILL.md 做"。它是 skill-eval 的原创层，也是和 skill-creator 这类工具最大的差异点。
+
+**audit 的噪声地图（先看全貌，逐条展开见 §7.2–§7.14）**
+
+audit 是诊断工具——它的结果不像 run 那样能靠“消噪”磨出干净数字，而是靠“诚实标注哪些不可信”让你判断能信多少。下表把噪声来源和各自怎么治 / 诊断一眼列全，后面各节逐条展开。
+
+| 噪声来源 | 长什么样 | 怎么治 / 诊断 | 详见 |
+|---|---|---|---|
+| extractor 误抽（地基瓶颈） | 教程型 skill 里的示例 / 占位文字被当成指令 → 大量 N/A | `refine`（判定前 LLM 砍伪指令，默认开）+ 结构化声明（待做） | §7.2 末 / §7.3 |
+| LLM 判官判定抖 | 同一条指令这次 PASS、下次判不出或判反 | 五态诚实标注（`UNRESOLVED` 可重跑、`INDETERMINATE` 带证据）+ 宁少报（没判成 → `UNRESOLVED`，不保守 FAIL） | §7.4 / §7.5 |
+| 头尾窗口盲区 | 执行记录太长，旧的只留头部 → 尾部收口被漏看 → 假 PASS | 头 + 尾各留一半 + 中段截断标记 + 完整 `tool_trace` 兜底 | §7.2 末 |
+| 条件性场景空 | `--kind` 切出的段没有 user turn → 条件性指令一律弃判 | 空场景时回退用 `transcript_text` 当场景 | §7.2 末 |
+| 工具噪声混进 FAIL | FAIL 里混着工具的洞和真 skill 问题 | `noise_label` 逐条打标（tool_noise / skill_issue / uncertain） | §7.12 |
+| `--turn-refs` 条件分支过严 | 开 `--turn-refs` 后，本该跳过的条件分支被误判 FAIL | 默认关，要定位时再 opt-in 开 | §7.13 |
+
+一个根本差异：**run 的三层噪声是“消”**——programmatic 归零、盲比较抵消、`--runs` 聚合，每层都有手段把噪声磨掉（见 §1.6）；**audit 的噪声大多是“标”**——磨不掉，只能诚实标出哪些不可信（`UNRESOLVED` / `INDETERMINATE` / `noise_label`），告诉你哪些结果能信、哪些要重跑或人工复核。所以读 audit 结果，看的是**可信度标注**，不是数字本身——这也是 §7.5 那句“0 FAIL ≠ 全过”的由来。
 
 ### 7.1 为什么需要遵循性
 
@@ -926,11 +992,116 @@ opencode 的转换器（`_records_from_opencode`）做三件事抹平格式差�
 
 ---
 
-## 第九章 run 过程与产物解析
+## 第九章 触发准确度（trigger-accuracy，第 4 维）
+
+前三层（评分 / 遵循性 / 校准）回答的都是 skill 已经"上场"之后的问题——输出对不对、过程遵不遵循、结果×过程协不协调。但有一个更上游的问题它们都没碰：**cc 到底会不会调用这个 skill？**
+
+### 9.1 上游缺口：三层都假设 skill 已"上场"
+
+一个 skill 在真实会话里被不被调用，靠的**只有 frontmatter 的 `description`**——cc 扫到一份 skill、读它的 description、据此决定这次任务要不要够它。description 写得不到位，cc 永不触发，skill body 再好也是死重量。
+
+但前三层都跳过了这一步：
+
+- **评分（run A/B）**：`_build_non_interactive_prompt` 把 skill body **强制注入** cc prompt，开头就是 "You have the following Skill loaded. Follow its instructions"——cc 对"要不要够这个 skill"没得选，触发能力**从不被测**。
+- **遵循性（audit）**：审的是 skill 被调用**之后**的行为（默认它已触发）。
+- **校准**：结果×过程 coherence，与触发无关。
+
+`description` 这一触发判定唯一依赖的输入，三维都不评。trigger-accuracy 补的就是这个缺口——它和前三层正交：前三层评"上场后表现如何"，trigger 评"会不会上场"。
+
+### 9.2 怎么测：中性 prompt + 真实 HOME
+
+```bash
+skill-eval trigger path/to/skill/ --runs 2 -o /tmp/out
+```
+
+`trigger` 命令把被测 skill 放进 `<cwd>/.claude/skills/<name>/`，给 cc 一条**中性 prompt**——不点名 skill、不暗示该用它，就是一个普通用户请求。然后看 cc 会不会仅凭 description 自动发现并调用本 skill。检测复用遵循性引擎的 `audit/slice.invoked_skills`（扫 transcript 里的 `Skill` tool_use，看本 skill 名在不在里面）。
+
+**用真实 HOME、不隔离**（对齐 run/audit）：spawn 用 `claude_cli_env` 补身份头 + 继承终端 env（含真实 HOME），不把 `HOME` 指向临时空目录。曾尝试用空 HOME 隔离用户全局 plugin，但实测两点推翻：① cc 2.x 的全局 plugin 不随 HOME——换空 HOME 后全局 plugin skill 照样加载，没隔掉；② cc 的文件/keyring 认证源在 HOME 里，覆空 HOME 会把认证一起断掉，终端 shell（无 IDE 注入的 token）撞 "Not logged in" → 全 probe UNRESOLVED。trigger 可信不靠 HOME 隔离撑：`fired` 判定只看本 skill 名在不在 `invoked_skills`（扫 transcript 的 `Skill` tool_use），别的 skill 参与发现不改变这个布尔——触发是否成立由 transcript 里有没有本 skill 的调用决定，与测试机装了哪些别的 skill 无关。
+
+### 9.3 两种探题：recall 与 false-trigger 是不同失效模式
+
+trigger 探题分两个方向，各测一种失效：
+
+- **should-trigger**（`expect_trigger: true`）：该 skill 该处理的真任务，措辞**中性**（在 prompt 里点名 skill 就只是测字面匹配，不是测触发）。
+- **should-not-trigger**（`expect_trigger: false`）：看着相关但 skill **不该**触发的任务——测 description 会不会过宽、把不该接的活也揽下来。
+
+两种是**不同的失效模式**，所以聚合时**分开报、不合成一个分**：
+
+| 率 | 来自 | 测的失效 | 方向 |
+|----|------|---------|------|
+| `recall` | should-trigger 方向 trigger_rate 均值 | 漏召（该触发没触发） | 越高越好 |
+| `false_trigger_rate` | should-not 方向 trigger_rate 均值 | 误触（不该触发却触发） | 越低越好 |
+
+为什么不合？因为"漏召"和"误触"指向相反的修法：recall 低 → description 太窄 / 缺关键词，要加触发线索；false_trigger 高 → description 太宽 / 太泛，要收窄 scope。合成一个分会把这两个相反信号互相抵消，丢掉诊断价值。
+
+### 9.4 判定与样本
+
+每条 probe 跨 N runs 算 `trigger_rate = fired 次数 / runs`（触发带随机性，`--runs` 多跑聚合成率更可信），阈值 0.5 二值化 → PASS / FAIL。spawn 失败 / 超时 / **cc 非零退出且没触发**（限流 / 后端不可用：cc 实测 exit 1 + 错误打 stdout、stderr 空，`run_trigger` 不 raise 而返正常输出）→ 该 probe = `UNRESOLVED`，**不进 recall / false_trigger_rate 的分母**，且其 `trigger_rate` 置 `null`（没判成、不显假数值率，避免把"没跑出来"误读成"触发率 0"）——宁少报不乱报，避免单次异常污染率（同遵循性"没判成不乱报"的哲学）。某方向 0 probe → 对应率 `null`（N/A，不是假 0.0）。
+
+每个率都带自己的样本量（`n_should_trigger` / `n_should_not`），别脱离样本量解读一个率：init 默认每方向 5 道，<3 道会告警"样本少"。同 1.6 的噪声分工，trigger 侧也有"答题噪声 B"（cc 触发带随机性）——靠 `--runs` 多跑抹平。
+
+### 9.5 出题：`init --trigger-probes`
+
+```bash
+skill-eval init path/to/skill/ --trigger-probes                 # 默认每方向 5 道，追加到 trigger_probes 段
+skill-eval init path/to/skill/ --trigger-probes --num-evals 8   # 每方向上限 8（trim 多余、不补下限）
+```
+
+LLM 读 skill 的 description 生成两方向探题，追加到 evals.json 的 `trigger_probes` 段（新 id 接续已有 `max+1`）。**不重生成已有 scoring evals**——载入已有 evals.json、只加 trigger 探题（`--trigger-probes` 单用、不加 `--append` 也保留原 scoring 题）。
+
+**`--num-evals` 是每方向上限、不是下限**（关键）：LLM 生成的探题多于这个数会被 trim，少于这个数**原样保留**、不强行凑满——硬凑会出重复 / 充数题，反而劣化信号质量。这是有意的"欠交付"：宁可少几道真信号，不要凑数的噪声。所以实际跑出来某方向可能少于你给的 `--num-evals`，别当成 bug。
+
+### 9.6 边界：诊断定位，无门禁
+
+trigger-accuracy 是**诊断工具，不是门禁**：
+
+- **无 gate / 不出 exit-code 判决**——只产 `trigger-report.json` + 终端摘要。recall 低或 false_trigger 高是"该改 description"的信号，不是合并阻断（那是 skill 内容要改、不是 PR 该卡的红灯）。
+- **独立 artifact，不并入 `benchmark.json`**——trigger 回答的是上游独立问题，和 scoring / compliance / calibration 不耦合，benchmark 的双率 delta / 盲评胜率都不含触发信号。
+- **`description_hash`**（sha256(frontmatter `description`)[:16]）锚定触发判定唯一依赖的输入——跨版本对比时，hash 变了说明 description 改了，recall 的变化才有"是 description 改动引起"的归因依据；hash 没变而 recall 变了，更可能是 cc 触发随机性（看 `--runs`）。
+
+> **成本**：每条 probe = 1 次 cc spawn（有 LLM 成本，但比 `run` 轻——无 with/without 双 spawn、无 grader、无 compliance judge）。配合前三层用：先 `trigger` 看 description 能不能让 cc 够到这个 skill，再 `run` 看上场后表现。
+
+### 9.7 怎么读报告 + 怎么改 description
+
+跑完 `trigger` 产三样：`trigger-report.json`（机器读）+ `trigger-report.html`（人读，**always 写**，与 JSON 并列、对齐 audit，`--open` 浏览器打开）+ 终端摘要。
+
+**终端进度 + 摘要**——跑的过程实时显示进度（每个 probe 开头 `probe i/N`（该触发 / 不该触发）+ cc 的实时动作 `🔧 …` / `✓ 完成`，同 `run` 命令）；跑完是一行汇总 + 逐 probe + 操作建议：
+
+```
+recall 75%(5 should-trigger) · false-trigger 10%(5 should-not) · 2 runs · 1 unresolved · 耗时 12.3s · 28400 tok
+  [+] probe-1: 100% → PASS (842 tok · 4.5s)
+  [-] probe-2: 0%   → FAIL (318 tok · 2.1s)
+  [?] probe-3: ?    → UNRESOLVED (0 tok · 0.0s)
+操作建议：
+  [rule:recall] 漏召:…考虑补触发关键词:
+    · probe-2:「…」
+  [llm:llm_rewrite] 修订 description:…\n理由:… (480 tok · 3.1s)
+Written to …/trigger-report.json · …/trigger-report.html
+```
+
+- 汇总行：`recall`（绿，越高越好）/ `false-trigger`（红，越低越好）各带样本量 + runs + unresolved + 耗时（cc spawn 总墙钟，不含 LLM 建议那次调用）+ 总 token。逐 probe `[+/-/?] probe-N: 触发率 → verdict (token · 耗时)`：`+` PASS、`-` FAIL、`?` UNRESOLVED（触发率显 `?`、消耗显 0，因为没判成）。
+
+**怎么改 description**——报告 `suggestions[]` 直接给方向，两路：
+
+| 信号 | 含义 | 怎么改 |
+|---|---|---|
+| `recall`（should-trigger FAIL） | 漏召：description 没够到该处理的任务 | 补与失败 prompt 匹配的触发关键词 / 动作动词 |
+| `false_trigger`（should-not FAIL） | 误触：description 过宽 | 收窄 scope / 加边界排除语（明确不处理这类） |
+| `unresolved` | 没判成（限流 / 异常） | 加大 `--runs` 重跑确认，别据未判成下结论 |
+| `all_good` | 零 FAIL 零 unresolved | description 触发边界够精准，无需改 |
+| `llm_rewrite`（source=llm） | LLM 起草的修订 description 草案 | 可直接抄改（有失败才自动产，带「理由:」） |
+
+规则建议（`recall`/`false_trigger`/`unresolved`/`all_good`）永远给、零成本；LLM 建议（`llm_rewrite`）**有失败才自动跑**（喂当前 description + 失败 probe 的 prompt，起草可抄改的 description + 一行理由），全 PASS 跳过。相对 trigger 本体（N probe × run 次完整 cc spawn）这是单次轻 LLM 调用、<5%，故默认开、无 flag；调用失败自动重试 2 次（限流瞬态），重试耗尽只丢这条、规则建议照在，终端打失败原因（疑似限流 / 超时 / 空 result）让你判断是瞬态还是真问题。
+
+> `trigger-report.json` 字段全表见 reference 的 `trigger-report.json` 段。建议口径是**诊断、不是门禁**——给「改 description 的方向」，不下 PASS/FAIL 判决（同 9.6）。
+
+---
+
+## 第十章 run 过程与产物解析
 
 这一章下钻到 per-run 产物的字段级含义和聚合链路，告诉你"每个 json 里什么字段什么意思"。
 
-### 9.1 一次 run 的链路
+### 10.1 一次 run 的链路
 
 ```
 spawn claude -p
@@ -941,7 +1112,7 @@ spawn claude -p
    → benchmark.json（聚合：per-run → run_summary + delta + 盲比较 + 分析）
 ```
 
-### 9.2 per-run 产物逐个解读（字段级）
+### 10.2 per-run 产物逐个解读（字段级）
 
 #### grading.json（评分）
 
@@ -1054,7 +1225,7 @@ spawn claude -p
 
 聚合时若 grading.json 的 `timing` 缺失，会回退读它——是 timing 的兜底源。
 
-### 9.3 聚合成 benchmark.json
+### 10.3 聚合成 benchmark.json
 
 所有 per-run 跑完后，`BenchmarkAggregator.aggregate()` 把它们聚合成 `BenchmarkData`：
 
@@ -1066,7 +1237,7 @@ spawn claude -p
 | `anomaly_report` | 异常检测（超时/离群） |
 | `comparisons[]` | 盲比较逐条（读 `outputs/`，不是 benchmark） |
 | `comparison_summary` | 盲比较聚合 `{total, a_wins, b_wins, ties, failed, valid, win_rate, label_a, label_b}` |
-| `analysis` | 深度分析（见 12.3） |
+| `analysis` | 深度分析（见 13.3） |
 | `selection` | （可选，仅 `--changed-from` 子集跑时）`{mode, ids, affected, total}`——标识本次为受影响子集跑、delta 非整体测量 |
 | `llm_token_usage` | （Phase 2）本次评测的 LLM token 用量 `{scoring, audit, executor, total}`：`scoring`=grader+comparator+analyzer 合计（带 cost/calls,calls=各子项真实调用次数之和）；`audit`=compliance rollup 自 per-run `compliance.json`；`executor`=被测 cc token（仅 token 数无 cost，对应 `run_summary.tokens`）；`total`=全加 token、cost=scoring+audit。**executor 是被测 token 效率（无 cost），scoring+audit 才是评测系统付出的 LLM 成本**。viewer 头部「LLM token 用量」分列 + 总计；旧 report 无此字段 → `{}` |
 | `llm_duration_seconds` | （Phase 2.5）本次评测耗时（秒）`{scoring, audit, executor, total}`：分列=各类调用时长加总（grader+comparator+analyzer / compliance / 各 run）；**`total`=墙钟**（run 命令头尾独立测）。与 token 根本不同：token 是消耗品可累加（total=分列和）；time 是墙钟、各段并行重叠（workers/线程池），**分列和 ≥ total 正常**，total 不由分列加、viewer 不对账分列和 vs total。分列看"哪段重"，total 看"等多久"；旧 report 无此字段 → `{}` |
@@ -1075,13 +1246,13 @@ spawn claude -p
 
 `run_summary`：每个 config 一组——`pass_rate` / `pass_rate_programmatic` / `pass_rate_llm`（后两者可能为 null）/ `time_seconds` / `tokens`，各带 `{mean, stddev, min, max}`；再加 `delta`：全是**有符号字符串**（如 `"+0.27"`），= 候选 − 基线，双率项可能为 null（任一侧无该类 expectation 时不报假 0）。
 
-### 9.4 retry 机制
+### 10.4 retry 机制
 
 UNEVAL / 出错时自动重试（`--max-retries`，默认 2），每次重跑完整的 Claude + 评分 + 遵循性。重试目录形如 `run-1-retry-1`。聚合时 `index_runs` 只取**最终 retry**（否则被取代的失败 base 会被当成独立低分 run 计入，拉低均值）。`retry_count` 记在 RunResultEntry 里。
 
 ---
 
-## 第十章 重跑归档
+## 第十一章 重跑归档
 
 重跑同一个 skill 时，skill-eval 会先回答两个问题：① **上次跑完了吗**（`benchmark.json` 在不在）？② **inputs 变了吗**（现有 slot——即每个 (eval, run) 槽位，如 `eval-1/run-2`——的 `cache_key` 还匹不匹配）？再结合 `--runs` 是不是调大，落进 resume / accumulate / fresh 三种行为之一。
 
@@ -1092,7 +1263,7 @@ UNEVAL / 出错时自动重试（`--max-retries`，默认 2），每次重跑完
 
 第二种 delta 赖以成立的前提，就是 fresh 重跑时把旧树挪进 `previous/` 保留下来。所以归档不只是"旧数据去哪了"，而是纵向对比的根基。
 
-### 10.1 三态判定：resume / accumulate / fresh
+### 11.1 三态判定：resume / accumulate / fresh
 
 | 情况 | `--runs` vs 已有 | 行为 | previous/ |
 |------|------------------|------|-----------|
@@ -1111,13 +1282,13 @@ UNEVAL / 出错时自动重试（`--max-retries`，默认 2），每次重跑完
 
 **"inputs 改了"具体指什么**：SKILL.md 正文 / evals.json 内容（含删 eval、改 prompt / expectations / assertions / fixtures / 换 sides）/ `--model` / scoring 配置（hybrid/programmatic/llm）/ skill-eval 代码版本。任一改动 → `cache_key` 变 → fresh → 产 `previous/`。已知缺口：eval 引用的 `source_dir` / `references/` 文件**内容**改动不检测（见 5.5），改这些请用新 `-o` 强制重跑。
 
-### 10.2 为什么 fresh 用 MOVE 不用 COPY
+### 11.2 为什么 fresh 用 MOVE 不用 COPY
 
 重跑要看的就是**方差**——Claude 非确定性，主观侧有真方差（约 23%，客观侧 programmatic 稳）。如果 copy 旧树（`grading.json` 还在原位），cache 会全 skip 出"和上次逐字相同"的结果，`previous/` 和 current 一模一样——归档了个寂寞。MOVE 清空原位 → 所有槽 cache miss → 必然 fresh 重跑，`previous/` 里才有真东西可比。accumulate 的"复用旧"靠 cache_key 匹配自然达成（不 MOVE → grading.json 在位 → skip），它和 fresh 的分界就是 inputs 变没变。
 
 **归档范围：只 move run 自己的产物，不卷其他命令的。** output 目录里常不只有 run 的东西——同目录可能还跑过 `audit`（产 `audit-report.json`/`.html` + `slices/`）、`gate`（`gate.json`）、`report`（`report.html`）。fresh 归档只 move run 的产物：config 目录（`with_skill/`…含 `eval-*/run-*`）+ `benchmark.json`/`scorecard.json`/`vet-report.json`/`analysis-*.json`；其他命令的产物**原地不动**，不会被卷进 `previous/`。归档的语义是"归档上次 run 的结果"，不是"清空目录"——audit 审的是独立 transcript、gate/report 是 run 之后才出的判决/报告，都不属于"这次 run 的产物"，卷走会丢你的数据。
 
-### 10.3 几个诚实的设计取舍（价值）
+### 11.3 几个诚实的设计取舍（价值）
 
 - **样本数不同就标出来**：fresh 重跑若 runs 变了（previous 3 vs current 6），delta 卡显式提醒。均值仍可比，但别对一个小 delta 过度解读。
 - **新增 run 无对照 = 隐藏，不是 bug**：6 个 run 里 run-4/5/6 是本次新增、`previous/` 没有 → 文件级"上次输出"面板对它们隐藏；聚合卡照常算（比的是均值）。两层分开、不矛盾。
@@ -1125,7 +1296,7 @@ UNEVAL / 出错时自动重试（`--max-retries`，默认 2），每次重跑完
 - **move 的诚实**：重跑 = "重新测一遍"，承认不复用旧数据。比 copy 假装"既有对比又省 token"诚实——这俩在"输入没改 + 同 runs"时不可兼得，copy 会产出无意义的 identical previous。
 - **单槽 previous，不做历史**：永远只留上一次，不搞 `previous-1/`/`previous-2/` 叠层（对比关心"现在 vs 上次"，叠层反而引来"到底比哪两个"的歧义）。想留多次快照？多次重跑间及时把 `previous/` 拷出去自己存。
 
-### 10.4 怎么看 / 怎么用
+### 11.4 怎么看 / 怎么用
 
 **四个典型场景：**
 
@@ -1140,7 +1311,7 @@ UNEVAL / 出错时自动重试（`--max-retries`，默认 2），每次重跑完
 
 ---
 
-## 第十一章 门禁 gate
+## 第十二章 门禁 gate
 
 `gate` 对已有 benchmark.json 出 PASS/FAIL 判决。它是 **post-hoc 纯函数**——不重跑 Claude、毫秒级、可反复改阈值重判（和 `report` / `audit` 一样，都只读 run 的产物做后处理，不重新跑题）。
 
@@ -1155,7 +1326,7 @@ UNEVAL / 出错时自动重试（`--max-retries`，默认 2），每次重跑完
 
 三者共性 = **post-hoc（跑在 run 之后、以 run 产物为输入）+ 不 spawn cc 跑题 + 可反复跑（改参数重跑不必重跑 cc）**。落到 `gate` 上就是它的核心卖点：改门禁阈值不用重跑 cc、毫秒级重判——调阈值、试不同门禁策略随便反复跑，不心疼 token。
 
-### 11.1 两轴判决
+### 12.1 两轴判决
 
 ```bash
 skill-eval gate output/benchmark.json                        # 仅客观回归守卫
@@ -1168,13 +1339,13 @@ skill-eval gate output/benchmark.json --no-programmatic-guard --min-win-rate 0.6
 | 客观侧 programmatic 回归守卫 | **常开** | `delta.pass_rate_programmatic < 0` → FAIL；`≥ 0` → PASS；纯主观题（无客观断言 → 该值为 null）→ 此轴不适用 |
 | 主观侧 comparison | opt-in（`--min-win-rate`） | tie-排除胜率 ≥ 阈值 → PASS；< 阈值且决定性比较数（= a_wins + b_wins，排除平局和失败，默认 ≥ `--min-valid`=3）→ FAIL；样本不足 → UNCLEAR |
 
-### 11.2 AND + UNCLEAR/N/A
+### 12.2 AND + UNCLEAR/N/A
 
 判决是 **AND**：任一适用轴 FAIL → FAIL。没有 FAIL 但有适用轴信号不足 → **UNCLEAR**（判不准）；无适用轴（守卫关/未请求/无信号）→ **N/A**（不适用）；否则 PASS。
 
 为什么 N/A 也 exit 2 不放行？因为不适用常意味着门禁根本没评上（如配置漏：纯主观题 + 没给 `--min-win-rate` + 关了 programmatic 守卫）。放行会让"没评"伪装成"通过"，有风险。
 
-### 11.3 exit code
+### 12.3 exit code
 
 ```
 0 = PASS
@@ -1184,7 +1355,7 @@ skill-eval gate output/benchmark.json --no-programmatic-guard --min-win-rate 0.6
 
 N/A、UNCLEAR、使用错误都退 2，靠 `gate.json` 是否存在 + 其 `decision` 字段区分。
 
-### 11.4 CI 集成
+### 12.4 CI 集成
 
 ```bash
 skill-eval run v2/ --skill-b v1/ --evals baseline.json --runs 3 -o out/
@@ -1194,9 +1365,9 @@ echo $?   # 0=PASS(放行) / 1=FAIL(卡合并) / 2=N/A 或 UNCLEAR，消费方�
 
 门禁阈值与 CI 落点（分支保护、check 名、N/A/UNCLEAR 是否阻塞）归消费方配置——skill-eval 只提供机制（三态 exit + gate.json）。
 
-### 11.5 gate.json 怎么读
+### 12.5 gate.json 怎么读
 
-`gate` 跑完写一份 gate.json 到 benchmark.json 同目录（或 `-o` 指定）。它是判决的**完整账本**——CI 靠它分清 exit 2 到底是 N/A 还是 UNCLEAR（见 11.3），人靠它看"为什么这么判"。这是**读者第一次跑最常见的样子**（只给了客观守卫、没给 `--min-win-rate`）：
+`gate` 跑完写一份 gate.json 到 benchmark.json 同目录（或 `-o` 指定）。它是判决的**完整账本**——CI 靠它分清 exit 2 到底是 N/A 还是 UNCLEAR（见 12.3），人靠它看"为什么这么判"。这是**读者第一次跑最常见的样子**（只给了客观守卫、没给 `--min-win-rate`）：
 
 ```json
 {
@@ -1238,7 +1409,7 @@ echo $?   # 0=PASS(放行) / 1=FAIL(卡合并) / 2=N/A 或 UNCLEAR，消费方�
 
 CI 脚本只读 exit code 分不清"N/A"和"UNCLEAR"，得读 gate.json 的 `decision` 字段——这正是 11.3 那句"靠 gate.json 区分"的落点。
 
-**② `axes` 里 `applicable` 是读懂产物的钥匙**——为什么上面 comparison 是 `N/A`、一堆 `null`？因为 `applicable: false`（没给 `--min-win-rate`，主观轴根本没介入）。`applicable=false` 的轴**不参与 AND 合并**（11.2），verdict 恒 `N/A`、数值字段恒 `null`；`applicable=true` 但样本不足 → `UNCLEAR`。所以看到某轴 `N/A` 先查 `applicable`：`false` = 你没开这轴，`true` = 开了但判不准。reference 里的样本两轴都 `applicable: true` 都 PASS 是理想态；现实里只跑客观守卫时 comparison 几乎总 `N/A`，别被 null 吓到。
+**② `axes` 里 `applicable` 是读懂产物的钥匙**——为什么上面 comparison 是 `N/A`、一堆 `null`？因为 `applicable: false`（没给 `--min-win-rate`，主观轴根本没介入）。`applicable=false` 的轴**不参与 AND 合并**（12.2），verdict 恒 `N/A`、数值字段恒 `null`；`applicable=true` 但样本不足 → `UNCLEAR`。所以看到某轴 `N/A` 先查 `applicable`：`false` = 你没开这轴，`true` = 开了但判不准。reference 里的样本两轴都 `applicable: true` 都 PASS 是理想态；现实里只跑客观守卫时 comparison 几乎总 `N/A`，别被 null 吓到。
 
 **③ `thresholds` 回显**——你传给 `gate` 的三个阈值原样记进 gate.json：可复现（同一 benchmark + 同一组阈值 → 同一判决），改阈值重判 thresholds 跟着变。`min_win_rate: null` = 没给主观阈值。
 
@@ -1246,15 +1417,15 @@ CI 脚本只读 exit code 分不清"N/A"和"UNCLEAR"，得读 gate.json 的 `dec
 
 ---
 
-## 第十二章 report HTML 布局
+## 第十三章 report HTML 布局
 
 `skill-eval report output/ --open` 生成自包含的 report.html（run 末尾也会自动产）。它读 `gate.json`（若存在）在标题旁渲染门禁徽章，读 `previous/benchmark.json` 显"vs 上次"卡。两个标签页：
 
-### 12.1 单次执行 tab
+### 13.1 单次执行 tab
 
 浏览单个 run 的 prompt、输出文件、评估详情（打分 + 遵循性 + 校准三层）。顶部下拉按 eval 分组，可直接跳到指定 run；方向键逐条翻。
 
-### 12.2 整体汇总 tab
+### 13.2 整体汇总 tab
 
 这是看全局的页面，自上而下：
 
@@ -1264,7 +1435,7 @@ CI 脚本只读 exit code 分不清"N/A"和"UNCLEAR"，得读 gate.json 的 `dec
 4. **基准测试** — 聚合 Δ 卡（双率 delta）+ 双率对比。
 5. **遵循性聚合** — 整个考试聚合的遵循性（per side 聚合 per-run findings，复用 audit 的 aggregate_by_instruction）。
 6. **盲评对比** — comparison_summary 胜率 + 逐条比较（rubric/output_quality/expectation_results），揭盲标注 Output A/B 各是哪侧。
-7. **深度分析** — 分析备注（见 12.3），有内容才显示。
+7. **深度分析** — 分析备注（见 13.3），有内容才显示。
 8. **检查点总览** — per-eval 的程序率 / LLM 率 / 总率（这三个数即"3-dim"）一览（mean across runs），点行跳明细。
 9. **逐项评测明细** — per-run 的 3-dim（程序/LLM/总率）列 + 检查项 ✓/✗ 矩阵。
 10. **异常检测** — 超时/离群值。
@@ -1272,7 +1443,7 @@ CI 脚本只读 exit code 分不清"N/A"和"UNCLEAR"，得读 gate.json 的 `dec
 
 > report 里有两套 `runs` 数据来源容易混：`benchmark.runs`（聚合器产出，compliance 恒 null）和 viewer 自己 `find_runs(workspace)` 扫描的 per-run compliance.json。遵循性聚合面板走的是后者（逐个读 per-run compliance.json 再聚合），所以它能在 benchmark.runs.compliance 为 null 时仍然显示遵循性。
 
-### 12.3 深度分析（analysis）
+### 13.3 深度分析（analysis）
 
 benchmark.json 的 `analysis` 字段来自两个 LLM 分析步骤：
 
@@ -1285,11 +1456,11 @@ benchmark.json 的 `analysis` 字段来自两个 LLM 分析步骤：
 
 ---
 
-## 第十三章 路径 1：真任务模式（live）
+## 第十四章 路径 1：真任务模式（live）
 
 路径 1 让 Claude 在真实环境里跑真实任务，而不是用 fixture 剧本。
 
-### 13.1 怎么用
+### 14.1 怎么用
 
 ```bash
 skill-eval run path/to/skill/ --task "重构 X 模块，拆成三个文件" --cwd ./repo --runs 2 -o /tmp/live
@@ -1300,11 +1471,11 @@ skill-eval run path/to/skill/ --task "重构 X 模块，拆成三个文件" --cw
 
 **执行器**：默认 `cc`（claude code）；给 `--executor opencode` 改用 opencode 跑（产 `run-*/transcript.json`，需 opencode CLI 在 PATH，模型在 `opencode.json` 里配，省略 `--model`）；`--executor cc,opencode` 两个执行器各跑 `--runs` 次。两种 transcript 都能直接喂 audit。
 
-### 13.2 拷贝隔离
+### 14.2 拷贝隔离
 
 `--cwd` 会被**拷贝隔离**——Claude 不碰你的原目录。这是为了安全（真任务可能改文件），也为了让多次 run 互不污染。
 
-### 13.3 与 audit 闭环
+### 14.3 与 audit 闭环
 
 路径 1 产的 transcript 可以直接喂给 audit：
 
@@ -1314,7 +1485,7 @@ skill-eval audit path/to/skill/ --transcript /tmp/live/run-1/transcript.jsonl -o
 
 所以路径 1 + audit = "在真环境跑真任务 → 对账有没有按 skill 做"的完整闭环。`--task` 必须对口 skill（不对口 → audit 假 FAIL）。
 
-### 13.4 路径 1 的边界：它是什么、不是什么
+### 14.4 路径 1 的边界：它是什么、不是什么
 
 路径 1 信号最真（真实目录 + 真实任务，cc 真跑），但有几条边界别误用：
 
@@ -1326,11 +1497,11 @@ skill-eval audit path/to/skill/ --transcript /tmp/live/run-1/transcript.jsonl -o
 
 ---
 
-## 第十四章 batch / batch-report
+## 第十五章 batch / batch-report
 
 批量评测多个 skill，按依赖拓扑顺序并行执行。
 
-### 14.1 batch
+### 15.1 batch
 
 ```bash
 skill-eval batch path/to/skills-dir/           # 目录自动 discover
@@ -1351,167 +1522,13 @@ skill-eval batch manifest.json -o batch-workspace/
 
 按 DAG（有向无环图）拓扑顺序同层并行执行（`--workers` 控并发）。注意 `batch` 的 `--runs` 默认是 3（与 `run` 的默认 1 不同）。
 
-### 14.2 batch-report
+### 15.2 batch-report
 
 ```bash
 skill-eval batch-report batch-workspace/ --open
 ```
 
 `batch-report` 是独立顶层命令（非 batch 子命令），生成多 skill 对比 HTML：多 skill 对比、通过率对比、盲评胜率、各 skill 详情。
-
----
-
-## 第十五章 触发准确度（trigger-accuracy，第 4 维）
-
-前三层（评分 / 遵循性 / 校准）回答的都是 skill 已经"上场"之后的问题——输出对不对、过程遵不遵循、结果×过程协不协调。但有一个更上游的问题它们都没碰：**cc 到底会不会调用这个 skill？**
-
-### 15.1 上游缺口：三层都假设 skill 已"上场"
-
-一个 skill 在真实会话里被不被调用，靠的**只有 frontmatter 的 `description`**——cc 扫到一份 skill、读它的 description、据此决定这次任务要不要够它。description 写得不到位，cc 永不触发，skill body 再好也是死重量。
-
-但前三层都跳过了这一步：
-
-- **评分（run A/B）**：`_build_non_interactive_prompt` 把 skill body **强制注入** cc prompt，开头就是 "You have the following Skill loaded. Follow its instructions"——cc 对"要不要够这个 skill"没得选，触发能力**从不被测**。
-- **遵循性（audit）**：审的是 skill 被调用**之后**的行为（默认它已触发）。
-- **校准**：结果×过程 coherence，与触发无关。
-
-`description` 这一触发判定唯一依赖的输入，三维都不评。trigger-accuracy 补的就是这个缺口——它和前三层正交：前三层评"上场后表现如何"，trigger 评"会不会上场"。
-
-### 15.2 怎么测：中性 prompt + 真实 HOME
-
-```bash
-skill-eval trigger path/to/skill/ --runs 2 -o /tmp/out
-```
-
-`trigger` 命令把被测 skill 放进 `<cwd>/.claude/skills/<name>/`，给 cc 一条**中性 prompt**——不点名 skill、不暗示该用它，就是一个普通用户请求。然后看 cc 会不会仅凭 description 自动发现并调用本 skill。检测复用遵循性引擎的 `audit/slice.invoked_skills`（扫 transcript 里的 `Skill` tool_use，看本 skill 名在不在里面）。
-
-**用真实 HOME、不隔离**（对齐 run/audit）：spawn 用 `claude_cli_env` 补身份头 + 继承终端 env（含真实 HOME），不把 `HOME` 指向临时空目录。曾尝试用空 HOME 隔离用户全局 plugin，但实测两点推翻：① cc 2.x 的全局 plugin 不随 HOME——换空 HOME 后全局 plugin skill 照样加载，没隔掉；② cc 的文件/keyring 认证源在 HOME 里，覆空 HOME 会把认证一起断掉，终端 shell（无 IDE 注入的 token）撞 "Not logged in" → 全 probe UNRESOLVED。trigger 可信不靠 HOME 隔离撑：`fired` 判定只看本 skill 名在不在 `invoked_skills`（扫 transcript 的 `Skill` tool_use），别的 skill 参与发现不改变这个布尔——触发是否成立由 transcript 里有没有本 skill 的调用决定，与测试机装了哪些别的 skill 无关。
-
-### 15.3 两种探题：recall 与 false-trigger 是不同失效模式
-
-trigger 探题分两个方向，各测一种失效：
-
-- **should-trigger**（`expect_trigger: true`）：该 skill 该处理的真任务，措辞**中性**（在 prompt 里点名 skill 就只是测字面匹配，不是测触发）。
-- **should-not-trigger**（`expect_trigger: false`）：看着相关但 skill **不该**触发的任务——测 description 会不会过宽、把不该接的活也揽下来。
-
-两种是**不同的失效模式**，所以聚合时**分开报、不合成一个分**：
-
-| 率 | 来自 | 测的失效 | 方向 |
-|----|------|---------|------|
-| `recall` | should-trigger 方向 trigger_rate 均值 | 漏召（该触发没触发） | 越高越好 |
-| `false_trigger_rate` | should-not 方向 trigger_rate 均值 | 误触（不该触发却触发） | 越低越好 |
-
-为什么不合？因为"漏召"和"误触"指向相反的修法：recall 低 → description 太窄 / 缺关键词，要加触发线索；false_trigger 高 → description 太宽 / 太泛，要收窄 scope。合成一个分会把这两个相反信号互相抵消，丢掉诊断价值。
-
-### 15.4 判定与样本
-
-每条 probe 跨 N runs 算 `trigger_rate = fired 次数 / runs`（触发带随机性，`--runs` 多跑聚合成率更可信），阈值 0.5 二值化 → PASS / FAIL。spawn 失败 / 超时 / **cc 非零退出且没触发**（限流 / 后端不可用：cc 实测 exit 1 + 错误打 stdout、stderr 空，`run_trigger` 不 raise 而返正常输出）→ 该 probe = `UNRESOLVED`，**不进 recall / false_trigger_rate 的分母**，且其 `trigger_rate` 置 `null`（没判成、不显假数值率，避免把"没跑出来"误读成"触发率 0"）——宁少报不乱报，避免单次异常污染率（同遵循性"没判成不乱报"的哲学）。某方向 0 probe → 对应率 `null`（N/A，不是假 0.0）。
-
-每个率都带自己的样本量（`n_should_trigger` / `n_should_not`），别脱离样本量解读一个率：init 默认每方向 5 道，<3 道会告警"样本少"。同 1.6 的噪声分工，trigger 侧也有"答题噪声 B"（cc 触发带随机性）——靠 `--runs` 多跑抹平。
-
-### 15.5 出题：`init --trigger-probes`
-
-```bash
-skill-eval init path/to/skill/ --trigger-probes                 # 默认每方向 5 道，追加到 trigger_probes 段
-skill-eval init path/to/skill/ --trigger-probes --num-evals 8   # 每方向上限 8（trim 多余、不补下限）
-```
-
-LLM 读 skill 的 description 生成两方向探题，追加到 evals.json 的 `trigger_probes` 段（新 id 接续已有 `max+1`）。**不重生成已有 scoring evals**——载入已有 evals.json、只加 trigger 探题（`--trigger-probes` 单用、不加 `--append` 也保留原 scoring 题）。
-
-**`--num-evals` 是每方向上限、不是下限**（关键）：LLM 生成的探题多于这个数会被 trim，少于这个数**原样保留**、不强行凑满——硬凑会出重复 / 充数题，反而劣化信号质量。这是有意的"欠交付"：宁可少几道真信号，不要凑数的噪声。所以实际跑出来某方向可能少于你给的 `--num-evals`，别当成 bug。
-
-### 15.6 边界：诊断定位，无门禁
-
-trigger-accuracy 是**诊断工具，不是门禁**：
-
-- **无 gate / 不出 exit-code 判决**——只产 `trigger-report.json` + 终端摘要。recall 低或 false_trigger 高是"该改 description"的信号，不是合并阻断（那是 skill 内容要改、不是 PR 该卡的红灯）。
-- **独立 artifact，不并入 `benchmark.json`**——trigger 回答的是上游独立问题，和 scoring / compliance / calibration 不耦合，benchmark 的双率 delta / 盲评胜率都不含触发信号。
-- **`description_hash`**（sha256(frontmatter `description`)[:16]）锚定触发判定唯一依赖的输入——跨版本对比时，hash 变了说明 description 改了，recall 的变化才有"是 description 改动引起"的归因依据；hash 没变而 recall 变了，更可能是 cc 触发随机性（看 `--runs`）。
-
-> **成本**：每条 probe = 1 次 cc spawn（有 LLM 成本，但比 `run` 轻——无 with/without 双 spawn、无 grader、无 compliance judge）。配合前三层用：先 `trigger` 看 description 能不能让 cc 够到这个 skill，再 `run` 看上场后表现。
-
-### 15.7 怎么读报告 + 怎么改 description
-
-跑完 `trigger` 产三样：`trigger-report.json`（机器读）+ `trigger-report.html`（人读，**always 写**，与 JSON 并列、对齐 audit，`--open` 浏览器打开）+ 终端摘要。
-
-**终端进度 + 摘要**——跑的过程实时显示进度（每个 probe 开头 `probe i/N`（该触发 / 不该触发）+ cc 的实时动作 `🔧 …` / `✓ 完成`，同 `run` 命令）；跑完是一行汇总 + 逐 probe + 操作建议：
-
-```
-recall 75%(5 should-trigger) · false-trigger 10%(5 should-not) · 2 runs · 1 unresolved · 耗时 12.3s · 28400 tok
-  [+] probe-1: 100% → PASS (842 tok · 4.5s)
-  [-] probe-2: 0%   → FAIL (318 tok · 2.1s)
-  [?] probe-3: ?    → UNRESOLVED (0 tok · 0.0s)
-操作建议：
-  [rule:recall] 漏召:…考虑补触发关键词:
-    · probe-2:「…」
-  [llm:llm_rewrite] 修订 description:…\n理由:… (480 tok · 3.1s)
-Written to …/trigger-report.json · …/trigger-report.html
-```
-
-- 汇总行：`recall`（绿，越高越好）/ `false-trigger`（红，越低越好）各带样本量 + runs + unresolved + 耗时（cc spawn 总墙钟，不含 LLM 建议那次调用）+ 总 token。逐 probe `[+/-/?] probe-N: 触发率 → verdict (token · 耗时)`：`+` PASS、`-` FAIL、`?` UNRESOLVED（触发率显 `?`、消耗显 0，因为没判成）。
-
-**怎么改 description**——报告 `suggestions[]` 直接给方向，两路：
-
-| 信号 | 含义 | 怎么改 |
-|---|---|---|
-| `recall`（should-trigger FAIL） | 漏召：description 没够到该处理的任务 | 补与失败 prompt 匹配的触发关键词 / 动作动词 |
-| `false_trigger`（should-not FAIL） | 误触：description 过宽 | 收窄 scope / 加边界排除语（明确不处理这类） |
-| `unresolved` | 没判成（限流 / 异常） | 加大 `--runs` 重跑确认，别据未判成下结论 |
-| `all_good` | 零 FAIL 零 unresolved | description 触发边界够精准，无需改 |
-| `llm_rewrite`（source=llm） | LLM 起草的修订 description 草案 | 可直接抄改（有失败才自动产，带「理由:」） |
-
-规则建议（`recall`/`false_trigger`/`unresolved`/`all_good`）永远给、零成本；LLM 建议（`llm_rewrite`）**有失败才自动跑**（喂当前 description + 失败 probe 的 prompt，起草可抄改的 description + 一行理由），全 PASS 跳过。相对 trigger 本体（N probe × run 次完整 cc spawn）这是单次轻 LLM 调用、<5%，故默认开、无 flag；调用失败自动重试 2 次（限流瞬态），重试耗尽只丢这条、规则建议照在，终端打失败原因（疑似限流 / 超时 / 空 result）让你判断是瞬态还是真问题。
-
-> `trigger-report.json` 字段全表见 reference 的 `trigger-report.json` 段。建议口径是**诊断、不是门禁**——给「改 description 的方向」，不下 PASS/FAIL 判决（同 15.6）。
-
----
-
-## 第十六章 coverage：出题漏测诊断
-
-前三层 + trigger（第 4 维）回答的是"skill 上场后表现如何"和"会不会上场"。coverage 补一个相邻问题：**你出的考卷（evals.json）覆盖了 SKILL.md 的多少内容点？** init 出题是 LLM 生成的（见 §3.2，出卷噪声 C），会系统性漏掉某些指令 / 条件分支——这些漏测点是 `run` 够不到的盲区（跑多少轮也测不着）。coverage 把它们亮出来。
-
-### 16.1 怎么测：一次 LLM 映射，不 re-run Claude
-
-```bash
-skill-eval coverage path/to/skill/                # 默认:诊断漏测
-skill-eval coverage path/to/skill/ --augment      # 漏测点自动补题(写回 evals.json,需人审)
-```
-
-coverage 不 spawn Claude 跑题——它做的是**一次性 LLM 映射**：喂 SKILL.md 正文 + 各 eval 的 `id` / `prompt` / `rationale`，让 LLM 列出 SKILL.md 的**可测内容点**（具体的规则 / 步骤 / 能力 / 条件分支，不含散文和示例），再判断每点被哪几道 eval 真的**验证**（不是仅在 prompt 里提到）。`covered_by` 为空的内容点 = **漏测**。
-
-产 `coverage-report.json`（机器读）+ `coverage-report.html`（人读，always 写，漏测行高亮红）+ 终端摘要（内容点 N · 漏测 M · 耗时 · token），并给每个漏测点一条 `init <skill> --append --focus "<label>"` 处方（人工定向补，复用 §3.4 的 `--focus` 机制）。
-
-### 16.2 怎么读报告
-
-- **内容点 N / 漏测 M**：内容点是 LLM 从 SKILL.md 切出的可测点（粒度主观，见 16.4），漏测是其中 `covered_by` 空的点。
-- **逐漏测点**：每个漏测点列 `label` + SKILL.md 原文片段（`source_quote`），帮你判断"这点 SKILL.md 真这么要求吗、漏得对不对"——LLM 偶尔会把示例 / 散文误当内容点，看 `source_quote` 能秒辨。
-- **HTML** 漏测行（`covered_by` 空）整行高亮红色，一眼定位。
-
-### 16.3 补漏测：人工定向（推荐）/ `--augment` 自动
-
-两条路：
-
-- **人工定向**（推荐）：逐条看漏测点的 `source_quote`，确认是真盲区后，照终端处方跑 `init path/to/skill/ --append --focus "<label>"`（§3.4 的 `--focus`：定向补某一类、`--append` 追加不覆盖旧题、id 接续）。每条都过一遍人脑，质量最稳。
-- **`coverage --augment`**（自动）：每个漏测点复用 `init` 的生成器（`EvalInitGenerator(focus=<label>)`）自动补 eval——生成时**喂现有 evals**（含本批已补题），走与 §3.4 `--append --focus` **同一个定向补题内核**（只补该漏测点、与现有题语义去重），新题带 `review:coverage-augment` flag、再按 `prompt` 字面去重兜底、id 接续，写回 evals.json。**质量不保证、必须人审**：自动补的 eval 只是"贴着那个 label 生成的题"，不一定真测到那个点、也可能是凑数题——`review:coverage-augment` flag 标着等审，人确认"这题真测到了、且不是凑数"后再接受，别直接拿去跑 `run`。某点补题失败（限流 / 异常）逐条跳过、不中断。
-
-### 16.4 诚实：LLM 估、有噪声、无 gate
-
-- **LLM 估、有噪声**：内容点清单的粒度（一个点怎么切）是主观的，映射是 LLM 判的——都抖。**「0 覆盖」的大漏测可靠**（一个内容点没任何 eval 碰，是明确的盲区信号）；边界态的「半覆盖」（点被部分 eval 碰到）噪声大。coverage 是**漏测预警、不是精确度量**——拿它定位明显盲区，别对每条 `covered_by` 过度解读。LLM 调用整体失败时降级为空报告（exit 0，不炸）。
-- **无 gate、独立 artifact**（同 trigger 第 4 维）：**无 gate / 不出 exit-code 判决**，`coverage-report.json` 不并入 `benchmark.json`。coverage 只产诊断报告，不挡 CI、不改 `run` 结果。
-
-### 16.5 与 §4.2 的关系：都摸 eval↔指令，都不建结构化表
-
-coverage 和 §4.2（`--changed-from`）都碰 eval↔指令映射，但问的问题不同、做法同源——都**不建结构化 instruction_ref 表**：
-
-| | coverage | §4.2 `--changed-from` |
-|---|---|---|
-| 问什么 | 每个内容点被哪几道 eval 覆盖（漏测诊断） | 改 skill 后哪些 eval 受影响（回归探针） |
-| 怎么映射 | 当场一次 LLM 判（喂 rationale + prompt 语义） | 当场一次 LLM 判（喂 diff + eval 语义） |
-| 建表吗 | 不建 | 不建 |
-
-为什么不建表，理由就是 §4.2 末尾「想要更可控的判定？」那段：自动建的 eval↔指令对应表，准度和当场 LLM 判定（同一个 LLM）一样，却白搭维护复杂度——只有**人工逐条校对**的表才更准，而工具不做人工表。故 coverage 走 LLM 柔性映射，靠 eval 的 `rationale`（`init` 自报的"这题对应 SKILL.md 哪段"，见 §3.1）做语义桥梁。
-
-> coverage 和 trigger 一样是**诊断维度**：前四维（scoring / compliance / calibration / trigger）评 skill 的能力和行为，coverage 退一步评**考卷本身**——考卷覆盖不全，前四维的结论就只能覆盖考卷够到的部分。先 `coverage` 看考卷有没有大盲区，补全后再 `run` / `trigger`，前四维的信号才扎实。
 
 ---
 
