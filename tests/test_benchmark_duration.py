@@ -39,7 +39,8 @@ def test_aggregate_populates_llm_duration(tmp_path):
          patch("skill_eval.execution.benchmark.run_analysis", side_effect=fake_run_analysis):
         bench = agg.aggregate(tmp_path, wall_duration=15.0)
     du = bench.llm_duration_seconds
-    assert du["scoring"] == 2.0 + 1.5 + 4.0   # grader + comparator + analyzer
+    assert du["scoring"] == 2.0 + 1.5 + 4.0   # grader + comparator + analyzer(合计)
+    assert du["grader"] == 2.0 and du["comparator"] == 1.5 and du["analyzer"] == 4.0  # scoring 细分
     assert du["audit"] == 3.0                  # compliance rollup
     assert du["executor"] == 0.5               # timing total_duration_seconds
     assert du["total"] == 15.0                 # 墙钟(独立测,≠ 分列和)

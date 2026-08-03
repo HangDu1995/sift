@@ -1239,8 +1239,8 @@ spawn claude -p
 | `comparison_summary` | 盲比较聚合 `{total, a_wins, b_wins, ties, failed, valid, win_rate, label_a, label_b}` |
 | `analysis` | 深度分析（见 13.3） |
 | `selection` | （可选，仅 `--changed-from` 子集跑时）`{mode, ids, affected, total}`——标识本次为受影响子集跑、delta 非整体测量 |
-| `llm_token_usage` | （Phase 2）本次评测的 LLM token 用量 `{scoring, audit, executor, total}`：`scoring`=grader+comparator+analyzer 合计（带 cost/calls,calls=各子项真实调用次数之和）；`audit`=compliance rollup 自 per-run `compliance.json`；`executor`=被测 cc token（仅 token 数无 cost，对应 `run_summary.tokens`）；`total`=全加 token、cost=scoring+audit。**executor 是被测 token 效率（无 cost），scoring+audit 才是评测系统付出的 LLM 成本**。viewer 头部「LLM token 用量」分列 + 总计；旧 report 无此字段 → `{}` |
-| `llm_duration_seconds` | （Phase 2.5）本次评测耗时（秒）`{scoring, audit, executor, total}`：分列=各类调用时长加总（grader+comparator+analyzer / compliance / 各 run）；**`total`=墙钟**（run 命令头尾独立测）。与 token 根本不同：token 是消耗品可累加（total=分列和）；time 是墙钟、各段并行重叠（workers/线程池），**分列和 ≥ total 正常**，total 不由分列加、viewer 不对账分列和 vs total。分列看"哪段重"，total 看"等多久"；旧 report 无此字段 → `{}` |
+| `llm_token_usage` | （Phase 2）本次评测的 LLM token 用量 `{scoring, audit, executor, total}`：`scoring`=grader+comparator+analyzer 合计（另细分 grader/comparator/analyzer 分计段;带 cost/calls,calls=各子项真实调用次数之和）；`audit`=compliance rollup 自 per-run `compliance.json`；`executor`=被测 cc token（仅 token 数无 cost，对应 `run_summary.tokens`）；`total`=全加 token、cost=scoring+audit。**executor 是被测 token 效率（无 cost），scoring+audit 才是评测系统付出的 LLM 成本**。viewer 头部「LLM token 用量」分列 + 总计；旧 report 无此字段 → `{}` |
+| `llm_duration_seconds` | （Phase 2.5）本次评测耗时（秒）`{scoring, audit, executor, total}`：分列=各类调用时长加总（grader+comparator+analyzer（另细分 grader/comparator/analyzer 分计）/ compliance / 各 run）；**`total`=墙钟**（run 命令头尾独立测）。与 token 根本不同：token 是消耗品可累加（total=分列和）；time 是墙钟、各段并行重叠（workers/线程池），**分列和 ≥ total 正常**，total 不由分列加、viewer 不对账分列和 vs total。分列看"哪段重"，total 看"等多久"；旧 report 无此字段 → `{}` |
 
 每条 `RunResultEntry`：`eval_id` / `eval_name` / `configuration` / `run_number` / `result`（`RunResultMetrics`：`pass_rate`/`passed`/`failed`/`total`/`time_seconds`/`tokens`/`tool_calls`/`errors` + 双率 `pass_rate_programmatic`/`pass_rate_llm`）/ `expectations[]` / `compliance`（**通常为 null**——聚合器不嵌完整 compliance，完整 AuditReport 在 per-run `compliance.json` 里，report 用 `find_runs` 另读）/ `notes[]` / `is_anomaly` / `anomaly_reason` / `retry_count`。
 
@@ -1436,8 +1436,8 @@ CI 脚本只读 exit code 分不清"N/A"和"UNCLEAR"，得读 gate.json 的 `dec
 5. **遵循性聚合** — 整个考试聚合的遵循性（per side 聚合 per-run findings，复用 audit 的 aggregate_by_instruction）。
 6. **盲评对比** — comparison_summary 胜率 + 逐条比较（rubric/output_quality/expectation_results），揭盲标注 Output A/B 各是哪侧。
 7. **深度分析** — 分析备注（见 13.3），有内容才显示。
-8. **检查点总览** — per-eval 的程序率 / LLM 率 / 总率（这三个数即"3-dim"）一览（mean across runs），点行跳明细。
-9. **逐项评测明细** — per-run 的 3-dim（程序/LLM/总率）列 + 检查项 ✓/✗ 矩阵。
+8. **检查点总览** — per-eval 的程序率 / LLM 率 / 总率（这三个数即"3-dim"）一览（mean across runs），点行跳明细；另含 token 均值列（诊断哪道题费 token）。
+9. **逐项评测明细** — per-run 的 3-dim（程序/LLM/总率）+ token / 耗时列 + 检查项 ✓/✗ 矩阵。
 10. **异常检测** — 超时/离群值。
 11. **vs 上次** — 读 previous/benchmark.json 显纵向 delta 卡（仅 fresh 重跑产生 previous/ 时）。
 

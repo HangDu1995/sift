@@ -829,8 +829,8 @@ skill-eval batch-report batch-workspace/ --open
 - **客观 Δ 趋零解读（D6）**：`delta.pass_rate_programmatic` 绝对值 ≤ 0.05（对齐染色阈值）= with/without 客观通过率无显著差异 = skill 相对 base 未带来增益。viewer「通过率变化」卡显 ⚠️ 警告、batch 表格/DAG delta 旁标 ⚠。**⚠ 只是「无增益」信号，不等于 skill 无用——先排查依赖目录是否进入工作区（常见假无增益，见 handbook），排除后再考虑 skill 已被模型原生能力覆盖（dead weight）、该核查 scope 或收窄**。客观为主（稳）；主观 Δ 不单独触发（漂）。
 - `comparison_summary.win_rate` = `a_wins/valid`（tie-计入）；`gate` 用 tie-排除版自行算。
 - `selection`（可选,仅 `--changed-from` 子集跑时）:`{mode, ids, affected, total}`——标识本次为受改动影响的子集跑、delta 非整体测量。
-- `llm_token_usage`:本次评测的 LLM token 用量,分四段——`scoring`(grader+comparator+analyzer 合计,带 cost/calls,calls=各子项真实调用次数之和)、`audit`(compliance/audit rollup 自 per-run compliance.json)、`executor`(被测 cc token,仅 token 数无 cost)、`total`(全加 token;cost = scoring+audit)。**executor 是被测 skill 的 token 效率指标(无 cost);scoring+audit 才是评测系统付出的 LLM 成本**。现有「令牌数」/「Δ 令牌数」(executor)语义不变,viewer 头部新增「LLM token 用量」分列(评分/遵循性/executor)+ 总计。
-- `llm_duration_seconds`:本次评测的耗时(秒),同四段——`scoring`(grader+comparator+analyzer 调用时长加总)、`audit`(compliance rollup)、`executor`(各 run 时长加总)、`total`(**墙钟**,run 命令头尾独立测)。**与 token 的关键差异**:token 是消耗品可累加(total=分列和);time 是墙钟、各段并行重叠(workers/线程池),**分列和 ≥ total 是正常的**,total 不由分列推导、viewer **不对账**分列和 vs total。分列看"哪段重",total 看"等多久"。viewer 头部「耗时」分列 + 墙钟总计。
+- `llm_token_usage`:本次评测的 LLM token 用量,分四段——`scoring`(grader+comparator+analyzer 合计(另细分 grader/comparator/analyzer 分计段),带 cost/calls,calls=各子项真实调用次数之和)、`audit`(compliance/audit rollup 自 per-run compliance.json)、`executor`(被测 cc token,仅 token 数无 cost)、`total`(全加 token;cost = scoring+audit)。**executor 是被测 skill 的 token 效率指标(无 cost);scoring+audit 才是评测系统付出的 LLM 成本**。现有「令牌数」/「Δ 令牌数」(executor)语义不变,viewer 头部新增「LLM token 用量」分列(评分/遵循性/executor)+ 总计。
+- `llm_duration_seconds`:本次评测的耗时(秒),同四段——`scoring`(grader+comparator+analyzer 调用时长加总(另细分 grader/comparator/analyzer 分计))、`audit`(compliance rollup)、`executor`(各 run 时长加总)、`total`(**墙钟**,run 命令头尾独立测)。**与 token 的关键差异**:token 是消耗品可累加(total=分列和);time 是墙钟、各段并行重叠(workers/线程池),**分列和 ≥ total 是正常的**,total 不由分列推导、viewer **不对账**分列和 vs total。分列看"哪段重",total 看"等多久"。viewer 头部「耗时」分列 + 墙钟总计。
 
 ### gate.json（`gate` 命令产出）
 

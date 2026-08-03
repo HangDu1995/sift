@@ -1537,7 +1537,10 @@
         html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">LLM token 用量</div>';
         html += '<table class="benchmark-table"><tbody>';
         var sc = tu.scoring || {}, au = tu.audit || {}, ex = tu.executor || {};
-        if (sc.input_tokens || sc.output_tokens) html += "<tr><td><strong>⚙ 评分 LLM</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(grader+comparator+analyzer)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(sc, true) + "</td></tr>";
+        var gr = tu.grader || {}, comp = tu.comparator || {}, ana = tu.analyzer || {};
+        if (gr.input_tokens || gr.output_tokens) html += "<tr><td><strong>⚙ grader</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(单评)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(gr, true) + "</td></tr>";
+        if (comp.input_tokens || comp.output_tokens) html += "<tr><td><strong>⚙ comparator</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(盲比较)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(comp, true) + "</td></tr>";
+        if (ana.input_tokens || ana.output_tokens) html += "<tr><td><strong>⚙ analyzer</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(深度分析)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(ana, true) + "</td></tr>";
         if (au.input_tokens || au.output_tokens) html += "<tr><td><strong>⚙ 遵循性 LLM</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(audit)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(au, true) + "</td></tr>";
         if (ex.input_tokens || ex.output_tokens) html += "<tr><td><strong>令牌数 (executor)</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(被测效率,无 cost)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(ex, false) + "</td></tr>";
         html += "<tr><td><strong>总计 LLM</strong></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(tu.total, true) + "</td></tr>";
@@ -1551,7 +1554,9 @@
         html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
         html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">耗时</div>';
         html += '<table class="benchmark-table"><tbody>';
-        if (du.scoring) html += "<tr><td><strong>⏱ 评分耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(grader+comparator+analyzer 累计)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.scoring) + "</td></tr>";
+        if (du.grader) html += "<tr><td><strong>⏱ grader 耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(单评累计)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.grader) + "</td></tr>";
+        if (du.comparator) html += "<tr><td><strong>⏱ comparator 耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(盲比较)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.comparator) + "</td></tr>";
+        if (du.analyzer) html += "<tr><td><strong>⏱ analyzer 耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(深度分析)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.analyzer) + "</td></tr>";
         if (du.audit) html += "<tr><td><strong>⏱ 遵循性耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(audit)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.audit) + "</td></tr>";
         if (du.executor) html += "<tr><td><strong>执行耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(executor 累计)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.executor) + "</td></tr>";
         if (du.total) html += "<tr><td><strong>总计耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(墙钟·真实等待)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.total) + "</td></tr>";
@@ -1733,7 +1738,7 @@
         const ovEvalIds = [...new Set(overviewRuns.map(r => r.eval_id))].sort((a, b) => a - b);
         html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
         html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">检查点总览</div>';
-        html += '<table class="benchmark-table checkpoint-overview"><thead><tr><th>题号</th><th style="text-align:left;">题名</th><th>程序</th><th>LLM</th><th>混合</th></tr></thead><tbody>';
+        html += '<table class="benchmark-table checkpoint-overview"><thead><tr><th>题号</th><th style="text-align:left;">题名</th><th>程序</th><th>LLM</th><th>混合</th><th>token</th></tr></thead><tbody>';
         for (const evalId of ovEvalIds) {
           const evalRuns = overviewRuns.filter(r => r.eval_id === evalId);
           const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : ("Eval " + evalId);
@@ -1746,6 +1751,8 @@
           html += '<td class="' + dimCls(mProg) + '">' + fmtDim(mProg) + '</td>';
           html += '<td class="' + dimCls(mLlm) + '">' + fmtDim(mLlm) + '</td>';
           html += '<td class="' + dimCls(mMix) + '">' + fmtDim(mMix) + '</td>';
+          const mTok = meanField(evalRuns, "tokens");
+          html += '<td>' + (mTok != null ? Math.round(mTok).toLocaleString() : "—") + '</td>';
           html += '</tr>';
         }
         html += '</tbody></table>';
@@ -1759,6 +1766,7 @@
         const evalIds = [...new Set(runs.map(r => r.eval_id))].sort((a, b) => a - b);
         html += '<div style="margin-top:1.5rem;"><h3 style="font-family:Poppins,sans-serif;margin-bottom:0.75rem;">逐项评测明细</h3>';
         const hasTime = runs.some(r => r.result && r.result.time_seconds != null);
+        const hasTokens = runs.some(r => r.result && r.result.tokens != null);
 
         for (const evalId of evalIds) {
           const evalRuns = runs.filter(r => r.eval_id === evalId);
@@ -1766,6 +1774,7 @@
           html += '<h4 id="eval-' + evalId + '" style="font-family:Poppins,sans-serif;margin:1rem 0 0.5rem;">' + escapeHtml(evalName) + '</h4>';
           html += '<table class="benchmark-table"><thead><tr><th>配置</th><th>运行</th><th>程序</th><th>LLM</th><th>混合</th>';
           if (hasTime) html += '<th>耗时 (秒)</th>';
+          if (hasTokens) html += '<th>token</th>';
           html += '</tr></thead><tbody>';
 
           const configGroups = [...new Set(evalRuns.map(r => r.configuration))];
@@ -1789,6 +1798,10 @@
                 const timeDisplay = r.time_seconds != null ? r.time_seconds.toFixed(1) : "—";
                 const timeStyle = r.time_seconds > 300 ? 'color:var(--red);' : '';
                 html += '<td style="' + timeStyle + '">' + timeDisplay + '</td>';
+              }
+              if (hasTokens) {
+                const tokDisplay = r.tokens != null ? Number(r.tokens).toLocaleString() : "—";
+                html += '<td>' + tokDisplay + '</td>';
               }
               html += '</tr>';
             }

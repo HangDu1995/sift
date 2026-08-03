@@ -123,16 +123,18 @@ class BenchmarkAggregator:
         anomalies: list[RunAnomaly] = []
         duration_map: dict[str, list[dict]] = {}
         real_model = ""  # 从 transcript 抓的真实模型名(executor 落盘,三模型字段复用)
-        # Phase 2: LLM token 累加(scoring = comparator+analyzer+grader;audit = compliance rollup)
-        scoring_acc = TokenUsageAccumulator()   # comparator + analyzer(:364/:390 回灌)
-        grader_acc = TokenUsageAccumulator()    # per-run grader(timing.json 汇总)
-        audit_acc = TokenUsageAccumulator()     # per-run compliance.json rollup
-        executor_total = 0                      # per-run executor token(timing.json total_tokens)
+        # Phase 2: LLM token 累加(scoring = grader+comparator+analyzer 分计;audit = compliance rollup)
+        comparator_acc = TokenUsageAccumulator()  # 盲比较(run_comparisons 回灌)
+        analyzer_acc = TokenUsageAccumulator()    # 深度分析(run_analysis 回灌)
+        grader_acc = TokenUsageAccumulator()      # per-run grader(timing.json 汇总)
+        audit_acc = TokenUsageAccumulator()       # per-run compliance.json rollup
+        executor_total = 0                        # per-run executor token(timing.json total_tokens)
         # Phase 2.5: 耗时累加(分列=各类调用时长加总;total=墙钟,独立测,见末尾 rollup)
-        scoring_dur = DurationAccumulator()     # comparator + analyzer(:389/:415 回灌)
-        grader_dur = DurationAccumulator()      # per-run grader(timing.json grader_duration_seconds)
-        audit_dur = DurationAccumulator()       # per-run compliance.json duration_seconds
-        executor_dur = 0.0                      # per-run executor 时长(timing total_duration_seconds)
+        comparator_dur = DurationAccumulator()    # 盲比较
+        analyzer_dur = DurationAccumulator()      # 深度分析
+        grader_dur = DurationAccumulator()        # per-run grader(timing.json grader_duration_seconds)
+        audit_dur = DurationAccumulator()         # per-run compliance.json duration_seconds
+        executor_dur = 0.0                        # per-run executor 时长(timing total_duration_seconds)
 
         for config_dir in sorted(iteration_dir.iterdir()):
             if not config_dir.is_dir():
@@ -395,7 +397,7 @@ class BenchmarkAggregator:
             main_benchmark = main_benchmark.model_copy(update={"notes": checkpoints_data})
 
         try:
-            comparisons = run_comparisons(self, iteration_dir, sides=sides, on_usage=scoring_acc.add, on_duration=scoring_dur.add)
+            comparisons = run_comparisons(self, iteration_dir, sides=sides, on_usage=comparator_acc.add, on_duration=comparator_dur.add)
             if comparisons:
                 # label 从 sides 透到 ComparisonSummary(默认 with/without)
                 label_a = sides[0][2] if sides else "with"
@@ -421,7 +423,7 @@ class BenchmarkAggregator:
             print(f"Warning: calibration summary failed ({exc}), skipping", file=__import__("sys").stderr)
 
         try:
-            analysis_notes, analysis_result = run_analysis(self, iteration_dir, main_benchmark, on_usage=scoring_acc.add, on_duration=scoring_dur.add)
+            analysis_notes, analysis_result = run_analysis(self, iteration_dir, main_benchmark, on_usage=analyzer_acc.add, on_duration=analyzer_dur.add)
             if analysis_notes:
                 existing = list(main_benchmark.notes or [])
                 existing.extend(analysis_notes)
@@ -436,10 +438,13 @@ class BenchmarkAggregator:
         except Exception as exc:
             print(f"Warning: analysis step failed ({exc}), skipping", file=__import__("sys").stderr)
 
-        # Phase 2: 汇总五路 → llm_token_usage(scoring/audit/executor/total)
+        # Phase 2: 汇总 → llm_token_usage(scoring 合计 + grader/comparator/analyzer 分计 + audit/executor/total)
         # 只在 snapshot 非空时 add(空 snapshot = 无调用,add({}) 会假计数)
+        grader_snapshot = grader_acc.snapshot()
+        comparator_snapshot = comparator_acc.snapshot()
+        analyzer_snapshot = analyzer_acc.snapshot()
         scoring_total = TokenUsageAccumulator()
-        for snap in (scoring_acc.snapshot(), grader_acc.snapshot()):
+        for snap in (comparator_snapshot, analyzer_snapshot, grader_snapshot):
             if snap:
                 scoring_total.add(snap, count=snap.get("calls", 1))
         audit_snapshot = audit_acc.snapshot()
@@ -452,14 +457,20 @@ class BenchmarkAggregator:
             total_acc.add({"input_tokens": executor_total, "output_tokens": 0}, count=0)
         main_benchmark = main_benchmark.model_copy(update={
             "llm_token_usage": {
-                "scoring": scoring_total.snapshot(),
+                "scoring": scoring_total.snapshot(),  # grader+comparator+analyzer 合计(向后兼容)
+                "grader": grader_snapshot,
+                "comparator": comparator_snapshot,
+                "analyzer": analyzer_snapshot,
                 "audit": audit_snapshot,
                 "executor": {"input_tokens": executor_total, "output_tokens": 0, "calls": 0},
                 "total": total_acc.snapshot(),
             },
             "llm_duration_seconds": {
                 # 分列=各类调用时长加总(可 ≥ 墙钟,并行所致);total=墙钟,独立测,不由分列加
-                "scoring": round(scoring_dur.snapshot() + grader_dur.snapshot(), 3),
+                "scoring": round(comparator_dur.snapshot() + analyzer_dur.snapshot() + grader_dur.snapshot(), 3),
+                "grader": round(grader_dur.snapshot(), 3),
+                "comparator": round(comparator_dur.snapshot(), 3),
+                "analyzer": round(analyzer_dur.snapshot(), 3),
                 "audit": round(audit_dur.snapshot(), 3),
                 "executor": round(executor_dur, 3),
                 "total": round(wall_duration or 0.0, 3),
