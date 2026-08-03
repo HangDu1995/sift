@@ -502,7 +502,7 @@ output/
 
 ### 5.2 LLM 语义判分（Tier 3）
 
-有些东西没法客观验证（"分析是否合理""解释是否清晰"），交给 LLM 判。类型有 `LLM_GRADE`（语义评分）、`LLM_FACT`（事实核查）、`LLM_NOT_DELEGATE`（检查模型有没有把不该委托的子任务甩出去）。LLM 判官用结构化输出 + 强制 evidence 引用，每条判定必须附证据。
+有些东西没法客观验证（"分析是否合理""解释是否清晰"），交给 LLM 判。类型有 `LLM_GRADE`（语义评分）、`LLM_FACT`（事实核查）、`LLM_NOT_DELEGATE`（检查模型有没有把不该委托的子任务甩出去）。LLM 判官用结构化输出 + 强制 evidence 引用，每条判定必须附证据。结构化输出通过 `claude --json-schema` 硬约束落地（判官输出 schema 验证过的结构化对象，代码直接解析，不再从散文里抠 JSON）。
 
 `expectations`（自然语言预期语句）也走 LLM 判，归到 LLM 侧。
 

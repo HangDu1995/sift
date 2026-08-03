@@ -159,6 +159,64 @@ class _RetryExhaustedType:
 _RETRY_EXHAUSTED = _RetryExhaustedType()
 
 
+# ── 结构化输出 schema:判官走 --json-schema,源头约束格式不可畸形 ───────────────
+# CLI 不接受顶层 array schema(spike 实测触发 error_max_structured_output_retries),
+# 故 array 判官把输出包成 {"items":[...]};call_claude 透明解开(items)→ judge 拿纯
+# array、parser 零改动(extract_first_balanced/load_json_lenient 照常命中,fallback
+# 留作 structured_output 缺失时兜底)。required 字段对齐各 prompt「输出格式」段;
+# indeterminate/turn_refs/reason 选填(parser 容错缺键)。verdict 用 enum。
+def _array_schema(item_schema: dict) -> dict:
+    """array 判官 schema:顶层 object 包 items(规避 CLI 顶层 array 限制)。"""
+    return {
+        "type": "object",
+        "properties": {"items": {"type": "array", "items": item_schema}},
+        "required": ["items"],
+    }
+
+
+_APPLICABLE_SCHEMA = _array_schema({
+    "type": "object",
+    "properties": {
+        "index": {"type": "integer"},
+        "applicable": {"type": "boolean"},
+        "indeterminate": {"type": "boolean"},
+        "reason": {"type": "string"},
+    },
+    "required": ["index", "applicable"],
+})
+_CLASSIFY_REAL_SCHEMA = _array_schema({
+    "type": "object",
+    "properties": {
+        "index": {"type": "integer"},
+        "is_real": {"type": "boolean"},
+        "indeterminate": {"type": "boolean"},
+        "reason": {"type": "string"},
+    },
+    "required": ["index", "is_real"],
+})
+_PROHIBITION_SCHEMA = _array_schema({
+    "type": "object",
+    "properties": {
+        "index": {"type": "integer"},
+        "violated": {"type": "boolean"},
+        "indeterminate": {"type": "boolean"},
+        "evidence": {"type": "string"},
+        "turn_refs": {"type": "array", "items": {"type": "integer"}},
+    },
+    "required": ["index", "violated", "evidence"],
+})
+_STEP_SCHEMA = _array_schema({
+    "type": "object",
+    "properties": {
+        "index": {"type": "integer"},
+        "verdict": {"type": "string", "enum": ["pass", "fail", "na", "indeterminate"]},
+        "evidence": {"type": "string"},
+        "turn_refs": {"type": "array", "items": {"type": "integer"}},
+    },
+    "required": ["index", "verdict", "evidence"],
+})
+
+
 def _judge_batch_with_retry(
     prompt: str,
     model: str | None,
@@ -168,6 +226,7 @@ def _judge_batch_with_retry(
     *,
     on_progress: ProgressFn | None,
     on_usage: Callable[[dict], None] | None = None,
+    schema: dict | None = None,
     label: str,
     k: int,
     total: int,
@@ -198,7 +257,7 @@ def _judge_batch_with_retry(
             # 信号量门控全局在飞 call_claude ≤ _MAX_BATCH_CONCURRENT:跨类别 + 同类多批
             # 统一争这一个。只圈住 call_claude(不圈 parse/重试 sleep),故重试退避不占槽。
             with _LLM_SEMAPHORE:
-                result_text = call_claude(prompt, model=model, timeout=timeout, max_turns=1, on_usage=on_usage)
+                result_text = call_claude(prompt, model=model, timeout=timeout, max_turns=1, on_usage=on_usage, schema=schema)
         except RuntimeError as exc:
             _emit(on_progress, f"  {prefix} 调用失败: {str(exc)[:120]}")
             continue
@@ -222,6 +281,7 @@ def _run_batches_concurrent(
     label: str,
     total: int,
     is_unparsed: Callable[[Any], bool],
+    schema: dict | None = None,
 ) -> list[tuple[int, list]]:
     """把一类的所有 LLM 批次**并发**跑,返回 ``[(start, parsed)]``(仅成功批)。
 
@@ -249,6 +309,7 @@ def _run_batches_concurrent(
                     prompt, model, timeout, parse_fn, bn,
                     on_progress=on_progress, label=label, k=k, total=total,
                     on_usage=on_usage,
+                    schema=schema,
                     is_unparsed=is_unparsed,
                 )
             except Exception as exc:
@@ -266,6 +327,7 @@ def _run_batches_concurrent(
                 _judge_batch_with_retry, prompt, model, timeout, parse_fn, bn,
                 on_progress=on_progress, label=label, k=k, total=total,
                 on_usage=on_usage,
+                schema=schema,
                 is_unparsed=is_unparsed,
             ): idx
             for idx, (start, bn, k, prompt) in enumerate(specs)
@@ -1084,6 +1146,7 @@ class TranscriptAuditor:
         for start, parsed in _run_batches_concurrent(
             specs, self._parse_applicable, model, timeout, on_progress, on_usage,
             "条件性", total, lambda v: v[0] is None,
+            schema=_APPLICABLE_SCHEMA,
         ):
             for j, val in enumerate(parsed):
                 mask[start + j] = val  # 本地 j → 全量 start+j(批间 index 映射)
@@ -1222,6 +1285,7 @@ class TranscriptAuditor:
         for start, parsed in _run_batches_concurrent(
             specs, self._parse_real, model, timeout, on_progress, on_usage,
             "精筛", total, lambda v: v is None,
+            schema=_CLASSIFY_REAL_SCHEMA,
         ):
             for j, val in enumerate(parsed):
                 mask[start + j] = val
@@ -1337,6 +1401,7 @@ class TranscriptAuditor:
         for start, parsed in _run_batches_concurrent(
             specs, self._parse_prohibition, model, timeout, on_progress, on_usage,
             "禁令", total, lambda v: v[0] is None,
+            schema=_PROHIBITION_SCHEMA,
         ):
             for j, val in enumerate(parsed):
                 results[start + j] = val  # 本地 j → 全量 start+j
@@ -1503,6 +1568,7 @@ class TranscriptAuditor:
         for start, parsed in _run_batches_concurrent(
             specs, self._parse_step, model, timeout, on_progress, on_usage,
             "步骤", total, lambda v: v[0] is None,
+            schema=_STEP_SCHEMA,
         ):
             for j, val in enumerate(parsed):
                 results[start + j] = val  # 本地 j → 全量 start+j

@@ -15,6 +15,28 @@ from skill_eval.models import (
 )
 from skill_eval.utils import call_claude
 
+# 结构化输出 schema:tier3 判官走 --json-schema,约束 JSON 不可畸形(CLI 拒顶层 array,
+# 故包 items;call_claude 透明解开 → _extract_json_array 照常命中,正则 fallback 兜底)。
+_TIER3_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer"},
+                    "verdict": {"type": "string", "enum": ["PASS", "FAIL", "UNEVAL"]},
+                    "evidence": {"type": "string"},
+                    "confidence": {"type": "number"},
+                },
+                "required": ["index", "verdict", "evidence"],
+            },
+        }
+    },
+    "required": ["items"],
+}
+
 
 class LLMGrader:
     def __init__(self, model: str | None = None, timeout: int = 120):
@@ -64,7 +86,7 @@ class LLMGrader:
 
         outputs = self._collect_outputs(output_dir)
         prompt = self._build_tier3_prompt(tier3_assertions, transcript, outputs)
-        response = self._call_claude(prompt, on_usage=on_usage)
+        response = self._call_claude(prompt, on_usage=on_usage, schema=_TIER3_SCHEMA)
 
         if not response or not response.strip():
             return [
@@ -226,9 +248,9 @@ class LLMGrader:
                     parts.append(f"=== {f.name} === (binary)")
         return "\n\n".join(parts) if parts else "(no output files)"
 
-    def _call_claude(self, prompt: str, *, on_usage=None) -> str:
+    def _call_claude(self, prompt: str, *, on_usage=None, schema=None) -> str:
         try:
-            return call_claude(prompt, model=self.model, timeout=self.timeout, max_turns=1, on_usage=on_usage)
+            return call_claude(prompt, model=self.model, timeout=self.timeout, max_turns=1, on_usage=on_usage, schema=schema)
         except RuntimeError:
             return ""
 

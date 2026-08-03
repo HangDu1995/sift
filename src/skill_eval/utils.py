@@ -69,41 +69,68 @@ def call_claude(
     timeout: int = 120,
     max_turns: int | None = None,
     on_usage: Callable[[dict], None] | None = None,
+    schema: dict | None = None,
 ) -> str:
     """调 claude CLI 拿文本回。
 
-    - ``on_usage=None``(默认)→ ``--output-format text``,纯文本进出(历史行为;
-      其余调用方与所有测试 mock 走这条,字节不变)。
+    - ``on_usage=None`` 且 ``schema=None``(默认)→ ``--output-format text``,纯文本
+      进出(历史行为;其余调用方与所有测试 mock 走这条,字节不变)。
     - ``on_usage`` 给定 → ``--output-format json``,解析单结果对象,返回 ``result``
       (文本,等同 text 模式输出);对象的 ``usage``(token 用量)+ ``total_cost_usd``
       打包成 dict 回调 ``on_usage``,供调用方累加。
       **兜底**:json 解析失败/对象畸形 → 退回返 raw stdout、**不触发** on_usage——
       绝不让抓 token 砸了拿结果(token 是锦上添花,不是单点故障)。
+    - ``schema`` 给定 → 额外加 ``--json-schema``(结构化输出:模型被硬约束产符合
+      schema 的对象,CLI 在结果里附 ``structured_output`` 字段)。判官用这条从源头
+      消灭「文本里抠 JSON」的解析 bug(格式不可畸形)。**返回仍是 str**:有
+      ``structured_output`` → 返其 ``json.dumps``(判官侧 ``json.loads`` 一次命中,
+      fallback parser 留作兜底);``structured_output`` 缺失(model 未合规)→ 降级返
+      ``result`` 文本,判官现有 fallback parser 接住,等同旧行为。
+      **array 判官约定**:CLI 不接受顶层 ``{"type":"array"}`` schema(spike 实证触发
+      ``error_max_structured_output_retries``),故 array 判官把输出包成
+      ``{"items":[...]}``;call_claude 透明解开(``structured_output`` 是 dict 且含
+      ``items`` list → 返 ``json.dumps(items)``),判官/parser 零改动、拿纯 array。
 
-    为何不另起 ``call_claude_with_usage`` 而在本函数加可选回调:全仓 ~35 处测试 mock
-    patch 的是 ``skill_eval.audit.auditor.call_claude`` 这个名字(auditor.py 把它
-    from-import 进本模块命名空间);换名会让 mock 全失效→测试去打真 claude。默认
-    None 保持 text 模式,这些 mock 与其余 7 个调用方零改动。
+    为何不另起 ``call_claude_with_usage`` / ``call_claude_structured`` 而在本函数加
+    可选参数:全仓 ~35 处测试 mock patch 的是 ``skill_eval.audit.auditor.call_claude``
+    这个名字(auditor.py 把它 from-import 进本模块命名空间);换名会让 mock 全失效→
+    测试去打真 claude。默认 None 保持 text 模式,这些 mock 与其余调用方零改动。
     """
-    fmt = "json" if on_usage is not None else "text"
+    fmt = "json" if (on_usage is not None or schema is not None) else "text"
+    # 结构化输出(--json-schema)需 claude 走 tool_use 循环产 schema 验证过的对象
+    # (实测 num_turns=2)。判官常设 max_turns=1 防发散,但 schema 模式下会截断成
+    # error_max_turns(整批 RuntimeError → UNRESOLVED)。schema 模式保底 max_turns≥2。
+    if schema is not None and max_turns is not None and max_turns < 2:
+        max_turns = 2
     cmd = ["claude", "-p", "--output-format", fmt, "--dangerously-skip-permissions"]
     if max_turns is not None:
         cmd.extend(["--max-turns", str(max_turns)])
     if model:
         cmd.extend(["--model", model])
+    if schema is not None:
+        cmd.extend(["--json-schema", json.dumps(schema)])
     out = _spawn_claude(cmd, prompt, timeout)
-    if on_usage is None:
+    if on_usage is None and schema is None:
         return out
-    # json 模式:解析单结果对象,抠 result + usage + cost。
+    # json 模式:解析单结果对象,抠 structured_output / result + usage + cost。
     try:
         obj = json.loads(out)
     except (json.JSONDecodeError, ValueError):
         return out  # 兜底:畸形输出当纯文本返,不回调(无法可信地报 token)。
-    usage = obj.get("usage")
-    if isinstance(usage, dict):
-        payload = dict(usage)
-        payload["total_cost_usd"] = obj.get("total_cost_usd") or 0.0
-        on_usage(payload)
+    if on_usage is not None:
+        usage = obj.get("usage")
+        if isinstance(usage, dict):
+            payload = dict(usage)
+            payload["total_cost_usd"] = obj.get("total_cost_usd") or 0.0
+            on_usage(payload)
+    if schema is not None:
+        so = obj.get("structured_output")
+        if so is not None:
+            # array 判官包 {"items":[...]}(CLI 拒顶层 array)→ 透明解开。
+            if isinstance(so, dict) and isinstance(so.get("items"), list):
+                return json.dumps(so["items"], ensure_ascii=False)
+            return json.dumps(so, ensure_ascii=False)
+        # structured_output 缺失 → 降级返 result 文本(fallback parser 接住,等同旧行为)。
     # result 缺失 → 空串(不返 raw json,免得 usage dict 被下游文本解析误 carve)。
     return obj.get("result", "")
 

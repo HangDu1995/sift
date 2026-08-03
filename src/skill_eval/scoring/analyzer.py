@@ -8,6 +8,14 @@ from pathlib import Path
 from skill_eval.models import AnalysisResult
 from skill_eval.utils import call_claude
 
+# 结构化输出 schema:benchmark notes 判官走 --json-schema(JSON array of string)。
+# CLI 拒顶层 array,故包 items;call_claude 透明解开 → _parse_notes 照常命中,正则 fallback 兜底。
+_NOTES_SCHEMA = {
+    "type": "object",
+    "properties": {"items": {"type": "array", "items": {"type": "string"}}},
+    "required": ["items"],
+}
+
 
 class PosthocAnalyzer:
     def __init__(self, model: str | None = None, timeout: int = 120):
@@ -29,7 +37,7 @@ class PosthocAnalyzer:
         on_usage=None,
     ) -> list[str]:
         prompt = self._build_benchmark_prompt(benchmark_json, skill_description)
-        response = self._call(prompt, on_usage=on_usage)
+        response = self._call(prompt, on_usage=on_usage, schema=_NOTES_SCHEMA)
         return self._parse_notes(response)
 
     def analyze_comparison(
@@ -106,9 +114,9 @@ class PosthocAnalyzer:
         ]
         return "\n".join(parts)
 
-    def _call(self, prompt: str, *, on_usage=None) -> str:
+    def _call(self, prompt: str, *, on_usage=None, schema=None) -> str:
         try:
-            return call_claude(prompt, model=self.model, timeout=self.timeout, max_turns=1, on_usage=on_usage)
+            return call_claude(prompt, model=self.model, timeout=self.timeout, max_turns=1, on_usage=on_usage, schema=schema)
         except RuntimeError:
             return ""
 

@@ -190,6 +190,78 @@ def test_call_claude_usage_missing_skips_callback(monkeypatch, tmp_path):
     assert acc.snapshot().get("calls", 0) == 0  # 无 usage 不回调
 
 
+# ── schema 模式:--json-schema 结构化输出 ─────────────────────────────────────
+def test_call_claude_schema_adds_json_schema_flag_and_json_format(monkeypatch):
+    # schema 给定 → cmd 带 --json-schema(后跟 schema json)且强制 json 模式。
+    from unittest.mock import MagicMock
+    import skill_eval.utils as u
+    proc = MagicMock(); proc.communicate.return_value = ('{"structured_output":{"items":[]},"usage":{}}', ""); proc.returncode = 0; proc.pid = 99999
+    mock_popen = MagicMock(return_value=proc)
+    monkeypatch.setattr(u.subprocess, "Popen", mock_popen)
+    sch = {"type": "object", "properties": {"items": {"type": "array"}}, "required": ["items"]}
+    call_claude("x", timeout=10, schema=sch)
+    cmd = mock_popen.call_args.args[0]
+    assert cmd[cmd.index("--output-format") + 1] == "json"  # schema 强制 json
+    assert "--json-schema" in cmd
+    assert json.loads(cmd[cmd.index("--json-schema") + 1]) == sch
+
+
+def test_call_claude_schema_unwraps_items_and_keeps_usage(monkeypatch, tmp_path):
+    # CLI 把 array 判官输出包成 {"items":[...]}(顶层 array 被拒);call_claude 透明解开
+    # → 返纯 array 的 json,judge parser 零改动;on_usage 仍照常回调(schema 模式也有 usage)。
+    obj = {
+        "type": "result", "is_error": False, "result": "(散文,判官不该读到)",
+        "structured_output": {"items": [{"index": 0, "applicable": True, "reason": "中文理由"}]},
+        "usage": {"input_tokens": 5, "output_tokens": 7},
+        "total_cost_usd": 0.002,
+    }
+    _fake_claude_json(tmp_path, obj)
+    _prepend_path(monkeypatch, tmp_path)
+    acc = TokenUsageAccumulator()
+    out = call_claude("x", timeout=10, on_usage=acc.add,
+                      schema={"type": "object", "properties": {"items": {"type": "array"}}, "required": ["items"]})
+    assert json.loads(out) == [{"index": 0, "applicable": True, "reason": "中文理由"}]  # 解开 items
+    assert "中文理由" in out  # 中文原样(ensure_ascii=False),不被 \\u 转义
+    snap = acc.snapshot()
+    assert snap["input_tokens"] == 5 and snap["output_tokens"] == 7  # schema 模式 usage 仍回调
+
+
+def test_call_claude_schema_without_on_usage_still_returns_structured(monkeypatch, tmp_path):
+    # schema 给定但 on_usage=None:不回调 token,仍返 structured_output(判官可不关心 token)。
+    obj = {"type": "result", "structured_output": {"items": [{"index": 1, "applicable": False}]},
+           "usage": {"input_tokens": 9, "output_tokens": 8}}
+    _fake_claude_json(tmp_path, obj)
+    _prepend_path(monkeypatch, tmp_path)
+    out = call_claude("x", timeout=10,
+                      schema={"type": "object", "properties": {"items": {"type": "array"}}, "required": ["items"]})
+    assert json.loads(out) == [{"index": 1, "applicable": False}]
+
+
+def test_call_claude_schema_raises_max_turns_floor(monkeypatch):
+    # 结构化输出需 claude 走 tool_use(实测 num_turns=2);判官常设 max_turns=1 会
+    # 截断成 error_max_turns(整批 RuntimeError)。schema 模式保底 max_turns≥2。
+    from unittest.mock import MagicMock
+    import skill_eval.utils as u
+    proc = MagicMock(); proc.communicate.return_value = ('{"structured_output":{"items":[]},"usage":{}}', ""); proc.returncode = 0; proc.pid = 99999
+    mock_popen = MagicMock(return_value=proc)
+    monkeypatch.setattr(u.subprocess, "Popen", mock_popen)
+    sch = {"type": "object", "properties": {"items": {"type": "array"}}, "required": ["items"]}
+    call_claude("x", timeout=10, max_turns=1, schema=sch)
+    cmd = mock_popen.call_args.args[0]
+    assert cmd[cmd.index("--max-turns") + 1] == "2"  # 保底 2(原 max_turns=1)
+
+
+def test_call_claude_schema_missing_structured_output_degrades_to_result(monkeypatch, tmp_path):
+    # structured_output 缺失(model 未合规 schema)→ 降级返 result 文本,fallback parser 接住。
+    obj = {"type": "result", "is_error": False, "result": "some prose without json",
+           "usage": {"input_tokens": 1, "output_tokens": 1}}
+    _fake_claude_json(tmp_path, obj)
+    _prepend_path(monkeypatch, tmp_path)
+    out = call_claude("x", timeout=10,
+                      schema={"type": "object", "properties": {"items": {"type": "array"}}, "required": ["items"]})
+    assert out == "some prose without json"
+
+
 # ── TokenUsageAccumulator:累加 + 并发安全 ────────────────────────────────────
 def test_accumulator_adds_and_sums():
     acc = TokenUsageAccumulator()
