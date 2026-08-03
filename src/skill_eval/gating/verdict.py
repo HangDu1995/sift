@@ -91,6 +91,66 @@ def _eval_calibration(benchmark: dict, candidate: str, warnings: list[str]) -> d
     return {"sides": out}
 
 
+def _run_failed(run: dict) -> bool:
+    """单个 run 是否未全过(total>0 且 passed==total 才算全过;total==0 空案视为未验证)。"""
+    res = run.get("result") or {}
+    total = res.get("total", 0)
+    passed = res.get("passed", 0)
+    return not (total > 0 and passed == total)
+
+
+def _eval_must_pass(benchmark: dict, candidate: str, ids: list[int],
+                    warnings: list[str]) -> AxisVerdict:
+    """必过题:candidate 侧这些 eval 的所有 run 都得全过,任一挂 → FAIL。"""
+    if not ids:
+        return AxisVerdict(verdict="N/A", applicable=False, reason="必过题未指定(--must-pass)")
+    runs = benchmark.get("runs") or []
+    by_eval: dict[int, list[dict]] = {}
+    for r in runs:
+        if r.get("configuration") == candidate:
+            by_eval.setdefault(r.get("eval_id"), []).append(r)
+    failed: list[int] = []
+    for eid in ids:
+        ev_runs = by_eval.get(eid)
+        if not ev_runs:
+            warnings.append(f"必过题 eval {eid} 在 candidate 侧({candidate})无 run —— 视为未通过")
+            failed.append(eid)
+            continue
+        if any(_run_failed(r) for r in ev_runs):
+            failed.append(eid)
+    if failed:
+        return AxisVerdict(verdict="FAIL", applicable=True,
+                           reason=f"必过题未通过 {failed}(candidate={candidate})",
+                           failed_ids=failed)
+    return AxisVerdict(verdict="PASS", applicable=True,
+                       reason=f"必过题 {len(ids)} 道全过(candidate={candidate})")
+
+
+def _eval_drift(benchmark: dict, baseline_ids: set[int] | None, strict: bool,
+                warnings: list[str]) -> AxisVerdict | None:
+    """题集漂移:benchmark.runs 的 eval_id 集合 vs baseline 基线集合,增删 → 报告。
+    baseline_ids=None → 不启用(返回 None,不加进 axes)。
+    非 strict:有漂移只 warning(返回 None);strict 且有漂移 → FAIL 轴。"""
+    if baseline_ids is None:
+        return None
+    run_ids = {r.get("eval_id") for r in (benchmark.get("runs") or [])
+               if r.get("eval_id") is not None}
+    added = sorted(run_ids - baseline_ids)
+    removed = sorted(baseline_ids - run_ids)
+    if not added and not removed:
+        return AxisVerdict(verdict="PASS", applicable=True, reason="题集与基线一致,无漂移")
+    detail = []
+    if added:
+        detail.append(f"增 {added}")
+    if removed:
+        detail.append(f"删 {removed}")
+    msg = f"题集漂移: {' '.join(detail)}"
+    warnings.append(msg)
+    if strict:
+        return AxisVerdict(verdict="FAIL", applicable=True, reason=msg)
+    return None
+
+
 def evaluate_gate(
     benchmark: dict,
     *,
@@ -98,11 +158,19 @@ def evaluate_gate(
     min_valid: int = 3,
     programmatic_guard: bool = True,
     candidate: str | None = None,
+    must_pass_ids: list[int] | None = None,
+    baseline_ids: set[int] | None = None,
+    strict_drift: bool = False,
 ) -> GateResult:
     warnings: list[str] = []
+    cand, base = _resolve_sides(benchmark, candidate)
     p = _eval_programmatic(benchmark, programmatic_guard)
     c = _eval_comparison(benchmark, min_win_rate, min_valid, warnings)
     axes = {"programmatic": p, "comparison": c}
+    axes["must_pass"] = _eval_must_pass(benchmark, cand, must_pass_ids or [], warnings)
+    drift = _eval_drift(benchmark, baseline_ids, strict_drift, warnings)
+    if drift is not None:
+        axes["drift"] = drift
 
     engaged = [v for v in axes.values() if v.applicable]
     if not engaged:
@@ -118,12 +186,14 @@ def evaluate_gate(
         decision, exit_code = "PASS", 0
     reason = "; ".join(v.reason for v in engaged) if engaged else "无适用轴可判"
 
-    cand, base = _resolve_sides(benchmark, candidate)
     calibration = _eval_calibration(benchmark, cand, warnings)
     return GateResult(
         decision=decision, exit_code=exit_code, reason=reason,
         candidate=cand, baseline=base,
         thresholds={"min_win_rate": min_win_rate, "min_valid": min_valid,
-                    "programmatic_guard": programmatic_guard},
+                    "programmatic_guard": programmatic_guard,
+                    "must_pass_ids": must_pass_ids,
+                    "baseline_ids": sorted(baseline_ids) if baseline_ids else None,
+                    "strict_drift": strict_drift},
         axes=axes, warnings=warnings, calibration=calibration,
     )

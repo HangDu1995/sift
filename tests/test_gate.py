@@ -148,7 +148,8 @@ def test_candidate_resolution_from_side_keys():
 
 def test_thresholds_recorded():
     r = evaluate_gate(_bench("+0.27", _cs(6, 2)), min_win_rate=0.6, min_valid=5)
-    assert r.thresholds == {"min_win_rate": 0.6, "min_valid": 5, "programmatic_guard": True}
+    assert r.thresholds == {"min_win_rate": 0.6, "min_valid": 5, "programmatic_guard": True,
+                            "must_pass_ids": None, "baseline_ids": None, "strict_drift": False}
 
 
 # ---- _eval_calibration:HIGH_SCORE_SUSPECT soft warning ----
@@ -196,3 +197,96 @@ def test_calibration_without_skill_side_is_none():
     res = evaluate_gate(_bench_with_cal([]), programmatic_guard=True)
     assert res.calibration["sides"]["without_skill"]["triggered"] is False
     assert res.calibration["sides"]["without_skill"]["count"] == 0
+
+
+# ---- _eval_must_pass(必过题)+ _eval_drift(题集漂移)----
+
+def _run(eval_id, config, passed, total, run_number=1):
+    """造 RunResultEntry dict(某 eval 某 config 某 run 的结果)。"""
+    return {"eval_id": eval_id, "configuration": config, "run_number": run_number,
+            "result": {"pass_rate": passed / total if total else 0.0,
+                       "passed": passed, "failed": total - passed, "total": total}}
+
+
+def _bench_runs(runs, delta_prog="+0.27"):
+    b = _bench(delta_prog)
+    b["runs"] = runs
+    return b
+
+
+def test_must_pass_empty_ids_not_applicable():
+    r = evaluate_gate(_bench_runs([_run(1, "v1", 2, 2)]))
+    assert r.axes["must_pass"].applicable is False
+    assert r.decision == "PASS"  # 客观 PASS,must_pass 未指定不介入
+
+
+def test_must_pass_all_pass():
+    runs = [_run(1, "v1", 2, 2), _run(3, "v1", 3, 3)]
+    r = evaluate_gate(_bench_runs(runs), must_pass_ids=[1, 3])
+    assert r.axes["must_pass"].verdict == "PASS"
+    assert r.decision == "PASS" and r.exit_code == 0
+
+
+def test_must_pass_one_failed():
+    runs = [_run(1, "v1", 2, 2), _run(3, "v1", 1, 3)]  # eval 3: 1/3 有 failed
+    r = evaluate_gate(_bench_runs(runs), must_pass_ids=[1, 3])
+    assert r.axes["must_pass"].verdict == "FAIL"
+    assert r.axes["must_pass"].failed_ids == [3]
+    assert r.decision == "FAIL" and r.exit_code == 1
+
+
+def test_must_pass_id_not_in_runs_warns_and_fails():
+    r = evaluate_gate(_bench_runs([_run(1, "v1", 2, 2)]), must_pass_ids=[1, 99])
+    assert r.axes["must_pass"].verdict == "FAIL"
+    assert 99 in r.axes["must_pass"].failed_ids
+    assert any("99" in w for w in r.warnings)
+
+
+def test_must_pass_multi_run_one_fails():
+    # eval 1 两个 run:run1 全过、run2 挂 → 整体没必过(strict:所有 run 都得过)
+    runs = [_run(1, "v1", 2, 2, run_number=1), _run(1, "v1", 1, 2, run_number=2)]
+    r = evaluate_gate(_bench_runs(runs), must_pass_ids=[1])
+    assert r.axes["must_pass"].verdict == "FAIL"
+    assert r.axes["must_pass"].failed_ids == [1]
+
+
+def test_must_pass_only_checks_candidate_side():
+    # eval 1 在 baseline 侧(v2)挂、candidate 侧(v1)全过 → 仍 PASS(只看 candidate)
+    runs = [_run(1, "v1", 2, 2), _run(1, "v2", 0, 2)]
+    r = evaluate_gate(_bench_runs(runs), must_pass_ids=[1])
+    assert r.axes["must_pass"].verdict == "PASS"
+
+
+def test_drift_no_baseline_not_engaged():
+    r = evaluate_gate(_bench_runs([_run(1, "v1", 2, 2)]))
+    assert "drift" not in r.axes
+
+
+def test_drift_clean_passes():
+    runs = [_run(1, "v1", 2, 2), _run(3, "v1", 2, 2)]
+    r = evaluate_gate(_bench_runs(runs), baseline_ids={1, 3})
+    assert r.axes["drift"].verdict == "PASS"
+    assert r.decision == "PASS"
+
+
+def test_drift_default_warning_not_in_decision():
+    runs = [_run(1, "v1", 2, 2)]  # baseline {1,3},runs 只 1 → 删 3
+    r = evaluate_gate(_bench_runs(runs), baseline_ids={1, 3})
+    assert "drift" not in r.axes  # 非 strict → 不进 axes
+    assert any("漂移" in w for w in r.warnings)
+    assert r.decision == "PASS"  # 不影响 decision
+
+
+def test_drift_strict_fails():
+    runs = [_run(1, "v1", 2, 2)]  # 删 3
+    r = evaluate_gate(_bench_runs(runs), baseline_ids={1, 3}, strict_drift=True)
+    assert r.axes["drift"].verdict == "FAIL"
+    assert r.decision == "FAIL" and r.exit_code == 1
+
+
+def test_drift_added_and_removed_reported():
+    runs = [_run(1, "v1", 2, 2), _run(5, "v1", 2, 2)]  # baseline {1,3}:删 3 增 5
+    r = evaluate_gate(_bench_runs(runs), baseline_ids={1, 3})
+    msg = [w for w in r.warnings if "漂移" in w][0]
+    assert "增" in msg and "5" in msg
+    assert "删" in msg and "3" in msg

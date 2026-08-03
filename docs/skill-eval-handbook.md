@@ -1328,18 +1328,22 @@ UNEVAL / 出错时自动重试（`--max-retries`，默认 2），每次重跑完
 
 三者共性 = **post-hoc（跑在 run 之后、以 run 产物为输入）+ 不 spawn cc 跑题 + 可反复跑（改参数重跑不必重跑 cc）**。落到 `gate` 上就是它的核心卖点：改门禁阈值不用重跑 cc、毫秒级重判——调阈值、试不同门禁策略随便反复跑，不心疼 token。
 
-### 12.1 两轴判决
+### 12.1 四轴判决
 
 ```bash
 skill-eval gate output/benchmark.json                        # 仅客观回归守卫
 skill-eval gate output/benchmark.json --min-win-rate 0.5     # 加主观 gate
 skill-eval gate output/benchmark.json --no-programmatic-guard --min-win-rate 0.6
+skill-eval gate output/benchmark.json --must-pass 3,5,7      # 必过题:candidate 侧这些题任一挂 → FAIL
+skill-eval gate output/benchmark.json --baseline freeze/baseline.json --strict-drift  # 题集漂移守卫
 ```
 
 | 轴 | 默认 | 判法 |
 |----|------|------|
 | 客观侧 programmatic 回归守卫 | **常开** | `delta.pass_rate_programmatic < 0` → FAIL；`≥ 0` → PASS；纯主观题（无客观断言 → 该值为 null）→ 此轴不适用 |
 | 主观侧 comparison | opt-in（`--min-win-rate`） | tie-排除胜率 ≥ 阈值 → PASS；< 阈值且决定性比较数（= a_wins + b_wins，排除平局和失败，默认 ≥ `--min-valid`=3）→ FAIL；样本不足 → UNCLEAR |
+| 必过题 must_pass | opt-in（`--must-pass`） | candidate 侧这些 eval 的**所有 run** 都得全过（`passed==total`），任一挂 → FAIL；未指定 → 此轴不适用。看 candidate 侧（= with skill）：关键题用了 skill 必须成 |
+| 题集漂移 drift | opt-in（`--baseline`） | 对比基线 eval id 集合 vs benchmark.runs 的 eval id 集合，增删 → 报告。默认只 warning（不进 decision）；`--strict-drift` → 有增删升 FAIL。防「删掉挂的题拉高 pass rate」 |
 
 ### 12.2 AND + UNCLEAR/N/A
 
@@ -1378,20 +1382,27 @@ echo $?   # 0=PASS(放行) / 1=FAIL(卡合并) / 2=N/A 或 UNCLEAR，消费方�
   "reason": "客观侧无回归(+0.27)",
   "candidate": "with_skill",
   "baseline": "without_skill",
-  "thresholds": {"min_win_rate": null, "min_valid": 3, "programmatic_guard": true},
+  "thresholds": {"min_win_rate": null, "min_valid": 3, "programmatic_guard": true,
+                 "must_pass_ids": null, "baseline_ids": null, "strict_drift": false},
   "axes": {
     "programmatic": {
       "verdict": "PASS",
       "applicable": true,
       "delta": 0.27,
       "reason": "客观侧无回归(+0.27)",
-      "win_rate": null, "decisive": null, "a_wins": null, "b_wins": null, "ties": null
+      "win_rate": null, "decisive": null, "a_wins": null, "b_wins": null, "ties": null, "failed_ids": null
     },
     "comparison": {
       "verdict": "N/A",
       "applicable": false,
       "reason": "主观 gate 未请求(未给 --min-win-rate)",
-      "delta": null, "win_rate": null, "decisive": null, "a_wins": null, "b_wins": null, "ties": null
+      "delta": null, "win_rate": null, "decisive": null, "a_wins": null, "b_wins": null, "ties": null, "failed_ids": null
+    },
+    "must_pass": {
+      "verdict": "N/A",
+      "applicable": false,
+      "reason": "必过题未指定(--must-pass)",
+      "delta": null, "win_rate": null, "decisive": null, "a_wins": null, "b_wins": null, "ties": null, "failed_ids": null
     }
   },
   "warnings": []

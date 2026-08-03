@@ -278,6 +278,8 @@ output/
 skill-eval gate output/benchmark.json                        # 仅客观回归守卫
 skill-eval gate output/benchmark.json --min-win-rate 0.5     # 加主观 gate
 skill-eval gate output/benchmark.json --no-programmatic-guard --min-win-rate 0.6
+skill-eval gate output/benchmark.json --must-pass 3,5,7      # 必过题:candidate 侧这些题任一挂 → FAIL
+skill-eval gate output/benchmark.json --baseline freeze/baseline.json --strict-drift  # 题集漂移守卫
 ```
 
 **参数**：
@@ -288,11 +290,16 @@ skill-eval gate output/benchmark.json --no-programmatic-guard --min-win-rate 0.6
 | `--min-valid` | 3 | 主观 gate 的最少决定性比较数 |
 | `--no-programmatic-guard` | 关闭 | 关掉客观回归守卫（只看主观质量时用） |
 | `--candidate` | 自动 | 候选侧名（默认 `comparison_summary.label_a` / 首个 side key） |
+| `--must-pass` | 无 | 必过题 eval id（逗号分隔，如 `3,5,7`）；**candidate 侧**这些题所有 run 都得全过，任一挂 → FAIL |
+| `--baseline` | 无 | 冻结基线 evals.json（`freeze` 产）；启用题集漂移守卫（对比 eval id 集合增删） |
+| `--strict-drift` | 关闭 | 题集漂移升 FAIL（默认只 warning） |
 | `--out` / `-o` | benchmark 同目录 | gate.json 输出路径 |
 
-**两轴**（§45 双主位）：
+**四轴**（客观 + 主观 + 必过题 + 漂移）：
 - **客观侧 programmatic 回归守卫**（默认常开）：`delta.pass_rate_programmatic < 0` → FAIL；`>= 0` → PASS；纯主观题（无 programmatic expectation，值为 null）→ 此轴不适用。
 - **主观侧 comparison**（`--min-win-rate` opt-in）：tie-排除胜率 `a_wins/(a_wins+b_wins)` ≥ 阈值 → PASS；< 阈值且决定性比较数 ≥ `--min-valid` → FAIL；样本不足 → UNCLEAR（判不准）。
+- **必过题 must_pass**（`--must-pass` opt-in）：candidate 侧这些 eval 的所有 run 都得全过（`passed==total`），任一挂 → FAIL。未指定 → 此轴不适用。看 candidate 侧（= with skill）：关键题用了 skill 必须成；without 侧挂正常。
+- **题集漂移 drift**（`--baseline` opt-in）：对比 `--baseline` 冻结基线的 eval id 集合 vs `benchmark.runs` 的 eval id 集合，增/删 → 报告。默认只 warning（不进 decision）；`--strict-drift` → 有增删升 FAIL。防「删掉挂的题拉高 pass rate」。
 
 **判决**：AND——任一适用轴 FAIL → FAIL；无 FAIL 但有适用轴信号不足（判不准/样本不足）→ **UNCLEAR**；无适用轴（守卫关 / 未请求 / 无信号）→ **N/A（不适用）**；否则 PASS。写 `gate.json`，按 `PASS/FAIL/N/A/UNCLEAR` 退 `0/1/2/2`（N/A 与 UNCLEAR 都 exit 2，消费方定）。
 

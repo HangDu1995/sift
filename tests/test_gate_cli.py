@@ -6,9 +6,9 @@ from skill_eval.cli.main import app
 cli = CliRunner()
 
 
-def _write_bench(path, delta_prog="+0.27", cs=None):
+def _write_bench(path, delta_prog="+0.27", cs=None, runs=None):
     bench = {"metadata": {"skill_name": "sk"},
-             "runs": [],
+             "runs": runs or [],
              "run_summary": {"v1": {"pass_rate": {"mean": 0.8}},
                              "v2": {"pass_rate": {"mean": 0.6}},
                              "delta": {"pass_rate_programmatic": delta_prog}}}
@@ -75,3 +75,55 @@ def test_gate_default_out_path(tmp_path):
     bp = _write_bench(tmp_path / "benchmark.json", "+0.27")
     cli.invoke(app, ["gate", str(bp)])
     assert (tmp_path / "gate.json").exists()
+
+
+def _run_entry(eval_id, config, passed, total):
+    return {"eval_id": eval_id, "configuration": config, "run_number": 1,
+            "result": {"pass_rate": passed / total if total else 0.0,
+                       "passed": passed, "failed": total - passed, "total": total}}
+
+
+def test_gate_must_pass_failed_exit1(tmp_path):
+    bp = _write_bench(tmp_path / "benchmark.json", "+0.27",
+                      runs=[_run_entry(1, "v1", 1, 2)])  # eval 1 挂
+    r = cli.invoke(app, ["gate", str(bp), "--must-pass", "1",
+                         "-o", str(tmp_path / "g.json")])
+    assert r.exit_code == 1
+
+
+def test_gate_must_pass_parse_error_exit2(tmp_path):
+    bp = _write_bench(tmp_path / "benchmark.json", "+0.27")
+    r = cli.invoke(app, ["gate", str(bp), "--must-pass", "1,bad",
+                         "-o", str(tmp_path / "g.json")])
+    assert r.exit_code == 2
+    assert not (tmp_path / "g.json").exists()
+
+
+def test_gate_baseline_strict_drift_exit1(tmp_path):
+    bp = _write_bench(tmp_path / "benchmark.json", "+0.27",
+                      runs=[_run_entry(1, "v1", 2, 2)])  # runs 只有 eval 1
+    basep = tmp_path / "baseline.json"
+    basep.write_text(json.dumps({"skill_name": "sk", "evals": [{"id": 1}, {"id": 3}]}))
+    r = cli.invoke(app, ["gate", str(bp), "--baseline", str(basep), "--strict-drift",
+                         "-o", str(tmp_path / "g.json")])
+    assert r.exit_code == 1  # 删 eval 3 → strict FAIL
+
+
+def test_gate_baseline_warning_keeps_pass(tmp_path):
+    bp = _write_bench(tmp_path / "benchmark.json", "+0.27",
+                      runs=[_run_entry(1, "v1", 2, 2)])
+    basep = tmp_path / "baseline.json"
+    basep.write_text(json.dumps({"skill_name": "sk", "evals": [{"id": 1}, {"id": 3}]}))
+    r = cli.invoke(app, ["gate", str(bp), "--baseline", str(basep),
+                         "-o", str(tmp_path / "g.json")])
+    assert r.exit_code == 0  # 默认 warning,不 FAIL
+    g = json.loads((tmp_path / "g.json").read_text())
+    assert any("漂移" in w for w in g["warnings"])
+
+
+def test_gate_baseline_missing_exit2(tmp_path):
+    bp = _write_bench(tmp_path / "benchmark.json", "+0.27")
+    r = cli.invoke(app, ["gate", str(bp), "--baseline", str(tmp_path / "nope.json"),
+                         "-o", str(tmp_path / "g.json")])
+    assert r.exit_code == 2
+    assert not (tmp_path / "g.json").exists()

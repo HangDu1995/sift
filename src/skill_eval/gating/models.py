@@ -15,6 +15,7 @@ class AxisVerdict(BaseModel):
     a_wins: int | None = None
     b_wins: int | None = None
     ties: int | None = None
+    failed_ids: list[int] | None = None    # must_pass 轴:未通过的 eval id(结构化);其它轴 None
 
 
 class GateResult(BaseModel):

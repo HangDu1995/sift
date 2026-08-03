@@ -24,12 +24,23 @@ def gate(
     candidate: Optional[str] = typer.Option(
         None, "--candidate",
         help="候选侧名(默认 comparison_summary.label_a / 首个 side key)"),
+    must_pass: Optional[str] = typer.Option(
+        None, "--must-pass",
+        help="必过题 eval id(逗号分隔,如 3,5,7);candidate 侧这些题任一挂 → FAIL"),
+    baseline: Optional[Path] = typer.Option(
+        None, "--baseline",
+        help="冻结基线 evals.json(freeze 产);启用题集漂移守卫"),
+    strict_drift: bool = typer.Option(
+        False, "--strict-drift",
+        help="题集漂移升 FAIL(默认只 warning)"),
     out: Optional[Path] = typer.Option(
         None, "--out", "-o", help="gate.json 输出路径(默认 benchmark.json 同目录)"),
 ):
     """对已有 benchmark.json 出通过/失败判决(post-hoc,毫秒级,可反复改阈值重判)。
 
-    两轴:客观 programmatic 回归守卫(默认常开)+ 主观 comparison(--min-win-rate opt-in)。
+    四轴:客观 programmatic 回归守卫(默认常开)+ 主观 comparison(--min-win-rate opt-in)
+    + 必过题(--must-pass,candidate 侧关键题任一挂 → FAIL)
+    + 题集漂移(--baseline,默认 warning / --strict-drift 升 FAIL)。
     退出码:0=PASS / 1=FAIL / 2=N/A(信号不足)。判决写 gate.json。
     """
     # exit 2 双语义:文件/解析错误(此处,不写 gate.json)与 N/A 判决(下方写 gate.json)
@@ -43,9 +54,32 @@ def gate(
         console.print(f"[red]Error:[/red] failed to parse benchmark.json: {exc}")
         raise typer.Exit(code=2)
 
+    must_pass_ids: list[int] = []
+    if must_pass:
+        try:
+            must_pass_ids = [int(x.strip()) for x in must_pass.split(",") if x.strip()]
+        except ValueError:
+            console.print(f"[red]Error:[/red] --must-pass 解析失败(要逗号分隔整数,如 3,5,7): {must_pass!r}")
+            raise typer.Exit(code=2)
+
+    baseline_ids: set[int] | None = None
+    if baseline:
+        if not baseline.exists():
+            console.print(f"[red]Error:[/red] baseline not found: {baseline}")
+            raise typer.Exit(code=2)
+        try:
+            bdata = json.loads(baseline.read_text(encoding="utf-8"))
+        except Exception as exc:
+            console.print(f"[red]Error:[/red] failed to parse baseline: {exc}")
+            raise typer.Exit(code=2)
+        baseline_ids = {e["id"] for e in bdata.get("evals", [])
+                        if isinstance(e, dict) and "id" in e}
+
     result = evaluate_gate(
         benchmark, min_win_rate=min_win_rate, min_valid=min_valid,
         programmatic_guard=not no_programmatic_guard, candidate=candidate,
+        must_pass_ids=must_pass_ids or None, baseline_ids=baseline_ids,
+        strict_drift=strict_drift,
     )
     result.artifact = str(benchmark_path)
 
