@@ -583,9 +583,10 @@ class TranscriptAuditor:
         for i, inst in enumerate(instructions):
             tool_name = inst.params.get("tool_name", "")
             script_path = inst.params.get("script_path", "")
-            if match_tool_call(tool_name, script_path, tool_trace):
+            required_params = inst.params.get("required_params")
+            if match_tool_call(tool_name, script_path, tool_trace, required_params=required_params):
                 findings[i] = self._make_match_pass_finding(
-                    inst, tool_name, script_path, transcript_name
+                    inst, tool_name, script_path, transcript_name, required_params
                 )
             else:
                 unmatched.append((i, inst))
@@ -974,12 +975,16 @@ class TranscriptAuditor:
         tool_name: str,
         script_path: str,
         transcript_name: str,
+        required_params=None,
     ) -> AuditFinding:
         """命中 tool_trace 的 PASS finding(method=PROGRAMMATIC)。evidence 按 params 里设的键选措辞。"""
         if tool_name:
             evidence = f"trace 中调用了 {tool_name}"
         else:
             evidence = f"trace 中读取了 {script_path}"
+        params = [p for p in (required_params or []) if p]
+        if params and tool_name:
+            evidence += f"(含 {' '.join(params)})"
         return AuditFinding(
             instruction_text=inst.instruction_text,
             source=inst.source.value,

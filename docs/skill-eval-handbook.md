@@ -661,10 +661,12 @@ audit 是诊断工具——它的结果不像 run 那样能靠“消噪”磨出
 
 | 类别 | 来自哪些指令 | 怎么判 |
 |------|------------|--------|
-| 条件性 CONDITIONAL | TOOL_REQUIREMENT / REFERENCE_USAGE | 命中 tool_trace → PASS（**程序判定**）；未命中 → LLM 判该不该触发 |
+| 条件性 CONDITIONAL | TOOL_REQUIREMENT / REFERENCE_USAGE | 命中 tool_trace（**含参数级断言**——SKILL 要求的 CLI 参数也得对，否则不命中走 LLM；路径规范化比对）→ PASS（**程序判定**）；未命中 → LLM 判该不该触发 |
 | 禁令 PROHIBITION | CONSTRAINT / ANTI_FABRICATION | LLM **主动检测这次有没有违规**（不是判"遵守没"） |
 | 步骤 STEP | HEADING_STEP | LLM 判走过 / 该走没走 / 不涉及 |
 | 输出格式 OUTPUT | OUTPUT_FORMAT | **确定性子串匹配**（程序判定，不调 LLM） |
+
+> **条件性的「程序判定」现在看参数**：TOOL_REQUIREMENT 命中工具名只是第一步——SKILL 点名的 CLI 参数（如要求跑 `pytest --tb=short`，参数就是 `--tb=short`）也得出现在 agent 实际命令里，才算程序判定 PASS。漏参数不算 PASS，**也不直接 FAIL**，而是走 LLM 判「这场景到底该不该要这个参数」。所以你会看到「agent 明明跑了 pytest、条件性却没给程序 PASS」——多半是它漏了 SKILL 点名的参数，交给 LLM 定夺了。匹配口径：工具名、路径类大小写不敏感且做了规范化比对（解相对/绝对路径差异 + 前缀边界）；CLI 参数大小写敏感、精确断言。抽不到参数的指令（指令里没点名具体参数）行为不变。
 
 > **输出格式（OUTPUT_FORMAT）怎么知道匹配什么**：extractor 从 SKILL.md 抽出声明的输出格式要求（比如规定产物要含某个标题 / 标记 / 模板），audit 拿它去和实际输出做**子串匹配**——命中 → PASS，未命中 → FAIL（这类没有 N/A / 没判成 / 判不准，因为是纯字符串判定）。所以 SKILL.md 里把输出格式写得越具体（点名某个 marker），越容易被抽到、查得越准。
 
@@ -916,7 +918,7 @@ opencode 的转换器（`_records_from_opencode`）做三件事抹平格式差�
 
 **多 skill 切分**也在归一之后口径统一：cc 按 `Skill` tool_use 切（父子作用域），opencode 按 per-message `agent` 切连续段（扁平，在转换前切原始 session）。切完每段各自重建 → 各自对账。
 
-> **对 audit 判定无影响**：重建出的 `produced_files`/`input_files` 内容、`unreconstructed` 这些字段，audit 其实**不读**——audit 只读 `tool_trace`（程序匹配，大小写不敏感）+ `transcript_text`（LLM 语义判）+ `user_turns`（场景）。所以 opencode 接到共享路之后 digest 更完整（edit 过的文件也重建、内容干净、不可重建的会告警），但 audit 的 verdict 不受影响——变的是 digest 的"保真度"，不是判定结果。
+> **对 audit 判定无影响**：重建出的 `produced_files`/`input_files` 内容、`unreconstructed` 这些字段，audit 其实**不读**——audit 只读 `tool_trace`（程序匹配：工具名/路径大小写不敏感，参数级断言大小写敏感）+ `transcript_text`（LLM 语义判）+ `user_turns`（场景）。所以 opencode 接到共享路之后 digest 更完整（edit 过的文件也重建、内容干净、不可重建的会告警），但 audit 的 verdict 不受影响——变的是 digest 的"保真度"，不是判定结果。
 
 **结构化输入（structured records）——给外部 producer 的通用入口**
 

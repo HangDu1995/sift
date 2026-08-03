@@ -202,6 +202,27 @@ def test_tool_trace_input_summary_truncated_to_200(tmp_path):
     d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
     assert len(d.tool_trace[0].input_summary) == 200
 
+def test_tool_trace_structured_input_kept_full(tmp_path):
+    """ToolCallRecord.input 保留完整结构化参数(不压平不截断),供参数级匹配/路径规范化用。"""
+    payload = {"file_path": "/proj/a.py", "content": "x = 1\n"}
+    recs = [_asst([_tool_use("w1", "Write", payload)])]
+    d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
+    assert d.tool_trace[0].input == payload
+
+def test_tool_trace_structured_input_not_truncated(tmp_path):
+    """input 不截断:content > 200 时 input_summary 截断(显示用),但 input 完整保留(匹配用)。"""
+    big = {"file_path": "/proj/a.py", "content": "x" * 500}
+    recs = [_asst([_tool_use("w1", "Write", big)])]
+    d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
+    assert len(d.tool_trace[0].input_summary) == 200      # summary 仍截断
+    assert d.tool_trace[0].input == big                    # input 完整
+
+def test_tool_trace_structured_input_none_when_empty(tmp_path):
+    """空 input → input 为 None(语义:无结构化参数;match 回退子串)。"""
+    recs = [_asst([_tool_use("b1", "Bash", {})])]
+    d = build_digest(_write_jsonl(tmp_path, recs), root="/proj")
+    assert d.tool_trace[0].input is None
+
 def test_tool_trace_empty_and_transcript_text_empty_by_default(tmp_path):
     # 非侵入:无 tool_use / 无 assistant text 时字段为默认空值
     recs = [_user("只有用户文本")]

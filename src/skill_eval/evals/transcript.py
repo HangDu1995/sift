@@ -281,6 +281,7 @@ def _digest_from_records(
             tool_trace.append(ToolCallRecord(
                 name=name,
                 input_summary=json.dumps(b.get("input") or {}, ensure_ascii=False)[:200],
+                input=inp or None,  # 完整结构化参数(不截断),供参数级匹配/路径规范化;inp 见上(line 274)
                 turn=turn_idx if locate_turns else None,
             ))
             if name == "Skill":

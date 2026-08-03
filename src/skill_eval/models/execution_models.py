@@ -27,7 +27,8 @@ class RunConfig(BaseModel):
 
 class ToolCallRecord(BaseModel):
     name: str
-    input_summary: str = ""
+    input_summary: str = ""  # json.dumps(input)[:200],显示用(报告/prompt);匹配优先用 input
+    input: dict | None = None  # 完整结构化参数(不截断),供参数级匹配/路径规范化;None=无结构化数据
     turn: int | None = None  # 该 tool_use 所属的全局 turnIndex(None=未标注)
 
 

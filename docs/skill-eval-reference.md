@@ -370,7 +370,7 @@ skill-eval audit path/to/skill/ --db opencode.db
 
 | 类别 | 来自哪些指令 | 怎么判 | 结论 |
 |------|------------|--------|------|
-| 条件性 CONDITIONAL | TOOL_REQUIREMENT / REFERENCE_USAGE（该用 X 工具、读 X 参考） | 命中 tool_trace → PASS（**程序判定，不调 LLM**）；未命中 → LLM 判该场景该不该触发 | 遵循 / 违反 / N/A / 没判成 / 判不准 |
+| 条件性 CONDITIONAL | TOOL_REQUIREMENT / REFERENCE_USAGE（该用 X 工具、读 X 参考） | 命中 tool_trace（**含参数级断言**：SKILL 要求的 CLI 参数也得对、否则不命中走 LLM；路径规范化比对）→ PASS（**程序判定，不调 LLM**）；未命中 → LLM 判该场景该不该触发 | 遵循 / 违反 / N/A / 没判成 / 判不准 |
 | 禁令 PROHIBITION | CONSTRAINT / ANTI_FABRICATION（不许做 X） | LLM **主动检测这次有没有违规**（不是判“遵守没”） | 未违反→PASS / 违反→FAIL / 没判成 / 判不准 |
 | 步骤 STEP | HEADING_STEP（应走第 N 步） | LLM 判走过 / 该走没走 / 不涉及 | pass / fail / na / 没判成 / 判不准 |
 | 输出格式 OUTPUT | OUTPUT_FORMAT（产物应含某格式） | **确定性子串匹配，程序判定，不调 LLM** | 命中→PASS / 未命中→FAIL（无 N/A / 没判成 / 判不准） |

@@ -298,6 +298,47 @@ class TestInstructionExtractorChinese:
         assert any("parse_result" in n for n in names), names
         assert any("coverage_audit" in n for n in names), names
 
+    # ---- C:required_params 抽取(参数级断言的料)----
+
+    def test_extract_required_params_unit(self):
+        """_extract_required_params:留 ASCII 参数 token,滤中文/虚词/标点,遇连接词停。"""
+        from skill_eval.compliance.extractor import _extract_required_params
+        assert _extract_required_params(" --tb=short -x") == ["--tb=short", "-x"]
+        assert _extract_required_params(" tests/") == ["tests/"]
+        assert _extract_required_params(" 来跑测试") == []               # 全中文 → 空
+        assert _extract_required_params(" --tb=short 来跑测试 -v") == ["--tb=short", "-v"]  # 中文跳过、ASCII 留
+        assert _extract_required_params(" 和 shape_audit.py") == []      # 连接词停(一行多工具保护)
+        assert _extract_required_params(" and tests/") == []
+        assert _extract_required_params("") == []
+
+    def test_tool_requirement_extracts_required_params(self):
+        """「运行 pytest --tb=short」→ params required_params=['--tb=short']。"""
+        ext = InstructionExtractor()
+        body = "运行 pytest --tb=short 生成简洁回溯"
+        tools = [c for c in ext.extract(body) if c.source == InstructionSource.TOOL_REQUIREMENT
+                 and c.params.get("tool_name") == "pytest"]
+        assert tools
+        assert tools[0].params.get("required_params") == ["--tb=short"]
+
+    def test_tool_requirement_no_params_empty_list(self):
+        """无参数「运行 pytest」→ required_params=[](非 None;match 当无要求=旧行为)。"""
+        ext = InstructionExtractor()
+        body = "运行 pytest"
+        tools = [c for c in ext.extract(body) if c.params.get("tool_name") == "pytest"]
+        assert tools
+        assert tools[0].params.get("required_params") == []
+
+    def test_tool_requirement_multi_tool_one_line_no_param_bleed(self):
+        """一行多工具(后者无动词):「使用 Grep 和 shape_audit.py」——shape_audit 无动词不抽;
+        stopper 保护:不让 shape_audit.py 被 _extract_required_params 当成 Grep 的参数(无 stopper
+        会误抽 ['shape_audit.py'])。"""
+        ext = InstructionExtractor()
+        body = "使用 Grep 和 shape_audit.py"
+        tools = [c for c in ext.extract(body) if c.source == InstructionSource.TOOL_REQUIREMENT]
+        names = [c.params.get("tool_name") for c in tools]
+        assert names == ["Grep"], names                       # shape_audit 无动词不抽
+        assert tools[0].params.get("required_params") == []   # shape_audit 不当 Grep 参数(stopper 挡住)
+
     def test_tool_requirement_cn_verb_shiyong(self):
         """「使用 X」引出真工具(developer: 使用 Bash / Write / Edit 工具)——补「使用」,
         tool_name 命中 tc.name(Grep/Bash 等,match_tool_call 第 1 条)。"""
@@ -704,6 +745,88 @@ class TestMatchToolCall:
         \\b 词边界:tool_name 须作为独立命令词出现(前后非字母数字)。"""
         trace = [{"name": "Bash", "input_summary": '{"command": "cd widgets && ls"}'}]
         assert match_tool_call("git", "", trace) is False
+
+    # ---- B1:条件2 路径规范化 + 分隔符边界(结构化 input)----
+
+    def test_script_path_structured_relative_absolute(self):
+        """结构化 input:绝对路径 file_path 命中相对路径 script_path(相对/绝对差异)。"""
+        trace = [ToolCallRecord(name="Read", input_summary="x",
+                                input={"file_path": "/workspace/references/guide.md"})]
+        assert match_tool_call("", "references/guide.md", trace) is True
+
+    def test_script_path_structured_prefix_boundary(self):
+        """分隔符边界:/not-references/x.md 不被 references/x.md 误命中(裸子串会,这里修掉)。"""
+        trace = [ToolCallRecord(name="Read", input_summary="x",
+                                input={"file_path": "/workspace/not-references/x.md"})]
+        assert match_tool_call("", "references/x.md", trace) is False
+
+    def test_script_path_structured_dir_clash(self):
+        """带目录的 script_path 不撞别的目录:a/x.md 不命中 /proj/b/x.md。"""
+        trace = [ToolCallRecord(name="Read", input_summary="x",
+                                input={"file_path": "/proj/b/x.md"})]
+        assert match_tool_call("", "a/x.md", trace) is False
+
+    def test_script_path_basename_only_matches(self):
+        """指令只给 basename(x.md):命中任意叫 x.md 的(指令粒度不足,非 bug)。"""
+        trace = [ToolCallRecord(name="Read", input_summary="x",
+                                input={"file_path": "/proj/a/x.md"})]
+        assert match_tool_call("", "x.md", trace) is True
+
+    def test_script_path_dot_slash_normalized(self):
+        """./前缀规范化:./references/guide.md 命中 /workspace/references/guide.md。"""
+        trace = [ToolCallRecord(name="Read", input_summary="x",
+                                input={"file_path": "/workspace/references/guide.md"})]
+        assert match_tool_call("", "./references/guide.md", trace) is True
+
+    def test_script_path_falls_back_to_substring(self):
+        """无结构化 input(None/旧数据)→ 回退子串(向后兼容,老行为不变)。"""
+        trace = [ToolCallRecord(name="Read", input_summary="reading references/guide.md")]
+        assert match_tool_call("", "references/guide.md", trace) is True
+
+    # ---- B2:条件3 参数级断言(required_params)----
+
+    def test_required_params_satisfied(self):
+        """工具命中 + 参数都在 command 里 → True。"""
+        trace = [ToolCallRecord(name="Bash", input_summary='{"command": "pytest --tb=short"}',
+                                input={"command": "pytest --tb=short"})]
+        assert match_tool_call("pytest", "", trace, required_params=["--tb=short"]) is True
+
+    def test_required_params_missing_not_pass(self):
+        """工具命中但缺参数 → 不命中(走 LLM 兜底)——B2 核心:漏参数不判 PASS。"""
+        trace = [ToolCallRecord(name="Bash", input_summary='{"command": "pytest"}',
+                                input={"command": "pytest"})]
+        assert match_tool_call("pytest", "", trace, required_params=["--tb=short"]) is False
+
+    def test_required_params_multiple_all_required(self):
+        """多参数全满足才 True,缺一即 False。"""
+        trace = [ToolCallRecord(name="Bash", input_summary='{"command": "pytest --tb=short -x"}',
+                                input={"command": "pytest --tb=short -x"})]
+        assert match_tool_call("pytest", "", trace, required_params=["--tb=short", "-x"]) is True
+        assert match_tool_call("pytest", "", trace, required_params=["--tb=short", "-v"]) is False
+
+    def test_required_params_none_is_old_behavior(self):
+        """required_params=None → 旧行为(命中工具即 True,不管参数)。"""
+        trace = [ToolCallRecord(name="Bash", input_summary='{"command": "pytest"}',
+                                input={"command": "pytest"})]
+        assert match_tool_call("pytest", "", trace) is True
+        assert match_tool_call("pytest", "", trace, required_params=None) is True
+
+    def test_required_params_empty_list_is_old_behavior(self):
+        """required_params=[] → 旧行为(空要求 = 无要求)。"""
+        trace = [ToolCallRecord(name="Bash", input_summary='{"command": "pytest"}',
+                                input={"command": "pytest"})]
+        assert match_tool_call("pytest", "", trace, required_params=[]) is True
+
+    def test_required_params_positional_arg(self):
+        """positional token 也算(tests/ 作为参数)。"""
+        trace = [ToolCallRecord(name="Bash", input_summary='{"command": "pytest tests/"}',
+                                input={"command": "pytest tests/"})]
+        assert match_tool_call("pytest", "", trace, required_params=["tests/"]) is True
+
+    def test_required_params_falls_back_to_input_summary(self):
+        """无结构化 input(dict 风格)→ 回退 input_summary 子串查参数。"""
+        trace = [{"name": "Bash", "input_summary": '{"command": "pytest --tb=short"}'}]
+        assert match_tool_call("pytest", "", trace, required_params=["--tb=short"]) is True
 
 
 class TestExtractFirstBalancedPublic:

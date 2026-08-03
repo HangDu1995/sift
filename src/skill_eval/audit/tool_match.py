@@ -92,21 +92,87 @@ def _command_word_re(tool_name: str):
     return re.compile(r"\b" + re.escape(tool_name) + r"\b", re.IGNORECASE)
 
 
-def match_tool_call(tool_name: str, script_path: str, tool_trace) -> bool:
-    """tool_trace 里是否存在匹配的调用,三条件任一命中即 True(大小写不敏感):
+# input 里常见含路径的字段(Read/Write/Edit → file_path;Grep/Glob → path)
+_PATH_FIELDS = ("file_path", "path")
 
-    1. ``tool_name`` 出现在某 ``tc.name``(子串,如 MCP 长工具名前缀
+
+def _norm_path(p: str) -> str:
+    """路径词法规范化:\\→/、压双斜杠、去 ``./`` 前缀与 ``/./`` 段、lower。
+
+    不解析 ``..``(语义依赖真实文件系统,留 LLM);只做安全的词法规范化供匹配。
+    """
+    if not p:
+        return ""
+    p = p.replace("\\", "/")
+    while "//" in p:
+        p = p.replace("//", "/")
+    p = p.replace("/./", "/")
+    if p.startswith("./"):
+        p = p[2:]
+    return p.lower()
+
+
+def _path_matches(script_path: str, tc) -> bool:
+    """script_path 是否匹配 tc 的路径。
+
+    优先结构化 ``tc.input`` 的路径字段,规范化后用**分隔符边界**比对(``==`` 或
+    ``endswith("/"+sp)``)——同时解相对/绝对差异(``/workspace/r.md`` 命中 ``r.md``)和
+    前缀边界(``/not-r.md`` 不被 ``r.md`` 误命中,比裸子串多修一个 bug)。无结构化
+    input(dict 风格 / 旧数据 / ``input=None``)→ 回退子串(input_summary),向后兼容。
+    """
+    sp = _norm_path(script_path)
+    if not sp:
+        return False
+    tc_input = tc.input if hasattr(tc, "input") else tc.get("input")
+    if isinstance(tc_input, dict):
+        for field in _PATH_FIELDS:
+            val = tc_input.get(field)
+            if isinstance(val, str) and val:
+                fp = _norm_path(val)
+                if fp == sp or fp.endswith("/" + sp):
+                    return True
+        return False  # 有结构化 input 但路径字段不匹配 → 精确化(不回退子串歪打正着)
+    tc_summary = tc.input_summary if hasattr(tc, "input_summary") else tc.get("input_summary", "")
+    return sp in (tc_summary or "").lower()
+
+
+def _params_satisfied(required_params, tc) -> bool:
+    """每个 required_param 都在 tc 的 command(优先结构化 input)或 input_summary 里出现(子串)。
+
+    粗召回(宁松):``--tb=short`` 整串、positional token(``tests/``)都算。全满足才 True;
+    任一缺 → False(该 tc 不命中,走 LLM 兜底)。空 required_params → True(无要求)。
+    """
+    params = [p for p in (required_params or []) if p]
+    if not params:
+        return True
+    tc_input = tc.input if hasattr(tc, "input") else tc.get("input")
+    cmd = ""
+    if isinstance(tc_input, dict):
+        cmd = str(tc_input.get("command", "") or "")
+    if not cmd:
+        cmd = tc.input_summary if hasattr(tc, "input_summary") else tc.get("input_summary", "")
+    cmd = (cmd or "").lower()
+    return all(p.lower() in cmd for p in params)
+
+
+def match_tool_call(tool_name: str, script_path: str, tool_trace, required_params=None) -> bool:
+    """tool_trace 里是否存在匹配的调用(大小写不敏感)。
+
+    三条件:
+    1. ``tool_name`` 出现在某 ``tc.name``(子串,如 MCP 长名前缀
        ``webReader`` ∈ ``mcp__web_reader__webReader``)。
-    2. ``script_path`` 出现在某 ``tc.input_summary``(子串,文件路径匹配)。
-    3. ``tool_name`` 作为**命令词**出现在某 ``tc.input_summary``(**词边界**,非裸子串)。
+    2. ``script_path`` 匹配某 ``tc`` 的路径(``_path_matches``:优先结构化 ``tc.input`` 的
+       file_path/path 字段,规范化 + 分隔符边界;无结构化 input → 回退子串)。
+    3. ``tool_name`` 作为**命令词**出现在某 ``tc.input_summary``(**词边界**,Bash 子命令场景)。
 
-    第 3 条是 Bash 子命令场景:SKILL.md「运行 pytest」抽出 tool_name=pytest,Claude 用 Bash
-    跑该命令(input_summary='{"command": "pytest"}')。tc.name 是 "Bash" 而非 "pytest",条件 1
-    漏判 → 假 FAIL;按词边界查 input_summary 命中。用词边界而非裸子串,避免 ``git`` 误命中
-    ``cd widgets`` 这类命令名词子串(假 PASS)。
+    ``required_params``(可选 list[str]):工具命中后额外断言每个参数 token(如 ``--tb=short``)
+    都在 ``command``(优先结构化 ``tc.input["command"]``,无则 input_summary)里出现。全满足才
+    True;任一缺 → 该 tc 不命中(走 LLM 兜底,即「工具名对、参数没照做」不放过)。None/空 →
+    旧行为(三条件任一命中即 True)。参数级断言只配套工具命中(条件 1/3),不与路径(条件 2,
+    REFERENCE_USAGE)同时出现。
 
-    tool_trace 元素支持 attr 风格(``tc.name``/``tc.input_summary``,如 ToolCallRecord)和
-    dict 风格(``tc.get(...)``)两种。遍历完无命中 → False;空 / None tool_trace → False。
+    tool_trace 元素支持 attr 风格(``tc.name``/``tc.input``/``tc.input_summary``,如
+    ToolCallRecord)和 dict 风格(``tc.get(...)``)。遍历完无命中 → False;空/None tool_trace → False。
     """
     if not tool_trace:
         return False
@@ -114,10 +180,17 @@ def match_tool_call(tool_name: str, script_path: str, tool_trace) -> bool:
     for tc in tool_trace:
         tc_name = tc.name if hasattr(tc, "name") else tc.get("name", "")
         tc_input = tc.input_summary if hasattr(tc, "input_summary") else tc.get("input_summary", "")
-        if tool_name and tool_name.lower() in tc_name.lower():
+        name_hit = bool(tool_name) and tool_name.lower() in tc_name.lower()
+        cmd_hit = bool(cmd_re) and bool(cmd_re.search(tc_input))
+        if required_params:
+            # 有参数要求:命中工具(名/命令词)+ 所有参数满足才 True
+            if (name_hit or cmd_hit) and _params_satisfied(required_params, tc):
+                return True
+            continue
+        if name_hit:
             return True
-        if script_path and script_path.lower() in tc_input.lower():
+        if script_path and _path_matches(script_path, tc):
             return True
-        if cmd_re and cmd_re.search(tc_input):
+        if cmd_hit:
             return True
     return False

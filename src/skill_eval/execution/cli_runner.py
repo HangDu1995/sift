@@ -369,6 +369,8 @@ class ClaudeRunner:
                         tool_calls[tool_name] = tool_calls.get(tool_name, 0) + 1
                         tool_input = content_item.get("input", {})
                         input_summary = json.dumps(tool_input, ensure_ascii=False)[:200] if tool_input else ""
-                        tool_trace.append(ToolCallRecord(name=tool_name, input_summary=input_summary))
+                        tool_trace.append(ToolCallRecord(
+                            name=tool_name, input_summary=input_summary,
+                            input=tool_input or None))  # 完整结构化参数,供参数级匹配
 
         return "\n".join(transcript_parts), total_tokens, tool_calls, result_text, num_turns, stop_reason, tool_trace

@@ -38,6 +38,38 @@ _TOOL_STOPWORDS: frozenset[str] = frozenset({
 })
 
 
+_PARAM_STOPPERS: frozenset[str] = frozenset({
+    # 连接词:其后通常是下一个工具/另一动作,不是当前工具的参数 → 遇到即停(一行多工具保护)。
+    "和", "或", "还有", "以及", "然后", "并", "接着", "同时",
+    "and", "or", "then", "also", "plus", "+", "&",
+})
+
+
+def _extract_required_params(rest: str) -> list[str]:
+    """从 tool_name 后的剩余文本抽参数 token(粗召回,供 match_tool_call 参数级断言)。
+
+    只留 ASCII token(CLI flag/positional/subcommand,如 ``--tb=short``/``-x``/``tests/``),
+    滤中文/非 ASCII 描述、虚词(复用 ``_TOOL_STOPWORDS``)、纯标点。**遇连接词(和/and/or/…)即停**
+    ——一行多工具时(``使用 Grep 和 shape_audit``)保护:不让后面的工具名被当成前一个工具的参数。
+    粗召回:抽多了/错了在 match 断言不上就当没有(走 LLM 兜底),天然容错。
+    """
+    if not rest:
+        return []
+    tokens: list[str] = []
+    for raw in rest.split():
+        tok = raw.strip(".,;:!'\"`*()[]{}")
+        if not tok:
+            continue
+        if tok.lower() in _PARAM_STOPPERS:
+            break  # 连接词:参数序列结束(后面是别的工具/动作)
+        if not tok.isascii():
+            continue  # 中文描述等跳过(参数是 ASCII CLI token)
+        if tok.lower() in _TOOL_STOPWORDS:
+            continue
+        tokens.append(tok)
+    return tokens
+
+
 class InstructionExtractor:
     def extract(self, body: str) -> list[InstructionCheck]:
         checks: list[InstructionCheck] = []
@@ -121,13 +153,17 @@ class InstructionExtractor:
                 # 停用词过滤:"use when"/"run concurrently" 等碎片不是真工具(见 _TOOL_STOPWORDS)。
                 if tool_name.lower() in _TOOL_STOPWORDS:
                     continue
+                # rest = tool_name 后到行尾(pattern 到 tool_name 结束,match.end(0)=tool_name 末),
+                # 抽 required_params(遇连接词停,保护一行多工具;见 _extract_required_params)。
+                rest = text[match.end(0):].split("\n", 1)[0]
+                required_params = _extract_required_params(rest)
                 checks.append(InstructionCheck(
                     source=InstructionSource.TOOL_REQUIREMENT,
                     instruction_text=match.group(0).strip(),
                     section=section,
                     priority=InstructionPriority.REQUIRED,
                     check_method=CheckMethod.TOOL_CALL_CHECK,
-                    params={"tool_name": tool_name},
+                    params={"tool_name": tool_name, "required_params": required_params},
                 ))
         return checks
 
