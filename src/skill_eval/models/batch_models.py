@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from skill_eval.models.analysis_models import AnalysisResult
 from skill_eval.models.comparison_models import ComparisonResult
+from skill_eval.stats import wilson_ci
 from skill_eval.models.enums import (
     CheckMethod,
     CalibrationVerdict,
@@ -51,6 +52,8 @@ class ComparisonSummary(BaseModel):
     failed: int = 0        # 无信号,排除出分母
     valid: int = 0         # a_wins + b_wins + ties
     win_rate: float | None = None  # a_wins / valid;valid==0 → None
+    win_rate_ci_lo: float | None = None  # Wilson 95% 下界(valid==0 → None);lo>0.5 → A 显著更优
+    win_rate_ci_hi: float | None = None  # Wilson 95% 上界;hi<0.5 → B 显著更优;含 0.5 → 不显著
     label_a: str = "with"
     label_b: str = "without"
 
@@ -74,10 +77,12 @@ class ComparisonSummary(BaseModel):
                    if c.winner not in (label_a, label_b) and not getattr(c, "failed", False))
         failed = sum(1 for c in comparisons if getattr(c, "failed", False))
         valid = a_wins + b_wins + ties
+        lo, hi = wilson_ci(a_wins, valid)  # valid==0 → (None, None)
         return cls(
             total=len(comparisons), a_wins=a_wins, b_wins=b_wins,
             ties=ties, failed=failed, valid=valid,
             win_rate=a_wins / valid if valid else None,
+            win_rate_ci_lo=lo, win_rate_ci_hi=hi,
             label_a=label_a, label_b=label_b,
         )
 

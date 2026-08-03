@@ -1267,6 +1267,14 @@
         const vals = runsArr.map(r => (r.result || {})[field]).filter(v => v != null);
         return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
       };
+      // flaky:某 config 下该 eval 跨 run 的 programmatic pass_rate 不全等 = 忽过忽挂(P2-5:程序判定
+      // 无方差是预期,有方差=异常=flaky)。返回 {min,max} 供红旗 tooltip;全等/样本<2 → null(稳定)。
+      const flakyOf = (runsArr) => {
+        const vals = runsArr.map(r => (r.result || {}).pass_rate_programmatic).filter(v => v != null);
+        if (vals.length < 2) return null;
+        const mn = Math.min(...vals), mx = Math.max(...vals);
+        return mn !== mx ? { min: mn, max: mx } : null;
+      };
 
       // ── Dashboard header ──
       html += "<div style='display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.5rem;'>";
@@ -1309,7 +1317,16 @@
         const wrClr = wr == null ? "var(--text-muted)"
           : wr >= 0.6 ? "var(--green)" : wr >= 0.4 ? "var(--accent)" : "var(--red)";
         const wrFail = compSummary.failed > 0 ? " · " + compSummary.failed + "失败" : "";
-        html += mkCard("盲评胜率", wrPct, (compSummary.label_a || "with") + " · " + compSummary.a_wins + "胜/" + compSummary.b_wins + "负/" + compSummary.ties + "平" + wrFail, wrClr);
+        // Wilson CI + 显著性:lo>0.5 = A 显著更优;hi<0.5 = B 显著;含 0.5 = 不显著(样本可能不足)
+        const wrCiLo = compSummary.win_rate_ci_lo, wrCiHi = compSummary.win_rate_ci_hi;
+        let wrSig = "";
+        if (wrCiLo != null && wrCiHi != null) {
+          const ciStr = " · CI [" + (wrCiLo * 100).toFixed(0) + "%," + (wrCiHi * 100).toFixed(0) + "%]";
+          wrSig = wrCiLo > 0.5 ? ciStr + " · " + (compSummary.label_a || "A") + "显著更优"
+            : wrCiHi < 0.5 ? ciStr + " · " + (compSummary.label_b || "B") + "显著更优"
+            : ciStr + " · 不显著(样本可能不足,建议加 run)";
+        }
+        html += mkCard("盲评胜率", wrPct, (compSummary.label_a || "with") + " · " + compSummary.a_wins + "胜/" + compSummary.b_wins + "负/" + compSummary.ties + "平" + wrFail + wrSig, wrClr);
       }
 
       // vs 上次(纵向 delta,Task 3):仅当 previous/benchmark.json 存在(run 端 fresh 重跑 MOVE 进去)
@@ -1582,10 +1599,19 @@
             : wr >= 0.6 ? "var(--green)" : wr >= 0.4 ? "var(--accent)" : "var(--red)";
           const failNote = compSummary.failed > 0
             ? ' · <span style="color:var(--red);font-weight:600;">' + compSummary.failed + '失败</span>' : "";
+          // Wilson CI + 显著性(与上方盲评胜率卡一致,避免同一报告两处胜率一处带 CI 一处不带)
+          let wrSigHd = "";
+          if (compSummary.win_rate_ci_lo != null && compSummary.win_rate_ci_hi != null) {
+            const loH = compSummary.win_rate_ci_lo, hiH = compSummary.win_rate_ci_hi;
+            const ciStrH = " · CI [" + (loH * 100).toFixed(0) + "%," + (hiH * 100).toFixed(0) + "%]";
+            wrSigHd = loH > 0.5 ? ciStrH + " · " + (compSummary.label_a || "A") + "显著更优"
+              : hiH < 0.5 ? ciStrH + " · " + (compSummary.label_b || "B") + "显著更优"
+              : ciStrH + " · 不显著(样本可能不足)";
+          }
           html += '<div style="text-align:center;padding:0.75rem 1rem;margin-bottom:1rem;background:var(--bg);border-radius:var(--radius);">';
           html += '<div style="font-size:0.75rem;color:var(--text-muted);">主观侧主位 · ' + (compSummary.label_a || 'With Skill') + ' 盲评胜率</div>';
           html += '<div style="font-size:1.75rem;font-weight:700;color:' + wrColor + ';">★ ' + wrPct + '</div>';
-          html += '<div style="font-size:0.8125rem;color:var(--text-muted);">' + compSummary.a_wins + '胜 / ' + compSummary.b_wins + '负 / ' + compSummary.ties + '平' + failNote + '</div>';
+          html += '<div style="font-size:0.8125rem;color:var(--text-muted);">' + compSummary.a_wins + '胜 / ' + compSummary.b_wins + '负 / ' + compSummary.ties + '平' + failNote + wrSigHd + '</div>';
           html += '</div>';
         }
 
@@ -1742,11 +1768,13 @@
         for (const evalId of ovEvalIds) {
           const evalRuns = overviewRuns.filter(r => r.eval_id === evalId);
           const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : ("Eval " + evalId);
+          const flakyRange = flakyOf(evalRuns.filter(r => r.configuration === configA));
           const mProg = meanField(evalRuns, "pass_rate_programmatic");
           const mLlm = meanField(evalRuns, "pass_rate_llm");
           const mMix = meanField(evalRuns, "pass_rate");
           html += '<tr style="cursor:pointer;" onclick="document.getElementById(\'eval-' + evalId + '\').scrollIntoView({block:\'start\'});">';
-          html += '<td>' + evalId + '</td>';
+          const flakyFlag = flakyRange ? ' <span style="color:var(--red);cursor:help;" title="主侧忽过忽挂(' + fmtDim(flakyRange.min) + '–' + fmtDim(flakyRange.max) + ')·建议补跑:run --eval-ids ' + evalId + ' --runs 更大">⚠</span>' : '';
+          html += '<td>' + evalId + flakyFlag + '</td>';
           html += '<td style="text-align:left;">' + escapeHtml(evalName) + '</td>';
           html += '<td class="' + dimCls(mProg) + '">' + fmtDim(mProg) + '</td>';
           html += '<td class="' + dimCls(mLlm) + '">' + fmtDim(mLlm) + '</td>';

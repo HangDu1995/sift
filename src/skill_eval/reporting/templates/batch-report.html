@@ -354,7 +354,13 @@
           if (csum) {
             const wrPct = csum.win_rate != null ? (csum.win_rate * 100).toFixed(0) + "%" : "—";
             const failNote = csum.failed > 0 ? " · " + csum.failed + "失败" : "";
-            html += '<div style="font-size:0.8125rem;margin-bottom:0.5rem;"><strong>盲评胜率</strong> <span style="font-weight:600;">' + wrPct + '</span>（' + csum.a_wins + '胜/' + csum.b_wins + '负/' + csum.ties + '平' + failNote + '）</div>';
+            let ciNote = "";
+            if (csum.win_rate_ci_lo != null && csum.win_rate_ci_hi != null) {
+              const loB = csum.win_rate_ci_lo, hiB = csum.win_rate_ci_hi;
+              const sigB = loB > 0.5 ? (csum.label_a || "A") + "显著" : hiB < 0.5 ? (csum.label_b || "B") + "显著" : "不显著";
+              ciNote = " · CI [" + (loB * 100).toFixed(0) + "%," + (hiB * 100).toFixed(0) + "%] " + sigB;
+            }
+            html += '<div style="font-size:0.8125rem;margin-bottom:0.5rem;"><strong>盲评胜率</strong> <span style="font-weight:600;">' + wrPct + '</span>（' + csum.a_wins + '胜/' + csum.b_wins + '负/' + csum.ties + '平' + failNote + ciNote + '）</div>';
           }
           for (const comp of comps) {
             const la = csum.label_a || 'with';

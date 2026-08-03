@@ -621,7 +621,7 @@ skill-eval batch-report batch-workspace/ --open
 
 同一 LLM 同一次看 side A / side B 两份产出（不知哪个是候选），判谁更好 + 打 rubric 分。**相对判断、噪声抵消**，比 per-run 独立打分稳。位置随机化（coin-flip 决定 A/B 摆位），winner 自描述为语义标签（`label_a`/`label_b`/tie）。
 
-聚合为 `comparison_summary`：`a_wins` / `b_wins` / `ties`（genuine tie，计入分母）/ `failed`（调用失败，**排除出分母**）/ `valid` / `win_rate`（= `a_wins/valid`，tie-**计入**）。
+聚合为 `comparison_summary`：`a_wins` / `b_wins` / `ties`（genuine tie，计入分母）/ `failed`（调用失败，**排除出分母**）/ `valid` / `win_rate`（= `a_wins/valid`，tie-**计入**）/ `win_rate_ci_lo` / `win_rate_ci_hi`（Wilson 95% 置信区间；`lo>0.5` → A 显著更优，`hi<0.5` → B 显著更优，含 0.5 → 不显著、样本可能不足）。
 
 > 注意 `comparison_summary.win_rate` 是 tie-**计入**版；`gate --min-win-rate` 用的是 tie-**排除**版 `a_wins/(a_wins+b_wins)`，两者在阈值边界会判决翻转——故 gate 自行计算，不复用该字段。
 
@@ -795,6 +795,7 @@ skill-eval batch-report batch-workspace/ --open
     "without_skill": { "...": "..." },
     "delta": {
       "pass_rate": "+0.50",
+      "pass_rate_normalized_gain": "+0.83",
       "pass_rate_programmatic": "+0.27",
       "pass_rate_llm": "+0.12",
       "time_seconds": "+13.0",
@@ -806,7 +807,8 @@ skill-eval batch-report batch-workspace/ --open
   ],
   "comparison_summary": {
     "total": 10, "a_wins": 6, "b_wins": 2, "ties": 1, "failed": 1,
-    "valid": 9, "win_rate": 0.67, "label_a": "with", "label_b": "without"
+    "valid": 9, "win_rate": 0.67, "win_rate_ci_lo": 0.36, "win_rate_ci_hi": 0.89,
+    "label_a": "with", "label_b": "without"
   },
   "analysis": {...},
   "llm_token_usage": {
@@ -827,7 +829,9 @@ skill-eval batch-report batch-workspace/ --open
 - 每个 config 的 `run_summary` 含 `pass_rate` / `pass_rate_programmatic` / `pass_rate_llm`（后两者可能为 `null`）+ `time_seconds` / `tokens`。
 - `delta` 全为有符号字符串（`+0.27`），= `configs[0] - configs[1]`（候选 - 基线）；双率项可能为 `null`。
 - **客观 Δ 趋零解读（D6）**：`delta.pass_rate_programmatic` 绝对值 ≤ 0.05（对齐染色阈值）= with/without 客观通过率无显著差异 = skill 相对 base 未带来增益。viewer「通过率变化」卡显 ⚠️ 警告、batch 表格/DAG delta 旁标 ⚠。**⚠ 只是「无增益」信号，不等于 skill 无用——先排查依赖目录是否进入工作区（常见假无增益，见 handbook），排除后再考虑 skill 已被模型原生能力覆盖（dead weight）、该核查 scope 或收窄**。客观为主（稳）；主观 Δ 不单独触发（漂）。
-- `comparison_summary.win_rate` = `a_wins/valid`（tie-计入）；`gate` 用 tie-排除版自行算。
+- `comparison_summary.win_rate` = `a_wins/valid`（tie-计入）；`gate` 用 tie-排除版自行算。`win_rate_ci_lo/hi` = Wilson 95% 区间，viewer 盲评胜率卡显区间 + 显著性（样本不足标「不显著，建议加 run」）。
+- `delta.pass_rate_normalized_gain` = `(post-pre)/(1-pre)` 天花板修正（raw Δ 在高分段如 0.9→0.95 系统性低估改进）；viewer Δ 卡并列报出。
+- viewer 检查点总览：主侧（with）某 eval 跨 run 的程序通过率忽过忽挂（不全等）→ 题号旁 ⚠ 红旗，tooltip 给补跑命令 `run --eval-ids <id> --runs 更大`（补跑须调大 runs 才走 accumulate 累加，否则 fresh 会归档全部旧采样）。
 - `selection`（可选,仅 `--changed-from` 子集跑时）:`{mode, ids, affected, total}`——标识本次为受改动影响的子集跑、delta 非整体测量。
 - `llm_token_usage`:本次评测的 LLM token 用量,分四段——`scoring`(grader+comparator+analyzer 合计(另细分 grader/comparator/analyzer 分计段),带 cost/calls,calls=各子项真实调用次数之和)、`audit`(compliance/audit rollup 自 per-run compliance.json)、`executor`(被测 cc token,仅 token 数无 cost)、`total`(全加 token;cost = scoring+audit)。**executor 是被测 skill 的 token 效率指标(无 cost);scoring+audit 才是评测系统付出的 LLM 成本**。现有「令牌数」/「Δ 令牌数」(executor)语义不变,viewer 头部新增「LLM token 用量」分列(评分/遵循性/executor)+ 总计。
 - `llm_duration_seconds`:本次评测的耗时(秒),同四段——`scoring`(grader+comparator+analyzer 调用时长加总(另细分 grader/comparator/analyzer 分计))、`audit`(compliance rollup)、`executor`(各 run 时长加总)、`total`(**墙钟**,run 命令头尾独立测)。**与 token 的关键差异**:token 是消耗品可累加(total=分列和);time 是墙钟、各段并行重叠(workers/线程池),**分列和 ≥ total 是正常的**,total 不由分列推导、viewer **不对账**分列和 vs total。分列看"哪段重",total 看"等多久"。viewer 头部「耗时」分列 + 墙钟总计。

@@ -24,6 +24,7 @@ from skill_eval.execution.comparison_suite import run_comparisons
 from skill_eval.execution.analysis_suite import run_analysis
 from skill_eval.utils import TokenUsageAccumulator, DurationAccumulator
 from skill_eval.execution.run_paths import index_runs, is_nested
+from skill_eval.stats import normalized_gain
 
 
 def calculate_stats(values: list[float]) -> StatsValue:
@@ -526,7 +527,9 @@ class BenchmarkAggregator:
         if len(configs) >= 2:
             a = run_summary.get(configs[0], {})
             b = run_summary.get(configs[1], {})
-            dpr = a.get("pass_rate", {}).get("mean", 0) - b.get("pass_rate", {}).get("mean", 0)
+            a_pr = a.get("pass_rate", {}).get("mean", 0)
+            b_pr = b.get("pass_rate", {}).get("mean", 0)
+            dpr = a_pr - b_pr
             dts = a.get("time_seconds", {}).get("mean", 0) - b.get("time_seconds", {}).get("mean", 0)
             dtk = a.get("tokens", {}).get("mean", 0) - b.get("tokens", {}).get("mean", 0)
 
@@ -540,6 +543,7 @@ class BenchmarkAggregator:
 
             run_summary["delta"] = {
                 "pass_rate": f"{dpr:+.2f}",
+                "pass_rate_normalized_gain": f"{normalized_gain(b_pr, a_pr):+.2f}",
                 "pass_rate_programmatic": _dual_delta("pass_rate_programmatic"),
                 "pass_rate_llm": _dual_delta("pass_rate_llm"),
                 "time_seconds": f"{dts:+.1f}",
