@@ -109,6 +109,11 @@ class InstructionCheck(BaseModel):
     priority: InstructionPriority
     check_method: CheckMethod
     params: dict[str, Any] = Field(default_factory=dict)
+    # 该指令在声明原文里所属 markdown 列表项(含续行)的完整文本,带主语上下文。
+    # **判定不读它**:judge 吃 instruction_text(谓语片段,如「必须存在」);source_excerpt
+    # 只供显示层补全被切走的主语(如「design_doc_cases.json 必须存在」)。extract 时填,
+    # 透传到 AuditFinding;缺省空(向后兼容旧产物 / 合成文案)。
+    source_excerpt: str = ""
 
 
 class HardViolation(BaseModel):

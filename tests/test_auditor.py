@@ -1900,3 +1900,32 @@ def test_conditional_scene_fallback_when_no_user_turn(tmp_path, monkeypatch) -> 
     scene = m.group(1)
     assert scene.strip() != "", "skill 切片无 user turn → 场景描述不应为空(应回退 transcript_text)"
     assert "CANARY_SCENE_FALLBACK" in scene
+
+
+def test_source_excerpt_propagates_to_finding(tmp_path, monkeypatch):
+    """audit 产出的 finding 带上 instruction 的 source_excerpt(主语上下文)。
+
+    判定不变:judge 仍吃 instruction_text(谓语片段);source_excerpt 只透传给 finding
+    供显示层补全被切的主语。回归:st-verifier「必须存在且非空」无主语(主语在列表项
+    首行被切走)→ finding.source_excerpt 带回 design_doc_cases.json。
+    """
+    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+    body = (
+        "## 标准产物存在性\n\n"
+        "- **用例生成类**:`design_doc_cases.json` 与 `ttk_design_doc_cases.csv`\n"
+        "  (黑盒为其 TTK 用例 CSV)必须存在且非空 —— 缺任一 → FAILED。\n"
+    )
+    tp = _write_jsonl(tmp_path / "s.jsonl", _read_file_records("/tmp/x"))
+    report = TranscriptAuditor().audit("s", body, [tp])
+
+    must = [
+        f for f in report.findings
+        if "必须存在" in f.instruction_text and "非空" in f.instruction_text
+    ]
+    assert must, "应有「必须存在且非空」的 finding"
+    # 主语从列表项首行经 instruction → finding 透传
+    assert any("design_doc_cases.json" in f.source_excerpt for f in must), (
+        "source_excerpt 应带回主语 design_doc_cases.json"
+    )
+    # 判定用的 instruction_text 仍是谓语片段(主语不在其中)
+    assert all("design_doc_cases.json" not in f.instruction_text for f in must)

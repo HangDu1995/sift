@@ -70,6 +70,16 @@ def _extract_required_params(rest: str) -> list[str]:
     return tokens
 
 
+def _clean_md(s: str) -> str:
+    """轻量清洗 markdown 噪声供显示:去粗体标记 ``**``、去行首列表标记(``- `` / ``* `` / ``1. ``)。
+
+    保留反引号(前端可当代码渲染)。只服务 source_excerpt(显示用),不碰 instruction_text。
+    """
+    s = re.sub(r"\*\*", "", s)
+    s = re.sub(r"(?m)^[ \t]*([-*+]\s+|\d+\.\s+)", "", s)
+    return s.strip()
+
+
 class InstructionExtractor:
     def extract(self, body: str) -> list[InstructionCheck]:
         checks: list[InstructionCheck] = []
@@ -105,12 +115,51 @@ class InstructionExtractor:
 
         return sections
 
+    @staticmethod
+    def _bullet_excerpt(text: str, anchor: int) -> str:
+        """``anchor`` 所在 markdown 列表项(含续行)的完整原文,清洗后返回。
+
+        供显示层补全被切走的主语:判定只吃 instruction_text(谓语片段,如「必须存在」),
+        本字段把同 bullet 首行的主语(如 ``design_doc_cases.json``)一起带回。anchor 落在
+        列表项 → 回溯到该列表项起始、含所有续行;落在散文 / 代码块(无列表项) → 回退到
+        anchor 所在行。空文本 / 越界 → 空。
+        """
+        if not text or anchor < 0 or anchor >= len(text):
+            return ""
+        # 回溯到最近的列表项起始行(- * + 或 数字.)。text[:anchor+1] 含 anchor 所在行首。
+        item_starts = [
+            m.start() for m in re.finditer(r"(?m)^[ \t]*([-*+]\s+|\d+\.\s+)", text[: anchor + 1])
+        ]
+        if not item_starts:
+            # 散文:回退到 anchor 所在行(整行,可能自带主语)
+            line_start = text.rfind("\n", 0, anchor) + 1
+            line_end = text.find("\n", anchor)
+            return _clean_md(text[line_start : line_end if line_end != -1 else len(text)])
+        bullet_start = item_starts[-1]
+        indent_m = re.match(r"[ \t]*", text[bullet_start:])  # 列表项起始行的前导空白(恒匹配)
+        base_indent = len(indent_m.group(0)) if indent_m else 0
+        # 往后含续行(缩进 > base_indent);遇空行 / 缩进 ≤ base_indent 的非空行终止
+        pos = text.find("\n", bullet_start)
+        pos = pos + 1 if pos != -1 else len(text)
+        while pos < len(text):
+            nl = text.find("\n", pos)
+            seg = text[pos : nl if nl != -1 else len(text)]
+            if seg.strip() == "":
+                break  # 空行终止(紧凑 list;loose list 跨空行不常见,保守)
+            indent = len(seg) - len(seg.lstrip(" \t"))
+            if indent <= base_indent:
+                break  # 缩进 ≤ 列表项 → 不属本 bullet(下一列表项 / 同级 / 散文)
+            pos = nl + 1 if nl != -1 else len(text)
+        return _clean_md(text[bullet_start:pos])
+
     def _extract_heading_steps(self, section: str, text: str) -> list[InstructionCheck]:
         checks: list[InstructionCheck] = []
-        lines = text.strip().split("\n")
-        imperative_re = re.compile(r"^[*\-]\s+\**[A-Z]")
 
-        for line in lines:
+        # 累计行 offset(未 strip)以回溯 bullet 原文;instruction_text 计算与原逻辑等价
+        offset = 0
+        for line in text.split("\n"):
+            line_start = offset
+            offset += len(line) + 1  # +\n
             stripped = line.strip()
             m = re.match(r"^\d+\.\s+", stripped)
             if not m and not stripped.startswith(("* ", "- ")):
@@ -126,6 +175,7 @@ class InstructionExtractor:
                 section=section,
                 priority=InstructionPriority.REQUIRED,
                 check_method=CheckMethod.LLM_JUDGE,
+                source_excerpt=self._bullet_excerpt(text, line_start),
             ))
 
         return checks
@@ -164,6 +214,7 @@ class InstructionExtractor:
                     priority=InstructionPriority.REQUIRED,
                     check_method=CheckMethod.TOOL_CALL_CHECK,
                     params={"tool_name": tool_name, "required_params": required_params},
+                    source_excerpt=self._bullet_excerpt(text, match.start()),
                 ))
         return checks
 
@@ -189,6 +240,7 @@ class InstructionExtractor:
                 section="Constraint",
                 priority=InstructionPriority.REQUIRED,
                 check_method=CheckMethod.LLM_JUDGE,
+                source_excerpt=self._bullet_excerpt(body, match.start()),
             ))
         return checks
 
@@ -203,7 +255,10 @@ class InstructionExtractor:
         )
         if not has_af:
             return checks
+        offset = 0
         for line in body.split("\n"):
+            line_start = offset
+            offset += len(line) + 1
             ls = line.strip().lower()
             if "fabricat" in ls or "invent" in ls or "hallucinat" in ls or any(w in line for w in ANTI_FABRICATION_CN):
                 checks.append(InstructionCheck(
@@ -212,6 +267,7 @@ class InstructionExtractor:
                     section="Anti-Fabrication",
                     priority=InstructionPriority.REQUIRED,
                     check_method=CheckMethod.LLM_JUDGE,
+                    source_excerpt=self._bullet_excerpt(body, line_start),
                 ))
         return checks
 

@@ -85,6 +85,10 @@ class AuditFinding(BaseModel):
     """
 
     instruction_text: str
+    # 该指令在声明原文里所属 bullet 的完整文本(含主语上下文)。显示层用它补全被切的主语;
+    # **判定不读它**(judge 吃 instruction_text)。透传自 InstructionCheck.source_excerpt,
+    # 缺省空(合成文案 / derived / 旧 JSON)。加在 finding 上供下游(insight)渲染。
+    source_excerpt: str = ""
     source: str  # InstructionSource 的值(如 "CONSTRAINT")——指令的规则类型
     verdict: AuditVerdict
     method: AuditMethod  # 判定方法(PROGRAMMATIC / LLM)——怎么查的
@@ -135,6 +139,8 @@ class InstructionAggregate(BaseModel):
     """单条指令跨 transcript 的对账聚合(见 audit.aggregate.aggregate_by_instruction)。"""
 
     instruction_text: str
+    # 该指令所属 bullet 的完整原文(含主语);透传自 AuditFinding,显示用、判定不读。缺省空。
+    source_excerpt: str = ""
     source: str
     category: AuditCategory
     pass_count: int

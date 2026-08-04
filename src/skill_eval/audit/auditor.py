@@ -670,6 +670,7 @@ class TranscriptAuditor:
             if verdict == AuditVerdict.FAIL:
                 findings[orig_i] = AuditFinding(
                     instruction_text=inst.instruction_text,
+                    source_excerpt=inst.source_excerpt,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.LLM,
@@ -680,6 +681,7 @@ class TranscriptAuditor:
             elif verdict == AuditVerdict.NA:
                 findings[orig_i] = AuditFinding(
                     instruction_text=inst.instruction_text,
+                    source_excerpt=inst.source_excerpt,
                     source=inst.source.value,
                     verdict=AuditVerdict.NA,
                     method=AuditMethod.LLM,
@@ -692,6 +694,7 @@ class TranscriptAuditor:
             elif verdict == AuditVerdict.INDETERMINATE:
                 findings[orig_i] = AuditFinding(
                     instruction_text=inst.instruction_text,
+                    source_excerpt=inst.source_excerpt,
                     source=inst.source.value,
                     verdict=AuditVerdict.INDETERMINATE,
                     method=AuditMethod.LLM,
@@ -764,6 +767,7 @@ class TranscriptAuditor:
             if verdict == AuditVerdict.FAIL:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
+                    source_excerpt=inst.source_excerpt,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.LLM,
@@ -776,6 +780,7 @@ class TranscriptAuditor:
             elif verdict == AuditVerdict.PASS:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
+                    source_excerpt=inst.source_excerpt,
                     source=inst.source.value,
                     verdict=AuditVerdict.PASS,
                     method=AuditMethod.LLM,
@@ -788,6 +793,7 @@ class TranscriptAuditor:
             elif verdict == AuditVerdict.INDETERMINATE:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
+                    source_excerpt=inst.source_excerpt,
                     source=inst.source.value,
                     verdict=AuditVerdict.INDETERMINATE,
                     method=AuditMethod.LLM,
@@ -868,6 +874,7 @@ class TranscriptAuditor:
             if verdict == AuditVerdict.PASS:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
+                    source_excerpt=inst.source_excerpt,
                     source=inst.source.value,
                     verdict=AuditVerdict.PASS,
                     method=AuditMethod.LLM,
@@ -880,6 +887,7 @@ class TranscriptAuditor:
             elif verdict == AuditVerdict.FAIL:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
+                    source_excerpt=inst.source_excerpt,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.LLM,
@@ -892,6 +900,7 @@ class TranscriptAuditor:
             elif verdict == AuditVerdict.NA:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
+                    source_excerpt=inst.source_excerpt,
                     source=inst.source.value,
                     verdict=AuditVerdict.NA,
                     method=AuditMethod.LLM,
@@ -904,6 +913,7 @@ class TranscriptAuditor:
             elif verdict == AuditVerdict.INDETERMINATE:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
+                    source_excerpt=inst.source_excerpt,
                     source=inst.source.value,
                     verdict=AuditVerdict.INDETERMINATE,
                     method=AuditMethod.LLM,
@@ -954,6 +964,7 @@ class TranscriptAuditor:
             if matched is not None:
                 findings.append(AuditFinding(
                     instruction_text=inst.instruction_text,
+                    source_excerpt=inst.source_excerpt,
                     source=inst.source.value,
                     verdict=AuditVerdict.PASS,
                     method=AuditMethod.PROGRAMMATIC,
@@ -969,6 +980,7 @@ class TranscriptAuditor:
                     evidence = "未提供期望输出格式样本"
                 findings.append(AuditFinding(
                     instruction_text=inst.instruction_text,
+                    source_excerpt=inst.source_excerpt,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.PROGRAMMATIC,
@@ -1049,6 +1061,7 @@ class TranscriptAuditor:
             evidence += f"(含 {' '.join(params)})"
         return AuditFinding(
             instruction_text=inst.instruction_text,
+            source_excerpt=inst.source_excerpt,
             source=inst.source.value,
             verdict=AuditVerdict.PASS,
             method=AuditMethod.PROGRAMMATIC,
@@ -1075,6 +1088,7 @@ class TranscriptAuditor:
         """
         return AuditFinding(
             instruction_text=inst.instruction_text,
+            source_excerpt=inst.source_excerpt,
             source=inst.source.value,
             verdict=AuditVerdict.UNRESOLVED,
             method=AuditMethod.LLM,

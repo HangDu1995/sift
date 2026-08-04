@@ -81,6 +81,16 @@ json.dump(data, f, indent=2)
 """
 
 
+# 列表项跨两行(首行主语 + 缩进续行谓语),模拟 st-verifier audit 里主语被切的实况。
+MULTILINE_BULLET_BODY = """\
+## 标准产物存在性
+
+- **用例生成类**:`design_doc_cases.json` 与 `ttk_design_doc_cases.csv`
+  (黑盒为其 TTK 用例 CSV)必须存在且非空 —— 缺任一 → FAILED。
+- 框架 manifest `aclnn_cpp_cases.json` 必须存在且 cases 非空 —— 缺失 / 为空 → FAILED。
+"""
+
+
 class TestInstructionExtractor:
     def test_extracts_heading_steps(self):
         ext = InstructionExtractor()
@@ -124,6 +134,36 @@ class TestInstructionExtractor:
         assert len(constraints) >= 1
         texts = " ".join(c.instruction_text for c in constraints)
         assert "NEVER" in texts or "DO NOT" in texts
+
+    def test_source_excerpt_carries_subject_from_bullet_header(self):
+        """CONSTRAINT 抓到续行谓语(主语在列表项首行)时,source_excerpt 带回主语上下文。
+
+        回归:st-verifier audit 实测「必须存在且非空」无主语(主语文件名在上一行列表项
+        首行被切走)。source_excerpt 从 match 回溯到所属列表项、截完整 bullet(含主语),
+        供显示层补全;judge 仍吃原 instruction_text(谓语片段)不变 → 判定零影响。
+        """
+        ext = InstructionExtractor()
+        checks = ext.extract(MULTILINE_BULLET_BODY)
+        constraints = [c for c in checks if c.source == InstructionSource.CONSTRAINT]
+        gen_case = next(
+            c for c in constraints
+            if "必须存在" in c.instruction_text and "非空" in c.instruction_text
+        )
+        # 主语从列表项首行带回
+        assert "design_doc_cases.json" in gen_case.source_excerpt
+        # 判定用的 instruction_text 仍是谓语片段(主语不在其中)
+        assert "design_doc_cases.json" not in gen_case.instruction_text
+
+    def test_source_excerpt_falls_back_to_line_when_not_in_bullet(self):
+        """match 落在散文(非列表项)→ source_excerpt 回退到所在行(含主语)。"""
+        ext = InstructionExtractor()
+        body = "本任务必须使用 UTF-8 编码,不得遗漏任何字段。\n"  # 散文,无列表项
+        checks = ext.extract(body)
+        must = next(
+            c for c in checks
+            if c.source == InstructionSource.CONSTRAINT and c.instruction_text.startswith("必须")
+        )
+        assert "本任务" in must.source_excerpt  # 散文回退仍带回主语
 
     def test_extracts_anti_fabrication(self):
         ext = InstructionExtractor()

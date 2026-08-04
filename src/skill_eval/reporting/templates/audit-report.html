@@ -91,6 +91,7 @@
     .finding.INDETERMINATE { border-left: 3px dashed var(--red); }
     .instruction { font-weight: 600; margin: 0.25rem 0; }
     .evidence { color: var(--text-muted); font-size: 0.9rem; margin: 0.25rem 0; }
+    .instruction-anchor { color: var(--text-muted); font-size: 0.8rem; margin: 0.1rem 0 0.25rem; }
     .transcript { color: var(--text-muted); font-size: 0.8rem; }
     .src { color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 0 0.3rem; margin-left: 0.3rem; font-size: 0.7rem; text-transform: uppercase; }
     .noise { padding: 0.05rem 0.4rem; border-radius: 3px; font-size: 0.72rem; margin-left: 0.3rem; border: 1px solid; display: inline-block; }
@@ -173,6 +174,19 @@
         return '<span class="method" title="未知判定方法">—</span>';
       }
 
+      // 指令行:优先 source_excerpt(声明原文所属 bullet,含被切的主语);与 instruction_text
+      // 不同时把 instruction_text(judge 实际判定的谓语锚点)作小字附下,便于核对。纯显示,
+      // 判定只吃 instruction_text 不受影响。
+      function renderInstruction(f) {
+        var text = f.instruction_text || '';
+        var excerpt = f.source_excerpt || '';
+        if (excerpt && excerpt.trim() !== text.trim()) {
+          return '<div class="instruction">' + escapeHtml(excerpt) + '</div>' +
+            '<div class="instruction-anchor">判定锚点:' + escapeHtml(text) + '</div>';
+        }
+        return '<div class="instruction">' + escapeHtml(text) + '</div>';
+      }
+
       // 单个 finding 的内层 HTML(finding-head + instruction + evidence + transcript)。多/单分支共用,DRY。
       function renderFinding(f) {
         var vd = VERDICT_DISPLAY[f.verdict] || { cls: 'badge-na', icon: '?', label: f.verdict || '?' };
@@ -200,7 +214,7 @@
           '<span class="cat">' + escapeHtml(f.category || '') + '</span>' +
           srcTag + derived + related + noise + turn +
           methodTag(f.method) + '</div>' +
-          '<div class="instruction">' + escapeHtml(f.instruction_text || '') + '</div>' +
+          renderInstruction(f) +
           '<div class="evidence">' + escapeHtml(f.evidence || '') + '</div>' +
           '<div class="transcript">@ ' + escapeHtml(f.transcript || '') + srcBadge(f.transcript) + '</div>';
       }
@@ -277,7 +291,7 @@
             // 噪声判别徽章(fail_count>0 行才有;无 noise_label → —)。整列让 reader 扫哪些 FAIL 是工具噪声。
             var noise = a.noise_label ? noiseBadge(a.noise_label, a.noise_reasons) : '—';
             return '<tr><td class="seq">' + escapeHtml(seqs) + '</td><td class="' + colorCls + '">' + pct + '%</td>' +
-              '<td>' + escapeHtml(a.instruction_text || '') + '</td>' +
+              '<td>' + escapeHtml(a.source_excerpt || a.instruction_text || '') + '</td>' +
               '<td>' + escapeHtml(a.category || '') + '</td>' +
               '<td>' + (a.fail_count || 0) + '/' + (a.total || 0) + '</td>' +
               '<td>' + noise + '</td>' +
@@ -297,7 +311,7 @@
           var naHtml = naRows.map(function (a) {
             var seqs = (a.na_seqs || []).map(function (s) { return '#' + s; }).join(', ');
             return '<tr><td class="seq">' + escapeHtml(seqs) + '</td><td class="badge-na">' + (a.na_count || 0) + '/' + (a.total || 0) + '</td>' +
-              '<td>' + escapeHtml(a.instruction_text || '') + '</td>' +
+              '<td>' + escapeHtml(a.source_excerpt || a.instruction_text || '') + '</td>' +
               '<td>' + escapeHtml(a.category || '') + '</td>' +
               '<td>' + escapeHtml((a.na_in_transcripts || []).join(', ')) + '</td></tr>';
           }).join('');
