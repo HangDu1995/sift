@@ -44,6 +44,6 @@ def test_template_script_passes_node_check():
 def test_render_real_data_has_dims_and_badges():
     """用真实 report 喂 JS 的字符串变换,验证读取路径(渲染输出含维度名 + status badge)。"""
     html = CritiqueReportGenerator().generate_html(_sample_report())
-    assert "失败机制编码" in html or "失败机制编码" in html  # 维度名进了渲染输出
+    assert "失败机制编码" in html  # 维度名进了渲染输出
     assert "badge-met" in html or "满足" in html
     assert "badge-missing" in html or "缺失" in html

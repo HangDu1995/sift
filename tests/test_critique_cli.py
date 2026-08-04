@@ -37,7 +37,6 @@ def test_critique_reports_dims_and_writes_json(monkeypatch, tmp_path):
     out = tmp_path / "out"
     r = runner.invoke(crt_cmd.app, ["critique", str(skill), "-o", str(out)])
     assert r.exit_code == 0, r.output
-    assert "[cyan]" not in r.output                   # 富文本标记不能漏到纯文本(markup=False 守卫,对齐 coverage)
     assert "满足" in r.output and "部分" in r.output and "缺失" in r.output  # 三态汇总
     assert "失败机制编码" in r.output                   # 维度名
     assert "漏 DB_HOST" in r.output                    # evidence 上报

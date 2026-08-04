@@ -61,7 +61,9 @@ def _build_critique_prompt(name: str, body: str) -> str:
 def _parse_critique_response(response: str, skill_name: str) -> ContentQualityReport:
     """解析 LLM 评审响应。畸形/空 → 空 report(宁少报不乱报)。
     按 key 归位(4 条固定,不依赖 LLM 返回顺序);漏条/非法 status → 该条默认 missing。
-    正则抠最大 {...}(fence 在大括号外被自然略过)对齐 coverage._parse_coverage_response。"""
+    正则抠最大 {...} 同 coverage(fence 在大括号外被自然略过);但有效 dict 无/空 dimensions
+    (如 {"error":"rate limited"}) → 4 条全 missing(非空 report,提示 LLM 跑题);完全非 dict
+    (畸形 JSON)→ 空 report。与 coverage(无 dimensions 返空)刻意分歧:missing 比 silent empty 显眼。"""
     obj = None
     try:
         obj = json.loads(response)

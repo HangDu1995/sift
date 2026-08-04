@@ -134,3 +134,13 @@ def test_analyze_call_failure_returns_empty(monkeypatch, tmp_path):
     rep = analyze_content_quality(skill, model=None, timeout=120)
     assert rep.dimensions == []                        # 失败 → 空 report(诊断不炸)
     assert rep.duration_seconds >= 0.0
+
+
+def test_parse_response_valid_dict_no_dims_yields_four_missing():
+    """有效 dict 但无/空 dimensions(LLM 返 JSON 但没按格式)→ 4 条全 missing,
+    非 silent 空 report(提示 LLM 跑题)。与 coverage 无 dimensions 返空刻意分歧。"""
+    for resp in ('{"error": "rate limited"}', '{"dimensions": []}'):
+        rep = _parse_critique_response(resp, "sk")
+        assert len(rep.dimensions) == 4
+        assert all(d.status == "missing" for d in rep.dimensions)
+        assert all("未评审" in d.feedback for d in rep.dimensions)
