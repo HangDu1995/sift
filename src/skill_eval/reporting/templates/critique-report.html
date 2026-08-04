@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>content quality report</title>
+  <style>
+    /* :root 变量拷自 coverage-report.html / trigger-report.html,保持同一套配色 */
+    :root {
+      --bg: #faf9f5; --surface: #ffffff; --border: #e8e6dc; --text: #141413;
+      --text-muted: #b0aea5; --accent: #d97757;
+      --green: #788c5d; --green-bg: #eef2e8;
+      --yellow: #b08800; --yellow-bg: #faf3e0;
+      --red: #c44; --red-bg: #fceaea;
+      --radius: 6px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Lora', Georgia, serif; background: var(--bg); color: var(--text); margin: 2rem; }
+    #critique-root { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 2rem; max-width: 960px; }
+    h1 { font-family: 'Poppins', system-ui, sans-serif; font-size: 1.5rem; font-weight: 600; margin-bottom: 0.75rem; }
+    .summary { display: flex; flex-wrap: wrap; gap: 0.25rem; font-size: 0.95rem; margin-bottom: 1.25rem; }
+    .summary span { margin-right: 0.8rem; }
+    .badge-met { color: var(--green); font-weight: 600; }
+    .badge-partial { color: var(--yellow); font-weight: 600; }
+    .badge-missing { color: var(--red); font-weight: 600; }
+    .badge-tokens { color: var(--text-muted); font-weight: normal; }
+    .dim { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.8rem 1rem; margin-bottom: 0.8rem; }
+    .dim.met { border-left: 4px solid var(--green); }
+    .dim.partial { border-left: 4px solid var(--yellow); }
+    .dim.missing { border-left: 4px solid var(--red); background: var(--red-bg); }
+    .dim-head { font-weight: 600; margin-bottom: 0.4rem; }
+    .dim-head .tag { margin-left: 0.5rem; font-size: 0.85rem; }
+    .evidence { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.3rem; white-space: pre-wrap; }
+    .feedback { font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <div id="critique-root"></div>
+  <script>
+    /*__EMBEDDED_DATA__*/;
+    (function () {
+      function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+      function fmtDur(sec){if(!sec)return '';return sec>=60?(sec/60).toFixed(1)+'min':sec.toFixed(1)+'s';}
+      var D = EMBEDDED_DATA;
+      var dims = D.dimensions || [];
+      var sc = {met:0,partial:0,missing:0};
+      dims.forEach(function(d){if(sc[d.status]!==undefined){sc[d.status]++;}});
+      var tu = D.token_usage || {};
+      var tok = (tu.input_tokens||0) + (tu.output_tokens||0);
+      var STATUS_CN = {met:'满足',partial:'部分',missing:'缺失'};
+      var html = '';
+      html += '<h1>' + escapeHtml(D.skill_name) + ' · 正文内容质量</h1>';
+      html += '<div class="summary">';
+      html += '<span>满足 <b class="badge-met">' + sc.met + '</b></span>';
+      html += '<span>部分 <b class="badge-partial">' + sc.partial + '</b></span>';
+      html += '<span>缺失 <b class="badge-missing">' + sc.missing + '</b></span>';
+      if (tok) html += '<span class="badge-tokens">' + tok + ' tok</span>';
+      var d = fmtDur(D.duration_seconds); if (d) html += '<span class="badge-tokens">耗时 ' + d + '</span>';
+      html += '</div>';
+      dims.forEach(function(dm){
+        var st = dm.status || 'missing';
+        html += '<div class="dim ' + st + '">';
+        html += '<div class="dim-head">' + escapeHtml(dm.name||'') + ' <span class="tag badge-' + st + '">' + STATUS_CN[st] + '</span></div>';
+        if (dm.evidence) html += '<div class="evidence">↳ SKILL.md:「' + escapeHtml(dm.evidence) + '」</div>';
+        if (dm.feedback) html += '<div class="feedback">' + escapeHtml(dm.feedback) + '</div>';
+        html += '</div>';
+      });
+      document.getElementById('critique-root').innerHTML = html;
+    })();
+  </script>
+</body>
+</html>
