@@ -653,9 +653,9 @@ v1/v2 是盲比较的**杀手级应用——CI 回归门禁**：skill 提 PR（v
 
 ## 第七章 遵循性与 audit
 
-遵循性回答"过程有没有按 SKILL.md 做"。它是 skill-eval 的原创层，也是和 skill-creator 这类工具最大的差异点。
+遵循性回答"过程有没有按声明做"——执行有没有真照声明（skill 的 SKILL.md / agent 定义 / 编排者声明）走，而不只看输出对不对。它是 skill-eval 的原创层，也是和 skill-creator 这类工具最大的差异点。
 
-**audit 的噪声地图（先看全貌，逐条展开见 §7.2–§7.14）**
+**audit 的噪声地图（先看全貌，逐条展开见 §7.2–§7.12）**
 
 audit 是诊断工具——它的结果不像 run 那样能靠“消噪”磨出干净数字，而是靠“诚实标注哪些不可信”让你判断能信多少。下表把噪声来源和各自怎么治 / 诊断一眼列全，后面各节逐条展开。
 
@@ -665,8 +665,8 @@ audit 是诊断工具——它的结果不像 run 那样能靠“消噪”磨出
 | LLM 判官判定抖 | 同一条指令这次 PASS、下次判不出或判反 | 五态诚实标注（`UNRESOLVED` 可重跑、`INDETERMINATE` 带证据）+ 宁少报（没判成 → `UNRESOLVED`，不保守 FAIL） | §7.4 / §7.5 |
 | 头尾窗口盲区 | 执行记录太长，旧的只留头部 → 尾部收口被漏看 → 假 PASS | 头 + 尾各留一半 + 中段截断标记 + 完整 `tool_trace` 兜底 | §7.2 末 |
 | 条件性场景空 | `--kind` 切出的段没有 user turn → 条件性指令一律弃判 | 空场景时回退用 `transcript_text` 当场景 | §7.2 末 |
-| 工具噪声混进 FAIL | FAIL 里混着工具的洞和真 skill 问题 | `noise_label` 逐条打标（tool_noise / skill_issue / uncertain） | §7.12 |
-| `--turn-refs` 条件分支过严 | 开 `--turn-refs` 后，本该跳过的条件分支被误判 FAIL | 默认关，要定位时再 opt-in 开 | §7.13 |
+| 工具噪声混进 FAIL | FAIL 里混着工具的洞和真声明问题 | `noise_label` 逐条打标（tool_noise / skill_issue / uncertain） | §7.10 |
+| `--turn-refs` 条件分支过严 | 开 `--turn-refs` 后，本该跳过的条件分支被误判 FAIL | 默认关，要定位时再 opt-in 开 | §7.11 |
 
 一个根本差异：**run 的三层噪声是“消”**——programmatic 归零、盲比较抵消、`--runs` 聚合，每层都有手段把噪声磨掉（见 §1.6）；**audit 的噪声大多是“标”**——磨不掉，只能诚实标出哪些不可信（`UNRESOLVED` / `INDETERMINATE` / `noise_label`），告诉你哪些结果能信、哪些要重跑或人工复核。所以读 audit 结果，看的是**可信度标注**，不是数字本身——这也是 §7.5 那句“0 FAIL ≠ 全过”的由来。
 
@@ -676,7 +676,7 @@ audit 是诊断工具——它的结果不像 run 那样能靠“消噪”磨出
 
 ### 7.2 6 类指令 → 4 个语义类别
 
-遵循性判定的**出题依据是 SKILL.md**（不是 eval）。`InstructionExtractor` 从 SKILL.md 静态抽出 6 类可检查指令：
+遵循性判定的**出题依据是声明**（skill 的 SKILL.md / agent 定义 / 编排者声明，不是 eval）。`InstructionExtractor` 从声明正文静态抽出 6 类可检查指令：
 
 - `HEADING_STEP`（应走某步骤）
 - `TOOL_REQUIREMENT`（该用某工具/运行某脚本）
@@ -689,24 +689,24 @@ audit 是诊断工具——它的结果不像 run 那样能靠“消噪”磨出
 
 | 类别 | 来自哪些指令 | 怎么判 |
 |------|------------|--------|
-| 条件性 CONDITIONAL | TOOL_REQUIREMENT / REFERENCE_USAGE | 命中 tool_trace（**含参数级断言**——SKILL 要求的 CLI 参数也得对，否则不命中走 LLM；路径规范化比对）→ PASS（**程序判定**）；未命中 → LLM 判该不该触发 |
+| 条件性 CONDITIONAL | TOOL_REQUIREMENT / REFERENCE_USAGE | 命中 tool_trace（**含参数级断言**——声明要求的 CLI 参数也得对，否则不命中走 LLM；路径规范化比对）→ PASS（**程序判定**）；未命中 → LLM 判该不该触发 |
 | 禁令 PROHIBITION | CONSTRAINT / ANTI_FABRICATION | LLM **主动检测这次有没有违规**（不是判"遵守没"） |
 | 步骤 STEP | HEADING_STEP | LLM 判走过 / 该走没走 / 不涉及 |
 | 输出格式 OUTPUT | OUTPUT_FORMAT | **确定性子串匹配**（程序判定，不调 LLM） |
 
-> **条件性的「程序判定」现在看参数**：TOOL_REQUIREMENT 命中工具名只是第一步——SKILL 点名的 CLI 参数（如要求跑 `pytest --tb=short`，参数就是 `--tb=short`）也得出现在 agent 实际命令里，才算程序判定 PASS。漏参数不算 PASS，**也不直接 FAIL**，而是走 LLM 判「这场景到底该不该要这个参数」。所以你会看到「agent 明明跑了 pytest、条件性却没给程序 PASS」——多半是它漏了 SKILL 点名的参数，交给 LLM 定夺了。匹配口径：工具名、路径类大小写不敏感且做了规范化比对（解相对/绝对路径差异 + 前缀边界）；CLI 参数大小写敏感、精确断言。抽不到参数的指令（指令里没点名具体参数）行为不变。
+> **条件性的「程序判定」现在看参数**：TOOL_REQUIREMENT 命中工具名只是第一步——声明点名的 CLI 参数（如要求跑 `pytest --tb=short`，参数就是 `--tb=short`）也得出现在 agent 实际命令里，才算程序判定 PASS。漏参数不算 PASS，**也不直接 FAIL**，而是走 LLM 判「这场景到底该不该要这个参数」。所以你会看到「agent 明明跑了 pytest、条件性却没给程序 PASS」——多半是它漏了声明点名的参数，交给 LLM 定夺了。匹配口径：工具名、路径类大小写不敏感且做了规范化比对（解相对/绝对路径差异 + 前缀边界）；CLI 参数大小写敏感、精确断言。抽不到参数的指令（指令里没点名具体参数）行为不变。
 
-> **输出格式（OUTPUT_FORMAT）怎么知道匹配什么**：extractor 从 SKILL.md 抽出声明的输出格式要求（比如规定产物要含某个标题 / 标记 / 模板），audit 拿它去和实际输出做**子串匹配**——命中 → PASS，未命中 → FAIL（这类没有 N/A / 没判成 / 判不准，因为是纯字符串判定）。所以 SKILL.md 里把输出格式写得越具体（点名某个 marker），越容易被抽到、查得越准。
+> **输出格式（OUTPUT_FORMAT）怎么知道匹配什么**：extractor 从声明抽出输出格式要求（比如规定产物要含某个标题 / 标记 / 模板），audit 拿它去和实际输出做**子串匹配**——命中 → PASS，未命中 → FAIL（这类没有 N/A / 没判成 / 判不准，因为是纯字符串判定）。所以声明里把输出格式写得越具体（点名某个 marker），越容易被抽到、查得越准。
 
 > 禁令的判法是**反着来**的：其它三类问"该不该做/做没做"（正面遵循），禁令问"这次执行里有没有发生**违反**这条禁令的行为"——主动找违规。例如 `NEVER fabricate error codes`，模型 hallucinate 一个错误码 → `violated=true` → FAIL。
 
 > **判官看什么 + 两处结构性噪声的防呆**：三个 LLM 判官各看不同的执行上下文——条件性看「场景」（`digest.user_turns`，任务上下文，判指令该不该触发）、禁令 / 步骤看「执行记录」（`transcript_text`，assistant 文字 + 工具调用渲染）。两处防呆治实测的两条主噪声：① **条件性场景回退**——`--kind skill/agent` 切出来的段只有执行 turn、没有 user turn（任务在父作用域），条件性判官原拿空场景只能一律弃判 INDETERMINATE（实测占 22%–55%）；现空场景时回退用 `transcript_text`（执行本身揭示任务上下文）当场景，判官方能判 applicability 而非弃判。② **头 + 尾窗口**——执行记录远超 prompt 预算时（实测单段 60–150KB），旧裸 `[:8000]` 只留头、尾部（最终结果 / 总结 / 收尾）判官全盲 → 禁令类「未见收口」假 PASS 或弃判；现取头 + 尾各半 + 中段截断标记，token 成本不变、覆盖从单端变双端。步骤类另有完整 `tool_trace`（不截断）兜底，所以「有没有调某工具」不受截断影响。
 
-> **extractor 的地基瓶颈**：SKILL.md 是给人读的自由文本——讲解、示例、真步骤混在一起，没有结构标记区分"这行是指令"还是"这行是示例"。extractor 抽指令只能靠正则死规则（标题下、大写开头 ≈ 步骤），于是教程型 skill 里的示例文字（如 `3 agents dispatched in parallel`、`6 failures across 3 files`）会被误抽成"指令"喂给判官 → 卷子大半是废题 → 判官再准也只能大量判 N/A（伪指令判不准）。这就是为什么遵循性常出很多 N/A、为什么教程型 skill 特别难审（路径 2/3 共用的地基问题）。根治两路：① **结构化声明**——skill 作者在 frontmatter 声明 `required_tools`/`required_reads`/`required_outputs`，extractor 直接查声明、不挖散文（最稳，但要 skill 作者配合改格式，待做）；② **refine**——正则粗召回后用 LLM 精筛伪指令（工具侧改进，不改 skill 格式），**默认开**，详见 §7.3。
+> **extractor 的地基瓶颈**：声明正文是给人读的自由文本——讲解、示例、真步骤混在一起，没有结构标记区分"这行是指令"还是"这行是示例"。extractor 抽指令只能靠正则死规则（标题下、大写开头 ≈ 步骤），于是教程型 skill 里的示例文字（如 `3 agents dispatched in parallel`、`6 failures across 3 files`）会被误抽成"指令"喂给判官 → 卷子大半是废题 → 判官再准也只能大量判 N/A（伪指令判不准）。这就是为什么遵循性常出很多 N/A、为什么教程型 skill 特别难审（路径 2/3 共用的地基问题）。根治两路：① **结构化声明**——声明作者在 frontmatter 声明 `required_tools`/`required_reads`/`required_outputs`，extractor 直接查声明、不挖散文（最稳，但要声明作者配合改格式，待做）；② **refine**——正则粗召回后用 LLM 精筛伪指令（工具侧改进，不改声明格式），**默认开**，详见 §7.3。
 
 ### 7.3 refine：extractor 粗召回后的 LLM 精筛
 
-§7.2 末尾提到 extractor 的地基瓶颈——它靠正则死规则从自由文本里抽指令，保召回但不分"真指令"还是"示例/占位"，于是教程型 skill 里的示例文字会被误抽成指令喂给判官，判官再准也只能大量判 N/A。refine 就是治这个的工具侧方案（不改 skill 格式）。
+§7.2 末尾提到 extractor 的地基瓶颈——它靠正则死规则从自由文本里抽指令，保召回但不分"真指令"还是"示例/占位"，于是教程型 skill 里的示例文字会被误抽成指令喂给判官，判官再准也只能大量判 N/A。refine 就是治这个的工具侧方案（不改声明格式）。
 
 **两段式**：extractor 正则**粗召回**（宁可多抽、不漏真指令）→ refine 在判定前用 LLM 逐条**精筛**"这是真实可检查的指令，还是示例/占位文字"，只砍明确判为伪指令的。
 
@@ -714,9 +714,9 @@ audit 是诊断工具——它的结果不像 run 那样能靠“消噪”磨出
 
 **默认开**：`--refine-instructions` 默认开（`--no-refine-instructions` 关），`audit` / `run` 都支持。砍掉的条数和来源写进 report 顶部 warnings（如 `refine: 滤除 9 条疑似示例/占位伪指令(HEADING_STEP 7, …)`）。`OUTPUT_FORMAT` 不精筛（纯程序子串匹配，精筛无收益）。
 
-**per-SKILL hash 缓存**：refine 只看 SKILL 指令、不看 transcript，所以同一份指令只算一次。缓存键 = 指令内容（每条的来源/标题/文本）+ model + prompt 版本的 hash，落盘 `~/.cache/skill-eval/refine/`，跨 audit() 调用、跨进程复用。这解决了 runner 每 eval×config×run 调一次 audit、同 SKILL.md 反复 refine 实测 10+ 分钟的问题——首次算完落盘，后续命中秒回。指令内容 / model / prompt 版本任一变 → 键变 → 自动失效重算；删 `~/.cache/skill-eval/refine/` 可强制清。
+**per-声明 hash 缓存**：refine 只看声明指令、不看 transcript，所以同一份指令只算一次。缓存键 = 指令内容（每条的来源/标题/文本）+ model + prompt 版本的 hash，落盘 `~/.cache/skill-eval/refine/`，跨 audit() 调用、跨进程复用。这解决了 runner 每 eval×config×run 调一次 audit、同一份声明反复 refine 实测 10+ 分钟的问题——首次算完落盘，后续命中秒回。指令内容 / model / prompt 版本任一变 → 键变 → 自动失效重算；删 `~/.cache/skill-eval/refine/` 可强制清。
 
-**边界**：extractor 本身冻结在固定版本、纯正则不调 LLM（保证可复现、不把 LLM 方差引入抽取层）；refine 是 audit 层加的独立步骤，不破坏 extractor 的 layering。另一条根治路——结构化声明（frontmatter 声明 `required_tools`/`required_reads`/`required_outputs`，extractor 直接查声明）——更稳但仍待做（要 skill 作者配合改格式）；在那之前，refine 是默认兜底。
+**边界**：extractor 本身冻结在固定版本、纯正则不调 LLM（保证可复现、不把 LLM 方差引入抽取层）；refine 是 audit 层加的独立步骤，不破坏 extractor 的 layering。另一条根治路——结构化声明（frontmatter 声明 `required_tools`/`required_reads`/`required_outputs`，extractor 直接查声明）——更稳但仍待做（要声明作者配合改格式）；在那之前，refine 是默认兜底。
 
 ### 7.4 五态 verdict + method 双维度
 
@@ -744,7 +744,7 @@ audit 是诊断工具——它的结果不像 run 那样能靠“消噪”磨出
 
 ### 7.5 "宁可少报不乱报"
 
-遵循性是诊断工具，**精度 > 召回**——假 FAIL 一多，skill 作者就不信这工具了。所以：
+遵循性是诊断工具，**精度 > 召回**——假 FAIL 一多，声明作者就不信这工具了。所以：
 
 - **FAIL 只在 LLM 明确判"违规/该做没做"时报**；
 - LLM 没判成（超时/异常/解析失败/未提及/畸形值）→ 报 UNRESOLVED，**不保守 FAIL**；
@@ -759,41 +759,50 @@ audit 是诊断工具——它的结果不像 run 那样能靠“消噪”磨出
 
 ### 7.7 audit 命令：对账历史 transcript
 
-audit 是**对账**，不是单看 transcript——背后有个根本前提：**transcript 只是执行事实，不是规范**。它只记"做了什么"，给不出禁令（如"禁止编造数据"）、也说不出遗漏（"该做没做"）。若把 transcript 单方面当标准答案，会出两类错：把违规固化成期望（做过就当对）、把违规洗成 N/A（没判违规就算过）。所以规范权威永远是 SKILL.md，transcript 只提供场景和事实，**两者交叉**才有可靠判断——冲突点由 SKILL.md 仲裁，trace 始终只当证据。
+audit 是**对账**，不是单看 transcript——背后有个根本前提：**transcript 只是执行事实，不是规范**。它只记"做了什么"，给不出禁令（如"禁止编造数据"）、也说不出遗漏（"该做没做"）。若把 transcript 单方面当标准答案，会出两类错：把违规固化成期望（做过就当对）、把违规洗成 N/A（没判违规就算过）。所以规范权威永远是**声明**（skill 的 SKILL.md / agent 的定义 .md / 编排者的声明），transcript 只提供场景和事实，**两者交叉**才有可靠判断——冲突点由声明仲裁，trace 始终只当证据。
+
+audit **不 re-run Claude**，直接拿已有会话的 transcript 跟声明对账。被审声明（首参）可以是 skill 目录（找其下 SKILL.md）、SKILL.md 文件、或任意 agent / workflow 的 .md 文件（直读）。`--transcript` 吃两种格式(按后缀自动分派):cc 会话 `.jsonl`(`run --task` 两种执行器都支持,默认 `cc` 产 `.jsonl`,`--executor opencode` 产 `.json`)或 opencode session `.json`(`opencode export <sessionID>` 导出,顶层 `info`/`messages`、parts 嵌在 message 里;生产:`opencode session list` 找 id → `opencode export <id> > s.json`)。**拿到一个 .db 文件**(别处拷来的库)直接 `audit --db handed.db`(内部自动 list/export/audit;单 session 自动选,多个列出挑;底层三步见 reference audit 段)。可重复,多条 transcript 做指令级聚合(跨会话看 fail%)。
 
 ```bash
-skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out/
-skill-eval audit path/to/skill/ --transcript a.jsonl --transcript b.jsonl   # 多 transcript 聚合
-skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --kind skill
-skill-eval audit path/to/skill/ --transcript opencode-session.json          # opencode session(.json)
+skill-eval audit path/to/decl/ --transcript run-1/transcript.jsonl -o audit-out/   # decl = skill 目录 / SKILL.md / agent.md
+skill-eval audit path/to/decl/ --transcript a.jsonl --transcript b.jsonl            # 多 transcript 聚合
+skill-eval audit path/to/decl/ --transcript opencode-session.json                   # opencode session(.json)
 ```
-
-audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md 对账。`--transcript` 吃两种格式(按后缀自动分派):cc 会话 `.jsonl`(`run --task` 两种执行器都支持,默认 `cc` 产 `.jsonl`,`--executor opencode` 产 `.json`)或 opencode session `.json`(`opencode export <sessionID>` 导出,顶层 `info`/`messages`、parts 嵌在 message 里;生产:`opencode session list` 找 id → `opencode export <id> > s.json`)。**拿到一个 .db 文件**(别处拷来的库)直接 `audit --db handed.db`(内部自动 list/export/audit;单 session 自动选,多个列出挑;底层三步见 reference audit 段)。可重复,多条 transcript 做指令级聚合(跨会话看 fail%)。
 
 判定要逐批调 LLM（每批约 40–257s），跑期间实时打印进度（`[条件性/禁令/步骤] 判定 N 条…`），三个 LLM 类别判定器（条件性 / 禁令 / 步骤；输出格式走程序判定不调 LLM）并发跑（约 2× 提速）。看到 `[类别] …` 滚动就是在跑，别误以为卡死。
 
 **对账作用域（两层，skill/agent/root 一视同仁）**：
 
 - **默认（不带 `--kind`）= 宽松全 session 模式**：拿**整条 transcript** 对声明 body 对账、不切分——**skill / agent / root 三者共同默认**（不是 skill 专属捷径）。整段当一个袋子判，别单元的行为会混进报告：skill 指令多"做事方式"类、不活跃段多落 N/A（误伤轻），故 skill 宽松模式常可接受；但 agent / root 的角色专属 / 编排指令会扣到不相干 record 上（agent 尤甚 → 误 FAIL）。
-- **`--kind skill/agent/root` = 精确收窄**：切到声明单元的真实执行作用域再对账（`skill` 按 `Skill` 调用切，scope-aware last-invoked-owns：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent 是独立作用域、其 `parent_tool_use_id` 标记的 record 不污染主 skill 归属）。三条限制：① skill 无"返回"信号，"调 A→调 B→不重调 A 接着干 A"那段会归给 B（不可测）；② 把委派子 skill 的段折进来审（inclusive）需声明、暂不支持；③ 该单元没以所选锚点在 transcript 出现 → exit 2（不静默跑空）。
+- **`--kind skill/agent/root` = 精确收窄**：切到声明单元的真实执行作用域再对账——三种锚点各切各的、**不并集**（skill 按 `Skill` 调用、agent 按 `agent` 归属、root 按主作用域，分别见 §7.7.1 / §7.7.2 / §7.7.3）。该单元没以所选锚点在 transcript 出现 → exit 2（不静默跑空）。
 
 **对称提示**：不带 `--kind` 但 transcript 含可收窄锚点（本 skill 被调用 / `agent==name` 段 / 子 agent 作用域）时，audit 打黄字提示可加哪个 `--kind`（skill/agent/root 一视同仁、**非阻断**——宽松模式照跑）。opencode 单锚点（无 `Skill` tool_use），`--kind skill/agent` 的区分对它无意义、照按 per-message `agent` 字段切；提示也只对 cc / structured transcript 触发。
 
-另两种作用域各成一节：**被 dispatch 的子 agent → §7.8**；**顶层主 agent / 编排者 → §7.9**。`--kind` 三选一，选锚点、不并集。
+三种作用域各成一节（平权，`--kind` 三选一）：**审 skill → §7.7.1**；**审 agent → §7.7.2**；**审 root → §7.7.3**。
 
-读结果（别只数 fail、来源徽章 / 同源关联）见 **§7.10**；transcript 反推出的额外检查见 **§7.11**；违规 turn 定位见 **§7.13**。
+读结果（别只数 fail、来源徽章 / 同源关联）见 **§7.8**；transcript 反推出的额外检查见 **§7.9**；违规 turn 定位见 **§7.11**。
 
-### 7.8 审 agent：对账被 dispatch 的 subagent
+#### 7.7.1 审 skill（`--kind skill`）
 
-audit 不只能审 skill，也能审**被 dispatch 的 subagent**——拿 subagent 的定义 .md 去验它在会话里有没有按定义执行。skill 对账审不了 subagent：skill 按 `Skill` 工具调用切，而 subagent 不是被 `Skill` 调用的、是被 `Agent`/`Task` 工具 dispatch 的，落不进 skill 的切段。agent 对账填的就是这个空白。
+skill 按 transcript 里的 `Skill` 工具调用切——**scope-aware last-invoked-owns**：每个 `Skill`（target）调用起一段、归该 skill 到同作用域下一次 `Skill` 调用或作用域结束；子 agent（`Agent` 工具）是独立作用域，其 record 带 `parent_tool_use_id`、不污染主 skill 归属。target 调多次 → 多段 → 多 transcript 聚合。
 
-**怎么用**：第一个参数给 agent 的定义目录（含 `SKILL.md`），加 `--kind agent`：
+```bash
+skill-eval audit path/to/skill/ --transcript big-multi-skill.jsonl --kind skill   # 多 skill 会话：只对账本 skill 被调用段
+```
+
+两条固有限制：① skill 无"返回"信号，"调 A→调 B→不重调 A 接着干 A"那段会归给 B（不可检测，解法是 agent 显式重调 A）；② 把委派子 skill 的段折进来审（inclusive）需用户声明、暂不支持。
+
+#### 7.7.2 审 agent（`--kind agent`）
+
+审**被 dispatch 的 subagent**——拿 subagent 的定义 .md 去验它在会话里有没有按定义执行。agent 与 skill 是两种不同的执行单元：skill 被 `Skill` 工具调用、agent 被 `Agent`/`Task` 工具 dispatch，落进不同的切段（所以审 agent 用 `--kind agent`，不能用 `--kind skill`）。
+
+**怎么用**：第一个参数给 agent 声明（fixture 式目录含 `SKILL.md`，如 `test-runner/`；或直接给 agent 的 `.md` 文件，如 `agents/developer.md`），加 `--kind agent`：
 
 ```bash
 skill-eval audit path/to/test-runner/ --transcript session.json --kind agent   # 审被 dispatch 的 subagent（给 agent 定义目录）
 ```
 
-切片器按 `record.agent == <name>` 切出该 agent 被 dispatch 期间的连续段，再对账它的 `SKILL.md` 指令。**name 契约**：agent .md frontmatter 的 `name` 要对上 transcript 里的 `agent` 字段（如 `name: test-runner` ↔ `record.agent == "test-runner"`）——对不上就切不到段、exit 2。
+切片器按 `record.agent == <name>` 切出该 agent 被 dispatch 期间的连续段，再对账它的声明指令。**name 契约**：agent .md frontmatter 的 `name` 要对上 transcript 里的 `agent` 字段（如 `name: test-runner` ↔ `record.agent == "test-runner"`）——对不上就切不到段、exit 2。
 
 **和 skill 对账的三处区别**：
 
@@ -803,9 +812,9 @@ skill-eval audit path/to/test-runner/ --transcript session.json --kind agent   #
 
 现成示例：`fixtures/example-agents/`（test-runner / lint-reviewer，合成违规 transcript + 期望该抓的违规逐条列明），见 [example-agents/README.md](../fixtures/example-agents/README.md)。
 
-> opencode transcript 单锚点（无 `Skill` tool_use），`--kind skill/agent` 的区分对它无意义、照常按 per-message `agent` 字段切——cc 的 skill/agent 双锚点区分只对 cc / structured transcript 有意义（`--kind root` 在 opencode 取 `session.info.agent`，见 §7.9）。
+> opencode transcript 单锚点（无 `Skill` tool_use），`--kind skill/agent` 的区分对它无意义、照常按 per-message `agent` 字段切——cc 的 skill/agent 双锚点区分只对 cc / structured transcript 有意义（`--kind root` 在 opencode 取 `session.info.agent`，见 §7.7.3）。
 
-### 7.9 审 root（`--kind root`）：对账顶层主 agent / 编排者
+#### 7.7.3 审 root（`--kind root`）：对账顶层主 agent / 编排者
 
 与 agent（被 dispatch 的子 agent）对称，root 切的是**顶层主 agent**的作用域——审主 agent 的**编排动作**（dispatch 了谁、何时、怎么接返回），而非子 agent 内部。它是整 session / workflow 审计的地基：主 agent 的声明常是一份 workflow 级 SKILL.md（管主 agent 怎么编排，而不是某个子 skill / 子 agent 的行为），root 就是拿这份声明去对账主 agent 作用域的执行。
 
@@ -814,35 +823,35 @@ skill-eval audit path/to/test-runner/ --transcript session.json --kind agent   #
 - **cc / 结构化 records** = `parent_tool_use_id` 为空的全部 record（主作用域）。主 agent 自己的 turn + 它发起的 Agent dispatch tool_use / tool_result 都在主作用域（这些是主 agent 的编排动作，**包含**）；子 agent 内部 record 的 `parent_tool_use_id` 指向某 Agent 调用（**排除**——那些归各自 `kind="agent"` 单元审）。
 - **opencode** 无父子作用域，root 取 `session.info.agent`（declared 主 agent），复用 `slice_opencode_by_agent` 按连续同 agent message 切段。
 
-**断段差异**（同源于 §7.8 agent 路的"扁平切"）：cc 主作用域过滤后是连贯的主执行流，作为**单 span** 喂 auditor（即使主 record 在原序列里被子 agent record 物理夹断，过滤后仍连贯一段，区别于 agent 路的同名 run 断段）；opencode 按连续 message 切，主 agent 的 message 若被子 agent 的 message 夹断（主…子…主…子…主），会被切成**多段**——这无害，每段独立喂 auditor，findings 全量 pool 后按指令聚合（`aggregate_by_instruction`），verdict 与合成单 span 等价（与 agent 路断段无害同理）。
+**断段差异**（同源于 §7.7.2 agent 路的"扁平切"）：cc 主作用域过滤后是连贯的主执行流，作为**单 span** 喂 auditor（即使主 record 在原序列里被子 agent record 物理夹断，过滤后仍连贯一段，区别于 agent 路的同名 run 断段）；opencode 按连续 message 切，主 agent 的 message 若被子 agent 的 message 夹断（主…子…主…子…主），会被切成**多段**——这无害，每段独立喂 auditor，findings 全量 pool 后按指令聚合（`aggregate_by_instruction`），verdict 与合成单 span 等价（与 agent 路断段无害同理）。
 
 **target 名对 root 无意义**：skill / agent 路靠声明名（`name` 契约）切，root 只认作用域（cc 的 `parent_tool_use_id` 是否为空 / opencode 的 `info.agent` 字段）——切主 agent 不看它叫什么、target 名忽略。这也是 root 能成为整 session 审计地基的原因：它不依赖某个子单元被点名调用，而是恒定的顶层作用域。
 
 exit code 不变（root 不引入新 gate）：cc 主作用域在**非空 transcript** 下恒非空（至少起头 user turn 在主），never-invoked 不触发 exit 2；**完全空 transcript 仍触发 exit 2**（无 record → 主作用域也为空，never-invoked）；opencode 缺 `session.info.agent`（无法定主 agent）→ exit 2。
 
-### 7.10 怎么读 audit 结果：别只数 fail + 来源徽章
+### 7.8 怎么读 audit 结果：别只数 fail + 来源徽章
 
-读 audit 结果时记住一句话：**别只数 fail 条数**——每条 finding 带序号。**来源徽章**显示这条 finding 是从哪个 / 哪些 `InstructionSource` 抽出来的（CONSTRAINT / ANTI_FABRICATION / HEADING_STEP / TOOL_REQUIREMENT / REFERENCE_USAGE / OUTPUT_FORMAT）。当同一句 SKILL.md 文本同时匹配多个抽取模式（如同句既是约束、又是反捏造）、且同 transcript 同 verdict 时，会**合并成一条**，徽章就显示两个来源（如 `CONSTRAINT + ANTI_FABRICATION`）——证明同文重复已去重、没有虚增 fail。而同一行为跨两条**不同**规则（如没读某 reference 同时违反"条件性"+"步骤"两条）仍会是两条，但互标"↔ 同源违规 #N"。所以 fail 条数可能 > 真实问题数，逐条看 evidence 对照"哪个行为"，别数条数。
+读 audit 结果时记住一句话：**别只数 fail 条数**——每条 finding 带序号。**来源徽章**显示这条 finding 是从哪个 / 哪些 `InstructionSource` 抽出来的（CONSTRAINT / ANTI_FABRICATION / HEADING_STEP / TOOL_REQUIREMENT / REFERENCE_USAGE / OUTPUT_FORMAT）。当同一句声明文本同时匹配多个抽取模式（如同句既是约束、又是反捏造）、且同 transcript 同 verdict 时，会**合并成一条**，徽章就显示两个来源（如 `CONSTRAINT + ANTI_FABRICATION`）——证明同文重复已去重、没有虚增 fail。而同一行为跨两条**不同**规则（如没读某 reference 同时违反"条件性"+"步骤"两条）仍会是两条，但互标"↔ 同源违规 #N"。所以 fail 条数可能 > 真实问题数，逐条看 evidence 对照"哪个行为"，别数条数。
 
-### 7.11 derived_from_transcript（反推）
+### 7.9 derived_from_transcript（反推）
 
-findings 里 `derived_from_transcript: true` 的不是从 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（**只增不减** = 只新增 finding，不会替换或删掉从 SKILL.md 抽出来的指令）。**目前只补一类**：transcript 里 agent 真实 Read 过的输入/参考文件 → 各补一条"读取 \<path\>"（REFERENCE_USAGE，构造上即命中 → PASS，不膨胀 fail）。另外两类不反推——工具调用反推（`required_tools`，Bash 命令分不清业务专用还是通用）和产物文件反推（`required_outputs`，历史 trace 的产物未必还在盘，且"产出文件检查"属评分断言、不属遵循性指令），因为映射不干净、容易误判。
+findings 里 `derived_from_transcript: true` 的不是从声明抽出来的，而是从 transcript 实际行为**补**出来的检查（**只增不减** = 只新增 finding，不会替换或删掉从声明抽出来的指令）。**目前只补一类**：transcript 里 agent 真实 Read 过的输入/参考文件 → 各补一条"读取 \<path\>"（REFERENCE_USAGE，构造上即命中 → PASS，不膨胀 fail）。另外两类不反推——工具调用反推（`required_tools`，Bash 命令分不清业务专用还是通用）和产物文件反推（`required_outputs`，历史 trace 的产物未必还在盘，且"产出文件检查"属评分断言、不属遵循性指令），因为映射不干净、容易误判。
 
-### 7.12 逐条判别：某条 FAIL 是工具噪声还是 skill 问题
+### 7.10 逐条判别：某条 FAIL 是工具噪声还是声明问题
 
-fixture 下遵循性的 FAIL 混着工具噪声和真 skill 问题（见 §7.14）。报告现在给每条 FAIL **自动标**一个启发式判别（per-run findings、整体汇总 by_instruction、单次 audit-report 的违规表都带徽章 + hover 理由）：
+fixture 下遵循性的 FAIL 混着工具噪声和真声明问题（见 §7.12）。报告现在给每条 FAIL **自动标**一个启发式判别（per-run findings、整体汇总 by_instruction、单次 audit-report 的违规表都带徽章 + hover 理由）：
 
 | `noise_label` | 含义 | 典型信号（命中即标）|
 |---|---|---|
-| `tool_noise`（疑似工具噪声）| 改 skill 治不了，根因在工具 | `source=HEADING_STEP` 且指令像资源链接（资源描述被当步骤）；evidence 自相矛盾（称"不涉及"却判 FAIL）；LLM 判定带跨类关联（`related` 非空）；聚合 NA 多 FAIL 少（条件性资源被当无条件步骤）|
-| `skill_issue`（疑似 skill 问题）| 大概率真 skill 没做到 | 硬约束（`CONSTRAINT`/`ANTI_FABRICATION`）+ 程序判定 FAIL（确定、可复现）|
+| `tool_noise`（疑似工具噪声）| 改声明治不了，根因在工具 | `source=HEADING_STEP` 且指令像资源链接（资源描述被当步骤）；evidence 自相矛盾（称"不涉及"却判 FAIL）；LLM 判定带跨类关联（`related` 非空）；聚合 NA 多 FAIL 少（条件性资源被当无条件步骤）|
+| `skill_issue`（疑似声明问题）| 大概率真声明没做到 | 硬约束（`CONSTRAINT`/`ANTI_FABRICATION`）+ 程序判定 FAIL（确定、可复现）|
 | `uncertain`（待确认）| 单条信号不足 | 其余 FAIL —— 看汇总分布或人工复核 evidence |
 
-**怎么用**：看到 FAIL 先看徽章 + 理由（hover）。`tool_noise` → 别急着改 skill，先想 extractor/判定/evidence 是不是工具的洞（典型：SKILL「详细资源」段的链接描述被抽成步骤）；`skill_issue` → 这才是改 skill 的信号；`uncertain` → 人工看 evidence。优先级 `tool_noise > skill_issue > uncertain`（取最严：有一条噪声信号就归 tool_noise，**避免据噪声误改 skill**）。
+**怎么用**：看到 FAIL 先看徽章 + 理由（hover）。`tool_noise` → 别急着改声明，先想 extractor/判定/evidence 是不是工具的洞（典型：声明「详细资源」段的链接描述被抽成步骤）；`skill_issue` → 这才是改声明的信号；`uncertain` → 人工看 evidence。优先级 `tool_noise > skill_issue > uncertain`（取最严：有一条噪声信号就归 tool_noise，**避免据噪声误改声明**）。
 
 **诚实说**：这是**启发式 + 疑似 + 理由，不是权威判决**（可能假阳/假阴）。它**治标**（帮解读现有噪声），没让 compliance 更准 —— 治本仍 `--refine-instructions`（判定前 LLM 砍伪指令，默认开）/ 结构化声明（frontmatter 声明 required_*）/ 真实 transcript audit。**别以为"标了 tool_noise = compliance 可信了"**。判别规则源码：`audit/noise.py`（纯函数，不调 LLM/不读 transcript）。
 
-### 7.13 turn 定位（`turn_refs`）：可选的违规 turn 定位，默认关
+### 7.11 turn 定位（`turn_refs`）：可选的违规 turn 定位，默认关
 
 audit 的 finding 默认告诉你「违反了什么指令 + evidence（中文理由）」，但**不告诉你在哪个 turn**——几百 turn 的 session 里手动翻找不现实。`turn_refs` 补这个：FAIL / INDETERMINATE 的 finding 带 `turn_refs` 列表（全局 turnIndex），能 link 到 turn 的消费方（如有 turn 浏览器的下游工具）拿它能直接跳到对应 turn 看上下文。
 
@@ -885,16 +894,16 @@ audit 的 finding 默认告诉你「违反了什么指令 + evidence（中文理
 - **OUTPUT / CONDITIONAL 类不带 turn_refs**：`--turn-refs` 只让 prohibition / step 类（走 transcript_text + turn 引用的 LLM judge）输出 turn_refs。OUTPUT 是程序化子串匹配、CONDITIONAL（TOOL_REQUIREMENT / REFERENCE_USAGE）的 FAIL 是段级缺席（trace 全程未调用 / 未读取 X）——两者都无具体 turn 可定位、恒空；只有 prohibition / step 的 turn 级违规才带 seq。
 - **想减条件分支误判**：别再试判定层纠偏（三轮皆败）。靠报告层 triage（empty/有 seq），或改单轮 prompt / conditional 判定器本身的「条件不满足→N/A」引导。
 
-### 7.14 这一层的边界：fixture 下边际价值低，真实 transcript 下价值高
+### 7.12 这一层的边界：fixture 下边际价值低，真实 transcript 下价值高
 
 诚实说，遵循性在不同路径下价值差别很大：
 
 - **路径 3（fixture 评测）**：compliance 的边际价值偏低。fixture transcript 是按剧本 spawn 出来的，模型的行为高度受 skill-eval 的 prompt 框定；这里 compliance 查出来的"违规"，有相当一部分根因不在 skill 而在工具自身——典型就是上面讲的 extractor 把示例文字误当指令，导致大量 N/A。换句话说，fixture 下 compliance 更多暴露"工具的洞"，而非"skill 的洞"。要"找 skill 问题 → 改 skill"，主信号是 **scoring（A/B delta）+ 静态分析（analyze/vet）**，不是 compliance。
-- **路径 2（audit 真实 transcript）**：价值高。真实会话里的违规是**诊断资产**——它如实反映 skill 在实际使用中被遵循成什么样，反过来暴露 skill 指令设计清不清晰、容不容易被遵循。这里的违规不是噪声，正是你想看的。
+- **路径 2（audit 真实 transcript）**：价值高。真实会话里的违规是**诊断资产**——它如实反映声明在实际使用中被遵循成什么样，反过来暴露声明指令设计清不清晰、容不容易被遵循。这里的违规不是噪声，正是你想看的。
 
-所以：做 fixture A/B 评测，别对 compliance 的数字过度解读（尤其 N/A 多时，先想 extractor 误抽）；要评估 skill 的真实遵循质量，拿真实会话跑 audit。
+所以：做 fixture A/B 评测，别对 compliance 的数字过度解读（尤其 N/A 多时，先想 extractor 误抽）；要评估声明的真实遵循质量，拿真实会话跑 audit。
 
-### 7.15 transcript 怎么变成可对账的 digest：三种来源同一条重建路
+### 7.13 transcript 怎么变成可对账的 digest：三种来源同一条重建路
 
 audit 对账前，先得把 transcript **重建**成一个结构化 digest——把"模型读了哪些文件、写了什么、改了什么、调了哪些工具"从原始会话记录里还原出来。这里有个关键架构：**cc 会话、opencode 会话、结构化输入三种来源，归一到同一种中间表示，再走同一个重建器**，所以重建逻辑只维护一份。
 
@@ -927,9 +936,9 @@ tool_use / tool_result         {info, messages, parts}          {role, tool_call
                                  │
                                  ▼
                    TranscriptAuditor.audit()（对账）
-                   · 多 skill 会话已先切分 → 每段各自重建、audit 跨段聚合
-                     （cc 按 Skill tool_use；opencode 按 agent，切原始 session）
-                   · 从 SKILL.md 提指令（6 类 → 4 类，见 §7.2）
+                   · 多单元会话已按 --kind 先切分 → 每段各自重建、audit 跨段聚合
+                     （cc 按 Skill tool_use / agent 归属 / 主作用域；opencode 按 agent）
+                   · 从声明提指令（6 类 → 4 类，见 §7.2）
                    · 每条指令：命中 tool_trace → PASS（程序，不调 LLM）；
                                 否则 → LLM 语义判（transcript_text）
                    · 五态 verdict（见 §7.4），跨 transcript 聚合违规率
@@ -949,7 +958,7 @@ opencode 的转换器（`_records_from_opencode`）做三件事抹平格式差�
 
 抹平之后，Read/Write/Edit/MultiEdit 重建 + demoted/unreconstructed 推导（含上面的 read 清洗）对三种来源完全一致。**一个例外**：opencode session 没有 `Skill` tool_use（它的 skill 标识在 `info.agent`），所以 `skill_used` 由 opencode 侧从 `info.agent` 补回（重建器只从 `Skill` tool_use 抽，抽不到）。
 
-**多 skill 切分**也在归一之后口径统一：cc 按 `Skill` tool_use 切（父子作用域），opencode 按 per-message `agent` 切连续段（扁平，在转换前切原始 session）。切完每段各自重建 → 各自对账。
+**多单元切分（`--kind`）**也在归一之后口径统一：cc 按 `Skill` tool_use / `agent` 归属 / 主作用域切（skill/agent/root 三锚点），opencode 按 per-message `agent` 切连续段（扁平，在转换前切原始 session）。切完每段各自重建 → 各自对账。
 
 > **对 audit 判定无影响**：重建出的 `produced_files`/`input_files` 内容、`unreconstructed` 这些字段，audit 其实**不读**——audit 只读 `tool_trace`（程序匹配：工具名/路径大小写不敏感，参数级断言大小写敏感）+ `transcript_text`（LLM 语义判）+ `user_turns`（场景）。所以 opencode 接到共享路之后 digest 更完整（edit 过的文件也重建、内容干净、不可重建的会告警），但 audit 的 verdict 不受影响——变的是 digest 的"保真度"，不是判定结果。
 
