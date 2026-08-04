@@ -94,3 +94,43 @@ def test_parse_response_strips_json_fence():
     rep = _parse_critique_response(fenced, "sk")
     assert len(rep.dimensions) == 4              # fence 剥离 + 漏条补齐
     assert rep.dimensions[0].status == "met"
+
+
+import skill_eval.static_analysis.critique as crt
+from skill_eval.static_analysis.critique import analyze_content_quality
+
+
+def _fake_response_four_dims():
+    return '{"dimensions": [{"key": "failure_mechanism", "status": "met", "evidence": "e1", "feedback": "好"}, {"key": "actionable_specificity", "status": "partial", "evidence": "e2", "feedback": "改"}, {"key": "high_risk_blacklist", "status": "missing", "evidence": "", "feedback": "补"}, {"key": "examples", "status": "missing", "evidence": "", "feedback": "补例"}]}'
+
+
+def test_analyze_calls_claude_and_fills_body(monkeypatch, tmp_path):
+    skill = tmp_path / "sk"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n执行 deploy.sh\n", encoding="utf-8")
+    captured = {}
+
+    def fake_call(prompt, model=None, timeout=120, max_turns=None, on_usage=None):
+        captured["prompt"] = prompt
+        if on_usage:
+            on_usage({"input_tokens": 100, "output_tokens": 50})
+        return _fake_response_four_dims()
+
+    monkeypatch.setattr(crt, "call_claude", fake_call)
+    rep = analyze_content_quality(skill, model=None, timeout=120)
+
+    assert "执行 deploy.sh" in captured["prompt"]     # body_text 喂进去了
+    assert "description" not in captured["prompt"].split("SKILL.md 正文")[1].split("##")[0]  # 不喂 frontmatter
+    assert len(rep.dimensions) == 4
+    assert rep.token_usage.get("input_tokens") == 100  # on_usage 收了 token
+    assert rep.duration_seconds >= 0.0
+
+
+def test_analyze_call_failure_returns_empty(monkeypatch, tmp_path):
+    skill = tmp_path / "sk"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    monkeypatch.setattr(crt, "call_claude", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    rep = analyze_content_quality(skill, model=None, timeout=120)
+    assert rep.dimensions == []                        # 失败 → 空 report(诊断不炸)
+    assert rep.duration_seconds >= 0.0

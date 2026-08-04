@@ -93,3 +93,23 @@ def _parse_critique_response(response: str, skill_name: str) -> ContentQualityRe
             evidence=str(d.get("evidence", "")).strip(), feedback=feedback,
         ))
     return ContentQualityReport(skill_name=skill_name, dimensions=dims)
+
+
+def analyze_content_quality(skill_path: Path, *, model: str | None = None, timeout: int = 120) -> ContentQualityReport:
+    """一次 LLM:SKILL.md body_text → 内容质量 report。call_claude 失败 → 空 report(诊断不炸)。
+
+    取 parse_skill_md 第 5 返回值 body_text(纯正文,不含 frontmatter description)——
+    4 条 rubric 评正文,description 留给 trigger/static_analysis。
+    """
+    name, _desc, _content, _fm, body = parse_skill_md(skill_path)
+    prompt = _build_critique_prompt(name, body)
+    usage: dict = {}
+    start = time.perf_counter()
+    try:
+        response = call_claude(prompt, model=model, timeout=timeout, on_usage=usage.update)
+    except RuntimeError:
+        return ContentQualityReport(skill_name=name, duration_seconds=time.perf_counter() - start)
+    rep = _parse_critique_response(response, name)
+    rep.token_usage = usage
+    rep.duration_seconds = time.perf_counter() - start
+    return rep
