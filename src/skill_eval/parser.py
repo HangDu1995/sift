@@ -10,30 +10,38 @@ from skill_eval.errors import SkillParseError
 
 
 def resolve_skill_dir(skill_path: Path) -> Path:
-    """规范化 skill 路径:传 SKILL.md 文件 → 取父目录;传目录(或不存在的路径)→ 原样。
+    """规范化 skill 路径:**名为 SKILL.md 的文件** → 取父目录;其余 → 原样。
 
-    用户常误传 SKILL.md 文件而非其所在目录,统一兜底,让所有
-    "用 skill_path 找 SKILL.md / references / scripts / evals"的下游拿到目录。
+    只兜底"用户误传 SKILL.md 文件而非目录"这一种(让找 references/scripts/evals 的下游拿到目录)。
+    **非 SKILL.md 的 .md 文件是 agent/workflow 声明**(audit --kind agent/root 故意直传),
+    不动它——身份靠 frontmatter `name`,不靠文件名。
     """
-    return skill_path.parent if skill_path.is_file() else skill_path
+    if skill_path.is_file() and skill_path.name == "SKILL.md":
+        return skill_path.parent
+    return skill_path
 
 
 def parse_skill_md(
     skill_path: Path,
 ) -> tuple[str, str, str, dict, str]:
-    """Parse a SKILL.md file.
+    """Parse a declaration file:SKILL.md,或任意 agent/workflow 声明 .md。
 
     Args:
-        skill_path: Directory containing SKILL.md, or the SKILL.md file itself.
+        skill_path: 目录(找其下 SKILL.md)、SKILL.md 文件、或任意 .md 声明文件
+                    (agent/workflow,audit --kind agent/root 用)。
 
     Returns:
         (name, description, full_content, frontmatter_dict, body_text)
+        name 来自 frontmatter(切片身份,--kind 拿它当 target),与文件名无关。
 
     Raises:
         SkillParseError: If the file is missing or malformed.
     """
-    skill_path = resolve_skill_dir(skill_path)
-    skill_file = skill_path / "SKILL.md"
+    # 直传 .md 文件 → 读它本身(SKILL.md 或 agent/workflow 声明);目录 → 找 <dir>/SKILL.md。
+    if skill_path.is_file():
+        skill_file = skill_path
+    else:
+        skill_file = skill_path / "SKILL.md"
     if not skill_file.exists():
         raise SkillParseError(f"SKILL.md not found in {skill_path}")
 

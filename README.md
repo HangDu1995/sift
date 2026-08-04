@@ -2,12 +2,12 @@
 
 [![CI](https://github.com/guixu-labs/skill-eval/actions/workflows/ci.yml/badge.svg)](https://github.com/guixu-labs/skill-eval/actions/workflows/ci.yml)
 
-自动评测 [Claude Code Skill](https://github.com/anthropics/skills) 的 CLI——三层质量保障（评分 / 遵循性 / 校准）+ 盲比较 + post-hoc 门禁，CI 就绪。
+评测 [Claude Code Skill](https://github.com/anthropics/skills) 并审计 skill / agent / 编排者执行遵循性的 CLI——三层质量保障（评分 / 遵循性 / 校准）+ 盲比较 + post-hoc 门禁，CI 就绪。
 
 脱胎于 [skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator)——交互式 meta-skill，Claude 加载它对话式建/测 skill。两者**共享评测血脉**（A/B 对照、LLM grader、盲比较、benchmark、review UI 都源自那里），**互补而非替代**：skill-creator 适合探索期人盯着迭代，skill-eval 把它延展到成熟期的工程化 CI。skill-eval 独有：
 
 - **确定性 programmatic 断言 + 双率** — 文件存在 / 内容匹配等零 LLM、不可作弊的客观判定，与 LLM 判定分开报，干净信号不被阅卷噪声污染
-- **遵循性 compliance** — 对账执行过程是否真按 SKILL.md 指令走了，不只看输出对不对
+- **遵循性 compliance（`audit`）** — 对账执行过程是否真按**声明**走了（不只看输出对不对）。声明可是 skill（SKILL.md）、agent、或编排者：`--kind skill/agent/root` 切对应执行段，cc / opencode transcript 都能审
 - **校准 calibration** — 结果×过程 coherence：输出对了但过程违反硬性规则 → 高分存疑（5 态判决）
 - **post-hoc 门禁 + CI** — `gate` 独立命令出 PASS/FAIL，exit code 驱动 CI；`--format json` 合入 pipeline
 - **多作用域 transcript 审计 audit** — 把生产会话 transcript（cc / opencode 双源）与 SKILL.md 逐条对账；按 **skill / agent / root** 三种作用域切分：审被 `Skill` 调用的 skill 段、被 dispatch 的子 agent（`--kind agent`）、或顶层主 agent / 编排者（`--kind root`，整 workflow 审计的地基）；多 transcript 聚合可反推 skill 设计本身有没有问题
