@@ -82,6 +82,42 @@ def _audit_from_db(db: Path, session: Optional[str]) -> Path:
     return Path(f.name)
 
 
+def _print_scope_hint(transcript: list[Path], name: str) -> None:
+    """``--kind`` 未指定时,对称提示 transcript 含哪些可收窄锚点(skill/agent/root 一视同仁)。
+
+    默认(不带 ``--kind``)= 宽松全 session 模式,**三者共同默认**(skill/agent/root 声明都不切分、
+    整条 session 对 body 对账)。但 transcript 常含可切的作用域锚点(本 skill 调用 / ``agent==name`` 段 /
+    子 agent 作用域)——这些在宽松模式下会混进对账(agent/root 尤甚:角色专属指令扣到不相干 record 上
+    → 误 FAIL)。检测到任一锚点就提示可带对应 ``--kind`` 精确收窄。
+
+    **非阻断**:宽松模式是有意选项(尤其 skill 全 session 多落 N/A、误伤轻),提示只让用户知道有精确档,
+    不阻止继续。opencode transcript 跳过(单锚点 ``info.agent``,``--kind skill/agent`` 对它无意义)。
+    """
+    from skill_eval.audit.slice import scope_signals
+    from skill_eval.evals.opencode import is_opencode_session
+
+    cc_tps = [tp for tp in transcript if not is_opencode_session(tp)]
+    if not cc_tps:
+        return
+    signals = scope_signals(cc_tps, name)
+    if not signals:
+        return
+    lines = []
+    if "skill" in signals:
+        lines.append(f"--kind skill   收窄到 {name} skill 活跃段(按 Skill 调用切)")
+    if "agent" in signals:
+        lines.append(f"--kind agent   收窄到 agent={name} 段(被 dispatch 的子 agent 执行段)")
+    if "root" in signals:
+        lines.append("--kind root    收窄到主 agent 作用域(排除子 agent 内部)")
+    console.print(
+        "[yellow]提示:[/yellow] 未指定 --kind,默认宽松模式(整条 session 对声明 body 对账——"
+        "skill/agent/root 三者共同默认)。本 transcript 含可收窄锚点,精确审计可加:"
+    )
+    for ln in lines:
+        console.print(f"[yellow]  {ln}[/yellow]")
+    console.print("[yellow](宽松模式是有意选项;加 --kind 走精确档。继续宽松对账…)[/yellow]")
+
+
 @app.command()
 def audit(
     skill_path: Path = typer.Argument(..., help="Path to skill directory"),
@@ -196,6 +232,12 @@ def audit(
                 expanded_tmps.append(Path(f.name))
                 expanded.append(Path(f.name))
             transcript = expanded
+
+        # --kind 未指定 → 宽松全 session 模式(三者共同默认)。transcript 含可收窄锚点
+        # (本 skill 调用 / agent==name / 子 agent 作用域)时,对称提示可带 --kind 精确收窄
+        # (非阻断:宽松是有意选项)。检测放 opencode 之外(slice 单扫 cc/structured)。
+        if kind is None:
+            _print_scope_hint(transcript, name)
 
         # --kind:切本声明单元被调用/被 dispatch 期间的段,每段写一个子段文件
         # (.jsonl=cc / .json=opencode),再喂 TranscriptAuditor(已支持多 transcript 聚合)。

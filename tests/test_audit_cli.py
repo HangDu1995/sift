@@ -337,3 +337,96 @@ def test_audit_json_output_includes_transcript_sources(monkeypatch, tmp_path):
     # JSON 含 transcript_sources 字段且值正确(避开多行 JSON 解析,直接断字符串)
     assert '"transcript_sources"' in r.output
     assert '"cc"' in r.output
+
+
+# ── --kind 未指定时的对称收窄提示(skill/agent/root 一视同仁)。 ──
+
+
+def _skill_use_rec(name: str) -> str:
+    """一条调 Skill(name)的 cc record(jsonl 行)。"""
+    return json.dumps({"message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "s1", "name": "Skill", "input": {"skill": name}}]}})
+
+
+def _agent_rec(agent: str) -> str:
+    """一条带 agent 归属字段的 record(structured reader 展开后的 cc-record 形)。"""
+    return json.dumps({"agent": agent, "message": {"role": "assistant", "content": [
+        {"type": "text", "text": f"{agent} 干活"}]}})
+
+
+def test_audit_no_kind_hints_scope_when_skill_invoked(monkeypatch, tmp_path):
+    """--kind 未指定 + transcript 调了本 skill → 黄字提示可加 --kind skill(对称收窄,非阻断)。"""
+    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    sp = _skill_dir(tmp_path)  # name=myskill
+    tp = tmp_path / "t.jsonl"
+    tp.write_text(_skill_use_rec("myskill"), encoding="utf-8")
+    out = tmp_path / "out"
+
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    # 提示出现 + 含本 skill 名 + 仍照常宽松对账(非阻断)
+    assert "收窄" in r.output and "--kind" in r.output and "myskill" in r.output
+    assert "Audited" in r.output  # 宽松对账照跑
+
+
+def test_audit_no_kind_hints_scope_when_agent_present(monkeypatch, tmp_path):
+    """--kind 未指定 + transcript 有 agent==name 段 → 提示 --kind agent。"""
+    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    sp = _skill_dir(tmp_path)  # name=myskill
+    tp = tmp_path / "t.jsonl"
+    tp.write_text(_agent_rec("myskill"), encoding="utf-8")  # agent 字段 == 声明名
+    out = tmp_path / "out"
+
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    assert "收窄" in r.output and "--kind agent" in r.output
+
+
+def test_audit_no_kind_hints_scope_when_subagent_dispatched(monkeypatch, tmp_path):
+    """--kind 未指定 + transcript 有子 agent 作用域 → 提示 --kind root。"""
+    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    sp = _skill_dir(tmp_path)
+    tp = tmp_path / "t.jsonl"
+    a_id = "call_A"
+    recs = [
+        {"message": {"role": "assistant", "content": [{"type": "text", "text": "main"}]}},
+        {"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": a_id, "name": "Agent", "input": {"subagent_type": "general-purpose"}}]}},
+        {"parent_tool_use_id": a_id, "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "sub"}]}},
+    ]
+    tp.write_text("\n".join(json.dumps(r) for r in recs), encoding="utf-8")
+    out = tmp_path / "out"
+
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    assert "收窄" in r.output and "--kind root" in r.output
+
+
+def test_audit_no_kind_no_hint_when_no_anchors(monkeypatch, tmp_path):
+    """--kind 未指定 + transcript 无任何收窄锚点(没调本 skill / 没 name agent / 没子 agent)
+    → 不提示(宽松是唯一选项)。"""
+    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    sp = _skill_dir(tmp_path)
+    tp = tmp_path / "t.jsonl"
+    tp.write_text(json.dumps({"message": {"role": "assistant", "content": [
+        {"type": "text", "text": "just doing main work, no skill/agent/subagent"}]}}),
+        encoding="utf-8")
+    out = tmp_path / "out"
+
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    assert "收窄" not in r.output
+
+
+def test_audit_with_kind_no_scope_hint(monkeypatch, tmp_path):
+    """指定了 --kind(任一)→ 不打收窄提示(用户已选精确档,哪怕 transcript 含锚点)。"""
+    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    sp = _skill_dir(tmp_path)
+    tp = tmp_path / "t.jsonl"
+    tp.write_text(_skill_use_rec("myskill"), encoding="utf-8")  # 含 skill 锚点
+    out = tmp_path / "out"
+
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "--kind", "skill", "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    assert "收窄" not in r.output  # 带 --kind → 不提示

@@ -98,6 +98,37 @@ def invoked_skills(transcript_path: Path) -> list[str]:
     return seen
 
 
+def scope_signals(transcript_paths: list[Path], name: str) -> set[str]:
+    """扫 cc/structured transcript(非 opencode),返回可收窄的作用域锚点集合。
+
+    供 audit CLI 在 ``--kind`` 未指定时**对称**提示:transcript 里有哪些可切的锚点,
+    让用户知道带 ``--kind`` 能精确收窄(skill/agent/root 三者一视同仁)。opencode 不走本模块
+    ——单锚点 ``info.agent``、无父子作用域,``--kind skill/agent`` 对它无意义、照按 agent 字段切。
+
+    - ``"skill"``:有 Skill tool_use 且其名(剥命名空间后)== name(--kind skill 会切到它的活跃段)
+    - ``"agent"``:有 ``record.agent == name`` 的段(--kind agent 切被 dispatch 的该 agent 执行段)
+    - ``"root"``:有子 agent 作用域(任意 ``parent_tool_use_id`` 非空 → 主 agent 派发过子 agent;
+      --kind root 切主作用域、排除子 agent 内部)
+
+    name 为空时(skill/agent 信号无意义)只可能检出 ``"root"``。单扫一趟三锚点同检;多 transcript
+    取并集。读失败 / 空 transcript → 贡献空(不影响其它 transcript 的信号)。
+    """
+    signals: set[str] = set()
+    for tp in transcript_paths:
+        try:
+            records = _records(tp)
+        except OSError:
+            continue
+        for rec in records:
+            if name and _skill_name_of(rec) == name:
+                signals.add("skill")
+            if name and rec.get("agent") == name:
+                signals.add("agent")
+            if _scope_of(rec) is not None:
+                signals.add("root")
+    return signals
+
+
 def _slice_skill_invoke(records: list[dict], target: str) -> list[list[dict]]:
     """kind='skill':按 Skill 调用切——scope-aware last-invoked-owns。
 

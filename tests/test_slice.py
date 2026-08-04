@@ -1,7 +1,7 @@
 # tests/test_slice.py
 import json
 from pathlib import Path
-from skill_eval.audit.slice import slice_transcript
+from skill_eval.audit.slice import slice_transcript, scope_signals
 
 # kind='skill'(按 Skill 调用切)与 kind='agent'(按 agent 归属切)各一组薄封装,省得每处传 kind。
 def _slice_skill(path, name):
@@ -324,3 +324,77 @@ def test_root_kind_all_subagent_returns_empty(tmp_path):
         _in_sub(a_id, _tool_use("r1", "Read", {"file_path": "x"})),
     ]
     assert _slice_root(_write(tmp_path, recs)) == []
+
+
+# ── scope_signals:--kind 未指定时的对称收窄锚点检测(三者一视同仁)。 ──
+
+
+def test_scope_signals_skill_when_target_invoked(tmp_path):
+    """transcript 调用了名为 target 的 Skill → 含 "skill" 锚点。"""
+    recs = [_skill("s1", "log-error-analyzer"), _tool_use("r1", "Read", {"file_path": "app.log"})]
+    assert "skill" in scope_signals([_write(tmp_path, recs)], "log-error-analyzer")
+
+
+def test_scope_signals_no_skill_when_other_skill_invoked(tmp_path):
+    """transcript 调的是别的 skill(非 target)→ 不含 "skill"(--kind skill 会跑空)。"""
+    recs = [_skill("s1", "other-skill"), _tool_use("r1", "Read", {"file_path": "x"})]
+    assert "skill" not in scope_signals([_write(tmp_path, recs)], "log-error-analyzer")
+
+
+def test_scope_signals_agent_when_target_agent_present(tmp_path):
+    """transcript 有 record.agent == target → 含 "agent" 锚点。"""
+    recs = [
+        {"message": {"role": "user", "content": [{"type": "text", "text": "main 起手"}]}},
+        _ag("developer", "干活"),
+    ]
+    assert "agent" in scope_signals([_write(tmp_path, recs)], "developer")
+
+
+def test_scope_signals_root_when_subagent_dispatched(tmp_path):
+    """transcript 有子 agent 作用域(parent_tool_use_id 非空)→ 含 "root" 锚点。"""
+    a_id = "call_A"
+    recs = [
+        _asst_text("main"), _agent(a_id),
+        _in_sub(a_id, _asst_text("sub")), _tool_result(a_id, "done"),
+    ]
+    assert "root" in scope_signals([_write(tmp_path, recs)], "whatever-name-ignored-for-root")
+
+
+def test_scope_signals_plain_session_no_anchors(tmp_path):
+    """纯主 agent、没调 target skill、没 target agent、没子 agent → 空集(无收窄锚点)。"""
+    recs = [
+        _asst_text("main 干活"),
+        _tool_use("r1", "Read", {"file_path": "x"}),
+        _tool_result("r1", "y"),
+    ]
+    assert scope_signals([_write(tmp_path, recs)], "my-skill") == set()
+
+
+def test_scope_signals_empty_name_only_root_possible(tmp_path):
+    """name 空(skill/agent 信号无意义)→ 即便调了 skill / 有 agent 段也只检出 root。"""
+    a_id = "call_A"
+    recs = [_skill("s1", "foo"), _ag("bar", "x"), _agent(a_id), _in_sub(a_id, _asst_text("sub"))]
+    assert scope_signals([_write(tmp_path, recs)], "") == {"root"}
+
+
+def test_scope_signals_multi_transcript_union(tmp_path):
+    """多 transcript 取并集:任一含锚点即提示。"""
+    a_id = "call_A"
+    t1 = tmp_path / "a.jsonl"
+    t1.write_text(json.dumps(_skill("s1", "foo")), encoding="utf-8")
+    t2 = tmp_path / "b.jsonl"
+    t2.write_text("\n".join(json.dumps(r) for r in [_agent(a_id), _in_sub(a_id, _asst_text("sub"))]),
+                  encoding="utf-8")
+    sig = scope_signals([t1, t2], "foo")
+    assert "skill" in sig and "root" in sig and "agent" not in sig
+
+
+def test_scope_signals_unreadable_file_skipped(tmp_path):
+    """读失败的 transcript 不炸、贡献空(不影响其它 transcript 信号)。"""
+    a_id = "call_A"
+    good = tmp_path / "good.jsonl"
+    good.write_text("\n".join(json.dumps(r) for r in [_agent(a_id), _in_sub(a_id, _asst_text("sub"))]),
+                    encoding="utf-8")
+    ghost = tmp_path / "ghost.jsonl"   # 不存在
+    sig = scope_signals([ghost, good], "nope")
+    assert sig == {"root"}

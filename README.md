@@ -189,7 +189,7 @@ skill-eval gate output/benchmark.json --min-win-rate 0.5  # 加主观盲评阈�
 
 ### `audit` — 真实 transcript 对账
 
-把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。不 re-run，直接对账历史执行（支持多 transcript 聚合）。对账对象按 `--kind` 三选一：**skill**（被 `Skill` 调用）/ **agent**（被 dispatch 的子 agent）/ **root**（顶层主 agent / 编排者）。`--transcript` 吃 cc 会话 `.jsonl` 或 **opencode session `.json`**（`opencode export <sessionID>` 导出；按格式自动分派);或直接给 opencode **`.db` 文件**(`--db`,内部自动 list/export/audit,单 session 自动选、多个列出让你挑)。
+把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。不 re-run，直接对账历史执行（支持多 transcript 聚合）。对账对象默认是整条 transcript（不带 `--kind` 的宽松全 session 模式，skill/agent/root 声明共同默认）；带 `--kind` 精确收窄到三类作用域之一：**skill**（被 `Skill` 调用）/ **agent**（被 dispatch 的子 agent）/ **root**（顶层主 agent / 编排者）。不传但 transcript 含可收窄锚点时黄字对称提示可加 `--kind`（非阻断）。`--transcript` 吃 cc 会话 `.jsonl` 或 **opencode session `.json`**（`opencode export <sessionID>` 导出；按格式自动分派);或直接给 opencode **`.db` 文件**(`--db`,内部自动 list/export/audit,单 session 自动选、多个列出让你挑)。
 
 ```bash
 skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl

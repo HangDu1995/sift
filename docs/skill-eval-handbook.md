@@ -772,7 +772,12 @@ audit **不 re-run Claude**，直接拿已有会话的 transcript 跟 SKILL.md �
 
 判定要逐批调 LLM（每批约 40–257s），跑期间实时打印进度（`[条件性/禁令/步骤] 判定 N 条…`），三个 LLM 类别判定器（条件性 / 禁令 / 步骤；输出格式走程序判定不调 LLM）并发跑（约 2× 提速）。看到 `[类别] …` 滚动就是在跑，别误以为卡死。
 
-**对账作用域**：audit 默认审 **skill 作用域**——按 transcript 里的 `Skill` 工具调用切（scope-aware，last-invoked-owns：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent 是独立作用域，其 `parent_tool_use_id` 标记的 record 不污染主 skill 归属），只对账本 skill 被调用期间的段。两条固有限制：① skill 无"返回"信号，"调 A→调 B→不重调 A 接着干 A"那段会归给 B（不可测）；② 把委派子 skill 的段折进来审（inclusive）需声明、暂不支持。opencode 单锚点（无 `Skill` tool_use），按 per-message `agent` 字段切。
+**对账作用域（两层，skill/agent/root 一视同仁）**：
+
+- **默认（不带 `--kind`）= 宽松全 session 模式**：拿**整条 transcript** 对声明 body 对账、不切分——**skill / agent / root 三者共同默认**（不是 skill 专属捷径）。整段当一个袋子判，别单元的行为会混进报告：skill 指令多"做事方式"类、不活跃段多落 N/A（误伤轻），故 skill 宽松模式常可接受；但 agent / root 的角色专属 / 编排指令会扣到不相干 record 上（agent 尤甚 → 误 FAIL）。
+- **`--kind skill/agent/root` = 精确收窄**：切到声明单元的真实执行作用域再对账（`skill` 按 `Skill` 调用切，scope-aware last-invoked-owns：每个 `Skill` 调用起一段、归该 skill 到下一次调用；子 agent 是独立作用域、其 `parent_tool_use_id` 标记的 record 不污染主 skill 归属）。三条限制：① skill 无"返回"信号，"调 A→调 B→不重调 A 接着干 A"那段会归给 B（不可测）；② 把委派子 skill 的段折进来审（inclusive）需声明、暂不支持；③ 该单元没以所选锚点在 transcript 出现 → exit 2（不静默跑空）。
+
+**对称提示**：不带 `--kind` 但 transcript 含可收窄锚点（本 skill 被调用 / `agent==name` 段 / 子 agent 作用域）时，audit 打黄字提示可加哪个 `--kind`（skill/agent/root 一视同仁、**非阻断**——宽松模式照跑）。opencode 单锚点（无 `Skill` tool_use），`--kind skill/agent` 的区分对它无意义、照按 per-message `agent` 字段切；提示也只对 cc / structured transcript 触发。
 
 另两种作用域各成一节：**被 dispatch 的子 agent → §7.8**；**顶层主 agent / 编排者 → §7.9**。`--kind` 三选一，选锚点、不并集。
 
