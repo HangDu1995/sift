@@ -179,9 +179,9 @@
       // 判定只吃 instruction_text 不受影响。
       function renderInstruction(f) {
         var text = f.instruction_text || '';
-        var excerpt = f.source_excerpt || '';
-        if (excerpt && excerpt.trim() !== text.trim()) {
-          return '<div class="instruction">' + escapeHtml(excerpt) + '</div>' +
+        var main = f.headline || f.source_excerpt || text;  // headline > excerpt > instruction_text
+        if (main.trim() !== text.trim()) {
+          return '<div class="instruction">' + escapeHtml(main) + '</div>' +
             '<div class="instruction-anchor">判定锚点:' + escapeHtml(text) + '</div>';
         }
         return '<div class="instruction">' + escapeHtml(text) + '</div>';
@@ -291,7 +291,7 @@
             // 噪声判别徽章(fail_count>0 行才有;无 noise_label → —)。整列让 reader 扫哪些 FAIL 是工具噪声。
             var noise = a.noise_label ? noiseBadge(a.noise_label, a.noise_reasons) : '—';
             return '<tr><td class="seq">' + escapeHtml(seqs) + '</td><td class="' + colorCls + '">' + pct + '%</td>' +
-              '<td>' + escapeHtml(a.source_excerpt || a.instruction_text || '') + '</td>' +
+              '<td>' + escapeHtml(a.headline || a.source_excerpt || a.instruction_text || '') + '</td>' +
               '<td>' + escapeHtml(a.category || '') + '</td>' +
               '<td>' + (a.fail_count || 0) + '/' + (a.total || 0) + '</td>' +
               '<td>' + noise + '</td>' +
@@ -311,7 +311,7 @@
           var naHtml = naRows.map(function (a) {
             var seqs = (a.na_seqs || []).map(function (s) { return '#' + s; }).join(', ');
             return '<tr><td class="seq">' + escapeHtml(seqs) + '</td><td class="badge-na">' + (a.na_count || 0) + '/' + (a.total || 0) + '</td>' +
-              '<td>' + escapeHtml(a.source_excerpt || a.instruction_text || '') + '</td>' +
+              '<td>' + escapeHtml(a.headline || a.source_excerpt || a.instruction_text || '') + '</td>' +
               '<td>' + escapeHtml(a.category || '') + '</td>' +
               '<td>' + escapeHtml((a.na_in_transcripts || []).join(', ')) + '</td></tr>';
           }).join('');

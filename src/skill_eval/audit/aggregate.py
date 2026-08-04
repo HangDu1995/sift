@@ -52,6 +52,7 @@ def aggregate_by_instruction(
             {
                 "instruction_text": f.instruction_text,
                 "source_excerpt": f.source_excerpt,
+                "headline": f.headline,
                 "source": f.source,
                 "category": f.category,
                 "pass": 0,
@@ -87,6 +88,7 @@ def aggregate_by_instruction(
             InstructionAggregate(
                 instruction_text=g["instruction_text"],
                 source_excerpt=g["source_excerpt"],
+                headline=g["headline"],
                 source=g["source"],
                 category=g["category"],
                 pass_count=g["pass"],

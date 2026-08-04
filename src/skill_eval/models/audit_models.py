@@ -89,6 +89,8 @@ class AuditFinding(BaseModel):
     # **判定不读它**(judge 吃 instruction_text)。透传自 InstructionCheck.source_excerpt,
     # 缺省空(合成文案 / derived / 旧 JSON)。加在 finding 上供下游(insight)渲染。
     source_excerpt: str = ""
+    # source_excerpt 的「人话标题」:LLM 去噪+补主语+压一句的显示标题。判定不读,缺省空回退。
+    headline: str = ""
     source: str  # InstructionSource 的值(如 "CONSTRAINT")——指令的规则类型
     verdict: AuditVerdict
     method: AuditMethod  # 判定方法(PROGRAMMATIC / LLM)——怎么查的
@@ -141,6 +143,7 @@ class InstructionAggregate(BaseModel):
     instruction_text: str
     # 该指令所属 bullet 的完整原文(含主语);透传自 AuditFinding,显示用、判定不读。缺省空。
     source_excerpt: str = ""
+    headline: str = ""  # 人话标题,透传自 AuditFinding,显示用、判定不读。缺省空。
     source: str
     category: AuditCategory
     pass_count: int

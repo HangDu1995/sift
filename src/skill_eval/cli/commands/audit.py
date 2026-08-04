@@ -134,6 +134,7 @@ def audit(
     ),
     model: Optional[str] = typer.Option(None, "--model", help="语义判定 LLM"),
     refine_instructions: bool = typer.Option(True, "--refine-instructions/--no-refine-instructions", help="精筛(默认开):LLM 砍掉 extractor 误抽的示例/占位伪指令(audit 提精度,精度>召回);--no-refine-instructions 关闭"),
+    generate_headline: bool = typer.Option(True, "--headline/--no-headline", help="人话标题(默认开):独立 LLM 步骤把每条指令的原文 bullet 去噪+补主语压成一句显示标题(判定不读);--no-headline 关闭省那次 LLM"),
     locate_turns: bool = typer.Option(
         False, "--turn-refs/--no-turn-refs",
         help="turn 定位(默认关):--turn-refs 时 digest 加 [T{idx}] 前缀、仅 prohibition/step 类 judge "
@@ -315,6 +316,7 @@ def audit(
         report = TranscriptAuditor().audit(
             name, body, transcript, model=model,
             refine_instructions=refine_instructions,
+            generate_headline=generate_headline,
             locate_turns=locate_turns,
             on_progress=lambda msg: console.print(msg),
         )

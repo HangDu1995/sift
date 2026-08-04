@@ -1005,6 +1005,28 @@ def _pass_fake():
     return fake
 
 
+def _headline_fake():
+    """通用 mock call_claude:全通过 + 带 headline(供 headline 生成/透传测试)。
+
+    一个结构兼容三种判定格式 + headline(key 各取所需):headline 步骤读 headline,
+    conditional 读 applicable、prohibition 读 violated、step 读 verdict。
+    """
+    def fake(prompt, *a, **k):
+        return json.dumps([
+            {
+                "index": i,
+                "applicable": False,
+                "violated": False,
+                "verdict": "pass",
+                "evidence": "通过",
+                "headline": f"标题 {i}",
+            }
+            for i in range(60)
+        ])
+
+    return fake
+
+
 def _write_jsonl(path: Path, records: list[dict]) -> Path:
     """把 records 写成 JSONL(每行一个 JSON 对象),返回该路径。"""
     with open(path, "w", encoding="utf-8") as f:
@@ -1929,3 +1951,62 @@ def test_source_excerpt_propagates_to_finding(tmp_path, monkeypatch):
     )
     # 判定用的 instruction_text 仍是谓语片段(主语不在其中)
     assert all("design_doc_cases.json" not in f.instruction_text for f in must)
+
+
+def test_generate_headlines_feeds_source_excerpt_and_returns_list(monkeypatch):
+    """_generate_headlines 把 instruction_text + source_excerpt 喂 LLM,返回等长 headline 列表。
+
+    判定不读 headline;空 instruction 集返回 []。LLM 据源 excerpt 补主语(测试只验管道)。
+    """
+    captured = {}
+
+    def fake(prompt, *a, **k):
+        captured["prompt"] = prompt
+        return json.dumps([{"index": 0, "headline": "design_doc_cases.json 必须存在且非空"}])
+
+    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+    auditor = TranscriptAuditor()
+    inst = InstructionCheck(
+        source=InstructionSource.CONSTRAINT,
+        instruction_text="必须存在",
+        section="Constraint",
+        priority=InstructionPriority.REQUIRED,
+        check_method=CheckMethod.LLM_JUDGE,
+        source_excerpt="用例生成类:`design_doc_cases.json` 必须存在",
+    )
+    headlines = auditor._generate_headlines([inst], model=None, timeout=10)
+    assert headlines == ["design_doc_cases.json 必须存在且非空"]
+    # prompt 喂了 source_excerpt(LLM 据此补主语)
+    assert "design_doc_cases.json" in captured["prompt"]
+    # 空集短路,不调 LLM
+    assert auditor._generate_headlines([], model=None, timeout=10) == []
+
+
+def test_headline_propagates_to_finding_when_enabled(tmp_path, monkeypatch):
+    """generate_headline=True → audit 产出的 finding 带 headline(独立步骤,判定不变)。
+
+    judge 仍吃 instruction_text;headline 是纯显示字段。headline_cache 指 tmp 不污染 ~/.cache。
+    """
+    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _headline_fake())
+    monkeypatch.setattr(
+        "skill_eval.audit.auditor.headline_cache._cache_dir", lambda: tmp_path
+    )
+    body = "- **用例生成类**:`design_doc_cases.json` 必须存在且非空 —— 缺 → FAILED。\n"
+    tp = _write_jsonl(tmp_path / "s.jsonl", _read_file_records("/tmp/x"))
+    report = TranscriptAuditor().audit("s", body, [tp], generate_headline=True)
+
+    must = [f for f in report.findings if "必须存在" in f.instruction_text]
+    assert must, "应有「必须存在」的 finding"
+    assert any(f.headline for f in must), "generate_headline=True → finding 应带 headline"
+
+
+def test_headline_off_by_default(tmp_path, monkeypatch):
+    """默认不生成 headline(generate_headline=False)→ finding.headline 恒空。"""
+    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+    monkeypatch.setattr(
+        "skill_eval.audit.auditor.headline_cache._cache_dir", lambda: tmp_path
+    )
+    body = "- **用例生成类**:`design_doc_cases.json` 必须存在。\n"
+    tp = _write_jsonl(tmp_path / "s.jsonl", _read_file_records("/tmp/x"))
+    report = TranscriptAuditor().audit("s", body, [tp])  # 不传 generate_headline
+    assert all(not f.headline for f in report.findings)

@@ -73,7 +73,7 @@ class _CapturingAuditor:
         self.calls: list[dict] = []
 
     def audit(self, skill_name, skill_body, transcripts, model=None, timeout=600,
-              on_progress=None, refine_instructions=False, locate_turns=False):
+              on_progress=None, refine_instructions=False, generate_headline=False, locate_turns=False):
         captured = []
         for tp in transcripts:
             try:

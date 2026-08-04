@@ -59,7 +59,7 @@ from skill_eval.audit.rebuild import rebuild
 from skill_eval.audit.tool_match import extract_first_balanced, load_json_lenient, match_tool_call
 from skill_eval.audit.aggregate import aggregate_by_instruction
 from skill_eval.audit.dedup import post_process_findings
-from skill_eval.audit import refine_cache
+from skill_eval.audit import headline_cache, refine_cache
 from skill_eval.audit.noise import annotate_aggregate_noise, annotate_noise
 from skill_eval.compliance.extractor import InstructionExtractor
 from skill_eval.errors import SkillEvalError
@@ -193,6 +193,14 @@ _CLASSIFY_REAL_SCHEMA = _array_schema({
         "reason": {"type": "string"},
     },
     "required": ["index", "is_real"],
+})
+_HEADLINE_SCHEMA = _array_schema({
+    "type": "object",
+    "properties": {
+        "index": {"type": "integer"},
+        "headline": {"type": "string"},
+    },
+    "required": ["index", "headline"],
 })
 _PROHIBITION_SCHEMA = _array_schema({
     "type": "object",
@@ -386,6 +394,7 @@ class TranscriptAuditor:
         timeout: int = 600,
         on_progress: ProgressFn | None = None,
         refine_instructions: bool = False,
+        generate_headline: bool = False,
         *,
         locate_turns: bool = False,
     ) -> AuditReport:
@@ -465,6 +474,29 @@ class TranscriptAuditor:
                 warnings.append(
                     f"refine: 滤除 {refine_dropped_count} 条疑似示例/占位伪指令({parts})"
                 )
+        if generate_headline:
+            # headline(人话标题,纯显示):refine 之后、transcript 判定之前。独立 LLM 步骤 +
+            # 独立缓存(headline_cache),不碰 refine/is_real/judge → 判定零影响。写回
+            # InstructionCheck.headline,透传到 finding 供显示。source_excerpt 进缓存键
+            # (extract 改了 bullet 回溯 → headline 应重算)。
+            hl_key = headline_cache._cache_key(instructions, model)
+
+            def _compute_hl(
+                _insts=instructions,
+                _model=model,
+                _timeout=timeout,
+                _on_progress=on_progress,
+                _usage=acc.add,
+            ):
+                return self._generate_headlines(
+                    _insts, model=_model, timeout=_timeout,
+                    on_progress=_on_progress, on_usage=_usage,
+                )
+
+            headlines = headline_cache.get_or_compute(hl_key, _compute_hl)
+            for _i, _inst in enumerate(instructions):
+                if _i < len(headlines):
+                    _inst.headline = headlines[_i]
         all_findings: list[AuditFinding] = []
         transcript_names: list[str] = []
         transcript_sources: list[str] = []  # 与 transcript_names 同序;"cc"/"opencode"/...
@@ -671,6 +703,7 @@ class TranscriptAuditor:
                 findings[orig_i] = AuditFinding(
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
+                    headline=inst.headline,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.LLM,
@@ -682,6 +715,7 @@ class TranscriptAuditor:
                 findings[orig_i] = AuditFinding(
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
+                    headline=inst.headline,
                     source=inst.source.value,
                     verdict=AuditVerdict.NA,
                     method=AuditMethod.LLM,
@@ -695,6 +729,7 @@ class TranscriptAuditor:
                 findings[orig_i] = AuditFinding(
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
+                    headline=inst.headline,
                     source=inst.source.value,
                     verdict=AuditVerdict.INDETERMINATE,
                     method=AuditMethod.LLM,
@@ -768,6 +803,7 @@ class TranscriptAuditor:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
+                    headline=inst.headline,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.LLM,
@@ -781,6 +817,7 @@ class TranscriptAuditor:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
+                    headline=inst.headline,
                     source=inst.source.value,
                     verdict=AuditVerdict.PASS,
                     method=AuditMethod.LLM,
@@ -794,6 +831,7 @@ class TranscriptAuditor:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
+                    headline=inst.headline,
                     source=inst.source.value,
                     verdict=AuditVerdict.INDETERMINATE,
                     method=AuditMethod.LLM,
@@ -875,6 +913,7 @@ class TranscriptAuditor:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
+                    headline=inst.headline,
                     source=inst.source.value,
                     verdict=AuditVerdict.PASS,
                     method=AuditMethod.LLM,
@@ -888,6 +927,7 @@ class TranscriptAuditor:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
+                    headline=inst.headline,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.LLM,
@@ -901,6 +941,7 @@ class TranscriptAuditor:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
+                    headline=inst.headline,
                     source=inst.source.value,
                     verdict=AuditVerdict.NA,
                     method=AuditMethod.LLM,
@@ -914,6 +955,7 @@ class TranscriptAuditor:
                 findings[i] = AuditFinding(
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
+                    headline=inst.headline,
                     source=inst.source.value,
                     verdict=AuditVerdict.INDETERMINATE,
                     method=AuditMethod.LLM,
@@ -965,6 +1007,7 @@ class TranscriptAuditor:
                 findings.append(AuditFinding(
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
+                    headline=inst.headline,
                     source=inst.source.value,
                     verdict=AuditVerdict.PASS,
                     method=AuditMethod.PROGRAMMATIC,
@@ -981,6 +1024,7 @@ class TranscriptAuditor:
                 findings.append(AuditFinding(
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
+                    headline=inst.headline,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.PROGRAMMATIC,
@@ -1062,6 +1106,7 @@ class TranscriptAuditor:
         return AuditFinding(
             instruction_text=inst.instruction_text,
             source_excerpt=inst.source_excerpt,
+            headline=inst.headline,
             source=inst.source.value,
             verdict=AuditVerdict.PASS,
             method=AuditMethod.PROGRAMMATIC,
@@ -1089,6 +1134,7 @@ class TranscriptAuditor:
         return AuditFinding(
             instruction_text=inst.instruction_text,
             source_excerpt=inst.source_excerpt,
+            headline=inst.headline,
             source=inst.source.value,
             verdict=AuditVerdict.UNRESOLVED,
             method=AuditMethod.LLM,
@@ -1336,6 +1382,80 @@ class TranscriptAuditor:
                     mask[idx] = False
                 # else: 缺 is_real / None / 非布尔 → 保持 None(保留)
         return mask
+
+    # ---- headline(人话标题,纯显示;判定不读)-----------------------------
+
+    def _generate_headlines(
+        self,
+        instructions: list[InstructionCheck],
+        model: str | None,
+        timeout: int,
+        on_progress: ProgressFn | None = None,
+        on_usage: Callable[[dict], None] | None = None,
+    ) -> list[str]:
+        """分批 call_claude 给每条指令产一句人话 headline(去噪 + 补主语 + 压一句)。
+
+        吃 instruction_text + source_excerpt(原文 bullet,含主语上下文)→ 返回与
+        instructions 等长的 list[str]。空串 = 没生成(批失败/解析失败/LLM 漏条)→
+        显示回退 source_excerpt/instruction_text。**判定不读 headline**(judge 吃
+        instruction_text)。per-declaration 一次,headline_cache 跨 audit() 复用。
+        分批/并发/重试复用 _run_batches_concurrent + _LLM_SEMAPHORE(与 refine/judge 同套)。
+        """
+        n = len(instructions)
+        if n == 0:
+            return []
+        total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
+        specs: list[tuple[int, int, int, str]] = []
+        for start in range(0, n, _MAX_LLM_IN_BATCH):
+            batch = instructions[start:start + _MAX_LLM_IN_BATCH]
+            bn = len(batch)
+            k = start // _MAX_LLM_IN_BATCH + 1
+            item_list = "".join(
+                f"[{i}]\n  判定指令:{inst.instruction_text}\n"
+                f"  原文上下文:{inst.source_excerpt or '(无)'}\n"
+                for i, inst in enumerate(batch)
+            )
+            prompt = (
+                "把下面每条「判定指令」改写成一句**给人看的简短标题**(headline)。\n\n"
+                "## 要求\n"
+                "- 用「原文上下文」补全被切走的主语(如判定指令是「必须存在」、原文上下文里"
+                "有文件名 → headline 写「<文件名> 必须存在」)。\n"
+                "- 去掉 markdown 噪声:反引号、星号、括号里的解释性注释、多余换行。\n"
+                "- 压成一句顺口的话,不丢关键信息(条件/对象/动作)、不改原意。\n"
+                "- 判定指令本身已自含主语时,headline ≈ 它(只去噪)。\n\n"
+                f"## 待改写 ({bn} 条)\n{item_list}\n"
+                "## 输出格式\n"
+                '只返回 JSON 数组,每元素:{"index": 0, "headline": "一句简短标题"}\n'
+            )
+            specs.append((start, bn, k, prompt))
+        out: list[str] = [""] * n
+        for start, parsed in _run_batches_concurrent(
+            specs, self._parse_headline, model, timeout, on_progress, on_usage,
+            "headline", total, lambda v: not v,
+            schema=_HEADLINE_SCHEMA,
+        ):
+            for j, val in enumerate(parsed):
+                out[start + j] = val
+        return out
+
+    @staticmethod
+    def _parse_headline(text: str, n: int) -> list[str]:
+        """解析 LLM headline 输出 → list[str](默认 n 个空串 = 没生成 → 回退)。"""
+        out: list[str] = [""] * n
+        arr_str = extract_first_balanced(text)
+        if arr_str is None:
+            return out
+        items = load_json_lenient(arr_str)
+        if not isinstance(items, list):
+            return out
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            idx = item.get("index")
+            h = item.get("headline")
+            if isinstance(idx, int) and 0 <= idx < n and isinstance(h, str):
+                out[idx] = h.strip()
+        return out
 
     # ---- 禁令类 LLM 违规检测 -------------------------------------------------
 

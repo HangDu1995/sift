@@ -114,6 +114,11 @@ class InstructionCheck(BaseModel):
     # 只供显示层补全被切走的主语(如「design_doc_cases.json 必须存在」)。extract 时填,
     # 透传到 AuditFinding;缺省空(向后兼容旧产物 / 合成文案)。
     source_excerpt: str = ""
+    # source_excerpt 的「人话改写」:LLM 把原文 bullet 去噪(反引号/括号注释/换行)、补主语、
+    # 压成一句顺口标题,供显示优先取用。独立 LLM 步骤产(refine 之后、judge 之前),独立缓存。
+    # **判定不读**:judge 仍吃 instruction_text。缺省空(关 --headline / 未生成 / 旧产物)→
+    # 显示回退 source_excerpt → instruction_text。
+    headline: str = ""
 
 
 class HardViolation(BaseModel):

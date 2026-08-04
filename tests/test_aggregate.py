@@ -88,6 +88,15 @@ class TestAggregateByInstruction:
         assert len(rows) == 1
         assert rows[0].source_excerpt == "design_doc_cases.json 必须存在"
 
+    def test_headline_taken_from_first_finding(self):
+        """聚合行的 headline 取首次出现 finding 的(人话标题,显示用、判定不读)。"""
+        f1 = _f("必须存在", AuditVerdict.PASS, "s1", "CONSTRAINT", AuditCategory.PROHIBITION)
+        f1.headline = "design_doc_cases.json 必须存在(人话)"
+        f2 = _f("必须存在", AuditVerdict.FAIL, "s2", "CONSTRAINT", AuditCategory.PROHIBITION)
+        rows = aggregate_by_instruction([f1, f2])
+        assert len(rows) == 1
+        assert rows[0].headline == "design_doc_cases.json 必须存在(人话)"
+
     def test_no_dedup_same_text_merges_different_text_keeps_separate(self):
         """不去重:相同 instruction_text 跨 transcript 合并一组;不同 text(即便同实体)分开。
 
