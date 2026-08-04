@@ -19,13 +19,15 @@ def critique(
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output dir"),
     model: Optional[str] = typer.Option(None, "--model"),
     timeout: int = typer.Option(120, "--timeout"),
+    runs: int = typer.Option(1, "--runs", help="多数投票跑 N 次(>1 启用,默认 1 单次)"),
 ):
     """诊断 SKILL.md 正文内容质量(4 维读者反馈;纯诊断无 gate)。"""
     skill_path = resolve_skill_dir(skill_path)
     try:
         name, *_ = parse_skill_md(skill_path)
-        with console.status(f"正在评审 {name} 的正文内容质量…", spinner="dots"):
-            report = analyze_content_quality(skill_path, model=model, timeout=timeout)
+        with console.status(f"正在评审 {name} 的正文内容质量" + (f"(跑 {runs} 次投票)" if runs > 1 else "") + "…",
+                             spinner="dots"):
+            report = analyze_content_quality(skill_path, model=model, timeout=timeout, runs=runs)
 
         out_dir = output or (skill_path / "evals")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -40,7 +42,10 @@ def critique(
                       f" · 缺失 [red]{sc['missing']}[/red]"
                       f" · 耗时 {report.duration_seconds:.1f}s · {tok} tok")
         for d in report.dimensions:
-            console.print(f"  {d.name} {_STATUS_BADGE.get(d.status, d.status)}")
+            head = f"  {d.name} {_STATUS_BADGE.get(d.status, d.status)}"
+            if d.vote_tally:
+                head += f" ({d.vote_tally})"
+            console.print(head)
             for ev in d.evidence:
                 console.print(f"      ↳ 「{ev[:160]}」", markup=False)
             if d.feedback:

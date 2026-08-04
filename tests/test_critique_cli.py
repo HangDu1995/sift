@@ -13,7 +13,7 @@ def _fake_report():
             CritiqueDimension(key="failure_mechanism", name="失败机制编码", status="met",
                               evidence=["漏 DB_HOST 会超时", "分页上限静默丢数据"], feedback="写清了失败机制", gap=""),
             CritiqueDimension(key="actionable_specificity", name="可执行具体性", status="partial",
-                              evidence=["部署前检查"], feedback="有步骤", gap="可补具体命令"),
+                              evidence=["部署前检查"], feedback="有步骤", gap="可补具体命令", vote_tally="2/3"),
             CritiqueDimension(key="high_risk_blacklist", name="高风险黑名单", status="missing",
                               evidence=[], feedback="", gap="补:别用 --force"),
             CritiqueDimension(key="examples", name="示例驱动", status="missing",
@@ -42,6 +42,7 @@ def test_critique_reports_dims_and_writes_json(monkeypatch, tmp_path):
     assert "漏 DB_HOST" in r.output                    # evidence 上报
     assert "✓" in r.output and "✗" in r.output          # 认可(✓)与缺口(✗)分行
     assert "可补具体命令" in r.output                   # partial 的 gap 内容上报
+    assert "(2/3)" in r.output                          # vote_tally 可信度显在维度头
     assert (out / "content-quality-report.json").exists()
     js = json.loads((out / "content-quality-report.json").read_text(encoding="utf-8"))
     assert len(js["dimensions"]) == 4

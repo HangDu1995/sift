@@ -220,7 +220,8 @@ skill-eval vet path/to/skill/ --skip-external # 只跑内置 2 个扫描器
 `analyze` 的 11 项体检查的是**格式**（description 够不够长、name 是不是 kebab-case、有没有示例标记……），但"格式都对"不等于"正文写得好"——一段空洞抽象、没演示、没说清会栽在哪的正文，照样能过 11 项。critique 补的就是这个空白：让 LLM 当**读者**通读 SKILL.md 正文，按 4 维 rubric 给读者反馈。
 
 ```bash
-skill-eval critique path/to/skill/              # 诊断正文质量,出 JSON + HTML
+skill-eval critique path/to/skill/              # 诊断正文质量,出 JSON + HTML(单次跑,默认)
+skill-eval critique path/to/skill/ --runs 3     # 多数投票跑 3 次,稳边界维度(显 X/N 可信度)
 ```
 
 四条 rubric，每条判 `met`（满足）/ `partial`（部分）/ `missing`（缺失）+ `evidence`（**每处引用一条**的数组，分属不同段落拆多条）+ `feedback`（✓ 认可 / 已做到）+ `gap`（✗ 缺口 + 方向），**大白话短句、不整段重写原文**：
@@ -236,7 +237,11 @@ skill-eval critique path/to/skill/              # 诊断正文质量,出 JSON + 
 
 **linter 降姿态，不当打分**：critique 给的是"读者反馈"不是"打分"——LLM 是外行评内行领域，rubric 判定会漂（同一份正文换个模型 / 多跑几次，partial / missing 的边界会抖），故只标三态提示哪里薄弱、**不进任何 gate**（同 trigger / coverage，独立 artifact、不并入 benchmark）。把它当 linter 提示读：`missing` 提醒补、`met` 认可写得好的地方，别当成权威判决。一次 LLM 调用喂 SKILL.md 正文（不含 frontmatter description——那是 trigger / analyze 的事），不依赖 evals.json；LLM 调用失败降级为空报告（exit 0，不炸）。
 
-产 `content-quality-report.json`（机器读，字段见 [参考手册](skill-eval-reference.md)）+ `content-quality-report.html`（人读，always 写）+ 终端摘要（满足 N · 部分 N · 缺失 N · 耗时 · token）+ 逐维 `[维度名] 满足/部分/缺失` + evidence / feedback。
+> **结果会抖，但有规律（默认单次跑，理解一下为什么）**：内容质量是**模糊判断**（不是客观对错），同一份 SKILL.md 跑几次，**界限分明的维度稳**（明显写得好→满足、明显缺→缺失），**处在边界上的维度只在相邻档抖**（部分↔满足、部分↔缺失），**不会跨档大跳**（没有满足↔缺失）。实测一个 skill 连跑 3 次：4 维里 2 维稳、2 维在相邻档抖。所以：满足 / 缺失明确的可以直接信，`partial` 当"这条值得看一眼、但不一定非改"——**抖本身就是在告诉你"这条是边界"**。这是 linter 的固有性质（不是 bug），所以不进 gate。
+
+> **想稳就 `--runs N`（多数投票）**：默认单次（`--runs 1`，便宜）接受抖；要稳就 `--runs 3`——同一 prompt 跑 N 次，每维 status 取多数（并列取更严档，偏向提醒）、原文取**首个判出多数档**的那次（保证贴的原文与判的档自洽）、并显**`X/N` 可信度**（3/3 稳、2/3 边界，把抖变成显式信息）。代价是 N× 调用（N=3 就 3 倍时间 / token）。linter 的价值在"指出哪里值得看"不在"精确判决"，多数情况下默认单次就够；只有某条反复在 partial / missing 之间晃、你想确认到底算不算问题时，才值得上 `--runs`。
+
+产 `content-quality-report.json`（机器读，字段见 [参考手册](skill-eval-reference.md)）+ `content-quality-report.html`（人读，always 写）+ 终端摘要（满足 N · 部分 N · 缺失 N · 耗时 · token）+ 逐维 `[维度名] 满足/部分/缺失`（`--runs>1` 时附 `X/N`）+ 每处 evidence 一行 + `feedback`（✓ 认可）/ `gap`（✗ 缺口）。
 
 ---
 

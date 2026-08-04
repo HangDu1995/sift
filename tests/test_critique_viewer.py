@@ -14,7 +14,7 @@ def _sample_report():
         dimensions=[
             CritiqueDimension(key="failure_mechanism", name="失败机制编码", status="met",
                               evidence=["漏 DB_HOST 超时", "分页上限静默丢数据"], feedback="有因有果,挺好", gap=""),
-            CritiqueDimension(key="examples", name="示例驱动", status="missing", feedback="", gap="补真实例子"),
+            CritiqueDimension(key="examples", name="示例驱动", status="missing", feedback="", gap="补真实例子", vote_tally="3/3"),
         ],
         token_usage={"input_tokens": 10, "output_tokens": 5}, duration_seconds=2.0,
     )
@@ -62,3 +62,4 @@ def test_render_real_data_has_dims_and_badges():
     assert "缺失" in out                                       # status badge
     assert "✓" in out and "✗" in out                          # 认可(✓)/缺口(✗)分行
     assert "有因有果" in out and "补真实例子" in out            # feedback + gap 内容
+    assert "(3/3)" in out                                       # vote_tally 可信度

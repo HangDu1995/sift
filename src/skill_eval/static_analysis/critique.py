@@ -7,6 +7,7 @@ utility),④ 示例驱动是经验自加(无数据验证)。
 import json
 import re
 import time
+from collections import Counter
 from pathlib import Path
 
 from skill_eval.models.critique_report import ContentQualityReport, CritiqueDimension
@@ -111,21 +112,91 @@ def _parse_critique_response(response: str, skill_name: str) -> ContentQualityRe
     return ContentQualityReport(skill_name=skill_name, dimensions=dims)
 
 
-def analyze_content_quality(skill_path: Path, *, model: str | None = None, timeout: int = 120) -> ContentQualityReport:
-    """一次 LLM:SKILL.md body_text → 内容质量 report。call_claude 失败 → 空 report(诊断不炸)。
+_STRICTNESS = {"missing": 3, "partial": 2, "met": 1}   # 并列时取更严(偏向提醒)
+
+
+def _majority_status(statuses: list[str]) -> tuple[str, int]:
+    """多数 status;并列取更严(missing>partial>met)。返 (winner, winner_count)。
+    全非法 → (missing, 0)。"""
+    c = Counter(s for s in statuses if s in _STRICTNESS)
+    if not c:
+        return "missing", 0
+    best = max(c.values())
+    cands = [s for s, n in c.items() if n == best]
+    return max(cands, key=lambda s: _STRICTNESS[s]), best
+
+
+def _sum_usage(snaps: list[dict]) -> dict:
+    """多 run token 用量求和(只累加数值字段,跳过 server_tool_use/service_tier 等非数值)。"""
+    out: dict = {}
+    for s in snaps:
+        for k, v in (s or {}).items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                out[k] = out.get(k, 0) + v
+    return out
+
+
+def _aggregate_runs(reports: list[ContentQualityReport], skill_name: str) -> ContentQualityReport:
+    """多 run 聚合(--runs N):每维 status 取多数(并列更严);evidence/feedback/gap 取
+    **首个判出多数档的 run**(保证贴的原文与判的档自洽);vote_tally = 多数档命中数/有效 run 数。"""
+    dims = []
+    for key in _KEYS:
+        per_run = []
+        for rep in reports:
+            m = [d for d in rep.dimensions if d.key == key]
+            if m:
+                per_run.append(m[0])
+        if not per_run:
+            continue
+        winner, count = _majority_status([d.status for d in per_run])
+        src = next((d for d in per_run if d.status == winner), per_run[0])
+        dims.append(CritiqueDimension(
+            key=key, name=_NAMES[key], status=winner,
+            evidence=src.evidence, feedback=src.feedback, gap=src.gap,
+            vote_tally=f"{count}/{len(per_run)}",
+        ))
+    return ContentQualityReport(skill_name=skill_name, dimensions=dims)
+
+
+def analyze_content_quality(skill_path: Path, *, model: str | None = None,
+                            timeout: int = 120, runs: int = 1) -> ContentQualityReport:
+    """SKILL.md body_text → 内容质量 report。call_claude 失败 → 空 report(诊断不炸)。
+
+    runs=1(默认):单次调用。runs>1:跑 N 次多数投票聚合(每维 status 取多数、
+    原文取首个判出多数档的 run、显 X/N 可信度),稳定性换 N× 调用开销。
 
     取 parse_skill_md 第 5 返回值 body_text(纯正文,不含 frontmatter description)——
     4 条 rubric 评正文,description 留给 trigger/static_analysis。
     """
     name, _desc, _content, _fm, body = parse_skill_md(skill_path)
     prompt = _build_critique_prompt(name, body)
-    usage: dict = {}
     start = time.perf_counter()
-    try:
-        response = call_claude(prompt, model=model, timeout=timeout, on_usage=usage.update)
-    except RuntimeError:
+
+    if runs <= 1:
+        usage: dict = {}
+        try:
+            response = call_claude(prompt, model=model, timeout=timeout, on_usage=usage.update)
+        except RuntimeError:
+            return ContentQualityReport(skill_name=name, duration_seconds=time.perf_counter() - start)
+        rep = _parse_critique_response(response, name)
+        rep.token_usage = usage
+        rep.duration_seconds = time.perf_counter() - start
+        return rep
+
+    # 多 run:逐次跑(顺序,避限流),成功的进 reports
+    snaps: list[dict] = []
+    reports: list[ContentQualityReport] = []
+    for _ in range(runs):
+        u: dict = {}
+        try:
+            response = call_claude(prompt, model=model, timeout=timeout, on_usage=u.update)
+            reports.append(_parse_critique_response(response, name))
+            snaps.append(u)
+        except RuntimeError:
+            continue
+    if not reports:
         return ContentQualityReport(skill_name=name, duration_seconds=time.perf_counter() - start)
-    rep = _parse_critique_response(response, name)
-    rep.token_usage = usage
-    rep.duration_seconds = time.perf_counter() - start
-    return rep
+    agg = _aggregate_runs(reports, name)
+    agg.token_usage = _sum_usage(snaps)
+    agg.duration_seconds = time.perf_counter() - start
+    return agg

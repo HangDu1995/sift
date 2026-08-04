@@ -522,8 +522,9 @@ Written to path/to/skill/evals/coverage-report.json · path/to/skill/evals/cover
 > **linter 降姿态**：给的是"读者反馈"不是"打分"——LLM 是外行评内行领域，rubric 判定会漂（同一份正文 partial / missing 边界会抖），故只标三态提示哪里薄弱、不进任何 gate。当 linter 提示读，别当权威判决。
 
 ```bash
-skill-eval critique path/to/skill/                       # 诊断正文质量,出 JSON + HTML
+skill-eval critique path/to/skill/                       # 诊断正文质量,出 JSON + HTML(单次,默认)
 skill-eval critique path/to/skill/ -o /tmp/out
+skill-eval critique path/to/skill/ --runs 3              # 多数投票跑 3 次,稳边界维度(显 X/N)
 ```
 
 **参数**：
@@ -532,6 +533,7 @@ skill-eval critique path/to/skill/ -o /tmp/out
 |------|--------|------|
 | `--model` | 默认 | LLM 模型 |
 | `--timeout` | 120 | LLM 调用超时（秒） |
+| `--runs` | 1 | 多数投票跑 N 次（>1 启用：每维 status 取多数、原文取首个判出多数档的 run、显 `X/N` 可信度；见 handbook §2.3「结果会抖」） |
 | `--output` / `-o` | `<skill>/evals/` | 输出目录（写 `content-quality-report.json` + `content-quality-report.html`） |
 
 **终端输出**：
@@ -553,7 +555,7 @@ skill-eval critique path/to/skill/ -o /tmp/out
 Written to path/to/skill/evals/content-quality-report.json · path/to/skill/evals/content-quality-report.html
 ```
 
-汇总行：满足 / 部分 / 缺失计数 · 耗时 · LLM token；逐维列 `name` + 状态徽章（满足 绿 / 部分 黄 / 缺失 红）+ `evidence`（每处引用一行，单条截断 160 字）+ `feedback`（✓ 认可 / 已做到，仅 met / partial）+ `gap`（✗ 缺口 + 方向，仅 partial / missing）。
+汇总行：满足 / 部分 / 缺失计数 · 耗时 · LLM token；逐维列 `name` + 状态徽章（满足 绿 / 部分 黄 / 缺失 红）+ `evidence`（每处引用一行，单条截断 160 字）+ `feedback`（✓ 认可 / 已做到，仅 met / partial）+ `gap`（✗ 缺口 + 方向，仅 partial / missing）。`--runs>1` 时维度名后附 `vote_tally`（如 `部分 (2/3)`）。
 
 ### `report` — HTML 报告
 
@@ -1006,7 +1008,7 @@ skill-eval batch-report batch-workspace/ --open
 | 字段 | 说明 |
 |------|------|
 | `skill_name` | 被测 skill 名（frontmatter `name`） |
-| `dimensions[]` | 4 维评审，每条：`key` / `name`（中文显示名）/ `status`（`met` 满足 / `partial` 部分 / `missing` 缺失）/ `evidence`（**字符串数组**，LLM 引用的 SKILL.md 正文片段，每处引用一条、分属不同段落拆多条；missing 为 `[]`）/ `feedback`（**认可 / 已做到**的大白话，1 句：met 好在哪、partial 已做到的、missing 空）/ `gap`（**缺口 + 方向**的大白话，1-2 句：met 空、partial / missing 缺什么 + 怎么补；不整段重写原文）。按 `key` 归位（4 条固定，不依赖 LLM 返回顺序）；漏条 / 非法 status → 该条默认 `missing` |
+| `dimensions[]` | 4 维评审，每条：`key` / `name`（中文显示名）/ `status`（`met` 满足 / `partial` 部分 / `missing` 缺失）/ `evidence`（**字符串数组**，LLM 引用的 SKILL.md 正文片段，每处引用一条、分属不同段落拆多条；missing 为 `[]`）/ `feedback`（**认可 / 已做到**的大白话，1 句：met 好在哪、partial 已做到的、missing 空）/ `gap`（**缺口 + 方向**的大白话，1-2 句：met 空、partial / missing 缺什么 + 怎么补；不整段重写原文）/ `vote_tally`（多数投票可信度 `X/N`，**仅 `--runs>1`** 有；单次跑为空）。按 `key` 归位（4 条固定，不依赖 LLM 返回顺序）；漏条 / 非法 status → 该条默认 `missing` |
 | `token_usage` | 这次 LLM 调用的 `{input_tokens, output_tokens, total_cost_usd}`（LLM 失败降级空报告时为 `{}`） |
 | `duration_seconds` | LLM 调用墙钟（秒） |
 

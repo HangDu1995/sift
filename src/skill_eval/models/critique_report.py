@@ -14,6 +14,7 @@ class CritiqueDimension(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     feedback: str = ""   # 认可/已做到的大白话(met 好在哪;partial 已做到的;missing 空)
     gap: str = ""        # 缺口+方向的大白话(met 空;partial/missing 缺什么+怎么补)
+    vote_tally: str = ""  # 多数投票可信度"X/N"(仅 --runs>1 有;单次跑空)
 
 
 class ContentQualityReport(BaseModel):

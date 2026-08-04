@@ -1,4 +1,6 @@
 """critique 单测(模型 + prompt + parse + analyze)。"""
+import json
+
 from skill_eval.models.critique_report import ContentQualityReport, CritiqueDimension
 
 
@@ -9,6 +11,7 @@ def test_dimension_defaults():
     assert d.evidence == []        # 默认空数组
     assert d.feedback == ""        # 默认空
     assert d.gap == ""             # 默认空
+    assert d.vote_tally == ""      # 默认空(单次跑不显)
 
 
 def test_report_status_counts_derived():
@@ -168,3 +171,71 @@ def test_parse_response_valid_dict_no_dims_yields_four_missing():
         assert len(rep.dimensions) == 4
         assert all(d.status == "missing" for d in rep.dimensions)
         assert all("未评审" in d.gap for d in rep.dimensions)
+
+
+# ---- 多数投票(--runs N)----
+from skill_eval.static_analysis.critique import _majority_status, _aggregate_runs
+
+
+def _resp(fm_status: str, others: str = "met") -> str:
+    """4-dim 响应:failure_mechanism=fm_status,其余 3 条=others。"""
+    dims = [{"key": "failure_mechanism", "status": fm_status,
+             "evidence": [fm_status + "-ev"], "feedback": fm_status + "-fb", "gap": fm_status + "-gap"}]
+    for k in ("actionable_specificity", "high_risk_blacklist", "examples"):
+        dims.append({"key": k, "status": others, "evidence": [], "feedback": "", "gap": ""})
+    return json.dumps({"dimensions": dims})
+
+
+def test_majority_status_clear_and_ties():
+    assert _majority_status(["partial", "met", "partial"]) == ("partial", 2)   # 明显多数
+    assert _majority_status(["met", "met", "met"]) == ("met", 3)               # 全一致
+    assert _majority_status(["partial", "met"]) == ("partial", 1)              # 并列→更严(partial>met)
+    assert _majority_status(["partial", "missing"]) == ("missing", 1)          # 并列→更严(missing>partial)
+    assert _majority_status(["met", "partial", "missing"]) == ("missing", 1)   # 三并列→最严 missing
+    assert _majority_status([]) == ("missing", 0)
+
+
+def test_aggregate_runs_majority_and_selfish_text():
+    """3 run failure_mechanism = partial/met/partial → 多数 partial,原文取首个 partial(run1,自洽)。"""
+    reps = [_parse_critique_response(_resp(s), "sk") for s in ("partial", "met", "partial")]
+    agg = _aggregate_runs(reps, "sk")
+    fm = [d for d in agg.dimensions if d.key == "failure_mechanism"][0]
+    assert fm.status == "partial"             # 2/3 多数
+    assert fm.vote_tally == "2/3"
+    assert fm.evidence == ["partial-ev"]      # 取 run1(首个 partial)原文——与判的档自洽
+    assert fm.feedback == "partial-fb"
+    other = [d for d in agg.dimensions if d.key == "actionable_specificity"][0]
+    assert other.status == "met" and other.vote_tally == "3/3"
+
+
+def test_analyze_multi_run_aggregates_and_sums_tokens(monkeypatch, tmp_path):
+    skill = tmp_path / "sk"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    responses = iter([_resp("partial"), _resp("met"), _resp("partial")])
+    calls = {"n": 0}
+
+    def fake_call(prompt, model=None, timeout=120, max_turns=None, on_usage=None):
+        calls["n"] += 1
+        if on_usage:
+            on_usage({"input_tokens": 100, "output_tokens": 50, "service_tier": "standard"})
+        return next(responses)
+
+    monkeypatch.setattr(crt, "call_claude", fake_call)
+    rep = analyze_content_quality(skill, runs=3)
+
+    assert calls["n"] == 3                              # 跑满 3 次
+    fm = [d for d in rep.dimensions if d.key == "failure_mechanism"][0]
+    assert fm.status == "partial" and fm.vote_tally == "2/3"
+    assert rep.token_usage.get("input_tokens") == 300   # 3 次 token 求和
+    assert "service_tier" not in rep.token_usage        # 非数值字段不进求和
+    assert rep.duration_seconds >= 0.0
+
+
+def test_analyze_multi_run_all_fail_returns_empty(monkeypatch, tmp_path):
+    skill = tmp_path / "sk"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    monkeypatch.setattr(crt, "call_claude", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    rep = analyze_content_quality(skill, runs=3)
+    assert rep.dimensions == []                         # 全失败 → 空 report(诊断不炸)
