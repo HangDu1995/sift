@@ -109,6 +109,8 @@
     .by-instruction th { background: var(--bg); font-weight: 600; }
     .by-instruction td.badge-fail { color: var(--red); font-weight: 600; }
     .by-instruction td.badge-na { color: var(--accent); font-weight: 600; }
+    .by-instruction .seq-link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
+    .by-instruction .seq-link:hover { border-bottom-style: solid; }
     .findings-grouped { margin-top: 1.5rem; }
     .findings-grouped h2 { font-family: 'Poppins', system-ui, sans-serif; font-size: 1.1rem; margin-bottom: 0.5rem; }
     .findings-grouped details { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; }
@@ -287,10 +289,12 @@
           var failHtml = failRows.map(function (a) {
             var pct = Math.round((a.fail_rate || 0) * 100);
             var colorCls = (a.fail_rate || 0) >= 0.5 ? 'badge-fail' : 'badge-na';
-            var seqs = (a.fail_seqs || []).map(function (s) { return '#' + s; }).join(', ');
+            var seqs = (a.fail_seqs || []).map(function (s) {
+              return '<a class="seq-link" href="#finding-' + escapeHtml(s) + '">#' + escapeHtml(s) + '</a>';
+            }).join(', ');
             // 噪声判别徽章(fail_count>0 行才有;无 noise_label → —)。整列让 reader 扫哪些 FAIL 是工具噪声。
             var noise = a.noise_label ? noiseBadge(a.noise_label, a.noise_reasons) : '—';
-            return '<tr><td class="seq">' + escapeHtml(seqs) + '</td><td class="' + colorCls + '">' + pct + '%</td>' +
+            return '<tr><td class="seq">' + seqs + '</td><td class="' + colorCls + '">' + pct + '%</td>' +
               '<td>' + escapeHtml(a.headline || a.source_excerpt || a.instruction_text || '') + '</td>' +
               '<td>' + escapeHtml(a.category || '') + '</td>' +
               '<td>' + (a.fail_count || 0) + '/' + (a.total || 0) + '</td>' +
@@ -309,8 +313,10 @@
           .sort(function (x, y) { return (y.na_count || 0) - (x.na_count || 0); });
         if (naRows.length) {
           var naHtml = naRows.map(function (a) {
-            var seqs = (a.na_seqs || []).map(function (s) { return '#' + s; }).join(', ');
-            return '<tr><td class="seq">' + escapeHtml(seqs) + '</td><td class="badge-na">' + (a.na_count || 0) + '/' + (a.total || 0) + '</td>' +
+            var seqs = (a.na_seqs || []).map(function (s) {
+              return '<a class="seq-link" href="#finding-' + escapeHtml(s) + '">#' + escapeHtml(s) + '</a>';
+            }).join(', ');
+            return '<tr><td class="seq">' + seqs + '</td><td class="badge-na">' + (a.na_count || 0) + '/' + (a.total || 0) + '</td>' +
               '<td>' + escapeHtml(a.headline || a.source_excerpt || a.instruction_text || '') + '</td>' +
               '<td>' + escapeHtml(a.category || '') + '</td>' +
               '<td>' + escapeHtml((a.na_in_transcripts || []).join(', ')) + '</td></tr>';
