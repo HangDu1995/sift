@@ -13,3 +13,4 @@ import skill_eval.cli.commands.freeze  # noqa: F401
 import skill_eval.cli.commands.gate  # noqa: F401
 import skill_eval.cli.commands.trigger  # noqa: F401
 import skill_eval.cli.commands.coverage  # noqa: F401
+import skill_eval.cli.commands.critique  # noqa: F401
