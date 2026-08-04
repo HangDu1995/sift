@@ -223,7 +223,7 @@ skill-eval vet path/to/skill/ --skip-external # 只跑内置 2 个扫描器
 skill-eval critique path/to/skill/              # 诊断正文质量,出 JSON + HTML
 ```
 
-四条 rubric，每条判 `met`（满足）/ `partial`（部分）/ `missing`（缺失）+ 引用正文的 `evidence` + 怎么改的 `feedback`：
+四条 rubric，每条判 `met`（满足）/ `partial`（部分）/ `missing`（缺失）+ `evidence`（**每处引用一条**的数组，分属不同段落拆多条）+ `feedback`（✓ 认可 / 已做到）+ `gap`（✗ 缺口 + 方向），**大白话短句、不整段重写原文**：
 
 | # | 维度 | 问什么 | 好例 / 反例 |
 |---|------|--------|-------------|

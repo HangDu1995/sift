@@ -13,8 +13,8 @@ def _sample_report():
         skill_name="sk",
         dimensions=[
             CritiqueDimension(key="failure_mechanism", name="失败机制编码", status="met",
-                              evidence="漏 DB_HOST 超时", feedback="好"),
-            CritiqueDimension(key="examples", name="示例驱动", status="missing", feedback="补例"),
+                              evidence=["漏 DB_HOST 超时", "分页上限静默丢数据"], feedback="有因有果,挺好", gap=""),
+            CritiqueDimension(key="examples", name="示例驱动", status="missing", feedback="", gap="补真实例子"),
         ],
         token_usage={"input_tokens": 10, "output_tokens": 5}, duration_seconds=2.0,
     )
@@ -42,8 +42,23 @@ def test_template_script_passes_node_check():
 
 
 def test_render_real_data_has_dims_and_badges():
-    """用真实 report 喂 JS 的字符串变换,验证读取路径(渲染输出含维度名 + status badge)。"""
-    html = CritiqueReportGenerator().generate_html(_sample_report())
-    assert "失败机制编码" in html  # 维度名进了渲染输出
-    assert "badge-met" in html or "满足" in html
-    assert "badge-missing" in html or "缺失" in html
+    """抽 <script> 注入真实数据跑 node,实际执行 JS 字符串变换——验证渲染输出含
+    维度名 / status badge / 每处 evidence 分行 / 计数标签(读取路径,非静态模板串)。"""
+    tpl = (Path(__file__).resolve().parents[1] / "src" / "skill_eval" / "reporting"
+           / "templates" / "critique-report.html").read_text(encoding="utf-8")
+    m = re.search(r"<script>(.*?)</script>", tpl, re.S)
+    js = m.group(1)
+    data = _sample_report().model_dump()
+    js = js.replace("/*__EMBEDDED_DATA__*/;",
+                    "var EMBEDDED_DATA = " + json.dumps(data, ensure_ascii=False) + ";")
+    js = js.replace("document.getElementById('critique-root').innerHTML = html;",
+                    "console.log(html);")
+    r = subprocess.run(["node"], input=js, text=True, capture_output=True)
+    assert r.returncode == 0, f"JS 执行错:\n{r.stderr}"
+    out = r.stdout
+    assert "失败机制编码" in out                              # 维度名
+    assert "引用原文(2 处)" in out                            # 多 evidence 计数标签
+    assert "漏 DB_HOST 超时" in out and "分页上限静默丢数据" in out  # 每处分行渲染
+    assert "缺失" in out                                       # status badge
+    assert "✓" in out and "✗" in out                          # 认可(✓)/缺口(✗)分行
+    assert "有因有果" in out and "补真实例子" in out            # feedback + gap 内容

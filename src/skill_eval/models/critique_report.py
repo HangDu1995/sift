@@ -10,8 +10,10 @@ class CritiqueDimension(BaseModel):
     key: str          # failure_mechanism / actionable_specificity / high_risk_blacklist / examples
     name: str         # 中文显示名
     status: str = ""  # met / partial / missing(空=未填,由 _parse 填)
-    evidence: str = ""   # 引用的 SKILL.md 正文片段(LLM 自报,mostly-verbatim;missing 可空)
-    feedback: str = ""   # 读者反馈(met 写好在哪,partial/missing 写怎么改)
+    # 每处引用一条(LLM 自报,mostly-verbatim 非保证逐字);分属不同段落就拆多条,missing 空 []
+    evidence: list[str] = Field(default_factory=list)
+    feedback: str = ""   # 认可/已做到的大白话(met 好在哪;partial 已做到的;missing 空)
+    gap: str = ""        # 缺口+方向的大白话(met 空;partial/missing 缺什么+怎么补)
 
 
 class ContentQualityReport(BaseModel):

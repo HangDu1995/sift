@@ -6,8 +6,9 @@ def test_dimension_defaults():
     d = CritiqueDimension(key="examples", name="示例驱动")
     assert d.key == "examples"
     assert d.status == ""          # 默认空(由 _parse 填)
-    assert d.evidence == ""
-    assert d.feedback == ""
+    assert d.evidence == []        # 默认空数组
+    assert d.feedback == ""        # 默认空
+    assert d.gap == ""             # 默认空
 
 
 def test_report_status_counts_derived():
@@ -49,15 +50,38 @@ def test_build_prompt_contains_four_rubrics_and_body():
         assert key in prompt                     # 4 条 rubric key 都在
     assert "好例" in prompt and "反例" in prompt  # 每条带好例/反例
     assert "JSON ONLY" in prompt
+    # 可读性约束:evidence 要数组、feedback/gap 分工(认可 vs 缺口)禁整段重写
+    assert "数组" in prompt
+    assert "认可" in prompt and "缺口" in prompt
+    assert "整段重写" in prompt
 
 
 def test_parse_response_normal_four_dims():
-    resp = '{"dimensions": [{"key": "failure_mechanism", "status": "met", "evidence": "e1", "feedback": "f1"}, {"key": "actionable_specificity", "status": "partial", "evidence": "e2", "feedback": "f2"}, {"key": "high_risk_blacklist", "status": "missing", "evidence": "", "feedback": "f3"}, {"key": "examples", "status": "missing", "evidence": "", "feedback": "f4"}]}'
+    resp = '{"dimensions": [{"key": "failure_mechanism", "status": "met", "evidence": ["e1a", "e1b"], "feedback": "好", "gap": ""}, {"key": "actionable_specificity", "status": "partial", "evidence": ["e2"], "feedback": "已做到的", "gap": "缺的具体补法"}, {"key": "high_risk_blacklist", "status": "missing", "evidence": [], "feedback": "", "gap": "补带原因的禁令"}, {"key": "examples", "status": "missing", "evidence": [], "feedback": "", "gap": "补真实例子"}]}'
     rep = _parse_critique_response(resp, "sk")
     assert [d.key for d in rep.dimensions] == ["failure_mechanism", "actionable_specificity", "high_risk_blacklist", "examples"]
     assert rep.dimensions[0].status == "met"
     assert rep.dimensions[0].name == "失败机制编码"   # 中文名按 key 归位
+    assert rep.dimensions[0].evidence == ["e1a", "e1b"]  # 数组逐条保留
+    assert rep.dimensions[0].gap == ""                   # met → gap 空
+    assert rep.dimensions[1].feedback == "已做到的" and rep.dimensions[1].gap == "缺的具体补法"  # partial 两段都有
+    assert rep.dimensions[2].feedback == "" and rep.dimensions[2].gap == "补带原因的禁令"       # missing → 只 gap
     assert rep.status_counts == {"met": 1, "partial": 1, "missing": 2}
+
+
+def test_parse_response_evidence_str_backcompat():
+    """LLM 偶尔退回字符串形态 evidence → 归一成单条 list(容错,不炸)。"""
+    resp = '{"dimensions": [{"key": "failure_mechanism", "status": "met", "evidence": "一段字符串"}, {"key": "actionable_specificity", "status": "met", "evidence": ["正常数组"]}]}'
+    rep = _parse_critique_response(resp, "sk")
+    assert rep.dimensions[0].evidence == ["一段字符串"]   # str → 单条
+    assert rep.dimensions[1].evidence == ["正常数组"]
+
+
+def test_parse_response_evidence_filters_empty():
+    """数组里的空串 / 空白被过滤掉(不产空引用)。"""
+    resp = '{"dimensions": [{"key": "failure_mechanism", "status": "met", "evidence": ["实条", "", "  "]}]}'
+    rep = _parse_critique_response(resp, "sk")
+    assert rep.dimensions[0].evidence == ["实条"]
 
 
 def test_parse_response_reorders_by_key():
@@ -75,7 +99,7 @@ def test_parse_response_missing_dim_defaults_missing():
     assert len(rep.dimensions) == 4              # 仍 4 条
     examples = [d for d in rep.dimensions if d.key == "examples"][0]
     assert examples.status == "missing"
-    assert "未评审" in examples.feedback
+    assert "未评审" in examples.gap      # 漏评提示落 gap(missing 显 ✗ 行)
 
 
 def test_parse_response_invalid_status_defaults_missing():
@@ -101,7 +125,7 @@ from skill_eval.static_analysis.critique import analyze_content_quality
 
 
 def _fake_response_four_dims():
-    return '{"dimensions": [{"key": "failure_mechanism", "status": "met", "evidence": "e1", "feedback": "好"}, {"key": "actionable_specificity", "status": "partial", "evidence": "e2", "feedback": "改"}, {"key": "high_risk_blacklist", "status": "missing", "evidence": "", "feedback": "补"}, {"key": "examples", "status": "missing", "evidence": "", "feedback": "补例"}]}'
+    return '{"dimensions": [{"key": "failure_mechanism", "status": "met", "evidence": ["e1"], "feedback": "好", "gap": ""}, {"key": "actionable_specificity", "status": "partial", "evidence": ["e2"], "feedback": "已做到的", "gap": "改"}, {"key": "high_risk_blacklist", "status": "missing", "evidence": [], "feedback": "", "gap": "补"}, {"key": "examples", "status": "missing", "evidence": [], "feedback": "", "gap": "补例"}]}'
 
 
 def test_analyze_calls_claude_and_fills_body(monkeypatch, tmp_path):
@@ -143,4 +167,4 @@ def test_parse_response_valid_dict_no_dims_yields_four_missing():
         rep = _parse_critique_response(resp, "sk")
         assert len(rep.dimensions) == 4
         assert all(d.status == "missing" for d in rep.dimensions)
-        assert all("未评审" in d.feedback for d in rep.dimensions)
+        assert all("未评审" in d.gap for d in rep.dimensions)

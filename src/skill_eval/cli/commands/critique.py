@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from rich.text import Text
 
 from skill_eval.cli.main import app, console
 from skill_eval.errors import SkillEvalError
@@ -40,10 +41,12 @@ def critique(
                       f" · 耗时 {report.duration_seconds:.1f}s · {tok} tok")
         for d in report.dimensions:
             console.print(f"  {d.name} {_STATUS_BADGE.get(d.status, d.status)}")
-            if d.evidence:
-                console.print(f"      ↳ SKILL.md:「{d.evidence[:120]}」", markup=False)
+            for ev in d.evidence:
+                console.print(f"      ↳ 「{ev[:160]}」", markup=False)
             if d.feedback:
-                console.print(f"      {d.feedback}", markup=False)
+                console.print(Text("      ✓ ", style="green").append(d.feedback))
+            if d.gap:
+                console.print(Text("      ✗ ", style="red").append(d.gap))
 
         from skill_eval.reporting.critique_viewer import CritiqueReportGenerator
         html_path = out_dir / "content-quality-report.html"

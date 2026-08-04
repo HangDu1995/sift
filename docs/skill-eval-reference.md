@@ -513,7 +513,7 @@ Written to path/to/skill/evals/coverage-report.json · path/to/skill/evals/cover
 
 ### `critique` — 正文内容质量诊断
 
-诊断 SKILL.md **正文内容质量**——补 [`analyze`](#analyze--静态分析) 的 11 项格式体检只查格式、不查正文写得好不好的空白。一次 LLM 调用喂 SKILL.md 正文（`parse_skill_md` 的 `body_text`，**不含 frontmatter description**——description 留给 [`trigger`](#trigger--触发准确度第-4-维) / `analyze`），按 4 维 rubric 给**读者反馈**（不是打分）：① 失败机制编码 ② 可执行具体性 ③ 高风险黑名单 ④ 示例驱动。每维 `met`（满足）/ `partial`（部分）/ `missing`（缺失）+ 引用正文的 `evidence` + 怎么改的 `feedback`。**不依赖 evals.json**（纯读 body）。
+诊断 SKILL.md **正文内容质量**——补 [`analyze`](#analyze--静态分析) 的 11 项格式体检只查格式、不查正文写得好不好的空白。一次 LLM 调用喂 SKILL.md 正文（`parse_skill_md` 的 `body_text`，**不含 frontmatter description**——description 留给 [`trigger`](#trigger--触发准确度第-4-维) / `analyze`），按 4 维 rubric 给**读者反馈**（不是打分）：① 失败机制编码 ② 可执行具体性 ③ 高风险黑名单 ④ 示例驱动。每维 `met`（满足）/ `partial`（部分）/ `missing`（缺失）+ `evidence`（**字符串数组**，每处引用一条、分属不同段落拆多条）+ `feedback`（✓ 认可 / 已做到）+ `gap`（✗ 缺口 + 方向），**大白话短句、不整段重写 SKILL.md**。**不依赖 evals.json**（纯读 body）。
 
 > **诊断定位、无门禁**（同 [`trigger`](#trigger--触发准确度第-4-维) / [`coverage`](#coverage--出题漏测诊断)）：**无 gate / 不出 exit-code 判决**，`content-quality-report.json` 是独立 artifact，**不并入 `benchmark.json`**。LLM 调用失败降级为空报告（exit 0，不炸）。
 
@@ -539,17 +539,21 @@ skill-eval critique path/to/skill/ -o /tmp/out
 ```
 正文内容质量 my-skill · 满足 1 · 部分 2 · 缺失 1 · 耗时 6.3s · 2800 tok
   失败机制编码 部分
-      ↳ SKILL.md:「处理错误要小心」
-      没写具体栽在哪、为什么栽;补「API 分页上限 100,不翻页会静默丢数据」这类因果链。
+      ↳ 「处理错误要小心」
+      ✓ 有提醒读者注意错误
+      ✗ 太泛了,没说具体栽在哪。补一条:某操作因某原因会失败,对应怎么查。
   可执行具体性 满足
+      ↳ 「改完重新查对象拿真 ID」
+      ↳ 「再用这个 ID 调用」
+      ✓ 步骤具体、引用真实对象名,照着能干。
   高风险黑名单 缺失
-      没拉黑看起来对但会害死人的操作;补「别直接拿用户串当正则」这类带原因的禁令。
+      ✗ 没拉黑看起来对但会害死人的操作。补一条带原因的禁令。
   示例驱动 缺失
-      只有规则没演示;补一段真实命令序列 / 输入→输出。
+      ✗ 只有规则没演示。补一段真实命令或输入→输出。
 Written to path/to/skill/evals/content-quality-report.json · path/to/skill/evals/content-quality-report.html
 ```
 
-汇总行：满足 / 部分 / 缺失计数 · 耗时 · LLM token；逐维列 `name` + 状态徽章（满足 绿 / 部分 黄 / 缺失 红）+ `evidence`（SKILL.md 正文片段，截断 120 字）+ `feedback`。
+汇总行：满足 / 部分 / 缺失计数 · 耗时 · LLM token；逐维列 `name` + 状态徽章（满足 绿 / 部分 黄 / 缺失 红）+ `evidence`（每处引用一行，单条截断 160 字）+ `feedback`（✓ 认可 / 已做到，仅 met / partial）+ `gap`（✗ 缺口 + 方向，仅 partial / missing）。
 
 ### `report` — HTML 报告
 
@@ -989,10 +993,10 @@ skill-eval batch-report batch-workspace/ --open
 {
   "skill_name": "my-skill",
   "dimensions": [
-    {"key": "failure_mechanism", "name": "失败机制编码", "status": "partial", "evidence": "处理错误要小心", "feedback": "没写具体栽在哪、为什么栽;补失败条件 + 因果链。"},
-    {"key": "actionable_specificity", "name": "可执行具体性", "status": "met", "evidence": "改完重新查对象拿真 ID,再用这个 ID 调用", "feedback": "步骤具体、引用真实对象名,照着能干。"},
-    {"key": "high_risk_blacklist", "name": "高风险黑名单", "status": "missing", "evidence": "", "feedback": "没拉黑看起来对但会害死人的操作;补带原因的禁令。"},
-    {"key": "examples", "name": "示例驱动", "status": "missing", "evidence": "", "feedback": "只有规则没演示;补一段真实命令序列 / 输入→输出。"}
+    {"key": "failure_mechanism", "name": "失败机制编码", "status": "partial", "evidence": ["处理错误要小心"], "feedback": "有提醒读者注意错误。", "gap": "太泛了,没说具体栽在哪。补一条:某操作因某原因会失败,对应怎么查。"},
+    {"key": "actionable_specificity", "name": "可执行具体性", "status": "met", "evidence": ["改完重新查对象拿真 ID", "再用这个 ID 调用"], "feedback": "步骤具体、引用真实对象名,照着能干。", "gap": ""},
+    {"key": "high_risk_blacklist", "name": "高风险黑名单", "status": "missing", "evidence": [], "feedback": "", "gap": "没拉黑看起来对但会害死人的操作。补一条带原因的禁令。"},
+    {"key": "examples", "name": "示例驱动", "status": "missing", "evidence": [], "feedback": "", "gap": "只有规则没演示。补一段真实命令或输入→输出。"}
   ],
   "token_usage": {"input_tokens": 1800, "output_tokens": 1000, "total_cost_usd": 0.03},
   "duration_seconds": 6.3
@@ -1002,7 +1006,7 @@ skill-eval batch-report batch-workspace/ --open
 | 字段 | 说明 |
 |------|------|
 | `skill_name` | 被测 skill 名（frontmatter `name`） |
-| `dimensions[]` | 4 维评审，每条：`key`（`failure_mechanism` / `actionable_specificity` / `high_risk_blacklist` / `examples`）/ `name`（中文显示名）/ `status`（`met` 满足 / `partial` 部分 / `missing` 缺失）/ `evidence`（LLM 引用的 SKILL.md 正文片段，mostly-verbatim 非保证逐字；missing 可空）/ `feedback`（读者反馈：met 写好在哪，partial / missing 写怎么改）。按 `key` 归位（4 条固定，不依赖 LLM 返回顺序）；漏条 / 非法 status → 该条默认 `missing` |
+| `dimensions[]` | 4 维评审，每条：`key` / `name`（中文显示名）/ `status`（`met` 满足 / `partial` 部分 / `missing` 缺失）/ `evidence`（**字符串数组**，LLM 引用的 SKILL.md 正文片段，每处引用一条、分属不同段落拆多条；missing 为 `[]`）/ `feedback`（**认可 / 已做到**的大白话，1 句：met 好在哪、partial 已做到的、missing 空）/ `gap`（**缺口 + 方向**的大白话，1-2 句：met 空、partial / missing 缺什么 + 怎么补；不整段重写原文）。按 `key` 归位（4 条固定，不依赖 LLM 返回顺序）；漏条 / 非法 status → 该条默认 `missing` |
 | `token_usage` | 这次 LLM 调用的 `{input_tokens, output_tokens, total_cost_usd}`（LLM 失败降级空报告时为 `{}`） |
 | `duration_seconds` | LLM 调用墙钟（秒） |
 

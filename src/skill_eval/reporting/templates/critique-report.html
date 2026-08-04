@@ -24,14 +24,19 @@
     .badge-partial { color: var(--yellow); font-weight: 600; }
     .badge-missing { color: var(--red); font-weight: 600; }
     .badge-tokens { color: var(--text-muted); font-weight: normal; }
-    .dim { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.8rem 1rem; margin-bottom: 0.8rem; }
+    .dim { border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem; margin-bottom: 1rem; }
     .dim.met { border-left: 4px solid var(--green); }
     .dim.partial { border-left: 4px solid var(--yellow); }
     .dim.missing { border-left: 4px solid var(--red); background: var(--red-bg); }
-    .dim-head { font-weight: 600; margin-bottom: 0.4rem; }
+    .dim-head { font-weight: 600; margin-bottom: 0.6rem; }
     .dim-head .tag { margin-left: 0.5rem; font-size: 0.85rem; }
-    .evidence { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.3rem; white-space: pre-wrap; }
-    .feedback { font-size: 0.9rem; }
+    .evidence { color: var(--text-muted); font-size: 0.85rem; line-height: 1.55; margin-bottom: 0.2rem; white-space: pre-wrap; }
+    .evidence-label { color: var(--text-muted); font-size: 0.78rem; margin-top: 0.5rem; margin-bottom: 0.15rem; }
+    .feedback { font-size: 0.9rem; line-height: 1.7; margin-top: 0.55rem; white-space: pre-wrap; }
+    .gap { font-size: 0.9rem; line-height: 1.7; margin-top: 0.3rem; white-space: pre-wrap; }
+    .feedback .ico, .gap .ico { font-weight: 700; margin-right: 0.35rem; }
+    .feedback .ico { color: var(--green); }
+    .gap .ico { color: var(--red); }
   </style>
 </head>
 <body>
@@ -61,8 +66,15 @@
         var st = dm.status || 'missing';
         html += '<div class="dim ' + st + '">';
         html += '<div class="dim-head">' + escapeHtml(dm.name||'') + ' <span class="tag badge-' + st + '">' + STATUS_CN[st] + '</span></div>';
-        if (dm.evidence) html += '<div class="evidence">↳ SKILL.md:「' + escapeHtml(dm.evidence) + '」</div>';
-        if (dm.feedback) html += '<div class="feedback">' + escapeHtml(dm.feedback) + '</div>';
+        var evs = dm.evidence || [];
+        if (evs.length) {
+          html += '<div class="evidence-label">引用原文(' + evs.length + ' 处)</div>';
+          evs.forEach(function(ev){
+            html += '<div class="evidence">↳ 「' + escapeHtml(ev) + '」</div>';
+          });
+        }
+        if (dm.feedback) html += '<div class="feedback"><span class="ico">✓</span>' + escapeHtml(dm.feedback) + '</div>';
+        if (dm.gap) html += '<div class="gap"><span class="ico">✗</span>' + escapeHtml(dm.gap) + '</div>';
         html += '</div>';
       });
       document.getElementById('critique-root').innerHTML = html;

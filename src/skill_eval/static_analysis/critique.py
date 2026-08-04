@@ -40,6 +40,7 @@ def _build_critique_prompt(name: str, body: str) -> str:
     )
     return f"""你是 Claude Code Skill 的正文内容质量评审。给「读者反馈」,不打分。
 你的角色是读者:读到抽象/像废话/没演示的地方指出来,读到具体可执行的点也认可。
+反馈要像跟同事随口说一句,用大白话,**别写报告、别长篇大论**。
 
 ## 待评审 Skill:{name} 的 SKILL.md 正文
 {body}
@@ -51,11 +52,22 @@ def _build_critique_prompt(name: str, body: str) -> str:
 对每条输出:
 - key: 上面的英文 key
 - status: met / partial / missing
-- evidence: 引用 SKILL.md 正文里支撑你判断的原文片段(missing 可空)
-- feedback: 读者反馈。met → 写好在哪里;partial/missing → 写怎么改(尽量给具体补法)
+- evidence: SKILL.md 正文里支撑判断的**原文片段,数组**——每个不同位置一条(分属不同段落就拆成多条),每条只摘关键句、**别整段抄**;missing 给空数组 []
+- feedback: **认可 / 已做到的大白话,1 句**。met → 好在哪(点出具体哪一处);partial → 已经做到的部分;missing → 空字符串 ""
+- gap: **缺口的大白话,1-2 句**。met → 空字符串 "";partial/missing → 第一句说缺什么,第二句给个改的方向(可举个短例子,但只点到为止)。**绝对不要把 SKILL.md 原文整段重写出来,不要堆成长篇。**
 
 输出 JSON ONLY,不要其他文字:
-{{"dimensions":[{{"key":"failure_mechanism","status":"partial","evidence":"...","feedback":"..."}},{{"key":"actionable_specificity","status":"met","evidence":"...","feedback":"..."}},{{"key":"high_risk_blacklist","status":"missing","evidence":"","feedback":"..."}},{{"key":"examples","status":"missing","evidence":"","feedback":"..."}}]}}"""
+{{"dimensions":[{{"key":"failure_mechanism","status":"partial","evidence":["处理错误要小心"],"feedback":"有提醒读者注意错误。","gap":"太泛了,没说具体栽在哪。补一条:某操作因某原因会失败,对应怎么查。"}},{{"key":"actionable_specificity","status":"met","evidence":["改完重新查对象拿真 ID","再用这个 ID 调用"],"feedback":"步骤具体、引用真实对象名,照着能干。","gap":""}},{{"key":"high_risk_blacklist","status":"missing","evidence":[],"feedback":"","gap":"没拉黑看起来对但会害死人的操作。补一条带原因的禁令。"}},{{"key":"examples","status":"missing","evidence":[],"feedback":"","gap":"只有规则没演示。补一段真实命令或输入→输出。"}}]}}"""
+
+
+def _coerce_evidence(raw) -> list[str]:
+    """LLM 返回的 evidence 归一成 list[str]:数组→逐条 strip 过滤空串;字符串→单条;其余→[]。
+    容错 LLM 偶尔退回字符串形态(应数组)。"""
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    if isinstance(raw, str) and raw.strip():
+        return [raw.strip()]
+    return []
 
 
 def _parse_critique_response(response: str, skill_name: str) -> ContentQualityReport:
@@ -88,11 +100,13 @@ def _parse_critique_response(response: str, skill_name: str) -> ContentQualityRe
         if status not in _VALID_STATUS:
             status = "missing"
         feedback = str(d.get("feedback", "")).strip()
-        if key not in by_key and not feedback:
-            feedback = "LLM 未评审该条"
+        gap = str(d.get("gap", "")).strip()
+        if key not in by_key and not feedback and not gap:
+            gap = "LLM 未评审该条"   # 漏评提示放 gap(missing 显 ✗ 行)
         dims.append(CritiqueDimension(
             key=key, name=_NAMES[key], status=status,
-            evidence=str(d.get("evidence", "")).strip(), feedback=feedback,
+            evidence=_coerce_evidence(d.get("evidence")),
+            feedback=feedback, gap=gap,
         ))
     return ContentQualityReport(skill_name=skill_name, dimensions=dims)
 
