@@ -15,6 +15,7 @@
 - **基准题集冻结** — `freeze` 不可变签名 + skill_name 校验，跨 run / CI 复用同一份题
 - **触发准确度 trigger（第 4 维）** — 测 cc 仅凭 description 会不会自然触发 skill（前三层都 force-inject body、测不到的触发面）；纯诊断、不出 gate
 - **出题漏测诊断 coverage** — SKILL.md 内容点 × evals 覆盖映射，亮出 `run` 够不到的漏测盲区，`--augment` 复用 init 生成器自动补题；纯诊断、不出 gate
+- **正文内容质量诊断 critique** — LLM 按 4 维 rubric（失败机制编码 / 可执行具体性 / 高风险黑名单 / 示例驱动）给 SKILL.md 正文读者反馈（met/partial/missing + evidence），补 `analyze` 只查格式、不查内容质量的空白；纯诊断、不出 gate。rubric ①②③ 来自 SkillLens（有数据验证）/ ④ 经验自加
 
 > 第一次接触想系统了解每个功能的设计与用法，读 [使用手册](docs/skill-eval-handbook.md)（深入浅出，概念优先）；完整命令参数、字段定义、JSON schema 查 [参考手册](docs/skill-eval-reference.md)；方法论依据见 [方法论溯源](docs/skill-eval-principles.md)。
 
@@ -219,6 +220,18 @@ skill-eval trigger path/to/skill/ --runs 2 -o /tmp/out
 skill-eval coverage path/to/skill/              # 诊断漏测,出 JSON + HTML
 skill-eval coverage path/to/skill/ --augment    # 漏测点自动补题(写回 evals.json,需人审)
 ```
+
+### `critique` — 正文内容质量诊断
+
+诊断 SKILL.md **正文内容质量**——补 `analyze`（11 项格式体检）只查格式、不查正文写得好不好的空白。一次 LLM 调用喂 SKILL.md 正文（不含 frontmatter——description 留给 trigger / analyze），按 4 维 rubric 给**读者反馈**（不是打分）：① 失败机制编码 ② 可执行具体性 ③ 高风险黑名单 ④ 示例驱动，每维 `met` / `partial` / `missing` + 引用正文的 `evidence` + 怎么改的 `feedback`。诊断定位、无门禁、独立 artifact（同 trigger / coverage，不并入 benchmark）；不依赖 evals.json（纯读 body）。rubric ①②③ 来自 SkillLens（论文每维 65–66% 预测 downstream utility，有数据验证）/ ④ 示例驱动是经验自加（无数据）。
+
+> **linter 降姿态**：给的是「读者反馈」不是「打分」——LLM 是外行评内行领域，rubric 判定会漂，故只标 met/partial/missing 提示哪里薄弱、不进任何 gate。当 linter 提示读，别当权威判决。
+
+```bash
+skill-eval critique path/to/skill/              # 诊断正文质量,出 JSON + HTML
+```
+
+产 `content-quality-report.json` + `content-quality-report.html`（always 写，同 coverage）。详见 [reference](docs/skill-eval-reference.md)。
 
 ### `report` — HTML 报告
 

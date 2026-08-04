@@ -18,6 +18,7 @@
   - [audit — 真实 transcript 对账](#audit--真实-transcript-对账)
   - [trigger — 触发准确度（第 4 维）](#trigger--触发准确度第-4-维)
   - [coverage — 出题漏测诊断](#coverage--出题漏测诊断)
+  - [critique — 正文内容质量诊断](#critique--正文内容质量诊断)
   - [report — HTML 报告](#report--html-报告)
   - [batch — 批量评测](#batch--批量评测)
   - [batch-report — 批量 HTML 报告](#batch-report--批量-html-报告)
@@ -510,6 +511,46 @@ Written to path/to/skill/evals/coverage-report.json · path/to/skill/evals/cover
 
 > **`--augment` 补题必须人审**：自动生成的 eval 质量不保证——`review:coverage-augment` flag 标着等审，人确认"这题真测到了那个漏测点、且不是凑数题"后再接受。别直接拿 `--augment` 的结果跑 `run`。
 
+### `critique` — 正文内容质量诊断
+
+诊断 SKILL.md **正文内容质量**——补 [`analyze`](#analyze--静态分析) 的 11 项格式体检只查格式、不查正文写得好不好的空白。一次 LLM 调用喂 SKILL.md 正文（`parse_skill_md` 的 `body_text`，**不含 frontmatter description**——description 留给 [`trigger`](#trigger--触发准确度第-4-维) / `analyze`），按 4 维 rubric 给**读者反馈**（不是打分）：① 失败机制编码 ② 可执行具体性 ③ 高风险黑名单 ④ 示例驱动。每维 `met`（满足）/ `partial`（部分）/ `missing`（缺失）+ 引用正文的 `evidence` + 怎么改的 `feedback`。**不依赖 evals.json**（纯读 body）。
+
+> **诊断定位、无门禁**（同 [`trigger`](#trigger--触发准确度第-4-维) / [`coverage`](#coverage--出题漏测诊断)）：**无 gate / 不出 exit-code 判决**，`content-quality-report.json` 是独立 artifact，**不并入 `benchmark.json`**。LLM 调用失败降级为空报告（exit 0，不炸）。
+
+> **rubric 来源（诚实标注）**：①②③ 来自 SkillLens（论文报告每维 65–66% 预测 downstream utility，有数据验证）；④ 示例驱动是经验自加（无数据验证）。
+
+> **linter 降姿态**：给的是"读者反馈"不是"打分"——LLM 是外行评内行领域，rubric 判定会漂（同一份正文 partial / missing 边界会抖），故只标三态提示哪里薄弱、不进任何 gate。当 linter 提示读，别当权威判决。
+
+```bash
+skill-eval critique path/to/skill/                       # 诊断正文质量,出 JSON + HTML
+skill-eval critique path/to/skill/ -o /tmp/out
+```
+
+**参数**：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--model` | 默认 | LLM 模型 |
+| `--timeout` | 120 | LLM 调用超时（秒） |
+| `--output` / `-o` | `<skill>/evals/` | 输出目录（写 `content-quality-report.json` + `content-quality-report.html`） |
+
+**终端输出**：
+
+```
+正文内容质量 my-skill · 满足 1 · 部分 2 · 缺失 1 · 耗时 6.3s · 2800 tok
+  失败机制编码 部分
+      ↳ SKILL.md:「处理错误要小心」
+      没写具体栽在哪、为什么栽;补「API 分页上限 100,不翻页会静默丢数据」这类因果链。
+  可执行具体性 满足
+  高风险黑名单 缺失
+      没拉黑看起来对但会害死人的操作;补「别直接拿用户串当正则」这类带原因的禁令。
+  示例驱动 缺失
+      只有规则没演示;补一段真实命令序列 / 输入→输出。
+Written to path/to/skill/evals/content-quality-report.json · path/to/skill/evals/content-quality-report.html
+```
+
+汇总行：满足 / 部分 / 缺失计数 · 耗时 · LLM token；逐维列 `name` + 状态徽章（满足 绿 / 部分 黄 / 缺失 红）+ `evidence`（SKILL.md 正文片段，截断 120 字）+ `feedback`。
+
 ### `report` — HTML 报告
 
 ```bash
@@ -941,6 +982,31 @@ skill-eval batch-report batch-workspace/ --open
 | `duration_seconds` | LLM 调用墙钟（秒） |
 
 > **`gaps` 是派生属性、不存 JSON**：`coverage-report.json` 只存 `points[]`；「漏测」= `covered_by` 为空的 point，读取时派生（`report.gaps = [p for p in points if not p.covered_by]`），不冗余存进 JSON（避免与 points 失同步）。`coverage-report.html` 渲染同一份 points，漏测行（`covered_by` 空）高亮红色。
+
+### content-quality-report.json（`critique` 命令产出）
+
+```json
+{
+  "skill_name": "my-skill",
+  "dimensions": [
+    {"key": "failure_mechanism", "name": "失败机制编码", "status": "partial", "evidence": "处理错误要小心", "feedback": "没写具体栽在哪、为什么栽;补失败条件 + 因果链。"},
+    {"key": "actionable_specificity", "name": "可执行具体性", "status": "met", "evidence": "改完重新查对象拿真 ID,再用这个 ID 调用", "feedback": "步骤具体、引用真实对象名,照着能干。"},
+    {"key": "high_risk_blacklist", "name": "高风险黑名单", "status": "missing", "evidence": "", "feedback": "没拉黑看起来对但会害死人的操作;补带原因的禁令。"},
+    {"key": "examples", "name": "示例驱动", "status": "missing", "evidence": "", "feedback": "只有规则没演示;补一段真实命令序列 / 输入→输出。"}
+  ],
+  "token_usage": {"input_tokens": 1800, "output_tokens": 1000, "total_cost_usd": 0.03},
+  "duration_seconds": 6.3
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `skill_name` | 被测 skill 名（frontmatter `name`） |
+| `dimensions[]` | 4 维评审，每条：`key`（`failure_mechanism` / `actionable_specificity` / `high_risk_blacklist` / `examples`）/ `name`（中文显示名）/ `status`（`met` 满足 / `partial` 部分 / `missing` 缺失）/ `evidence`（LLM 引用的 SKILL.md 正文片段，mostly-verbatim 非保证逐字；missing 可空）/ `feedback`（读者反馈：met 写好在哪，partial / missing 写怎么改）。按 `key` 归位（4 条固定，不依赖 LLM 返回顺序）；漏条 / 非法 status → 该条默认 `missing` |
+| `token_usage` | 这次 LLM 调用的 `{input_tokens, output_tokens, total_cost_usd}`（LLM 失败降级空报告时为 `{}`） |
+| `duration_seconds` | LLM 调用墙钟（秒） |
+
+> **`status_counts` 是派生属性、不存 JSON**：`met` / `partial` / `missing` 三态计数在终端 / HTML 汇总用时读取派生（`report.status_counts`），不冗余存进 JSON。三态**不用 `n/a`**——4 条 rubric 对任何 skill 都适用，极简 skill 没"高风险操作" → `missing` 正好提醒补。
 
 ### 输出文件说明
 

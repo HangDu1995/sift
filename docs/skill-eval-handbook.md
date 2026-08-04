@@ -75,7 +75,7 @@ skill-eval 的三层架构正是为了把这两件事分别测清楚，再由"�
 
 > 盲比较是评分层的主观侧主信号（对比两侧 outputs），不是独立第四层；校准读「评分 × 遵循性」交叉；gate 读评分两轴（客观 delta + 主观胜率）定 decision + 校准 HIGH_SCORE_SUSPECT 作 soft warning（不进 decision）。
 >
-> 这个框图画的是主流程的三层。还有一个正交的诊断维度画不进来：**触发准确度（trigger，第 4 维）**评的是"cc 会不会按 description 自然触发这个 skill"（见第九章）——前三层都假设 skill 已上场，trigger 补的是更上游的"会不会上场"，只诊断、不出 gate。（`coverage` 也是诊断工具，但它评的是考卷本身、属第 3 章出卷环节，不在这张主流程图里。）
+> 这个框图画的是主流程的三层。还有一个正交的诊断维度画不进来：**触发准确度（trigger，第 4 维）**评的是"cc 会不会按 description 自然触发这个 skill"（见第九章）——前三层都假设 skill 已上场，trigger 补的是更上游的"会不会上场"，只诊断、不出 gate。（`coverage` 也是诊断工具，但它评的是考卷本身、属第 3 章出卷环节，不在这张主流程图里；`critique` 同属诊断、评正文内容质量、属第 2 章静态体检。）
 
 三个关键设计原则贯穿全书，先记住：
 
@@ -103,7 +103,7 @@ skill-eval 不是一条路，而是三条，按"怎么产生 Claude 的执行"�
 >
 > | 阶段 | 命令 | 干什么 | 详 |
 > |---|---|---|---|
-> | 静态体检（不跑 cc） | `analyze` / `vet` | skill 本身 11 项体检 + 4 扫描器安全审查 | 第 2 章 |
+> | 静态体检（不跑 cc） | `analyze` / `vet` / `critique` | skill 本身 11 项体检 + 4 扫描器安全审查 + 正文内容质量诊断（4 维读者反馈） | 第 2 章 |
 > | 出题 | `init` / `add` / `inspect` / `freeze` / `coverage` | 生成 / 追加 / 体检（不下判决）/ 冻结基线 / 漏测诊断（eval 覆盖 SKILL.md 内容点） | 第 3 章 |
 > | 跑测 | `run` / `run --task --cwd` | A/B 对照（路径 3）/ 真任务（路径 1） | 第 4、14 章 |
 > | 判决 | `gate` | post-hoc 门禁（CI 用，毫秒级） | 第 12 章 |
@@ -214,6 +214,29 @@ skill-eval vet path/to/skill/ --skip-external # 只跑内置 2 个扫描器
 判定三态：`SAFE`（全过，exit 0）/ `REVIEW_NEEDED`（有中等风险，exit 0）/ `BLOCKED`（有严重风险，exit 1）。
 
 > `run` 命令默认会在末尾自动产出 `scorecard.json` 和 `vet-report.json`（可用 `--no-static` / `--no-vet` 跳过），所以你不用单独跑这两步也能在 report 里看到静态体检结果。
+
+### 2.3 critique：正文内容质量诊断
+
+`analyze` 的 11 项体检查的是**格式**（description 够不够长、name 是不是 kebab-case、有没有示例标记……），但"格式都对"不等于"正文写得好"——一段空洞抽象、没演示、没说清会栽在哪的正文，照样能过 11 项。critique 补的就是这个空白：让 LLM 当**读者**通读 SKILL.md 正文，按 4 维 rubric 给读者反馈。
+
+```bash
+skill-eval critique path/to/skill/              # 诊断正文质量,出 JSON + HTML
+```
+
+四条 rubric，每条判 `met`（满足）/ `partial`（部分）/ `missing`（缺失）+ 引用正文的 `evidence` + 怎么改的 `feedback`：
+
+| # | 维度 | 问什么 | 好例 / 反例 |
+|---|------|--------|-------------|
+| ① | 失败机制编码 | 有没有写「agent 具体会栽的具体坑」+ 为什么栽（失败条件 + 因果链） | 「API 分页上限 100，不翻页会静默丢数据」/「处理错误要小心」 |
+| ② | 可执行具体性 | 步骤够不够照着能干，引用真实的工具 / API / 对象名 | 「改完重新查对象拿真 ID，再用这个 ID 调用」/「把任务拆小」 |
+| ③ | 高风险黑名单 | 有没有明确拉黑「看起来对但其实会害死人」的操作，带具体原因 | 「别直接拿用户串当正则——`.*` 会让匹配静默失败，先转义」/「注意危险操作」 |
+| ④ | 示例驱动 | 有没有 worked example（完整演示一遍），而非纯抽象规则 | 一段真实命令序列 / 真实输入→真实输出 / 只有规则没有演示 |
+
+> **rubric 来源（诚实标注）**：①②③ 来自 SkillLens（论文报告每维 65–66% 预测 downstream utility，有数据验证）；④ 示例驱动是经验自加（无数据验证）。
+
+**linter 降姿态，不当打分**：critique 给的是"读者反馈"不是"打分"——LLM 是外行评内行领域，rubric 判定会漂（同一份正文换个模型 / 多跑几次，partial / missing 的边界会抖），故只标三态提示哪里薄弱、**不进任何 gate**（同 trigger / coverage，独立 artifact、不并入 benchmark）。把它当 linter 提示读：`missing` 提醒补、`met` 认可写得好的地方，别当成权威判决。一次 LLM 调用喂 SKILL.md 正文（不含 frontmatter description——那是 trigger / analyze 的事），不依赖 evals.json；LLM 调用失败降级为空报告（exit 0，不炸）。
+
+产 `content-quality-report.json`（机器读，字段见 [参考手册](skill-eval-reference.md)）+ `content-quality-report.html`（人读，always 写）+ 终端摘要（满足 N · 部分 N · 缺失 N · 耗时 · token）+ 逐维 `[维度名] 满足/部分/缺失` + evidence / feedback。
 
 ---
 
@@ -1574,6 +1597,7 @@ skill-eval batch-report batch-workspace/ --open
 | `audit` | 真实 transcript 对账 | LLM |
 | `trigger` | 触发准确度（第 4 维，诊断、无门禁） | Claude spawn |
 | `coverage` | 漏测诊断（eval 覆盖 SKILL.md 内容点，诊断、无门禁） | LLM（一次映射） |
+| `critique` | 正文内容质量诊断（4 维读者反馈，诊断、无门禁） | LLM（一次调用） |
 | `report` | 生成 HTML 报告 | 零 API |
 | `batch` | 批量评测（DAG） | Claude + LLM |
 | `batch-report` | 批量对比 HTML | 零 API |
@@ -1586,6 +1610,7 @@ skill-eval batch-report batch-workspace/ --open
 | `run` | 产数据成功 | （`--security-gate` 触发） | 输入错误 | 执行错误 |
 | `trigger` | 跑完（诊断，无门禁） | — | 输入错误 | 执行错误（cc 缺失/超时） |
 | `coverage` | 跑完（诊断，无门禁；LLM 失败降级空报告） | — | 输入错误 | — |
+| `critique` | 跑完（诊断，无门禁；LLM 失败降级空报告） | — | 输入错误 | — |
 | `vet` | SAFE / REVIEW_NEEDED | BLOCKED | 输入错误 | — |
 | `analyze` | score 满 | score 未满 | 输入错误 | — |
 | `init`/`inspect`/`freeze`/`report` | 成功 | — | 输入错误 | — |
