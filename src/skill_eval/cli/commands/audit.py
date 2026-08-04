@@ -120,7 +120,10 @@ def _print_scope_hint(transcript: list[Path], name: str) -> None:
 
 @app.command()
 def audit(
-    skill_path: Path = typer.Argument(..., help="Path to skill directory"),
+    skill_path: Path = typer.Argument(
+        ...,
+        help="声明路径:skill 目录(找其下 SKILL.md)、SKILL.md 文件、或任意 agent/workflow .md 文件(直读)",
+    ),
     transcript: Optional[list[Path]] = typer.Option(
         None,
         "--transcript",

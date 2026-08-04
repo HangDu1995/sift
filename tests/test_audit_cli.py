@@ -272,6 +272,24 @@ def test_audit_skill_path_missing_friendly_error(tmp_path):
     assert "Error" in r.output
 
 
+def test_audit_shared_agents_dir_hints_pass_specific_file(tmp_path):
+    """传装多个 agent .md 的共享目录(无 SKILL.md)→ 友好提示传具体文件(真实 agent 布局误用)。"""
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "developer.md").write_text("---\nname: developer\ndescription: d\n---\nbody", encoding="utf-8")
+    (agents / "reviewer.md").write_text("---\nname: reviewer\ndescription: r\n---\nbody", encoding="utf-8")
+    tp = _transcript(tmp_path)
+    out = tmp_path / "out"
+
+    r = runner.invoke(
+        app,
+        ["audit", str(agents), "--transcript", str(tp), "-o", str(out)],
+    )
+    assert r.exit_code == 2
+    assert "直接传具体文件路径" in r.output
+    assert "developer.md" in r.output  # 点出真实存在的 .md
+
+
 class _OneReportAuditor:
     """返回预设 report(不真跑判定),供测 transcript_sources 渲染。"""
     def __init__(self, report):

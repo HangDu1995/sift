@@ -43,6 +43,16 @@ def parse_skill_md(
     else:
         skill_file = skill_path / "SKILL.md"
     if not skill_file.exists():
+        # 目录里没 SKILL.md:若该目录有别的 .md(agent/workflow 常是目录里的扁平单文件,
+        # 真实布局如 agents/developer.md),提示传具体文件——否则"SKILL.md not found"
+        # 听着像"你该加个 SKILL.md",但真意是"该指向具体声明文件"。
+        if skill_path.is_dir():
+            md_files = sorted(skill_path.glob("*.md"))
+            if md_files:
+                raise SkillParseError(
+                    f"{skill_path} 下无 SKILL.md。agent / workflow 声明常是目录里的扁平 .md 文件,"
+                    f"请直接传具体文件路径,如:{skill_path / md_files[0].name}"
+                )
         raise SkillParseError(f"SKILL.md not found in {skill_path}")
 
     content = skill_file.read_text(encoding="utf-8")

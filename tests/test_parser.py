@@ -91,6 +91,30 @@ def test_parse_skill_md_missing_file(tmp_path: Path):
         parse_skill_md(tmp_path)
 
 
+def test_parse_skill_md_dir_with_md_but_no_skill_md_hints_file(tmp_path: Path):
+    """目录里有 .md 但没 SKILL.md → 错误提示传具体文件(而非"该加 SKILL.md")。
+
+    真实 agent 布局(agents/developer.md + reviewer.md + …)误传共享目录时给正确引导:
+    "SKILL.md not found" 会误导成"补一个 SKILL.md",真意是"指向具体声明文件"。
+    """
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "developer.md").write_text("---\nname: developer\ndescription: d\n---\nbody", encoding="utf-8")
+    (agents / "reviewer.md").write_text("---\nname: reviewer\ndescription: r\n---\nbody", encoding="utf-8")
+    with pytest.raises(SkillParseError, match="直接传具体文件路径") as exc_info:
+        parse_skill_md(agents)
+    # 提示里点出一个真实存在的 .md(sorted 首个 = developer.md)
+    assert "developer.md" in str(exc_info.value)
+
+
+def test_parse_skill_md_empty_dir_still_generic_not_found(tmp_path: Path):
+    """空目录(无任何 .md)→ 仍走通用 "SKILL.md not found"(无可提示的具体文件)。"""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(SkillParseError, match="SKILL.md not found"):
+        parse_skill_md(empty)
+
+
 def test_parse_skill_md_no_frontmatter(tmp_path: Path):
     (tmp_path / "SKILL.md").write_text("Just some content without frontmatter", encoding="utf-8")
     with pytest.raises(SkillParseError, match="no opening ---"):
