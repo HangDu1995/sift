@@ -26,7 +26,7 @@ from skill_eval.models import InstructionCheck
 
 
 # bump 当 _generate_headlines 的 prompt 改了 → 进键 → 强制失效所有缓存条目。
-HEADLINE_PROMPT_VERSION = 1
+HEADLINE_PROMPT_VERSION = 2
 
 # 模块级锁:ThreadPoolExecutor 并发 audit() 时,保证同 key 的 compute_fn 只调一次。
 _HEADLINE_LOCK = threading.Lock()
