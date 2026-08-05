@@ -791,7 +791,7 @@ skill-eval audit path/to/decl/ --transcript opencode-session.json               
 
 三种作用域各成一节（平权，`--kind` 三选一）：**审 skill → §7.8.1**；**审 agent → §7.8.2**；**审 root → §7.8.3**。
 
-读结果（别只数 fail、来源徽章 / 同源关联）见 **§7.9**；transcript 反推出的额外检查见 **§7.10**；违规 turn 定位见 **§7.12**。
+读结果（别只数 fail、来源徽章 / 同源关联）见 **§7.9**；transcript 反推出的额外检查见 **§7.10**；违规 turn 定位见 **§7.12**；audit 的 6 阶段流水线（对应报告的阶段耗时表）见 **§7.15**。
 
 #### 7.8.1 审 skill（`--kind skill`）
 
@@ -994,6 +994,25 @@ opencode 的转换器（`_records_from_opencode`）做三件事抹平格式差�
 **`parent_tool_use_id` 决定多 skill 切段的作用域归并**：`--kind skill` 的切片器（`slice.py:_scope_of`）按它把 record 归作用域——`null` = 主，其他值 = 某子 agent 的独立作用域；作用域内 last-invoked-owns（每个 `Skill` 调用起段，到同作用域下一个 `Skill` 调用或作用域结束）。**子 agent 里调用过 skill 的 session 必须填它**：若子 agent turn 也填 `null`，它们会和主 turn 挤进同一个主作用域，主作用域的噪声（别的工具调用 / 别的 skill）就按 last-invoked-owns 混进本 skill 的段 → 假证据（实测跨 scope 噪声 40%+）。填对之后，子 agent 的 skill 段被干净隔离进自己的作用域。零嵌套（子 agent 不再派生子 agent）数据下这是充分的：切片器的 depth-1 closure（靠 `Agent` tool_use 配对 tool_result）在结构化输入没合成 `Agent` 块时是 no-op，归段只靠 `parent_tool_use_id`——所以 producer **不必伪造 `Agent` tool_use**，把 scope id 填对即可。守卫测试：`test_structured.py::test_slice_isolates_subagent_scope_from_main`。
 
 **`tool_calls[].result` 是可选的——做对账(audit)的 producer 建议不传**：`result`（工具返回值，如 Read 整个文件、skill 正文、大段命令输出）在真实 session 里常达 10MB+，而 **audit 的判定根本不读它**——auditor 只取 `digest.user_turns`(场景)+ `tool_trace`(工具调用的**输入**)+ `transcript_text`(assistant 文本)，三项都不含工具结果；连"反推指令"(`derive_declarations`)也只读 `input_files` 的 **路径**(路径来自 Read 的 `file_path` **输入**，不靠 result)。所以全量回传 `result` 是纯死重量：会让 `--transcript` 的 session.json 撑到 20MB+，序列化 / 落盘 / skill-eval 解析全慢。做 audit 的 producer 因此**不传 `result`**（payload 实测 18MB→7MB，砍掉 10MB+ 的结果体）。reader 对缺 `result` 的 tool_call 本就容错（不产 tool_result 块，`input_files` 内容空但路径在、tool_trace 完整），对账 verdict 不变。仅在需要重建文件**内容**(produced_files 还原、非对账)时才传 `result`。
+
+### 7.15 audit 的阶段流水线（对应报告的「阶段耗时 / token」表）
+
+audit 跑一次声明 × transcript 对账，内部是一条 **6 阶段顺序流水线**（各阶段非重叠，秒数加总 ≈ 总墙钟）。报告里的「阶段耗时 / token」表就是这 6 行（末尾多一行 `合计` = 各阶段 token/秒数之和，**不是阶段**）。每阶段：
+
+| 阶段 | 类型 | 干什么 |
+|---|---|---|
+| 抽取（extract） | 程序 | 从声明（SKILL.md / agent .md）静态正则抽全部候选指令（§7.2 说的地基瓶颈在这） |
+| 精筛（refine） | LLM | 判定前用 LLM 砍掉 extractor 误抽的示例/占位伪指令，精度 > 召回、per-SKILL 缓存（§7.3） |
+| 标题（headline） | LLM | 把指令改写成人话标题，**仅显示、判定不读**，per-声明缓存（§7.4） |
+| 切片（rebuild） | 程序 | 把 transcript 重建为 SessionDigest + 按作用域（`--kind`）切执行段（§7.14） |
+| 判定（judge） | LLM | 三类判官（条件性 / 禁令 / 步骤）逐批调 LLM 判指令遵循性 |
+| 聚合（postprocess） | 程序 | **判定后的汇总**：跨 transcript 按指令聚合 findings（`by_instruction` 的 fail%）+ 噪声判别标注 |
+
+要点：
+
+- **只有 LLM 阶段（精筛 / 标题 / 判定）有 token + calls**；程序阶段（抽取 / 切片 / 聚合）恒 0——表中看到 0 不是漏跑，是本地计算阶段。
+- **判定是性能主战场**：三类判官并发跑（`--max-concurrent` 调全局在飞 LLM 调用上限），墙钟主要花在这；精筛 / 标题有 per-声明缓存（命中秒回），只有首次才花时间。
+- **聚合（postprocess）就是"判定之后那个汇总阶段"**：它不调 LLM（程序阶段），所以 token=0、秒数极小，但产出 `by_instruction` 跨会话聚合表 + 每条 FAIL 的噪声判别徽章——别把它和表末的 `合计` 行混（`合计` 是算出来的和、`聚合` 是真阶段）。
 
 ---
 
