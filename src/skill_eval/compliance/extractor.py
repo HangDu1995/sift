@@ -39,10 +39,14 @@ _TOOL_STOPWORDS: frozenset[str] = frozenset({
 
 
 _PARAM_STOPPERS: frozenset[str] = frozenset({
-    # 连接词:其后通常是下一个工具/另一动作,不是当前工具的参数 → 遇到即停(一行多工具保护)。
+    # 连接词:其后通常是下一个工具/另一个动作,不是当前工具的参数 → 遇到即停(一行多工具保护)。
     "和", "或", "还有", "以及", "然后", "并", "接着", "同时",
     "and", "or", "then", "also", "plus", "+", "&",
 })
+
+# 参考文件/脚本路径(references/X | scripts/X)。_extract_reference_usage 抽指令用,
+# _dedup_covered_reference_usage 判覆盖用——同一份正则,避免两处漂移。
+_REF_PATH_RE = re.compile(r"references/[\w\-\.]+|scripts/[\w\-\.]+")
 
 
 def _extract_required_params(rest: str) -> list[str]:
@@ -94,7 +98,35 @@ class InstructionExtractor:
         checks.extend(self._extract_output_format(body))
         checks.extend(self._extract_reference_usage(body))
 
+        checks = self._dedup_covered_reference_usage(checks)
+
         return checks
+
+    @staticmethod
+    def _dedup_covered_reference_usage(checks: list[InstructionCheck]) -> list[InstructionCheck]:
+        """删掉被更忠实指令覆盖的 REFERENCE_USAGE 文件级副本。
+
+        同一文件路径(scripts/X.py / references/X.md)常同时被两条 extractor 抽到:
+        HEADING_STEP/TOOL_REQUIREMENT(带上下文语义,LLM_JUDGE 查"正确做了没")和
+        REFERENCE_USAGE(裸路径,TOOL_CALL_CHECK 查"碰过没")。后者是被包含的弱副本——
+        正确做了必然碰过、没做必然没碰 → 删之不丢判定信号,只去冗余。
+
+        无 step 兜底的(如 fenced 代码块里的 inspect_kernel_binaries.sh,HEADING_STEP
+        只认列表项不认代码块)保留 REFERENCE_USAGE 作唯一检查,覆盖不丢。
+
+        域中立:不区分 scripts/ vs references/,凡某路径已在非 REFERENCE_USAGE 指令的
+        instruction_text 里出现,即视为已被覆盖。类别级 "Consult reference material"
+        (script_path="references/")无具体路径,不在去重范围。
+        """
+        covered: set[str] = set()
+        for c in checks:
+            if c.source != InstructionSource.REFERENCE_USAGE:
+                covered.update(_REF_PATH_RE.findall(c.instruction_text or ""))
+        return [
+            c for c in checks
+            if c.source != InstructionSource.REFERENCE_USAGE
+            or c.params.get("script_path") not in covered
+        ]
 
     def _split_sections(self, body: str) -> list[tuple[str, str]]:
         sections: list[tuple[str, str]] = []
@@ -225,7 +257,7 @@ class InstructionExtractor:
         # 负向前瞻排除,否则把「不可用时的回退方案见 X」误当约束(ascendc-env-check 实测)。
         # "不可遗漏/不可省略" 等真约束保留(后跟字不在排除表)。
         cn = "|".join(
-            rf"不可(?!用|见|数|能|逆|抗|解|测|及)" if k == "不可" else k
+            r"不可(?!用|见|数|能|逆|抗|解|测|及)" if k == "不可" else k
             for k in _CONSTRAINT_KEYWORDS_CN
         )
         pattern = re.compile(
@@ -312,7 +344,7 @@ class InstructionExtractor:
 
     def _extract_reference_usage(self, body: str) -> list[InstructionCheck]:
         checks: list[InstructionCheck] = []
-        refs = re.findall(r"references/[\w\-\.]+|scripts/[\w\-\.]+", body)
+        refs = _REF_PATH_RE.findall(body)
         # 区分两类(P0-1d follow-up,修路由型 skill 假红灯 —— 见 §41 观察 1):
         # - 类别级 references/<X>(X 无扩展名 = 目录/类别):路由型 skill 的**互斥备选**,
         #   每任务只 1 类适用。合并成一条"查阅参考资料"(查任意 references/ 读)。

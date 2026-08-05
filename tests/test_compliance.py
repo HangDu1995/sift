@@ -222,18 +222,64 @@ class TestInstructionExtractor:
         ]
 
     def test_reference_usage_category_mixed(self):
-        """类别级 + 文件级混存:类别合并成 1 条,文件各自一条。"""
+        """类别级 + 文件级混存:类别合并成 1 条;文件级若同时是列表项 step(HEADING_STEP 含
+        同路径)则被覆盖、不再重复发 REFERENCE_USAGE(去重见 _dedup_covered_reference_usage)。"""
         ext = InstructionExtractor()
         body = (
             "## References\n"
             "- 各类算子见 references/reduction / references/broadcast\n"
             "- 通用规范必读 references/conventions.md\n"
         )
-        refs = [c for c in ext.extract(body) if c.source == InstructionSource.REFERENCE_USAGE]
-        # 1 条合并的类别(reduction+broadcast)+ 1 条文件(conventions.md)
-        assert len(refs) == 2
+        checks = ext.extract(body)
+        refs = [c for c in checks if c.source == InstructionSource.REFERENCE_USAGE]
+        # 类别合并成 1 条;conventions.md 在 bullet step 里 → REFERENCE_USAGE 副本去重
+        assert len(refs) == 1
+        assert refs[0].params.get("script_path") == "references/"
+        # conventions.md 没丢:被忠实的 bullet HEADING_STEP 覆盖
+        steps = [c.instruction_text for c in checks if c.source == InstructionSource.HEADING_STEP]
+        assert any("conventions.md" in s for s in steps)
+
+    def test_reference_usage_dedup_when_covered_by_step(self):
+        """同一文件路径同时被 HEADING_STEP(列表项,带语义、LLM_JUDGE)和 REFERENCE_USAGE
+        (裸路径、TOOL_CALL_CHECK)抽到时,后者是被包含的弱副本 → 删之不丢判定。
+        build-system 实况:inspect_build.py / trace_codegen.py 在编号列表里有忠实 step,
+        REFERENCE_USAGE 副本删除;inspect_kernel_binaries.sh 只在代码块(无 step 兜底)→ 保留。"""
+        ext = InstructionExtractor()
+        body = (
+            "## 构建失败\n"
+            "1. `python3 scripts/inspect_build.py build` —— 哪些 .o 缺失\n"
+            "2. `python3 scripts/trace_codegen.py build` —— 现场\n"
+            "\n"
+            "## 验收\n"
+            "```bash\n"
+            "./scripts/inspect_kernel_binaries.sh <root>\n"
+            "```\n"
+        )
+        checks = ext.extract(body)
+        refs = [c for c in checks if c.source == InstructionSource.REFERENCE_USAGE]
         paths = sorted(r.params.get("script_path") for r in refs)
-        assert paths == ["references/", "references/conventions.md"]
+        # 有 step 兜底的两脚本 → REFERENCE_USAGE 副本删;无兜底的 inspect_kernel_binaries.sh → 保留
+        assert paths == ["scripts/inspect_kernel_binaries.sh"]
+        # 覆盖没丢:忠实的 HEADING_STEP 仍在
+        steps = [c.instruction_text for c in checks if c.source == InstructionSource.HEADING_STEP]
+        assert any("inspect_build.py" in s for s in steps)
+        assert any("trace_codegen.py" in s for s in steps)
+
+    def test_reference_usage_dedup_references_md_covered_by_step(self):
+        """references/X.md 出现在编号列表步骤里(对照决策树)也视为已被 step 覆盖 → REFERENCE_USAGE
+        副本删;仅散文提及、无 step 的 references/Y.md 保留。同一去重规则,域中立。"""
+        ext = InstructionExtractor()
+        body = (
+            "## 构建失败\n"
+            "3. 拿报错信息对照 references/build-pipeline.md 的调试决策树\n"
+            "\n"
+            "## 理解\n"
+            "references/pipeline.md 描述全图。\n"
+        )
+        refs = [c for c in ext.extract(body) if c.source == InstructionSource.REFERENCE_USAGE]
+        paths = sorted(r.params.get("script_path") for r in refs)
+        # build-pipeline.md 在编号列表 step 里 → 删;pipeline.md 仅散文、无 step → 保留
+        assert paths == ["references/pipeline.md"]
 
     def test_empty_body(self):
         ext = InstructionExtractor()
