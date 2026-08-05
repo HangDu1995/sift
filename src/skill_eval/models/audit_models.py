@@ -182,3 +182,9 @@ class AuditReport(BaseModel):
     # total_cost_usd, calls}。空 dict = 无 LLM 调用或旧 report(默认空,向后兼容)。
     token_usage: dict = Field(default_factory=dict)
     duration_seconds: float = 0.0  # Phase 2.5: audit 墙钟(audit() 头尾 perf_counter;判官 token 在 token_usage)
+    # 各阶段(extract/refine/headline/rebuild/judge/postprocess)的耗时 + token,诊断慢在哪。
+    # 每元素 {stage, seconds, input_tokens, output_tokens, calls, note};token 仅 LLM 阶段非 0。
+    # note 仅 refine/headline 在 calls=0 时有值:"缓存命中"(开关开、跑了秒回)/"未启用"(开关关);
+    # 其余阶段 calls=0 是本地程序常态,note 为空。
+    # 各阶段 seconds 之和 ≈ duration_seconds(rebuild/judge 在 transcript 循环里累加)。空 = 旧 report。
+    stage_breakdown: list[dict] = Field(default_factory=list)

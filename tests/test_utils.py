@@ -330,3 +330,50 @@ def test_accumulator_snapshot_nonempty_when_tokens_but_zero_calls():
     assert snap != {}                   # 有 token 不该被判空
     assert snap["input_tokens"] == 50
     assert snap["calls"] == 0
+
+
+def test_token_accumulator_scoped_attributes_by_stage():
+    """scoped(stage) 返回的闭包把 token 归到指定阶段;snapshot_by_stage() 出每阶段,
+    snapshot() 仍出总和(不变,保 token_usage 向后兼容)。"""
+    acc = TokenUsageAccumulator()
+    acc.scoped("refine")({"input_tokens": 100, "output_tokens": 50})
+    acc.scoped("judge")({"input_tokens": 200, "total_cost_usd": 0.01})
+    acc.add({"input_tokens": 10})  # 无 stage → 只进总桶,不进 by_stage
+
+    total = acc.snapshot()
+    assert total["input_tokens"] == 310  # 100 + 200 + 10
+    assert total["output_tokens"] == 50
+    assert total["calls"] == 3
+
+    by_stage = acc.snapshot_by_stage()
+    assert by_stage["refine"]["input_tokens"] == 100
+    assert by_stage["refine"]["calls"] == 1
+    assert by_stage["judge"]["input_tokens"] == 200
+    assert by_stage["judge"]["total_cost_usd"] == 0.01
+    assert set(by_stage) == {"refine", "judge"}  # 无 stage 的不进 by_stage
+
+
+def test_token_accumulator_snapshot_by_stage_empty_when_no_stage():
+    acc = TokenUsageAccumulator()
+    acc.add({"input_tokens": 5})  # 无 stage
+    assert acc.snapshot_by_stage() == {}
+    assert acc.snapshot()["input_tokens"] == 5  # 总桶照常
+
+
+def test_token_accumulator_scoped_concurrent_safe():
+    """scoped 闭包从多线程调用(judge 并发)不丢更新——复用 add 的锁。"""
+    import threading
+    acc = TokenUsageAccumulator()
+    judge_add = acc.scoped("judge")
+
+    def hammer():
+        for _ in range(100):
+            judge_add({"input_tokens": 1, "output_tokens": 1})
+
+    threads = [threading.Thread(target=hammer) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert acc.snapshot_by_stage()["judge"]["input_tokens"] == 800
+    assert acc.snapshot_by_stage()["judge"]["calls"] == 800

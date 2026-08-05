@@ -1166,6 +1166,41 @@ class TestAuditAggregate:
         report = TranscriptAuditor().audit("myskill", "use Bash", [])
         assert report.duration_seconds >= 0.0
 
+    def test_audit_populates_stage_breakdown(self, tmp_path, monkeypatch) -> None:
+        """audit() 分阶段计时 + token:stage_breakdown 含全部 6 阶段;判官走 scoped("judge")
+        → judge 阶段有 token/calls,本地阶段(extract/rebuild/postprocess)0 token;refine/headline
+        默认关 → 0 token。各阶段是顺序非重叠墙钟片段 → 秒数之和 ≤ duration_seconds。"""
+        inner = _pass_fake()
+
+        def fake(prompt, *a, **k):
+            ou = k.get("on_usage")
+            if ou:
+                ou({"input_tokens": 100, "output_tokens": 50, "total_cost_usd": 0.02})
+            return inner(prompt, *a, **k)
+
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        foo = tmp_path / "foo.md"
+        tp = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records(str(foo)))
+        report = TranscriptAuditor().audit("myskill", "use Bash", [tp])
+
+        stages = {s["stage"]: s for s in report.stage_breakdown}
+        assert set(stages) == {"extract", "refine", "headline", "rebuild", "judge", "postprocess"}
+        assert all(s["seconds"] >= 0 for s in stages.values())
+        # judge 跑了 LLM → 有 token + calls;refine/headline 默认关 + 本地阶段 → 0 token
+        assert stages["judge"]["input_tokens"] > 0
+        assert stages["judge"]["calls"] > 0
+        for local_stage in ("extract", "refine", "headline", "rebuild", "postprocess"):
+            assert stages[local_stage]["calls"] == 0
+            assert stages[local_stage]["input_tokens"] == 0
+        # note:开关默认关 → refine/headline "未启用";本地阶段 + judge 的 note 空(calls=0 是常态)
+        assert stages["refine"]["note"] == "未启用"
+        assert stages["headline"]["note"] == "未启用"
+        for noteless in ("extract", "rebuild", "judge", "postprocess"):
+            assert stages[noteless]["note"] == ""
+        # 顺序非重叠片段 → 阶段和 ≤ 总墙钟(允许 1s 浮点/timing 缝隙)
+        stage_sum = sum(s["seconds"] for s in stages.values())
+        assert stage_sum <= report.duration_seconds + 1.0
+
     def test_audit_token_usage_survives_model_dump_roundtrip(
         self, tmp_path, monkeypatch
     ) -> None:
@@ -1752,6 +1787,10 @@ class TestRefineInstructions:
         assert any("真" in f.instruction_text for f in report2.findings)
         # dropped_count 两次都对(缓存 hit 不丢 dropped_count)
         assert report1.refine_dropped_count == report2.refine_dropped_count == 1
+        # 第二次跑 refine 缓存命中(_compute 不跑 → 0 LLM 调用)→ stage note="缓存命中"
+        stages2 = {s["stage"]: s for s in report2.stage_breakdown}
+        assert stages2["refine"]["note"] == "缓存命中"
+        assert stages2["refine"]["calls"] == 0
 
     def test_refine_off_does_not_touch_cache(
         self, tmp_path, monkeypatch

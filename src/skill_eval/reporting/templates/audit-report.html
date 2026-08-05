@@ -103,6 +103,15 @@
 
     .header { margin-bottom: 0.5rem; }
     .by-instruction { margin-top: 1.5rem; }
+    .stage-breakdown { margin-top: 1rem; }
+    .stage-breakdown > summary { cursor: pointer; font-size: 0.9rem; color: var(--accent); }
+    .stage-breakdown table { border-collapse: collapse; width: 100%; font-size: 0.85rem; margin-top: 0.4rem; }
+    .stage-breakdown th, .stage-breakdown td { border: 1px solid var(--border); padding: 0.3rem 0.6rem; text-align: left; }
+    .stage-breakdown th { background: var(--bg); font-weight: 600; }
+    .stage-breakdown .stage-note { color: var(--text-muted); font-size: 0.8rem; }
+    .stage-breakdown .kind-llm { color: var(--accent); font-weight: 600; }
+    .stage-breakdown .kind-prog { color: var(--text-muted); }
+    .stage-breakdown .stage-total td { font-weight: 600; border-top: 2px solid var(--border); }
     .by-instruction h2 { font-family: 'Poppins', system-ui, sans-serif; font-size: 1.1rem; margin-bottom: 0.5rem; }
     .by-instruction table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
     .by-instruction th, .by-instruction td { border: 1px solid var(--border); padding: 0.4rem 0.6rem; text-align: left; }
@@ -267,6 +276,36 @@
             (EMBEDDED_DATA.duration_seconds ? ' · <span class="badge-tokens" title="audit 墙钟(audit 头尾 perf_counter)">⏱ ' + Number(EMBEDDED_DATA.duration_seconds).toFixed(0) + 's</span>' : '') +
           '</div>' +
         '</div>');
+
+      // ①b 各阶段耗时/token(诊断 audit 慢在哪:extract/refine/headline/rebuild 切片/judge/postprocess)
+      var STAGE_LABEL = { extract: '抽取', refine: '精筛', headline: '标题', rebuild: '切片', judge: '判定', postprocess: '后处理' };
+      // 阶段类型:LLM(调 call_claude:refine/headline/judge)vs 程序(本地:extract/rebuild/postprocess)。
+      // 程序阶段 calls/tokens 恒 0,标出来免误读成"漏跑/合计行"。
+      var STAGE_KIND = { extract: '程序', refine: 'LLM', headline: 'LLM', rebuild: '程序', judge: 'LLM', postprocess: '程序' };
+      var stages = EMBEDDED_DATA.stage_breakdown || [];
+      if (stages.length) {
+        var dur = EMBEDDED_DATA.duration_seconds || 0;
+        var sumSec = 0, sumIn = 0, sumOut = 0, sumCalls = 0;
+        var stageRows = stages.map(function (s) {
+          var sec = Number(s.seconds || 0);
+          var inT = s.input_tokens || 0, outT = s.output_tokens || 0;
+          sumSec += sec; sumIn += inT; sumOut += outT; sumCalls += (s.calls || 0);
+          var tok = (inT || outT) ? (inT + ' / ' + outT) : '—';
+          var pct = (dur && sec) ? ' (' + Math.round(sec / dur * 100) + '%)' : '';
+          var note = s.note ? ' <span class="stage-note">(' + escapeHtml(s.note) + ')</span>' : '';
+          var kind = STAGE_KIND[s.stage] || '';
+          var kindClass = kind === 'LLM' ? 'kind-llm' : 'kind-prog';
+          return '<tr><td>' + escapeHtml(STAGE_LABEL[s.stage] || s.stage) + '</td>' +
+            '<td><span class="' + kindClass + '">' + kind + '</span></td>' +
+            '<td>' + sec.toFixed(1) + 's' + pct + '</td><td>' + tok + '</td><td>' + (s.calls || 0) + note + '</td></tr>';
+        }).join('');
+        var sumTok = (sumIn || sumOut) ? (sumIn + ' / ' + sumOut) : '—';
+        var totalRow = '<tr class="stage-total"><td>合计</td><td>—</td><td>' + sumSec.toFixed(1) + 's</td><td>' + sumTok + '</td><td>' + sumCalls + '</td></tr>';
+        root.insertAdjacentHTML('beforeend',
+          '<details class="stage-breakdown" open><summary>阶段耗时 / token(诊断慢在哪)</summary>' +
+          '<table><thead><tr><th>阶段</th><th>类型</th><th>耗时(% 占总)</th><th>tokens in/out</th><th>calls</th></tr></thead>' +
+          '<tbody>' + stageRows + totalRow + '</tbody></table></details>');
+      }
 
       // ② warnings(有才显)
       var warns = EMBEDDED_DATA.warnings || [];

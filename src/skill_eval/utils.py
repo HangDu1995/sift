@@ -152,15 +152,46 @@ class TokenUsageAccumulator:
         self._lock = threading.Lock()
         self._counts = {k: 0 for k in self._KEYS}
         self._counts["calls"] = 0
+        # 按阶段(refine/headline/judge/…)分桶 token,供报告分阶段展示。无 stage 的 add
+        # 不进这里(只进总桶 _counts)。lazily 建。
+        self._by_stage: dict[str, dict] = {}
 
-    def add(self, payload: dict, *, count: int = 1) -> None:
+    def _stage_counts(self, stage: str) -> dict:
+        sc = self._by_stage.get(stage)
+        if sc is None:
+            sc = {k: 0 for k in self._KEYS}
+            sc["calls"] = 0
+            self._by_stage[stage] = sc
+        return sc
+
+    def add(self, payload: dict, *, count: int = 1, stage: str | None = None) -> None:
         """on_usage 回调目标 / rollup 子快照累加。缺键补 0(不 KeyError)。
         count: 本次 add 计几次调用;默认 1(单次 call_claude 回调)。rollup 子快照时传
-        count=snap.get("calls",1) 以保留子内部真实调用数(否则 add 一次会吞掉 child 的 calls)。"""
+        count=snap.get("calls",1) 以保留子内部真实调用数(否则 add 一次会吞掉 child 的 calls)。
+        stage: 归属的 audit 阶段(如 "refine"/"judge");给定时同时累加到该阶段桶,
+            便于报告分阶段展示 token。省略 → 只进总桶(向后兼容老调用方)。"""
         with self._lock:
             for k in self._KEYS:
-                self._counts[k] += payload.get(k, 0) or 0
+                v = payload.get(k, 0) or 0
+                self._counts[k] += v
+                if stage is not None:
+                    self._stage_counts(stage)[k] += v
             self._counts["calls"] += count
+            if stage is not None:
+                self._stage_counts(stage)["calls"] += count
+
+    def scoped(self, stage: str) -> Callable[[dict], None]:
+        """返绑定 stage 的 add 闭包,供 ``on_usage=acc.scoped("refine")`` 把该处
+        call_claude 的 token 归到指定阶段。线程安全(复用 add 的锁)。"""
+        def _add(payload: dict, count: int = 1) -> None:
+            self.add(payload, stage=stage, count=count)
+        return _add
+
+    def snapshot_by_stage(self) -> dict[str, dict]:
+        """返各阶段 token 桶的副本 {stage: {input_tokens, …, calls}}。无任何带 stage
+        的 add → 空 dict。只含显式归阶段的量;总桶用 snapshot()。"""
+        with self._lock:
+            return {stage: dict(sc) for stage, sc in self._by_stage.items()}
 
     def snapshot(self) -> dict:
         """返当前累计的副本;无任何 usage(所有 token 字段 + calls 皆 0)返空 dict。

@@ -113,6 +113,11 @@ _LLM_RETRY_DELAY = 3.0
 # 三个 LLM 判定器(条件性/禁令/步骤)并发上限。= 类别数 = 实测安全并发(1/2/3 档全 0 失败),
 # 既是全类别并发的最优值、又天然有界(再高也无更多类别可并发)。非魔法数、无需调参。
 _MAX_CONCURRENT = 3
+# audit() 的阶段顺序(报告 stage_breakdown 按此序展示)。rebuild/judge 在 transcript
+# 循环里累加;token 仅 LLM 阶段(refine/headline/judge)非 0,其余本地阶段 0。
+_AUDIT_STAGES: tuple[str, ...] = (
+    "extract", "refine", "headline", "rebuild", "judge", "postprocess",
+)
 # **全局** LLM 调用(call_claude)并发上限——跨类别 + 同类多批统一争这个信号量。
 # audit 慢的根因是推理次数(每批 ~117s),旧实现每类内批次**串行** → 墙钟 = 最慢类批数 × 单批。
 # 现在同类多批也铺到本地池并发跑,信号量把全局在飞 call_claude 钉在 ≤ 本值,墙钟降到 ~单批。
@@ -429,10 +434,14 @@ class TranscriptAuditor:
             不进 findings,而是带文件名进 warnings。
         """
         _wall_start = time.perf_counter()  # audit 墙钟(头尾测;判官 token 在 token_usage)
+        stage_seconds: dict[str, float] = {s: 0.0 for s in _AUDIT_STAGES}
+        _t = time.perf_counter()
         instructions = InstructionExtractor().extract(skill_body)
+        stage_seconds["extract"] = time.perf_counter() - _t
         warnings: list[str] = []
         refine_dropped_count = 0
         acc = TokenUsageAccumulator()  # 累加所有判官 LLM 调用的 token(audit 末尾 snapshot 进 report)
+        _t = time.perf_counter()
         if refine_instructions:
             # per-SKILL hash 缓存:同 instructions + model + prompt 版本只 refine 一次,
             # 跨 audit() 调用复用(runner.py 每 eval×config×run 调一次 audit,同 SKILL.md
@@ -447,7 +456,7 @@ class TranscriptAuditor:
                 _model=model,
                 _timeout=timeout,
                 _on_progress=on_progress,
-                _on_usage=acc.add,
+                _on_usage=acc.scoped("refine"),
             ):
                 refined, _warns = self._refine_pseudo_instructions(
                     _insts, model=_model, timeout=_timeout, on_progress=_on_progress,
@@ -474,6 +483,8 @@ class TranscriptAuditor:
                 warnings.append(
                     f"refine: 滤除 {refine_dropped_count} 条疑似示例/占位伪指令({parts})"
                 )
+        stage_seconds["refine"] = time.perf_counter() - _t
+        _t = time.perf_counter()
         if generate_headline:
             # headline(人话标题,纯显示):refine 之后、transcript 判定之前。独立 LLM 步骤 +
             # 独立缓存(headline_cache),不碰 refine/is_real/judge → 判定零影响。写回
@@ -486,7 +497,7 @@ class TranscriptAuditor:
                 _model=model,
                 _timeout=timeout,
                 _on_progress=on_progress,
-                _usage=acc.add,
+                _usage=acc.scoped("headline"),
             ):
                 return self._generate_headlines(
                     _insts, model=_model, timeout=_timeout,
@@ -497,6 +508,7 @@ class TranscriptAuditor:
             for _i, _inst in enumerate(instructions):
                 if _i < len(headlines):
                     _inst.headline = headlines[_i]
+        stage_seconds["headline"] = time.perf_counter() - _t
         all_findings: list[AuditFinding] = []
         transcript_names: list[str] = []
         transcript_sources: list[str] = []  # 与 transcript_names 同序;"cc"/"opencode"/...
@@ -504,7 +516,9 @@ class TranscriptAuditor:
         for ti, tp in enumerate(transcripts, 1):
             _emit(on_progress, f"对账 transcript {ti}/{len(transcripts)}: {tp.name}")
             try:
+                _t = time.perf_counter()
                 tool_trace, transcript_text, digest = rebuild(tp, locate_turns=locate_turns)
+                stage_seconds["rebuild"] += time.perf_counter() - _t
             except SkillEvalError as e:
                 # 坏/空 transcript:不崩,记 warning 跳过(其余 transcript 照常处理)。
                 warnings.append(f"{tp.name}: {e}")
@@ -534,22 +548,23 @@ class TranscriptAuditor:
             # 类别数 = 实测安全并发(3 档全 0 失败),天然有界、非魔法数。输出格式判定器
             # 是确定性子串匹配(无 LLM),留主线程不占池位。on_progress(console.print)
             # 线程安全,三类 [k/总] 交错可读。
+            _t = time.perf_counter()
             with ThreadPoolExecutor(max_workers=_MAX_CONCURRENT) as pool:
                 fut_cond = pool.submit(
                     self._judge_conditional, buckets[AuditCategory.CONDITIONAL],
                     tool_trace, scene, tp.name, model, timeout, on_progress=on_progress,
-                    on_usage=acc.add,
+                    on_usage=acc.scoped("judge"),
                 )
                 fut_proh = pool.submit(
                     self._judge_prohibition, buckets[AuditCategory.PROHIBITION],
                     transcript_text, tp.name, model, timeout, on_progress=on_progress,
-                    on_usage=acc.add,
+                    on_usage=acc.scoped("judge"),
                     locate_turns=locate_turns,
                 )
                 fut_step = pool.submit(
                     self._judge_step, buckets[AuditCategory.STEP], transcript_text,
                     tp.name, model, timeout, tool_trace=tool_trace, on_progress=on_progress,
-                    on_usage=acc.add,
+                    on_usage=acc.scoped("judge"),
                     locate_turns=locate_turns,
                 )
                 findings: list[AuditFinding] = []
@@ -576,6 +591,7 @@ class TranscriptAuditor:
             findings += self._judge_output(
                 buckets[AuditCategory.OUTPUT], transcript_text, tp.name
             )
+            stage_seconds["judge"] += time.perf_counter() - _t
 
             for f in findings:
                 if f.instruction_text in derived_texts:
@@ -588,6 +604,7 @@ class TranscriptAuditor:
         # findings 后处理:Case A 同文去重(合并 sources)+ 编 #1..#N + Case B 跨类关联
         # (related 引 #N)。在汇总前做,使 unverified/summary/by_instruction 都基于去重后
         # findings(同文重复不再虚增 fail、by_instruction 不再同 transcript 双计)。
+        _t = time.perf_counter()
         all_findings = post_process_findings(all_findings)
 
         # FAIL 噪声/skill 判别(每条 FAIL 标 noise_label / noise_reasons,非 FAIL 置 None)。
@@ -625,6 +642,29 @@ class TranscriptAuditor:
         # 聚合级噪声判别(fail_count>0 的行标 noise_label / noise_reasons)。在 AuditReport
         # 构造前做,使 report.by_instruction 直接携带标注。
         by_instruction = annotate_aggregate_noise(by_instruction)
+        stage_seconds["postprocess"] = time.perf_counter() - _t
+
+        # 分阶段耗时/token(rebuild/judge 在 transcript 循环里累加;token 仅 LLM 阶段非 0)。
+        stage_tokens = acc.snapshot_by_stage()
+        # calls=0 的 LLM 阶段(refine/headline:开关控制 + 有缓存)区分两种 0——
+        # 开关开 → "缓存命中"(LLM 路径跑了、秒回、本次 ~0 token);开关关 → "未启用"(没跑)。
+        # extract/rebuild/judge/postprocess 是本地程序阶段(judge 不缓存),calls=0 是常态,不标。
+        stage_flag_on = {"refine": refine_instructions, "headline": generate_headline}
+        stage_breakdown = []
+        for stage in _AUDIT_STAGES:
+            tokens = stage_tokens.get(stage, {})
+            calls = tokens.get("calls", 0)
+            note = ""
+            if stage in stage_flag_on:
+                note = "未启用" if not stage_flag_on[stage] else ("缓存命中" if calls == 0 else "")
+            stage_breakdown.append({
+                "stage": stage,
+                "seconds": round(stage_seconds.get(stage, 0.0), 3),
+                "input_tokens": tokens.get("input_tokens", 0),
+                "output_tokens": tokens.get("output_tokens", 0),
+                "calls": calls,
+                "note": note,
+            })
         return AuditReport(
             skill_name=skill_name,
             transcripts=transcript_names,
@@ -636,6 +676,7 @@ class TranscriptAuditor:
             refine_dropped_count=refine_dropped_count,
             token_usage=acc.snapshot(),
             duration_seconds=time.perf_counter() - _wall_start,
+            stage_breakdown=stage_breakdown,
         )
 
     def _judge_conditional(
