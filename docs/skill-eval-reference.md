@@ -364,7 +364,7 @@ skill-eval audit path/to/skill/ --db opencode.db
 | `--model` | 默认 | 语义判定 LLM |
 | `--format` | table | table / json |
 | `--open` | 关闭 | 生成后浏览器打开 `audit-report.html` |
-| `--max-concurrent` | 6 | LLM 判定并发上限(三类 judge × 全局 ≤6 路在飞 `call_claude`)。大声明 / 低内存 / 多 audit 共存时调小(如 3,用时间换内存,防 OOM 与端点压力)。也读 env `SKILL_EVAL_MAX_CONCURRENT`;CLI 显式值优先,两者都未设走默认 6 |
+| `--max-concurrent` | 自适应(基线 6) | LLM 判定并发模式。**默认 AIMD 自适应**:动态探当前后端容量边界(撞限流乘性减、连续成功加性增),适配不同模型/服务商的并发或速率限制。显式给 N = **固定 N**(关自适应,向后兼容);env `SKILL_EVAL_MAX_CONCURRENT` 同效;env `SKILL_EVAL_ADAPTIVE_CONCURRENCY=0` 显式关自适应(回退固定基线)。大声明 / 低内存 / 多 audit 共存时固定调小 |
 
 > **默认（不带 `--kind`）= 宽松全 session 模式，三者共同默认**：不带 `--kind`，skill / agent / root 声明一律拿整条 transcript 对 body 对账、不切分（不是 skill 专属捷径）。skill 指令多"做事方式"类、不活跃段多落 N/A（误伤轻），故 skill 宽松模式常可接受；但 agent / root 的角色专属 / 编排指令会扣到不相干 record 上（agent 尤甚 → 误 FAIL）。带 `--kind` 精确收窄到声明单元真实执行作用域。**对称提示**：不传但 transcript 含可收窄锚点（本 skill 被调用 / `agent==name` 段 / 子 agent 作用域）→ audit 打黄字提示可加哪个 `--kind`（三者一视同仁、非阻断、宽松照跑）；opencode 单锚点不提示。
 

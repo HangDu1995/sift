@@ -22,7 +22,12 @@ from typing import Optional
 import typer
 from rich.table import Table
 
-from skill_eval.audit.auditor import TranscriptAuditor, configure_max_concurrent
+from skill_eval.audit.auditor import (
+    _MAX_BATCH_CONCURRENT,
+    TranscriptAuditor,
+    configure_adaptive,
+    configure_max_concurrent,
+)
 from skill_eval.cli.main import app, console
 from skill_eval.errors import SkillEvalError
 from skill_eval.evals.opencode_db import export_session, list_sessions, resolve_session
@@ -167,8 +172,9 @@ def audit(
     max_concurrent: Optional[int] = typer.Option(
         None,
         "--max-concurrent",
-        help=("LLM 判定并发上限(默认 6;大声明/低内存/多 audit 共存时调小,如 3,用时间换内存)。"
-              "也读 env SKILL_EVAL_MAX_CONCURRENT;CLI 显式值优先"),
+        help=("LLM 判定并发上限:显式设 = 固定该值(关自适应);不设 = 默认 AIMD 自适应"
+              "(动态探当前后端容量边界,通用工具适配多后端)。"
+              "也读 env SKILL_EVAL_MAX_CONCURRENT;env SKILL_EVAL_ADAPTIVE_CONCURRENCY=0 显式关自适应"),
     ),
 ):
     """Audit real session transcript(s) against SKILL.md(不 re-run,直接对账真实历史执行)。"""
@@ -176,7 +182,9 @@ def audit(
     export_tmp: Optional[Path] = None  # --db 导出的临时 json,finally 清理
     expanded_tmps: list[Path] = []     # 结构化输入展开出的临时 cc-jsonl,finally 清理
     try:
-        # 并发上限:CLI --max-concurrent > env SKILL_EVAL_MAX_CONCURRENT > 默认 6(不调 configure)
+        # 并发模式:--max-concurrent / env SKILL_EVAL_MAX_CONCURRENT 有值 → 固定该值(关 AIMD,
+        # 向后兼容);否则默认 AIMD 自适应(通用工具适配多后端容量),env
+        # SKILL_EVAL_ADAPTIVE_CONCURRENCY=0 时显式关(回退固定默认 _MAX_BATCH_CONCURRENT)。
         mc = max_concurrent
         if mc is None:
             env_mc = os.environ.get("SKILL_EVAL_MAX_CONCURRENT")
@@ -191,6 +199,10 @@ def audit(
                 console.print(f"[red]Error:[/red] --max-concurrent 必须 ≥ 1,收到 {mc}")
                 raise typer.Exit(code=2)
             configure_max_concurrent(mc)
+        elif os.environ.get("SKILL_EVAL_ADAPTIVE_CONCURRENCY", "1") == "0":
+            configure_max_concurrent(_MAX_BATCH_CONCURRENT)
+        else:
+            configure_adaptive()
 
         name, _desc, _content, _frontmatter, body = parse_skill_md(skill_path)
 

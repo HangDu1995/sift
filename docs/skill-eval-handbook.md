@@ -780,7 +780,7 @@ skill-eval audit path/to/decl/ --transcript a.jsonl --transcript b.jsonl        
 skill-eval audit path/to/decl/ --transcript opencode-session.json                   # opencode session(.json)
 ```
 
-判定要逐批调 LLM（每批约 40–257s），跑期间实时打印进度（`[条件性/禁令/步骤] 判定 N 条…`），三个 LLM 类别判定器（条件性 / 禁令 / 步骤；输出格式走程序判定不调 LLM）并发跑（约 2× 提速）；全局在飞 `call_claude` 钉在 ≤6，可用 `--max-concurrent`（或 env `SKILL_EVAL_MAX_CONCURRENT`）在大声明 / 低内存时调小。看到 `[类别] …` 滚动就是在跑，别误以为卡死。
+判定要逐批调 LLM（每批约 40–257s），跑期间实时打印进度（`[条件性/禁令/步骤] 判定 N 条…`），三个 LLM 类别判定器（条件性 / 禁令 / 步骤；输出格式走程序判定不调 LLM）并发跑（约 2× 提速）；全局在飞 `call_claude` 由 **AIMD 自适应限制器**动态调（撞限流降、连续成功升，适配不同后端容量；控在飞数 = 控吞吐，对并发/速率两类限制都通用）。`--max-concurrent`（或 env `SKILL_EVAL_MAX_CONCURRENT`）固定关自适应（向后兼容），大声明 / 低内存时调小；env `SKILL_EVAL_ADAPTIVE_CONCURRENCY=0` 显式关自适应。看到 `[类别] …` 滚动就是在跑，别误以为卡死。
 
 **对账作用域（两层，skill/agent/root 一视同仁）**：
 
@@ -1011,7 +1011,7 @@ audit 跑一次声明 × transcript 对账，内部是一条 **6 阶段顺序流
 要点：
 
 - **只有 LLM 阶段（精筛 / 标题 / 判定）有 token + calls**；程序阶段（抽取 / 切片 / 聚合）恒 0——表中看到 0 不是漏跑，是本地计算阶段。
-- **判定是性能主战场**：三类判官并发跑（`--max-concurrent` 调全局在飞 LLM 调用上限），墙钟主要花在这；精筛 / 标题有 per-声明缓存（命中秒回），只有首次才花时间。
+- **判定是性能主战场**：三类判官并发跑（全局在飞 LLM 调用由 AIMD 自适应限制器动态调，适配不同后端容量；`--max-concurrent` 固定向后兼容），墙钟主要花在这；精筛 / 标题有 per-声明缓存（命中秒回），只有首次才花时间。
 - **聚合（postprocess）就是"判定之后那个汇总阶段"**：它不调 LLM（程序阶段），所以 token=0、秒数极小，但产出 `by_instruction` 跨会话聚合表 + 每条 FAIL 的噪声判别徽章——别把它和表末的 `合计` 行混（`合计` 是算出来的和、`聚合` 是真阶段）。
 
 ---
