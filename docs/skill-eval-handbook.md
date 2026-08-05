@@ -718,6 +718,17 @@ audit 是诊断工具——它的结果不像 run 那样能靠“消噪”磨出
 
 **边界**：extractor 本身冻结在固定版本、纯正则不调 LLM（保证可复现、不把 LLM 方差引入抽取层）；refine 是 audit 层加的独立步骤，不破坏 extractor 的 layering。另一条根治路——结构化声明（frontmatter 声明 `required_tools`/`required_reads`/`required_outputs`，extractor 直接查声明）——更稳但仍待做（要声明作者配合改格式）；在那之前，refine 是默认兜底。
 
+### 7.3.1 headline：指令显示的人话标题（判定不读）
+
+§7.2 的 extractor 地基瓶颈还有个显示副作用：按 markdown 结构切指令时，谓语常被切到独立片段、主语留在列表项首行（如「必须存在」丢了 `design_doc_cases.json`），读起来晦涩。但判定吃 instruction_text + 整段 scene、不依赖主语——**主语丢失只伤显示可读性、不伤判定**，所以治显示不必动判定。
+
+两步纯显示增强（judge 始终吃 instruction_text 不变）：
+
+- **`source_excerpt`**：extract 时记下指令所属 bullet（markdown 列表项 + 续行）的完整原文，带回被切的主语。确定性正则（`_bullet_excerpt` 回溯列表项首行），无 bullet 时回退所在行。
+- **`--headline`**（默认开，`--no-headline` 关）：refine 之后、判定之前的**独立 LLM 步骤**，把 instruction_text + source_excerpt 去噪 + 补主语 + 压成一句人话标题。**关键：没塞进 refine**——refine 判 is_real 决定哪些指令进 judge，把 headline 塞进去会让 is_real 漂移→滤指令集合变→判定间接变；做成独立步骤（自己的 prompt + 缓存）才真正做到判定零影响。
+
+显示回退顺序 `headline > source_excerpt > instruction_text`：headline 优先、source_excerpt 兜底、最后才是无主语谓语；audit-report.html 和 insight 都保留 instruction_text 作「判定锚点」折叠核对（judge 实际对账的就是它）。per-声明 hash 缓存（`~/.cache/skill-eval/headline/`，键含 source_excerpt——extract 改了 bullet 回溯会失效重算），跨 audit() 复用。
+
 ### 7.4 五态 verdict + method 双维度
 
 每条 finding 有两个**正交**维度：
@@ -831,7 +842,7 @@ exit code 不变（root 不引入新 gate）：cc 主作用域在**非空 transc
 
 ### 7.8 怎么读 audit 结果：别只数 fail + 来源徽章
 
-读 audit 结果时记住一句话：**别只数 fail 条数**——每条 finding 带序号。**来源徽章**显示这条 finding 是从哪个 / 哪些 `InstructionSource` 抽出来的（CONSTRAINT / ANTI_FABRICATION / HEADING_STEP / TOOL_REQUIREMENT / REFERENCE_USAGE / OUTPUT_FORMAT）。当同一句声明文本同时匹配多个抽取模式（如同句既是约束、又是反捏造）、且同 transcript 同 verdict 时，会**合并成一条**，徽章就显示两个来源（如 `CONSTRAINT + ANTI_FABRICATION`）——证明同文重复已去重、没有虚增 fail。而同一行为跨两条**不同**规则（如没读某 reference 同时违反"条件性"+"步骤"两条）仍会是两条，但互标"↔ 同源违规 #N"。所以 fail 条数可能 > 真实问题数，逐条看 evidence 对照"哪个行为"，别数条数。
+读 audit 结果时记住一句话：**别只数 fail 条数**——每条 finding 带序号。**来源徽章**显示这条 finding 是从哪个 / 哪些 `InstructionSource` 抽出来的（CONSTRAINT / ANTI_FABRICATION / HEADING_STEP / TOOL_REQUIREMENT / REFERENCE_USAGE / OUTPUT_FORMAT）。当同一句声明文本同时匹配多个抽取模式（如同句既是约束、又是反捏造）、且同 transcript 同 verdict 时，会**合并成一条**，徽章就显示两个来源（如 `CONSTRAINT + ANTI_FABRICATION`）——证明同文重复已去重、没有虚增 fail。而同一行为跨两条**不同**规则（如没读某 reference 同时违反"条件性"+"步骤"两条）仍会是两条，但互标"↔ 同源 #N"。所以 fail 条数可能 > 真实问题数，逐条看 evidence 对照"哪个行为"，别数条数。
 
 ### 7.9 derived_from_transcript（反推）
 

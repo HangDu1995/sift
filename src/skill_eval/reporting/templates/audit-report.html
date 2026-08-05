@@ -201,12 +201,12 @@
         // 来源徽章:同文去重后多来源用 " + " 连(已排序);单来源原样。sources 空则退回 source。
         var srcs = (f.sources && f.sources.length) ? f.sources : [f.source];
         var srcTag = '<span class="src">' + escapeHtml(srcs.join(' + ')) + '</span>';
-        // Case B 同行为跨类关联:↔ 同源违规 #X #Y(可点跳到对应 finding)
+        // Case B 同行为跨类关联:↔ 同源 #X #Y(同一行为被抽成跨类多条,verdict 各自独立;可点跳)
         var relLinks = (f.related || []).map(function (r) {
           var n = escapeHtml(String(r).replace('#', ''));
           return '<a class="ref-link" href="#finding-' + n + '">' + escapeHtml(r) + '</a>';
         }).join('');
-        var related = relLinks ? '<span class="related">↔ 同源违规</span>' + relLinks : '';
+        var related = relLinks ? '<span class="related">↔ 同源</span>' + relLinks : '';
         // FAIL 噪声判别徽章(仅 FAIL 且 noise_label 才显);放 method 前,留在徽章簇里(不跟 method 跑到右侧)
         var noise = (f.verdict === 'FAIL' && f.noise_label) ? noiseBadge(f.noise_label, f.noise_reasons) : '';
         // turn 定位徽章(turn_refs 非空才显,即 FAIL / INDETERMINATE 违规);放噪声后、method 前,留徽章簇里

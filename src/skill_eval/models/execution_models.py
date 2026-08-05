@@ -17,6 +17,7 @@ class RunConfig(BaseModel):
     skip_calibration: bool = False
     skip_compliance: bool = False
     refine_instructions: bool = True
+    generate_headline: bool = True
     eval_samples: int | float | None = None
     eval_ids: list[int] | None = None  # 按 id 指定某几道题(优先于 eval_samples;互斥)
     per_eval_timeout: int = 300  # Per-eval timeout for outlier detection
