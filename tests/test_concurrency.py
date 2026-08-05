@@ -190,3 +190,97 @@ def test_on_success_raising_wakes_waiter():
     lim.on_success()  # ceiling 1→2 → notify → worker 通过(仍有 1 名额)
     assert got.wait(2.0)
     t.join()
+
+
+# ── _judge_batch_with_retry 接 AIMD(集成)─────────────────────────────────
+
+
+def test_judge_batch_aimd_on_rate_limit_then_success(monkeypatch):
+    """call_claude 先抛 _HttpRateLimited 再成功 → on_throttled(降 ceiling)+ 退避 sleep +
+    成功后 on_success。"""
+    auditor._LLM_LIMITER.reset(6)
+    seq = []
+
+    def fake_call(prompt, **kw):
+        seq.append(1)
+        if len(seq) == 1:
+            raise _HttpRateLimited("429 test")
+        return '[{"index":0,"verdict":"pass","evidence":"ok"}]'
+
+    monkeypatch.setattr(auditor, "call_claude", fake_call)
+    sleeps = []
+    monkeypatch.setattr(auditor.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(auditor.random, "uniform", lambda a, b: 0.0)
+
+    result = auditor._judge_batch_with_retry(
+        "p", None, 10, lambda t, n: json.loads(t), 1,
+        on_progress=None, label="测", k=1, total=1,
+        is_unparsed=lambda v: not v, transport="http",
+    )
+    assert result == [{"index": 0, "verdict": "pass", "evidence": "ok"}]
+    assert auditor._LLM_LIMITER.ceiling == 3  # 6//2 降了
+    assert auditor._RATE_LIMIT_BACKOFF in sleeps  # AIMD 退避发生
+    auditor._LLM_LIMITER.reset(6)
+
+
+def test_judge_batch_success_keeps_ceiling_below_probe(monkeypatch):
+    """成功 → on_success(streak+1),但一次 < probe_every(8),ceiling 不变。"""
+    auditor._LLM_LIMITER.reset(6)
+    monkeypatch.setattr(auditor, "call_claude",
+                        lambda *a, **k: '[{"index":0,"verdict":"pass","evidence":"ok"}]')
+    monkeypatch.setattr(auditor.time, "sleep", lambda s: None)
+    auditor._judge_batch_with_retry(
+        "p", None, 10, lambda t, n: json.loads(t), 1,
+        on_progress=None, label="测", k=1, total=1,
+        is_unparsed=lambda v: not v, transport="http",
+    )
+    assert auditor._LLM_LIMITER.ceiling == 6  # 一次成功不够 probe_every,不升不降
+    auditor._LLM_LIMITER.reset(6)
+
+
+def test_judge_batch_fixed_mode_skips_aimd_on_rate_limit(monkeypatch):
+    """固定模式(set_fixed)下撞 429:on_throttled no-op(ceiling 不降),但仍退避重试救回。"""
+    auditor._LLM_LIMITER.set_fixed(4)
+    seq = []
+
+    def fake_call(prompt, **kw):
+        seq.append(1)
+        if len(seq) == 1:
+            raise _HttpRateLimited("429")
+        return '[{"index":0,"verdict":"pass","evidence":"ok"}]'
+
+    monkeypatch.setattr(auditor, "call_claude", fake_call)
+    monkeypatch.setattr(auditor.time, "sleep", lambda s: None)
+    monkeypatch.setattr(auditor.random, "uniform", lambda a, b: 0.0)
+    auditor._judge_batch_with_retry(
+        "p", None, 10, lambda t, n: json.loads(t), 1,
+        on_progress=None, label="测", k=1, total=1,
+        is_unparsed=lambda v: not v, transport="http",
+    )
+    assert auditor._LLM_LIMITER.ceiling == 4  # 固定模式不降
+    assert auditor._LLM_LIMITER.adaptive is False
+    auditor._LLM_LIMITER.reset(6)
+
+
+def test_judge_batch_emits_throttle_progress(monkeypatch):
+    """撞 429 时 on_progress 收到「撞限流…并发降至 N」进度行(可观测,诊断用)。"""
+    auditor._LLM_LIMITER.reset(8)
+    seq = []
+
+    def fake_call(prompt, **kw):
+        seq.append(1)
+        if len(seq) == 1:
+            raise _HttpRateLimited("429")
+        return '[{"index":0,"verdict":"pass","evidence":"ok"}]'
+
+    monkeypatch.setattr(auditor, "call_claude", fake_call)
+    monkeypatch.setattr(auditor.time, "sleep", lambda s: None)
+    monkeypatch.setattr(auditor.random, "uniform", lambda a, b: 0.0)
+    progs: list[str] = []
+    auditor._judge_batch_with_retry(
+        "p", None, 10, lambda t, n: json.loads(t), 1,
+        on_progress=progs.append, label="测", k=1, total=1,
+        is_unparsed=lambda v: not v, transport="http",
+    )
+    assert any("撞限流" in m and "降至 4" in m for m in progs)  # 8//2=4
+    auditor._LLM_LIMITER.reset(6)
