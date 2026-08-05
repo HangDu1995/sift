@@ -21,6 +21,16 @@ class _HttpThrottled(Exception):
     """
 
 
+class _HttpRateLimited(Exception):
+    """裸 HTTP 撞 429(账户速率/并发限制)→ **不回退 cc**(同账号同限,cc 也撞),
+    穿透 ``call_claude`` dispatcher 交 ``_judge_batch_with_retry`` 做 AIMD 退避:
+    limiter.on_throttled()(降并发)+ 退避重试。
+
+    独立类型(**非** RuntimeError 子类):避免被通用 ``except RuntimeError`` 误吞——
+    429 要触发 AIMD 降档,不是当普通调用失败立即重试(速率没降、重试无效)。
+    """
+
+
 def _resolve_http_model(model: str | None) -> str:
     """裸 HTTP 用的真实模型 id。
 
@@ -84,6 +94,10 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
         if e.code == 529:
             raise _HttpThrottled(
                 f"裸 HTTP 529(后端过载/身份限流): {e.read().decode()[:200]}"
+            )
+        if e.code == 429:
+            raise _HttpRateLimited(
+                f"裸 HTTP 429(账户速率/并发限制): {e.read().decode()[:200]}"
             )
         raise RuntimeError(f"裸 HTTP {e.code}: {e.read().decode()[:500]}")
     except (urllib.error.URLError, TimeoutError, OSError) as e:
