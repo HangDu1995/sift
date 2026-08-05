@@ -780,7 +780,7 @@ skill-eval audit path/to/decl/ --transcript a.jsonl --transcript b.jsonl        
 skill-eval audit path/to/decl/ --transcript opencode-session.json                   # opencode session(.json)
 ```
 
-判定要逐批调 LLM（每批约 40–257s），跑期间实时打印进度（`[条件性/禁令/步骤] 判定 N 条…`），三个 LLM 类别判定器（条件性 / 禁令 / 步骤；输出格式走程序判定不调 LLM）并发跑（约 2× 提速）。看到 `[类别] …` 滚动就是在跑，别误以为卡死。
+判定要逐批调 LLM（每批约 40–257s），跑期间实时打印进度（`[条件性/禁令/步骤] 判定 N 条…`），三个 LLM 类别判定器（条件性 / 禁令 / 步骤；输出格式走程序判定不调 LLM）并发跑（约 2× 提速）；全局在飞 `call_claude` 钉在 ≤6，可用 `--max-concurrent`（或 env `SKILL_EVAL_MAX_CONCURRENT`）在大声明 / 低内存时调小。看到 `[类别] …` 滚动就是在跑，别误以为卡死。
 
 **对账作用域（两层，skill/agent/root 一视同仁）**：
 

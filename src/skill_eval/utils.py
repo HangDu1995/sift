@@ -7,7 +7,102 @@ import os
 import signal
 import subprocess
 import threading
+import urllib.error
+import urllib.request
 from collections.abc import Callable
+
+
+class _HttpThrottled(Exception):
+    """裸 HTTP 撞 529(后端过载/身份限流)→ ``call_claude`` dispatcher 捕获、回退 cc。
+
+    独立类型(**非** RuntimeError 子类):避免被 ``_judge_batch_with_retry`` 的
+    ``except RuntimeError`` 误吞——它要穿透到 ``call_claude`` dispatcher 做 cc 兜底
+    (dispatcher 在 call_claude 内部捕获,不会真逃出去)。
+    """
+
+
+def _resolve_http_model(model: str | None) -> str:
+    """裸 HTTP 用的真实模型 id。
+
+    cc CLI 的 model 别名(如 ``glm-5.2[1m]`` 的 ``[1m]`` 上下文窗口后缀)裸 API 不收
+    (spike 实证 code 1211「模型不存在」)→ 剥首个 ``[`` 后缀。``model=None``(audit 默认
+    不传 ``--model`` 的常态)→ **镜像 cc**:读 ``ANTHROPIC_MODEL`` env(cc 的默认模型来源,
+    本环境 ``=glm-5.2[1m]``)再剥后缀;env 也没有才抛(裸 HTTP 无内置默认)。
+    """
+    if not model:
+        model = os.environ.get("ANTHROPIC_MODEL")
+    if not model:
+        raise RuntimeError(
+            "裸 HTTP 无可用 model:未传 --model 且环境无 ANTHROPIC_MODEL"
+        )
+    i = model.find("[")
+    return model[:i] if i != -1 else model
+
+
+def _llm_http_call(prompt, model, timeout, schema, on_usage):
+    """裸 HTTP 直连智谱 Anthropic 协议 endpoint(forced tool_use 保 schema)。
+
+    省 cc CLI 的进程 spawn + ~25k 系统 prompt/批(spike 实测 refine 5.3×、headline 2.7×、
+    refine 输出 12/12 一致)。stdlib ``urllib`` 不加依赖。``schema`` 作为 forced tool 的
+    ``input_schema``(``tool_choice`` force)→ 模型一次产 ``tool_use.input``
+    (= ``{"items":[...]}`` 或单对象),解包后 ``json.dumps`` 返(形状与 ``call_claude``
+    schema 模式一致,下游 parser 零改动)。
+
+    - **529**(过载/身份限流)→ ``_HttpThrottled``(交 ``call_claude`` dispatcher 回退 cc)。
+    - **其它 HTTP 错**(4xx 配置)/ **传输错**(timeout / URLError)→ ``RuntimeError``
+      (暴露、走既有重试/兜底;cc 同 endpoint 同样会 timeout,回退无意义)。
+    - ``on_usage``:回 ``{input_tokens, output_tokens, …, total_cost_usd:0}``(裸 API 不返
+      cost,补 0 对齐 ``call_claude`` 的 payload 形状)。
+    """
+    body = {
+        "model": _resolve_http_model(model),
+        "max_tokens": 4096,
+        "messages": [{"role": "user", "content": prompt}],
+        "tools": [{
+            "name": "emit",
+            "description": "emit the JSON result",
+            "input_schema": schema,
+        }],
+        "tool_choice": {"type": "tool", "name": "emit"},
+    }
+    headers = {
+        "Authorization": f"Bearer {os.environ['ANTHROPIC_AUTH_TOKEN']}",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        # best-effort 身份(减 529 触发,非保证——保证靠 529→cc 兜底):让后端尽量当 cc 放行。
+        "User-Agent": "claude-code/2.1.220",
+    }
+    base = os.environ["ANTHROPIC_BASE_URL"].rstrip("/")
+    req = urllib.request.Request(
+        base + "/v1/messages", data=json.dumps(body).encode(),
+        headers=headers, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            obj = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 529:
+            raise _HttpThrottled(
+                f"裸 HTTP 529(后端过载/身份限流): {e.read().decode()[:200]}"
+            )
+        raise RuntimeError(f"裸 HTTP {e.code}: {e.read().decode()[:500]}")
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise RuntimeError(f"裸 HTTP 传输失败: {e!r}")
+    # 抠 tool_use.input(forced tool_use 应恒有;缺失 = 异常,loud)
+    for b in obj.get("content", []):
+        if b.get("type") == "tool_use":
+            inp = b.get("input", {})
+            items = inp.get("items", inp)   # array schema 包 {"items":[...]} → 解开
+            break
+    else:
+        raise RuntimeError(f"裸 HTTP 未返回 tool_use(force 失败?): {str(obj)[:300]}")
+    if on_usage is not None:
+        usage = obj.get("usage")
+        if isinstance(usage, dict):
+            payload = dict(usage)
+            payload.setdefault("total_cost_usd", 0.0)
+            on_usage(payload)
+    return json.dumps(items, ensure_ascii=False)
 
 
 def claude_cli_env() -> dict:
@@ -63,38 +158,10 @@ def _spawn_claude(cmd: list[str], prompt: str, timeout: int) -> str:
     return out
 
 
-def call_claude(
-    prompt: str,
-    model: str | None = None,
-    timeout: int = 120,
-    max_turns: int | None = None,
-    on_usage: Callable[[dict], None] | None = None,
-    schema: dict | None = None,
-) -> str:
-    """调 claude CLI 拿文本回。
+def _call_claude_cc(prompt, model, timeout, max_turns, on_usage, schema):
+    """call_claude 的 cc CLI 实现(从 call_claude 抽出,逻辑零改动)。
 
-    - ``on_usage=None`` 且 ``schema=None``(默认)→ ``--output-format text``,纯文本
-      进出(历史行为;其余调用方与所有测试 mock 走这条,字节不变)。
-    - ``on_usage`` 给定 → ``--output-format json``,解析单结果对象,返回 ``result``
-      (文本,等同 text 模式输出);对象的 ``usage``(token 用量)+ ``total_cost_usd``
-      打包成 dict 回调 ``on_usage``,供调用方累加。
-      **兜底**:json 解析失败/对象畸形 → 退回返 raw stdout、**不触发** on_usage——
-      绝不让抓 token 砸了拿结果(token 是锦上添花,不是单点故障)。
-    - ``schema`` 给定 → 额外加 ``--json-schema``(结构化输出:模型被硬约束产符合
-      schema 的对象,CLI 在结果里附 ``structured_output`` 字段)。判官用这条从源头
-      消灭「文本里抠 JSON」的解析 bug(格式不可畸形)。**返回仍是 str**:有
-      ``structured_output`` → 返其 ``json.dumps``(判官侧 ``json.loads`` 一次命中,
-      fallback parser 留作兜底);``structured_output`` 缺失(model 未合规)→ 降级返
-      ``result`` 文本,判官现有 fallback parser 接住,等同旧行为。
-      **array 判官约定**:CLI 不接受顶层 ``{"type":"array"}`` schema(spike 实证触发
-      ``error_max_structured_output_retries``),故 array 判官把输出包成
-      ``{"items":[...]}``;call_claude 透明解开(``structured_output`` 是 dict 且含
-      ``items`` list → 返 ``json.dumps(items)``),判官/parser 零改动、拿纯 array。
-
-    为何不另起 ``call_claude_with_usage`` / ``call_claude_structured`` 而在本函数加
-    可选参数:全仓 ~35 处测试 mock patch 的是 ``skill_eval.audit.auditor.call_claude``
-    这个名字(auditor.py 把它 from-import 进本模块命名空间);换名会让 mock 全失效→
-    测试去打真 claude。默认 None 保持 text 模式,这些 mock 与其余调用方零改动。
+    见 ``call_claude`` 的 docstring(text/json/schema 三模式 + array 解包 + 兜底语义)。
     """
     fmt = "json" if (on_usage is not None or schema is not None) else "text"
     # 结构化输出(--json-schema)需 claude 走 tool_use 循环产 schema 验证过的对象
@@ -133,6 +200,54 @@ def call_claude(
         # structured_output 缺失 → 降级返 result 文本(fallback parser 接住,等同旧行为)。
     # result 缺失 → 空串(不返 raw json,免得 usage dict 被下游文本解析误 carve)。
     return obj.get("result", "")
+
+
+def call_claude(
+    prompt: str,
+    model: str | None = None,
+    timeout: int = 120,
+    max_turns: int | None = None,
+    on_usage: Callable[[dict], None] | None = None,
+    schema: dict | None = None,
+    *,
+    transport: str = "cc",
+) -> str:
+    """调 claude CLI 拿文本回。
+
+    - ``on_usage=None`` 且 ``schema=None``(默认)→ ``--output-format text``,纯文本
+      进出(历史行为;其余调用方与所有测试 mock 走这条,字节不变)。
+    - ``on_usage`` 给定 → ``--output-format json``,解析单结果对象,返回 ``result``
+      (文本,等同 text 模式输出);对象的 ``usage``(token 用量)+ ``total_cost_usd``
+      打包成 dict 回调 ``on_usage``,供调用方累加。
+      **兜底**:json 解析失败/对象畸形 → 退回返 raw stdout、**不触发** on_usage——
+      绝不让抓 token 砸了拿结果(token 是锦上添花,不是单点故障)。
+    - ``schema`` 给定 → 额外加 ``--json-schema``(结构化输出:模型被硬约束产符合
+      schema 的对象,CLI 在结果里附 ``structured_output`` 字段)。判官用这条从源头
+      消灭「文本里抠 JSON」的解析 bug(格式不可畸形)。**返回仍是 str**:有
+      ``structured_output`` → 返其 ``json.dumps``(判官侧 ``json.loads`` 一次命中,
+      fallback parser 留作兜底);``structured_output`` 缺失(model 未合规)→ 降级返
+      ``result`` 文本,判官现有 fallback parser 接住,等同旧行为。
+      **array 判官约定**:CLI 不接受顶层 ``{"type":"array"}`` schema(spike 实证触发
+      ``error_max_structured_output_retries``),故 array 判官把输出包成
+      ``{"items":[...]}``;call_claude 透明解开(``structured_output`` 是 dict 且含
+      ``items`` list → 返 ``json.dumps(items)``),判官/parser 零改动、拿纯 array。
+
+    为何不另起 ``call_claude_with_usage`` / ``call_claude_structured`` 而在本函数加
+    可选参数:全仓 ~35 处测试 mock patch 的是 ``skill_eval.audit.auditor.call_claude``
+    这个名字(auditor.py 把它 from-import 进本模块命名空间);换名会让 mock 全失效→
+    测试去打真 claude。默认 None 保持 text 模式,这些 mock 与其余调用方零改动。
+
+    ``transport``(代码级,默认 ``"cc"``):``"cc"`` → cc CLI(``_call_claude_cc``);
+    ``"http"`` → 裸 HTTP 直连(``_llm_http_call``,省 cc 进程 spawn + ~25k 系统 prompt/批,
+    forced tool_use 保 schema)。裸 HTTP 撞 529(后端过载/身份限流)→ 回退 cc(最坏=今天)。
+    默认 ``"cc"`` 保持现有调用方 / ~35 处 mock 零改动。
+    """
+    if transport == "http":
+        try:
+            return _llm_http_call(prompt, model, timeout, schema, on_usage)
+        except _HttpThrottled:
+            return _call_claude_cc(prompt, model, timeout, max_turns, on_usage, schema)
+    return _call_claude_cc(prompt, model, timeout, max_turns, on_usage, schema)
 
 
 class TokenUsageAccumulator:

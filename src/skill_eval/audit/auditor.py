@@ -244,6 +244,7 @@ def _judge_batch_with_retry(
     k: int,
     total: int,
     is_unparsed: Callable[[Any], bool],
+    transport: str = "cc",
 ) -> list | _RetryExhaustedType:
     """call+parse 一个 LLM 批,RuntimeError 或整批 0 解析成功则重试(共用 _LLM_RETRY_MAX 预算)。
 
@@ -270,7 +271,10 @@ def _judge_batch_with_retry(
             # 信号量门控全局在飞 call_claude ≤ _MAX_BATCH_CONCURRENT:跨类别 + 同类多批
             # 统一争这一个。只圈住 call_claude(不圈 parse/重试 sleep),故重试退避不占槽。
             with _LLM_SEMAPHORE:
-                result_text = call_claude(prompt, model=model, timeout=timeout, max_turns=1, on_usage=on_usage, schema=schema)
+                result_text = call_claude(
+                    prompt, model=model, timeout=timeout, max_turns=1,
+                    on_usage=on_usage, schema=schema, transport=transport,
+                )
         except RuntimeError as exc:
             _emit(on_progress, f"  {prefix} 调用失败: {str(exc)[:120]}")
             continue
@@ -295,6 +299,7 @@ def _run_batches_concurrent(
     total: int,
     is_unparsed: Callable[[Any], bool],
     schema: dict | None = None,
+    transport: str = "cc",
 ) -> list[tuple[int, list]]:
     """把一类的所有 LLM 批次**并发**跑,返回 ``[(start, parsed)]``(仅成功批)。
 
@@ -324,6 +329,7 @@ def _run_batches_concurrent(
                     on_usage=on_usage,
                     schema=schema,
                     is_unparsed=is_unparsed,
+                    transport=transport,
                 )
             except Exception as exc:
                 # _judge_batch_with_retry 只 except RuntimeError;非 RuntimeError(parse_fn
@@ -342,6 +348,7 @@ def _run_batches_concurrent(
                 on_usage=on_usage,
                 schema=schema,
                 is_unparsed=is_unparsed,
+                transport=transport,
             ): idx
             for idx, (start, bn, k, prompt) in enumerate(specs)
         }
@@ -1387,6 +1394,7 @@ class TranscriptAuditor:
             specs, self._parse_real, model, timeout, on_progress, on_usage,
             "精筛", total, lambda v: v is None,
             schema=_CLASSIFY_REAL_SCHEMA,
+            transport="http",
         ):
             for j, val in enumerate(parsed):
                 mask[start + j] = val
@@ -1476,6 +1484,7 @@ class TranscriptAuditor:
             specs, self._parse_headline, model, timeout, on_progress, on_usage,
             "headline", total, lambda v: not v,
             schema=_HEADLINE_SCHEMA,
+            transport="http",
         ):
             for j, val in enumerate(parsed):
                 out[start + j] = val

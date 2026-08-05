@@ -2049,3 +2049,68 @@ def test_headline_off_by_default(tmp_path, monkeypatch):
     tp = _write_jsonl(tmp_path / "s.jsonl", _read_file_records("/tmp/x"))
     report = TranscriptAuditor().audit("s", body, [tp])  # 不传 generate_headline
     assert all(not f.headline for f in report.findings)
+
+
+# ── 裸 HTTP 通道:refine / headline 经调度链传 transport='http' ──
+
+
+def test_refine_passes_http_transport_down_the_chain(monkeypatch):
+    """refine(_refine_pseudo_instructions → _llm_classify_real)把 transport='http'
+    穿到 call_claude(mock 整替 call_claude,断言收到的 transport=='http')。"""
+    seen = {}
+
+    def fake_call_claude(prompt, *, model=None, timeout=120, max_turns=None,
+                         on_usage=None, schema=None, transport="cc"):
+        seen["transport"] = transport
+        # 返 is_real=true(真指令,保留一条)
+        return json.dumps([{"index": 0, "is_real": True}])
+
+    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake_call_claude)
+    TranscriptAuditor()._refine_pseudo_instructions(
+        [_step_inst("Step 1: 真步骤")], model="glm-5.2[1m]", timeout=10,
+    )
+    assert seen.get("transport") == "http"
+
+
+def test_headline_passes_http_transport_down_the_chain(monkeypatch):
+    """headline(_generate_headlines)把 transport='http' 穿到 call_claude。"""
+    seen = {}
+
+    def fake_call_claude(prompt, *, model=None, timeout=120, max_turns=None,
+                         on_usage=None, schema=None, transport="cc"):
+        seen["transport"] = transport
+        return json.dumps([{"index": 0, "headline": "标题"}])
+
+    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake_call_claude)
+    TranscriptAuditor()._generate_headlines(
+        [_step_inst("做某事")], model="glm-5.2[1m]", timeout=10,
+    )
+    assert seen.get("transport") == "http"
+
+
+def test_judge_batch_with_retry_forwards_transport_to_call_claude(monkeypatch):
+    """_judge_batch_with_retry 把 transport 参转发给 call_claude(cc 默认 / http 两向)。"""
+    import skill_eval.audit.auditor as A
+    seen = {}
+
+    def fake_call_claude(prompt, *, model=None, timeout=120, max_turns=None,
+                         on_usage=None, schema=None, transport="cc"):
+        seen.setdefault("transports", []).append(transport)
+        return json.dumps([{"index": 0, "applicable": False}])
+
+    monkeypatch.setattr(A, "call_claude", fake_call_claude)
+    # parse 返非 unparsed 值(v[0] 非 None)→ 首次即成功、不重试(否则重试会重复记 transport)
+    parse = lambda text, n: [("ok", "")] * n
+    # transport 默认 cc
+    A._judge_batch_with_retry(
+        "p", None, 10, parse, 1,
+        on_progress=None, on_usage=None, schema=None, label="X", k=1, total=1,
+        is_unparsed=lambda v: v[0] is None,
+    )
+    # 显式 http
+    A._judge_batch_with_retry(
+        "p", None, 10, parse, 1,
+        on_progress=None, on_usage=None, schema=None, label="X", k=1, total=1,
+        is_unparsed=lambda v: v[0] is None, transport="http",
+    )
+    assert seen["transports"] == ["cc", "http"]

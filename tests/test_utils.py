@@ -1,11 +1,13 @@
 # tests/test_utils.py
 """call_claude 的 subprocess 行为:timeout 必须真生效(kill 整组,含孙进程)。
 on_usage 回调(json 模式抓 token)+ TokenUsageAccumulator 并发累加。"""
+import io
 import json
 import os
 import shlex
 import stat
 import time
+import urllib.error
 
 import pytest
 
@@ -377,3 +379,197 @@ def test_token_accumulator_scoped_concurrent_safe():
         t.join()
     assert acc.snapshot_by_stage()["judge"]["input_tokens"] == 800
     assert acc.snapshot_by_stage()["judge"]["calls"] == 800
+
+
+# ── 裸 HTTP 传输通道:_resolve_http_model / _llm_http_call / call_claude 调度 ──
+
+def test_resolve_http_model_strips_context_alias_suffix():
+    """cc CLI 的 [1m] 上下文窗口后缀裸 API 不收(spike code 1211)→ 剥首个 [ 后缀。"""
+    from skill_eval.utils import _resolve_http_model
+    assert _resolve_http_model("glm-5.2[1m]") == "glm-5.2"
+
+
+def test_resolve_http_model_passthrough_when_no_bracket():
+    from skill_eval.utils import _resolve_http_model
+    assert _resolve_http_model("glm-5.2") == "glm-5.2"
+
+
+def test_resolve_http_model_none_reads_env(monkeypatch):
+    """audit 默认不传 --model(model=None)→ 镜像 cc 读 ANTHROPIC_MODEL(本环境=glm-5.2[1m])。"""
+    from skill_eval.utils import _resolve_http_model
+    monkeypatch.setenv("ANTHROPIC_MODEL", "glm-5.2[1m]")
+    assert _resolve_http_model(None) == "glm-5.2"
+
+
+def test_resolve_http_model_none_and_no_env_raises(monkeypatch):
+    """既没传 model 也没 env → 裸 HTTP 无默认模型,loud 抛(走重试/兜底,不静默)。"""
+    from skill_eval.utils import _resolve_http_model
+    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
+    with pytest.raises(RuntimeError):
+        _resolve_http_model(None)
+
+
+# ── _llm_http_call:裸 HTTP 直连(forced tool_use)──
+class _FakeResp:
+    """假 urlopen 返回的 context manager:.read() 返 body bytes。"""
+    def __init__(self, payload):
+        import json as _j
+        self._raw = _j.dumps(payload).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self._raw
+
+
+def _http_env(monkeypatch):
+    """裸 HTTP 需的两个 env(AUTH_TOKEN / BASE_URL);token 是测试占位,非真凭据。"""
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "test-token")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://x.example/api/anthropic")
+
+
+def test_http_call_builds_forced_tooluse_and_parses_items(monkeypatch):
+    """请求体含 forced tool_use + auth header + 剥后缀 model;响应 tool_use.input 解包。"""
+    import json as _j
+    import skill_eval.utils as u
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = _j.loads(req.data.decode())
+        captured["headers"] = req.headers
+        captured["timeout"] = timeout
+        return _FakeResp({
+            "content": [{"type": "tool_use", "input": {"items": [{"index": 0, "is_real": True}]}}],
+            "usage": {"input_tokens": 764, "output_tokens": 403},
+        })
+
+    monkeypatch.setattr(u.urllib.request, "urlopen", fake_urlopen)
+    _http_env(monkeypatch)
+    out = u._llm_http_call(
+        "prompt", "glm-5.2[1m]", 600,
+        {"type": "object", "properties": {"items": {"type": "array"}}}, None,
+    )
+    assert captured["body"]["model"] == "glm-5.2"                       # 别名剥离
+    assert captured["body"]["tool_choice"] == {"type": "tool", "name": "emit"}  # forced tool_use
+    assert captured["body"]["tools"][0]["name"] == "emit"
+    assert captured["headers"].get("Authorization") == "Bearer test-token"
+    assert _j.loads(out) == [{"index": 0, "is_real": True}]             # 解包 items
+
+
+def test_http_call_reports_usage_with_cost_zero(monkeypatch):
+    """裸 API 不返 cost → payload 补 total_cost_usd=0(对齐 call_claude 形状)。"""
+    import skill_eval.utils as u
+    seen = {}
+    monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
+        "content": [{"type": "tool_use", "input": {"items": []}}],
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }))
+    _http_env(monkeypatch)
+    u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, lambda p: seen.update(p))
+    assert seen["input_tokens"] == 10
+    assert seen["total_cost_usd"] == 0.0
+
+
+def test_http_call_529_raises_throttled(monkeypatch):
+    """529(过载/身份限流)→ _HttpThrottled(交 dispatcher 回退 cc),非 RuntimeError。"""
+    import skill_eval.utils as u
+
+    def boom(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 529, "overloaded", {}, io.BytesIO(b""))
+
+    monkeypatch.setattr(u.urllib.request, "urlopen", boom)
+    _http_env(monkeypatch)
+    with pytest.raises(u._HttpThrottled):
+        u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+
+
+def test_http_call_4xx_raises_runtime_loud(monkeypatch):
+    """4xx(配置错如模型名)→ RuntimeError(暴露、走重试/兜底),不回退、不 _HttpThrottled。"""
+    import skill_eval.utils as u
+
+    def boom(req, timeout=None):
+        raise urllib.error.HTTPError(
+            req.full_url, 400, "bad",
+            {}, io.BytesIO(b'{"error":{"message":"model missing"}}'),
+        )
+
+    monkeypatch.setattr(u.urllib.request, "urlopen", boom)
+    _http_env(monkeypatch)
+    with pytest.raises(RuntimeError):
+        u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+
+
+def test_http_call_missing_tooluse_raises_loud(monkeypatch):
+    """forced tool_use 应恒返 tool_use;缺失=异常 → RuntimeError(不静默返空)。"""
+    import skill_eval.utils as u
+    monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
+        "content": [{"type": "text", "text": "no tool"}],
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }))
+    _http_env(monkeypatch)
+    with pytest.raises(RuntimeError):
+        u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+
+
+# ── call_claude transport 调度:cc(默认)/ http(529→cc 兜底)──
+
+
+def test_call_claude_default_transport_is_cc(monkeypatch):
+    """不传 transport → 默认 cc → _llm_http_call 绝不被调。"""
+    import skill_eval.utils as u
+    monkeypatch.setattr(u, "_call_claude_cc", lambda *a, **k: "cc-out")
+    monkeypatch.setattr(
+        u, "_llm_http_call",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("http 不该被调")),
+    )
+    assert u.call_claude("p") == "cc-out"
+
+
+def test_call_claude_transport_http_routes_to_http(monkeypatch):
+    """transport='http' → _llm_http_call 被调、_call_claude_cc 不被调。"""
+    import skill_eval.utils as u
+    monkeypatch.setattr(u, "_llm_http_call", lambda *a, **k: "http-out")
+    monkeypatch.setattr(
+        u, "_call_claude_cc",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("cc 不该被调")),
+    )
+    assert u.call_claude("p", transport="http") == "http-out"
+
+
+def test_call_claude_http_529_falls_back_to_cc(monkeypatch):
+    """transport='http' 撞 _HttpThrottled → 回退 _call_claude_cc(=今天速度,最坏不更差)。"""
+    import skill_eval.utils as u
+    calls = {"http": 0, "cc": 0}
+
+    def fake_http(*a, **k):
+        calls["http"] += 1
+        raise u._HttpThrottled("529")
+
+    def fake_cc(*a, **k):
+        calls["cc"] += 1
+        return "cc-fallback"
+
+    monkeypatch.setattr(u, "_llm_http_call", fake_http)
+    monkeypatch.setattr(u, "_call_claude_cc", fake_cc)
+    assert u.call_claude("p", transport="http") == "cc-fallback"
+    assert calls == {"http": 1, "cc": 1}
+
+
+def test_call_claude_http_non_throttled_error_does_not_fallback(monkeypatch):
+    """transport='http' 抛非 _HttpThrottled(如 4xx→RuntimeError)→ 不回退、直接穿透。"""
+    import skill_eval.utils as u
+
+    def fake_http(*a, **k):
+        raise RuntimeError("裸 HTTP 400: model missing")
+
+    monkeypatch.setattr(u, "_llm_http_call", fake_http)
+    monkeypatch.setattr(
+        u, "_call_claude_cc",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("4xx 不该回退 cc")),
+    )
+    with pytest.raises(RuntimeError, match="400"):
+        u.call_claude("p", transport="http")
