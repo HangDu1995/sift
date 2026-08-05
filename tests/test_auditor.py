@@ -1168,14 +1168,15 @@ class TestAuditAggregate:
 
     def test_audit_populates_stage_breakdown(self, tmp_path, monkeypatch) -> None:
         """audit() 分阶段计时 + token:stage_breakdown 含全部 6 阶段;判官走 scoped("judge")
-        → judge 阶段有 token/calls,本地阶段(extract/rebuild/postprocess)0 token;refine/headline
-        默认关 → 0 token。各阶段是顺序非重叠墙钟片段 → 秒数之和 ≤ duration_seconds。"""
+        → judge 阶段有 token/calls(含 cache_read 归属),本地阶段(extract/rebuild/postprocess)0 token;
+        refine/headline 默认关 → 0 token。各阶段是顺序非重叠墙钟片段 → 秒数之和 ≤ duration_seconds。"""
         inner = _pass_fake()
 
         def fake(prompt, *a, **k):
             ou = k.get("on_usage")
             if ou:
-                ou({"input_tokens": 100, "output_tokens": 50, "total_cost_usd": 0.02})
+                ou({"input_tokens": 100, "output_tokens": 50,
+                    "cache_read_input_tokens": 200, "total_cost_usd": 0.02})
             return inner(prompt, *a, **k)
 
         monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
@@ -1186,12 +1187,14 @@ class TestAuditAggregate:
         stages = {s["stage"]: s for s in report.stage_breakdown}
         assert set(stages) == {"extract", "refine", "headline", "rebuild", "judge", "postprocess"}
         assert all(s["seconds"] >= 0 for s in stages.values())
-        # judge 跑了 LLM → 有 token + calls;refine/headline 默认关 + 本地阶段 → 0 token
+        # judge 跑了 LLM → 有 token + calls(含 cache_read 归属到 judge 桶);refine/headline 默认关 + 本地阶段 → 0 token
         assert stages["judge"]["input_tokens"] > 0
+        assert stages["judge"]["cache_read_input_tokens"] > 0
         assert stages["judge"]["calls"] > 0
         for local_stage in ("extract", "refine", "headline", "rebuild", "postprocess"):
             assert stages[local_stage]["calls"] == 0
             assert stages[local_stage]["input_tokens"] == 0
+            assert stages[local_stage]["cache_read_input_tokens"] == 0
         # note:开关默认关 → refine/headline "未启用";本地阶段 + judge 的 note 空(calls=0 是常态)
         assert stages["refine"]["note"] == "未启用"
         assert stages["headline"]["note"] == "未启用"

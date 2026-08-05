@@ -669,6 +669,11 @@ class TranscriptAuditor:
                 "seconds": round(stage_seconds.get(stage, 0.0), 3),
                 "input_tokens": tokens.get("input_tokens", 0),
                 "output_tokens": tokens.get("output_tokens", 0),
+                # cache_read/creation 也要分阶段透出:累加器已按 stage 记(_KEYS 含这俩),
+                # 旧序列化漏拷 → total 有 cache_read 但 stage 桶显 0(误导)。补上后报告能看出
+                # 每阶段是否走 prompt cache(refine/headline 裸 HTTP 无 cache;judge cc 有)。
+                "cache_read_input_tokens": tokens.get("cache_read_input_tokens", 0),
+                "cache_creation_input_tokens": tokens.get("cache_creation_input_tokens", 0),
                 "calls": calls,
                 "note": note,
             })

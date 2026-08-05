@@ -285,12 +285,12 @@
       var stages = EMBEDDED_DATA.stage_breakdown || [];
       if (stages.length) {
         var dur = EMBEDDED_DATA.duration_seconds || 0;
-        var sumSec = 0, sumIn = 0, sumOut = 0, sumCalls = 0;
+        var sumSec = 0, sumIn = 0, sumOut = 0, sumCr = 0, sumCalls = 0;
         var stageRows = stages.map(function (s) {
           var sec = Number(s.seconds || 0);
-          var inT = s.input_tokens || 0, outT = s.output_tokens || 0;
-          sumSec += sec; sumIn += inT; sumOut += outT; sumCalls += (s.calls || 0);
-          var tok = (inT || outT) ? (inT + ' / ' + outT) : '—';
+          var inT = s.input_tokens || 0, outT = s.output_tokens || 0, crT = s.cache_read_input_tokens || 0;
+          sumSec += sec; sumIn += inT; sumOut += outT; sumCr += crT; sumCalls += (s.calls || 0);
+          var tok = (inT || outT) ? (inT + ' / ' + outT + (crT ? ' · cache ' + crT : '')) : '—';
           var pct = (dur && sec) ? ' (' + Math.round(sec / dur * 100) + '%)' : '';
           var note = s.note ? ' <span class="stage-note">(' + escapeHtml(s.note) + ')</span>' : '';
           var kind = STAGE_KIND[s.stage] || '';
@@ -299,7 +299,7 @@
             '<td><span class="' + kindClass + '">' + kind + '</span></td>' +
             '<td>' + sec.toFixed(1) + 's' + pct + '</td><td>' + tok + '</td><td>' + (s.calls || 0) + note + '</td></tr>';
         }).join('');
-        var sumTok = (sumIn || sumOut) ? (sumIn + ' / ' + sumOut) : '—';
+        var sumTok = (sumIn || sumOut) ? (sumIn + ' / ' + sumOut + (sumCr ? ' · cache ' + sumCr : '')) : '—';
         var totalRow = '<tr class="stage-total"><td>合计</td><td>—</td><td>' + sumSec.toFixed(1) + 's</td><td>' + sumTok + '</td><td>' + sumCalls + '</td></tr>';
         root.insertAdjacentHTML('beforeend',
           '<details class="stage-breakdown" open><summary>阶段耗时 / token(诊断慢在哪)</summary>' +
