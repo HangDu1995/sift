@@ -61,7 +61,15 @@ from skill_eval.audit.tool_match import extract_first_balanced, load_json_lenien
 from skill_eval.audit.aggregate import aggregate_by_instruction
 from skill_eval.audit.dedup import post_process_findings
 from skill_eval.audit import headline_cache, refine_cache
-from skill_eval.concurrency import AdaptiveConcurrencyLimiter
+from skill_eval.concurrency import (
+    AdaptiveConcurrencyLimiter,
+    _LLM_LIMITER,
+    _LLM_SEMAPHORE,
+    _MAX_BATCH_CONCURRENT,
+    _RATE_LIMIT_BACKOFF,
+    configure_adaptive,
+    configure_max_concurrent,
+)
 from skill_eval.audit.noise import annotate_aggregate_noise, annotate_noise
 from skill_eval.compliance.extractor import InstructionExtractor
 from skill_eval.errors import SkillEvalError
@@ -120,41 +128,9 @@ _MAX_CONCURRENT = 3
 _AUDIT_STAGES: tuple[str, ...] = (
     "extract", "refine", "headline", "rebuild", "judge", "postprocess",
 )
-# **全局** LLM 调用并发——跨类别 + 同类多批统一争 _LLM_LIMITER(自适应限制器)。
-# audit 慢的根因是推理次数(每批 ~117s),旧实现每类内批次**串行** → 墙钟 = 最慢类批数 × 单批;
-# 现同类多批也铺到本地池并发跑,全局在飞 call_claude 由 _LLM_LIMITER 钉住。
-_MAX_BATCH_CONCURRENT = 6
-# 全局自适应并发限制器:_judge_batch_with_retry 在 call_claude 前后 acquire/release,把跨所有
-# 判定器、所有批次的在飞 LLM 调用钉在 ≤ 当前 ceiling。AIMD 调 ceiling:撞 429
-# (_HttpRateLimited)乘性减、连续成功加性增,收敛到当前后端真实容量边界(控在飞数 = 控吞吐,
-# 故对并发限制/速率限制两类后端都通用)。模块级单例 → 跨 audit() 共享(端点容量稳定)、
-# 三判定器各起的本地池线程争同一个(按负载自均衡)。configure_max_concurrent(n)→set_fixed(n)
-# (--max-concurrent 固定向后兼容);configure_adaptive()→恢复 AIMD(默认)。
-_LLM_LIMITER = AdaptiveConcurrencyLimiter(_MAX_BATCH_CONCURRENT)
-# 向后兼容别名:旧引用/测试按 _LLM_SEMAPHORE 名访问(limiter 兼容 acquire/release/__enter__)。
-_LLM_SEMAPHORE = _LLM_LIMITER
-# AIMD 退避:撞 429 后 sleep 这么久(+ random 抖动防多线程同步重试)再重试。
-_RATE_LIMIT_BACKOFF = 2.0
-
-
-def configure_max_concurrent(n: int) -> None:
-    """锁死全局并发上限 = n、关 AIMD(= 旧行为,供 ``--max-concurrent`` 固定向后兼容)。
-
-    供 CLI ``--max-concurrent`` / env ``SKILL_EVAL_MAX_CONCURRENT`` 在大声明、低内存机器、
-    或多 audit 共存场景下调小(用时间换内存)。在 audit 起判定前调。
-    """
-    if n < 1:
-        raise ValueError(f"max_concurrent 必须 ≥ 1,收到 {n}")
-    _LLM_LIMITER.set_fixed(n)
-
-
-def configure_adaptive(initial: int | None = None) -> None:
-    """恢复 AIMD 自适应并发(默认模式)。``initial`` 给则重设探测起点,否则保留当前 ceiling。
-
-    通用工具默认自适应——动态探当前后端容量边界(严苛后端收敛到低值、宽松后端探到更高),
-    不写死固定值。
-    """
-    _LLM_LIMITER.set_adaptive(initial)
+# _LLM_LIMITER 单例 / _MAX_BATCH_CONCURRENT / _RATE_LIMIT_BACKOFF / configure_* 已上提到
+# skill_eval.concurrency(audit 与 run 侧共享一个 ceiling);上面 from-import 进本模块命名空间,
+# 本模块代码(_judge_batch_with_retry 等)与旧测试(auditor._LLM_LIMITER)零改动继续可用。
 
 
 # 进度回调类型:audit 每批 LLM 判定 40-257s,全程静默对用户极不友好。核心只 emit 字符串,

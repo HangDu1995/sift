@@ -22,9 +22,9 @@ from typing import Optional
 import typer
 from rich.table import Table
 
-from skill_eval.audit.auditor import (
+from skill_eval.audit.auditor import TranscriptAuditor
+from skill_eval.concurrency import (
     _MAX_BATCH_CONCURRENT,
-    TranscriptAuditor,
     configure_adaptive,
     configure_max_concurrent,
 )

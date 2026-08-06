@@ -284,3 +284,11 @@ def test_judge_batch_emits_throttle_progress(monkeypatch):
     )
     assert any("撞限流" in m and "降至 4" in m for m in progs)  # 8//2=4
     auditor._LLM_LIMITER.reset(6)
+
+
+def test_limiter_singleton_shared_across_modules():
+    """_LLM_LIMITER 模块级单例:auditor(上提后 from-import)与 concurrency 必须同一对象。
+    否则 audit 与 run 侧各用一个 → 共享容量失效(B2 防回归)。"""
+    from skill_eval.concurrency import _LLM_LIMITER as cc_limiter
+    assert auditor._LLM_LIMITER is cc_limiter
+    assert auditor._LLM_SEMAPHORE is cc_limiter  # 别名也指向同一单例

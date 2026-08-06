@@ -144,3 +144,37 @@ class AdaptiveConcurrencyLimiter:
     def adaptive(self) -> bool:
         with self._cond:
             return self._adaptive
+
+
+# ── 模块级单例 + 配置(audit 与 run 侧 grading/comparator/analyzer 共享一个 ceiling)────
+# 全局自适应并发限制器:_judge_batch_with_retry / call_llm_with_retry 在 call_claude 前后
+# acquire/release,把跨所有调用方(判定器批 + run 侧单次判定)的在飞 LLM 调用钉在 ≤ ceiling。
+# AIMD 调 ceiling:撞 429(_HttpRateLimited)乘性减、连续成功加性增,收敛到后端真实容量边界。
+# 模块级单例 → 跨调用共享(端点容量稳定),audit 与 run 侧争同一个(同账号同容量预算)。
+_MAX_BATCH_CONCURRENT = 6  # AIMD 探测起点(保守);真实边界由 on_throttled/on_success 摸出
+_LLM_LIMITER = AdaptiveConcurrencyLimiter(_MAX_BATCH_CONCURRENT)
+# 向后兼容别名:旧引用/测试按 _LLM_SEMAPHORE 名访问(limiter 兼容 acquire/release/__enter__)。
+_LLM_SEMAPHORE = _LLM_LIMITER
+# AIMD 退避:撞 429 后 sleep 这么久(+ random 抖动防多线程同步重试)再重试。
+_RATE_LIMIT_BACKOFF = 2.0
+
+
+def configure_max_concurrent(n: int) -> None:
+    """锁死全局并发上限 = n、关 AIMD(= 旧行为,供 ``--max-concurrent`` 固定向后兼容)。
+
+    供 CLI ``--max-concurrent`` / env ``SKILL_EVAL_MAX_CONCURRENT`` 在大声明、低内存机器、
+    或多 audit 共存场景下调小(用时间换内存)。在 audit/run 起判定前调。
+    """
+    if n < 1:
+        raise ValueError(f"max_concurrent 必须 ≥ 1,收到 {n}")
+    _LLM_LIMITER.set_fixed(n)
+
+
+def configure_adaptive(initial: int | None = None) -> None:
+    """恢复 AIMD 自适应并发(默认模式)。``initial`` 给则重设探测起点,否则保留当前 ceiling。
+
+    通用工具默认自适应——动态探当前后端容量边界(严苛后端收敛到低值、宽松后端探到更高),
+    不写死固定值。
+    """
+    _LLM_LIMITER.set_adaptive(initial)
+
