@@ -11,7 +11,7 @@ import threading
 import pytest
 
 from skill_eval.audit import auditor
-from skill_eval.audit.concurrency import AdaptiveConcurrencyLimiter
+from skill_eval.concurrency import AdaptiveConcurrencyLimiter
 from skill_eval.utils import _HttpRateLimited
 
 

@@ -61,7 +61,7 @@ from skill_eval.audit.tool_match import extract_first_balanced, load_json_lenien
 from skill_eval.audit.aggregate import aggregate_by_instruction
 from skill_eval.audit.dedup import post_process_findings
 from skill_eval.audit import headline_cache, refine_cache
-from skill_eval.audit.concurrency import AdaptiveConcurrencyLimiter
+from skill_eval.concurrency import AdaptiveConcurrencyLimiter
 from skill_eval.audit.noise import annotate_aggregate_noise, annotate_noise
 from skill_eval.compliance.extractor import InstructionExtractor
 from skill_eval.errors import SkillEvalError
