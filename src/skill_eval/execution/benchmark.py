@@ -401,6 +401,7 @@ class BenchmarkAggregator:
         if checkpoints_data:
             main_benchmark = main_benchmark.model_copy(update={"notes": checkpoints_data})
 
+        _read_end = time.perf_counter()  # read+summarize 阶段结束(_p2_start→此 = read_runs_wall)
         try:
             comparisons = run_comparisons(self, iteration_dir, sides=sides, on_usage=comparator_acc.add, on_duration=comparator_dur.add)
             if comparisons:
@@ -416,6 +417,7 @@ class BenchmarkAggregator:
                 )
         except Exception as exc:
             print(f"Warning: comparison step failed ({exc}), skipping", file=__import__("sys").stderr)
+        _cmp_end = time.perf_counter()  # comparator 阶段墙钟(_read_end→此)
 
         try:
             per_side_cal = _collect_per_side_calibration(iteration_dir, sides)
@@ -427,6 +429,7 @@ class BenchmarkAggregator:
         except Exception as exc:
             print(f"Warning: calibration summary failed ({exc}), skipping", file=__import__("sys").stderr)
 
+        _an_start = time.perf_counter()
         try:
             analysis_notes, analysis_result = run_analysis(self, iteration_dir, main_benchmark, on_usage=analyzer_acc.add, on_duration=analyzer_dur.add)
             if analysis_notes:
@@ -442,6 +445,7 @@ class BenchmarkAggregator:
                 )
         except Exception as exc:
             print(f"Warning: analysis step failed ({exc}), skipping", file=__import__("sys").stderr)
+        _an_end = time.perf_counter()  # analyzer 阶段墙钟
 
         # Phase 2: 汇总 → llm_token_usage(scoring 合计 + grader/comparator/analyzer 分计 + audit/executor/total)
         # 只在 snapshot 非空时 add(空 snapshot = 无调用,add({}) 会假计数)
@@ -478,6 +482,10 @@ class BenchmarkAggregator:
             "llm_duration_seconds": {
                 "phase1_wall": p1_wall,
                 "phase2_wall": p2_wall,
+                # phase2 子墙钟(整段计时;与分列累计和是两维度):read+summarize / comparator / analyzer
+                "read_runs_wall": round(_read_end - _p2_start, 3),
+                "comparator_wall": round(_cmp_end - _read_end, 3),
+                "analyzer_wall": round(_an_end - _an_start, 3),
                 # 分列=各类 LLM 调用时长加总(并发叠加,可 ≥ 墙钟,与墙钟分解是两个维度)
                 "scoring": round(comparator_dur.snapshot() + analyzer_dur.snapshot() + grader_dur.snapshot(), 3),
                 "grader": round(grader_dur.snapshot(), 3),
