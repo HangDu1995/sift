@@ -1574,7 +1574,7 @@
         if (du.phase1_wall != null || du.phase2_wall != null) {
           html += '<table class="benchmark-table"><tbody>';
           html += "<tr><td colspan='4' style='font-size:0.7rem;color:var(--text-muted);'>墙钟分解(加总 = 总计)</td></tr>";
-          if (du.phase1_wall != null) html += "<tr><td><strong>阶段1 runs</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(含准备)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.phase1_wall) + "</td></tr>";
+          if (du.phase1_wall != null) html += "<tr><td><strong>阶段1 runs</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(准备 · 执行 executor · grader 评分 · 遵循性 audit · calibration;并发交叠不再拆,各项 LLM 时长见下「LLM 累计」)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.phase1_wall) + "</td></tr>";
           if (du.phase2_wall != null) html += "<tr><td><strong>阶段2 aggregate</strong></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.phase2_wall) + "</td></tr>";
           if (du.read_runs_wall) html += "<tr><td style='padding-left:1.5rem;'>· 读产物</td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.read_runs_wall) + "</td></tr>";
           if (du.comparator_wall) html += "<tr><td style='padding-left:1.5rem;'>· 盲比较</td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.comparator_wall) + "</td></tr>";
