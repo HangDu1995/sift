@@ -10,8 +10,11 @@
 """
 from __future__ import annotations
 
+import random
 import threading
 import time
+
+from skill_eval.utils import _HttpRateLimited, call_claude
 
 
 class AdaptiveConcurrencyLimiter:
@@ -173,8 +176,79 @@ def configure_max_concurrent(n: int) -> None:
 def configure_adaptive(initial: int | None = None) -> None:
     """恢复 AIMD 自适应并发(默认模式)。``initial`` 给则重设探测起点,否则保留当前 ceiling。
 
-    通用工具默认自适应——动态探当前后端容量边界(严苛后端收敛到低值、宽松后端探到更高),
+    通用工具默认自适应——动态探当前端容量边界(严苛后端收敛到低值、宽松后端探到更高),
     不写死固定值。
     """
     _LLM_LIMITER.set_adaptive(initial)
+
+
+# ── 调用级 LLM 重试壳(供 run 侧 grading/comparator/analyzer 切 http 用)──────────────
+class _LLMRetryExhausted(Exception):
+    """``call_llm_with_retry`` 重试耗尽。
+
+    非 ``RuntimeError`` 子类(镜像 ``_HttpRateLimited``,防被通用 ``except RuntimeError`` 误吞),
+    调用方须显式 catch 后各降级(grader→UNEVAL / comparator→failed / analyzer→skip),永不进 FAIL。
+    """
+
+
+_LLM_WRAPPER_RETRY_MAX = 2        # 调用级重试上限(瞬态 429 / RuntimeError)
+_LLM_WRAPPER_RETRY_DELAY = 3.0    # 线性退避基数(× 尝试序号)
+_LLM_WRAPPER_BACKOFF = _RATE_LIMIT_BACKOFF  # 429 退避基数(+ random 抖动),与 audit 同源
+
+
+def _emit(on_progress, msg: str) -> None:
+    if on_progress:
+        try:
+            on_progress(msg)
+        except Exception:
+            pass
+
+
+def call_llm_with_retry(
+    prompt: str,
+    *,
+    model: str | None = None,
+    timeout: int = 120,
+    schema: dict | None = None,
+    on_usage=None,
+    transport: str = "http",
+    on_progress=None,
+    max_retries: int = _LLM_WRAPPER_RETRY_MAX,
+) -> str:
+    """调用级 LLM 重试壳:AIMD 门控(``_LLM_LIMITER`` 限在飞)+ 429 退避重试(同份重发)→ 耗尽抛
+    ``_LLMRetryExhausted``。
+
+    给 run 侧 grading/comparator/analyzer(单次结构化/文本判定)用;audit 的批级 parse 重试
+    (0 解析重试)不在此范围,audit 继续用 ``_judge_batch_with_retry``(共享同一 limiter 实例)。
+
+    结构严格镜像 audit ``_judge_batch_with_retry``:``with _LLM_LIMITER:`` 只圈 ``call_claude``
+    (重试退避不占槽);**成功赋值不早返**(早返会跳过 with 外的 ``on_success`` → AIMD 永不加性增
+    → 静默劣化),``on_success``/``on_throttled``/sleep 都在 with 外。默认 ``transport="http"``
+    (forced tool_use、schema-safe)。
+    """
+    for attempt in range(max_retries + 1):
+        if attempt > 0:
+            time.sleep(_LLM_WRAPPER_RETRY_DELAY * attempt)
+            _emit(on_progress, f"  LLM 重试 {attempt}/{max_retries}…")
+        try:
+            with _LLM_LIMITER:
+                result = call_claude(
+                    prompt, model=model, timeout=timeout, schema=schema,
+                    on_usage=on_usage, transport=transport,
+                )
+        except _HttpRateLimited as exc:
+            _LLM_LIMITER.on_throttled()
+            _emit(
+                on_progress,
+                f"  撞限流({str(exc)[:80]}),并发降至 {_LLM_LIMITER.ceiling},退避重试…",
+            )
+            time.sleep(_LLM_WRAPPER_BACKOFF + random.uniform(0, 1))
+            continue
+        except RuntimeError as exc:
+            _emit(on_progress, f"  LLM 调用失败: {str(exc)[:120]}")
+            continue
+        _LLM_LIMITER.on_success()   # 成功才到这(with 已 release),AIMD 加性增
+        return result
+    raise _LLMRetryExhausted(f"LLM 调用重试耗尽(max_retries={max_retries})")
+
 

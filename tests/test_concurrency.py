@@ -292,3 +292,76 @@ def test_limiter_singleton_shared_across_modules():
     from skill_eval.concurrency import _LLM_LIMITER as cc_limiter
     assert auditor._LLM_LIMITER is cc_limiter
     assert auditor._LLM_SEMAPHORE is cc_limiter  # 别名也指向同一单例
+
+
+# ── call_llm_with_retry(调用级重试壳:AIMD 门控 + 429 退避 + 耗尽抛 _LLMRetryExhausted)──
+
+
+def _reset_limiter_and_time(monkeypatch):
+    import skill_eval.concurrency as cc
+    cc._LLM_LIMITER.reset(cc._MAX_BATCH_CONCURRENT)
+    monkeypatch.setattr(cc.time, "sleep", lambda *a: None)
+    monkeypatch.setattr(cc.random, "uniform", lambda *a: 0.0)
+    return cc
+
+
+def test_llm_retry_exhausted_not_runtime_error():
+    """_LLMRetryExhausted 非 RuntimeError 子类(镜像 _HttpRateLimited,防被通用 except 误吞,
+    调用方须显式 catch 才降级)。"""
+    import skill_eval.concurrency as cc
+    assert not issubclass(cc._LLMRetryExhausted, RuntimeError)
+
+
+def test_call_llm_with_retry_success_calls_on_success(monkeypatch):
+    """成功必须调 on_success——抓早返 bug(return 在 with 内 → on_success 永不调 → AIMD 不增)。"""
+    cc = _reset_limiter_and_time(monkeypatch)
+    monkeypatch.setattr(cc, "call_claude", lambda *a, **k: "ok")
+    spied = []
+    monkeypatch.setattr(cc._LLM_LIMITER, "on_success", lambda: spied.append(1))
+    assert cc.call_llm_with_retry("p") == "ok"
+    assert spied == [1]
+
+
+def test_call_llm_with_retry_429_then_success_calls_on_throttled(monkeypatch):
+    cc = _reset_limiter_and_time(monkeypatch)
+    seq = [_HttpRateLimited("429"), "ok"]
+
+    def fake(*a, **k):
+        v = seq.pop(0)
+        if isinstance(v, BaseException):
+            raise v
+        return v
+
+    monkeypatch.setattr(cc, "call_claude", fake)
+    thr = []
+    monkeypatch.setattr(cc._LLM_LIMITER, "on_throttled", lambda: thr.append(1))
+    monkeypatch.setattr(cc._LLM_LIMITER, "on_success", lambda: None)
+    assert cc.call_llm_with_retry("p") == "ok"
+    assert thr == [1]   # 429 必触发降并发
+
+
+def test_call_llm_with_retry_exhaustion_raises(monkeypatch):
+    cc = _reset_limiter_and_time(monkeypatch)
+
+    def always_429(*a, **k):
+        raise _HttpRateLimited("429")
+
+    monkeypatch.setattr(cc, "call_claude", always_429)
+    monkeypatch.setattr(cc._LLM_LIMITER, "on_throttled", lambda: None)
+    with pytest.raises(cc._LLMRetryExhausted):
+        cc.call_llm_with_retry("p", max_retries=1)
+
+
+def test_call_llm_with_retry_runtime_error_retried(monkeypatch):
+    cc = _reset_limiter_and_time(monkeypatch)
+    seq = [RuntimeError("boom"), "ok"]
+
+    def fake(*a, **k):
+        v = seq.pop(0)
+        if isinstance(v, BaseException):
+            raise v
+        return v
+
+    monkeypatch.setattr(cc, "call_claude", fake)
+    monkeypatch.setattr(cc._LLM_LIMITER, "on_success", lambda: None)
+    assert cc.call_llm_with_retry("p") == "ok"
