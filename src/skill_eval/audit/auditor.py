@@ -1285,6 +1285,7 @@ class TranscriptAuditor:
             specs, self._parse_applicable, model, timeout, on_progress, on_usage,
             "条件性", total, lambda v: v[0] is None,
             schema=_APPLICABLE_SCHEMA,
+            transport="http",
         ):
             for j, val in enumerate(parsed):
                 mask[start + j] = val  # 本地 j → 全量 start+j(批间 index 映射)
@@ -1618,6 +1619,7 @@ class TranscriptAuditor:
             specs, self._parse_prohibition, model, timeout, on_progress, on_usage,
             "禁令", total, lambda v: v[0] is None,
             schema=_PROHIBITION_SCHEMA,
+            transport="http",
         ):
             for j, val in enumerate(parsed):
                 results[start + j] = val  # 本地 j → 全量 start+j
@@ -1785,6 +1787,7 @@ class TranscriptAuditor:
             specs, self._parse_step, model, timeout, on_progress, on_usage,
             "步骤", total, lambda v: v[0] is None,
             schema=_STEP_SCHEMA,
+            transport="http",
         ):
             for j, val in enumerate(parsed):
                 results[start + j] = val  # 本地 j → 全量 start+j

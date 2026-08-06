@@ -2091,6 +2091,54 @@ def test_headline_passes_http_transport_down_the_chain(monkeypatch):
     assert seen.get("transport") == "http"
 
 
+def test_judge_applicable_passes_http_transport(monkeypatch):
+    """条件性 judge(_llm_judge_applicable)走 http 通道(与 refine/headline 一致)。"""
+    seen = {}
+
+    def fake_call_claude(prompt, *, model=None, timeout=120, max_turns=None,
+                         on_usage=None, schema=None, transport="cc"):
+        seen["transport"] = transport
+        return json.dumps([{"index": 0, "applicable": False, "reason": "不涉及"}])
+
+    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake_call_claude)
+    TranscriptAuditor()._llm_judge_applicable(
+        [_tool_inst()], "某场景", model="glm-5.2[1m]", timeout=10,
+    )
+    assert seen.get("transport") == "http"
+
+
+def test_judge_prohibition_passes_http_transport(monkeypatch):
+    """禁令 judge(_llm_judge_prohibition)走 http 通道。"""
+    seen = {}
+
+    def fake_call_claude(prompt, *, model=None, timeout=120, max_turns=None,
+                         on_usage=None, schema=None, transport="cc"):
+        seen["transport"] = transport
+        return json.dumps([{"index": 0, "violated": False, "evidence": "未违反"}])
+
+    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake_call_claude)
+    TranscriptAuditor()._llm_judge_prohibition(
+        [_prohibition_inst()], "某执行记录", model="glm-5.2[1m]", timeout=10,
+    )
+    assert seen.get("transport") == "http"
+
+
+def test_judge_step_passes_http_transport(monkeypatch):
+    """步骤 judge(_llm_judge_step)走 http 通道。"""
+    seen = {}
+
+    def fake_call_claude(prompt, *, model=None, timeout=120, max_turns=None,
+                         on_usage=None, schema=None, transport="cc"):
+        seen["transport"] = transport
+        return json.dumps([{"index": 0, "verdict": "pass", "evidence": "做过"}])
+
+    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake_call_claude)
+    TranscriptAuditor()._llm_judge_step(
+        [_step_inst()], "某执行记录", model="glm-5.2[1m]", timeout=10,
+    )
+    assert seen.get("transport") == "http"
+
+
 def test_judge_batch_with_retry_forwards_transport_to_call_claude(monkeypatch):
     """_judge_batch_with_retry 把 transport 参转发给 call_claude(cc 默认 / http 两向)。"""
     import skill_eval.audit.auditor as A
