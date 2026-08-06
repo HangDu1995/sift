@@ -26,12 +26,17 @@ def _make_iteration_dir(tmp_path: Path) -> Path:
 
 def test_total_equals_phase1_plus_phase2_and_includes_tail(tmp_path, monkeypatch):
     """total 严格 = phase1_wall + phase2_wall;phase2 含 aggregate 内耗时(尾巴进 total)。"""
+    import time as _time
     from skill_eval.execution import benchmark as bm
 
     it = _make_iteration_dir(tmp_path)
     agg = bm.BenchmarkAggregator(enable_llm=False)
-    # 隔离掉 LLM/外部依赖:comparisons/analysis 不真跑(本测只关心墙钟分解)
-    monkeypatch.setattr(bm, "run_comparisons", lambda *a, **k: [])
+
+    def slow_cmp(*a, **k):
+        _time.sleep(0.05)  # 注入确定性耗时:证 aggregate 工作进了 total/phase2(防快路径 sub-ms 抖动)
+        return []
+
+    monkeypatch.setattr(bm, "run_comparisons", slow_cmp)
     monkeypatch.setattr(bm, "run_analysis", lambda *a, **k: ([], None))
 
     b = agg.aggregate(it, Path(), phase1_wall=0.0)
@@ -40,8 +45,8 @@ def test_total_equals_phase1_plus_phase2_and_includes_tail(tmp_path, monkeypatch
     assert "phase1_wall" in du and "phase2_wall" in du
     # 加总承诺:total = phase1 + phase2(严格,不是 ≥)
     assert abs(du["total"] - (du["phase1_wall"] + du["phase2_wall"])) < 0.05
-    # aggregate 内有耗时(读 run 产物等)→ phase2 非零;旧 bug:total 在 aggregate 前捕获,phase2 不在其中
-    assert du["phase2_wall"] > 0.0
+    # aggregate 内有 sleep → phase2 可测;旧 bug:total 在 aggregate 前捕获,phase2 不在其中
+    assert du["phase2_wall"] > 0.04
 
 
 def test_phase2_subwalls_measured(tmp_path, monkeypatch):
