@@ -2,6 +2,9 @@ from skill_eval.models.audit_models import (
     AuditReport, AuditFinding, AuditMethod, AuditVerdict, AuditCategory, InstructionAggregate,
 )
 from skill_eval.reporting.audit_viewer import AuditReportGenerator
+import json
+import re
+import subprocess
 
 
 def test_audit_html_renders_header_skill_name_and_transcripts():
@@ -204,3 +207,91 @@ def test_audit_html_renders_noise_badges_on_fail_findings_and_aggregate():
     # 违规表渲染(fail_count>0) + finding-head 渲染(FAIL finding)
     assert 'id="audit-by-instruction-fail"' in html
     assert 'id="audit-findings-grouped"' in html
+
+
+def _by_instruction_report(transcripts):
+    """单/多 transcript + by_instruction(各 1 fail 行 + 1 na 行)的审计报告,供 ③ 渲染测。"""
+    return AuditReport(
+        skill_name="s", transcripts=transcripts,
+        summary={"total": 2, "pass": 0, "fail": 1, "na": 1},
+        findings=[
+            AuditFinding(instruction_text="NEVER 编造", source="CONSTRAINT",
+                         verdict=AuditVerdict.FAIL, category=AuditCategory.PROHIBITION,
+                         evidence="ev", method=AuditMethod.LLM, transcript=transcripts[0]),
+            AuditFinding(instruction_text="Use ref: x.md", source="REFERENCE_USAGE",
+                         verdict=AuditVerdict.NA, category=AuditCategory.CONDITIONAL,
+                         evidence="ev-na", method=AuditMethod.LLM, transcript=transcripts[0]),
+        ],
+        by_instruction=[
+            InstructionAggregate(
+                instruction_text="NEVER 编造", source="CONSTRAINT", category=AuditCategory.PROHIBITION,
+                pass_count=0, fail_count=1, na_count=0, total=len(transcripts),
+                fail_rate=1.0 / len(transcripts), fail_in_transcripts=transcripts[:1], fail_seqs=[1],
+                noise_label="uncertain", noise_reasons=["r"]),
+            InstructionAggregate(
+                instruction_text="Use ref: x.md", source="REFERENCE_USAGE", category=AuditCategory.CONDITIONAL,
+                pass_count=0, fail_count=0, na_count=len(transcripts), total=len(transcripts),
+                fail_rate=0.0, fail_in_transcripts=[],
+                na_in_transcripts=transcripts, na_seqs=[2]),
+        ],
+        warnings=[],
+    )
+
+
+def _render_by_instruction_via_node(report, tmp_path):
+    """抽 audit-report.html 的 <script>,在 node 里 mock document 跑真渲染,返回 ③ 表的列标记。
+
+    列裁剪(单 transcript 去 fail%/fail/total/in transcripts)是 JS 运行时字符串变换,
+    render-smoke 只验模板字符串抓不到(记忆 skill-eval-viewer-js-needs-node-check)。
+    故 mock DOM 实跑 IIFE,收 root.insertAdjacentHTML 的产物断言。
+    """
+    html = AuditReportGenerator().generate_html(report)
+    assert "multi && (EMBEDDED_DATA.by_instruction" not in html   # 门控已放开(不再要求 multi)
+    js = "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", html, re.DOTALL))
+    preamble = (
+        "var __c=[];function FN(){this._k=[];}"
+        "FN.prototype.insertAdjacentHTML=function(p,h){__c.push(h);};"
+        "FN.prototype.appendChild=function(c){this._k.push(c);return c;};"
+        "FN.prototype.setAttribute=function(){};"
+        "FN.prototype.addEventListener=function(){};"
+        "var __m={'audit-root':new FN()};"
+        "var document={getElementById:function(i){if(!__m[i])__m[i]=new FN();return __m[i];},"
+        "createElement:function(){return new FN();}};\n"
+    )
+    epilogue = (
+        "\nvar o=__c.join('\\n');"
+        "console.log(JSON.stringify({"
+        "failPct:o.includes('fail%'),failTotal:o.includes('fail/total'),"
+        "inTrans:o.includes('in transcripts'),failTbl:o.includes('违规 FAIL'),"
+        "naTbl:o.includes('场景不适用 N/A'),kua:o.includes('跨 ')}));"
+    )
+    runfile = tmp_path / "run.js"
+    runfile.write_text(preamble + js + epilogue, encoding="utf-8")
+    out = subprocess.run(["node", str(runfile)], capture_output=True, text=True)
+    assert out.returncode == 0, f"node runtime failed:\n{out.stderr}"
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def test_audit_html_by_instruction_renders_for_single_transcript_drops_cross_session_cols(tmp_path):
+    """单 transcript ③ 也显违规/NA 概要表,但去掉跨会话列(fail%/fail/total/in transcripts)、标题不带「跨」。
+
+    列裁剪是运行时变换 → 走 node mock DOM 实跑(见 _render_by_instruction_via_node)。
+    """
+    m = _render_by_instruction_via_node(_by_instruction_report(["t1.jsonl"]), tmp_path)
+    assert m["failTbl"] is True           # 违规 FAIL 表仍显
+    assert m["naTbl"] is True             # 场景不适用 N/A 表仍显
+    assert m["kua"] is False              # 单 transcript 标题不带「跨 N transcript」
+    assert m["failPct"] is False          # 跨会话列 fail% 去掉
+    assert m["failTotal"] is False        # fail/total 去掉(单 transcript 恒 1/1,无意义)
+    assert m["inTrans"] is False          # "in transcripts" 列去掉
+
+
+def test_audit_html_by_instruction_multi_transcript_keeps_cross_session_cols(tmp_path):
+    """多 transcript ③ 保留全部跨会话列(回归护栏,防把多 transcript 也裁了)。"""
+    m = _render_by_instruction_via_node(_by_instruction_report(["t1.jsonl", "t2.jsonl"]), tmp_path)
+    assert m["failTbl"] is True
+    assert m["naTbl"] is True
+    assert m["kua"] is True               # 多 transcript 标题带「跨 N transcript」
+    assert m["failPct"] is True           # 跨会话列保留
+    assert m["failTotal"] is True
+    assert m["inTrans"] is True

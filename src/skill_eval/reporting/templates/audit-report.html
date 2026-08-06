@@ -327,34 +327,45 @@
           '</ul></div>');
       }
 
-      // ③ by_instruction 系统性表(仅多 transcript 且有聚合)。fail 与 N/A 语义不同 → 两张表
-      // (同终端):违规表看 fail%/fail/total;场景不适用表看 na/total + 哪几段不适用。
-      // 不再混一张让 N/A 行套 fail 列(那看着像有 fail、误导)。全 PASS 仍不列。
-      if (multi && (EMBEDDED_DATA.by_instruction || []).length) {
+      // ③ by_instruction 概要表:有聚合就显(单/多 transcript 都显)。fail 与 N/A 语义不同 → 两张表。
+      // 多 transcript 看跨会话 fail%/fail/total + 哪几段 fail;单 transcript 无跨会话可比,去掉
+      // fail%/fail/total/"in transcripts" 列,只留指令 + 类别(+ FAIL 的噪声判别)做概要扫描。
+      // 全无 fail → 不列违规表;全无 na → 不列不适用表。逐条详情见 ④ 明细。
+      if ((EMBEDDED_DATA.by_instruction || []).length) {
         var byInstr = EMBEDDED_DATA.by_instruction;
         var nTrans = EMBEDDED_DATA.transcripts.length;
 
         var failRows = byInstr.filter(function (a) { return a.fail_count > 0; });
         if (failRows.length) {
+          var failTitle = multi ? '违规 FAIL(跨 ' + nTrans + ' transcript)' : '违规 FAIL';
+          // 列:明细 # [,fail%] 指令 类别 [,fail/total] 噪声判别 [,fail in transcripts](方括号=多 transcript 才有)
+          var failHead = '<tr><th>明细 #</th>' + (multi ? '<th>fail%</th>' : '') +
+            '<th>指令</th><th>类别</th>' + (multi ? '<th>fail/total</th>' : '') +
+            '<th>噪声判别</th>' + (multi ? '<th>fail in transcripts</th>' : '') + '</tr>';
           var failHtml = failRows.map(function (a) {
-            var pct = Math.round((a.fail_rate || 0) * 100);
-            var colorCls = (a.fail_rate || 0) >= 0.5 ? 'badge-fail' : 'badge-na';
             var seqs = (a.fail_seqs || []).map(function (s) {
               return '<a class="seq-link" href="#finding-' + escapeHtml(s) + '">#' + escapeHtml(s) + '</a>';
             }).join(', ');
             // 噪声判别徽章(fail_count>0 行才有;无 noise_label → —)。整列让 reader 扫哪些 FAIL 是工具噪声。
             var noise = a.noise_label ? noiseBadge(a.noise_label, a.noise_reasons) : '—';
-            return '<tr><td class="seq">' + seqs + '</td><td class="' + colorCls + '">' + pct + '%</td>' +
-              '<td>' + escapeHtml(a.headline || a.source_excerpt || a.instruction_text || '') + '</td>' +
-              '<td>' + escapeHtml(a.category || '') + '</td>' +
-              '<td>' + (a.fail_count || 0) + '/' + (a.total || 0) + '</td>' +
-              '<td>' + noise + '</td>' +
-              '<td>' + escapeHtml((a.fail_in_transcripts || []).join(', ')) + '</td></tr>';
+            var instr = escapeHtml(a.headline || a.source_excerpt || a.instruction_text || '');
+            var cat = escapeHtml(a.category || '');
+            var cells = '<td class="seq">' + seqs + '</td>';
+            if (multi) {
+              var pct = Math.round((a.fail_rate || 0) * 100);
+              var colorCls = (a.fail_rate || 0) >= 0.5 ? 'badge-fail' : 'badge-na';
+              cells += '<td class="' + colorCls + '">' + pct + '%</td>';
+            }
+            cells += '<td>' + instr + '</td><td>' + cat + '</td>';
+            if (multi) cells += '<td>' + (a.fail_count || 0) + '/' + (a.total || 0) + '</td>';
+            cells += '<td>' + noise + '</td>';
+            if (multi) cells += '<td>' + escapeHtml((a.fail_in_transcripts || []).join(', ')) + '</td>';
+            return '<tr>' + cells + '</tr>';
           }).join('');
           root.insertAdjacentHTML('beforeend',
             '<div id="audit-by-instruction-fail" class="by-instruction">' +
-              '<h2>违规 FAIL(跨 ' + nTrans + ' transcript)</h2>' +
-              '<table><thead><tr><th>明细 #</th><th>fail%</th><th>指令</th><th>类别</th><th>fail/total</th><th>噪声判别</th><th>fail in transcripts</th></tr></thead>' +
+              '<h2>' + failTitle + '</h2>' +
+              '<table><thead>' + failHead + '</thead>' +
               '<tbody>' + failHtml + '</tbody></table>' +
             '</div>');
         }
@@ -362,25 +373,33 @@
         var naRows = byInstr.filter(function (a) { return a.na_count > 0; })
           .sort(function (x, y) { return (y.na_count || 0) - (x.na_count || 0); });
         if (naRows.length) {
+          var naTitle = multi ? '场景不适用 N/A(跨 ' + nTrans + ' transcript)' : '场景不适用 N/A';
+          // 列:明细 # [,na/total] 指令 类别 [,na in transcripts](方括号=多 transcript 才有)
+          var naHead = '<tr><th>明细 #</th>' + (multi ? '<th>na/total</th>' : '') +
+            '<th>指令</th><th>类别</th>' + (multi ? '<th>na in transcripts</th>' : '') + '</tr>';
           var naHtml = naRows.map(function (a) {
             var seqs = (a.na_seqs || []).map(function (s) {
               return '<a class="seq-link" href="#finding-' + escapeHtml(s) + '">#' + escapeHtml(s) + '</a>';
             }).join(', ');
-            return '<tr><td class="seq">' + seqs + '</td><td class="badge-na">' + (a.na_count || 0) + '/' + (a.total || 0) + '</td>' +
-              '<td>' + escapeHtml(a.headline || a.source_excerpt || a.instruction_text || '') + '</td>' +
-              '<td>' + escapeHtml(a.category || '') + '</td>' +
-              '<td>' + escapeHtml((a.na_in_transcripts || []).join(', ')) + '</td></tr>';
+            var instr = escapeHtml(a.headline || a.source_excerpt || a.instruction_text || '');
+            var cat = escapeHtml(a.category || '');
+            var cells = '<td class="seq">' + seqs + '</td>';
+            if (multi) cells += '<td class="badge-na">' + (a.na_count || 0) + '/' + (a.total || 0) + '</td>';
+            cells += '<td>' + instr + '</td><td>' + cat + '</td>';
+            if (multi) cells += '<td>' + escapeHtml((a.na_in_transcripts || []).join(', ')) + '</td>';
+            return '<tr>' + cells + '</tr>';
           }).join('');
           root.insertAdjacentHTML('beforeend',
             '<div id="audit-by-instruction-na" class="by-instruction">' +
-              '<h2>场景不适用 N/A(跨 ' + nTrans + ' transcript)</h2>' +
-              '<table><thead><tr><th>明细 #</th><th>na/total</th><th>指令</th><th>类别</th><th>na in transcripts</th></tr></thead>' +
+              '<h2>' + naTitle + '</h2>' +
+              '<table><thead>' + naHead + '</thead>' +
               '<tbody>' + naHtml + '</tbody></table>' +
             '</div>');
         }
       }
 
-      // ④ findings:多 transcript → 按指令分组(可折叠);单 transcript → 扁平
+      // ④ findings:多 transcript → 按指令分组(同指令各 transcript 并排可比);
+      // 单 transcript → 按 verdict 分组(每指令仅 1 份,按结果分节更易扫"哪几条违规/不适用")
       var ORDER = { 'FAIL': 0, 'UNRESOLVED': 1, 'INDETERMINATE': 2, 'N/A': 3, 'PASS': 4 };
       if (multi) {
         root.insertAdjacentHTML('beforeend',
@@ -406,11 +425,29 @@
         });
       } else {
         root.insertAdjacentHTML('beforeend',
-          '<div id="audit-findings" class="findings"><h2>明细(findings 全集)</h2></div>');
+          '<div id="audit-findings" class="findings-grouped"><h2>明细(按结果分组)</h2></div>');
         var fc = document.getElementById('audit-findings');  // M1: getElementById 而非 lastElementChild
-        findings.slice().sort(function (a, b) {
+        var sorted = findings.slice().sort(function (a, b) {
           return (ORDER[a.verdict] || 9) - (ORDER[b.verdict] || 9);
-        }).forEach(function (f) { fc.appendChild(findingRow(f)); });
+        });
+        // 单 transcript:按 verdict 分组(顺序由上面 ORDER 排序保证),每组 <details> + 计数 summary,
+        // 违规/没判成/判不准/不适用 默认展开、通过折叠——让"哪几条违规/不适用"一眼可见,不必滚扁平列表找。
+        // 与 cannbot-insight AuditReportView 的 groupFindingsByVerdict 对齐。
+        var groups = {}; var order = [];
+        sorted.forEach(function (f) {
+          if (!groups[f.verdict]) { groups[f.verdict] = []; order.push(f.verdict); }
+          groups[f.verdict].push(f);
+        });
+        order.forEach(function (v) {
+          var vd = VERDICT_DISPLAY[v] || { icon: '?', label: v || '?' };
+          var det = document.createElement('details');
+          if (v !== 'PASS') det.setAttribute('open', '');
+          var sum = document.createElement('summary');
+          sum.textContent = vd.icon + ' ' + vd.label + ' (' + groups[v].length + ')';  // textContent 自动转义
+          det.appendChild(sum);
+          groups[v].forEach(function (f) { det.appendChild(findingRow(f)); });
+          fc.appendChild(det);
+        });
       }
     })();
   </script>
