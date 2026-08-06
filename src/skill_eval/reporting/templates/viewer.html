@@ -1564,20 +1564,36 @@
         html += "</tbody></table></div>";
       }
 
-      // ── 耗时(分列=各类调用时长加总;total=墙钟,独立测,不对账分列)──
+      // ── 耗时:两段——墙钟分解(加总=总计)+ LLM 累计(并发叠加,非墙钟)──
       var du = data.llm_duration_seconds || {};
-      if (du.total || du.scoring || du.audit || du.executor) {
+      if (du.total || du.scoring || du.audit || du.executor || du.phase1_wall != null) {
         function _dur(s) { return (typeof s === 'number' && s > 0) ? s.toFixed(1) + 's' : '—'; }
         html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
         html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">耗时</div>';
-        html += '<table class="benchmark-table"><tbody>';
-        if (du.grader) html += "<tr><td><strong>⏱ grader 耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(单评累计)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.grader) + "</td></tr>";
-        if (du.comparator) html += "<tr><td><strong>⏱ comparator 耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(盲比较)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.comparator) + "</td></tr>";
-        if (du.analyzer) html += "<tr><td><strong>⏱ analyzer 耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(深度分析)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.analyzer) + "</td></tr>";
-        if (du.audit) html += "<tr><td><strong>⏱ 遵循性耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(audit)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.audit) + "</td></tr>";
-        if (du.executor) html += "<tr><td><strong>执行耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(executor 累计)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.executor) + "</td></tr>";
-        if (du.total) html += "<tr><td><strong>总计耗时</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(墙钟·真实等待)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.total) + "</td></tr>";
-        html += "</tbody></table></div>";
+        // 子块1:墙钟分解(加总 = 总计;total 严格 = phase1+phase2,不含写后的报告生成)
+        if (du.phase1_wall != null || du.phase2_wall != null) {
+          html += '<table class="benchmark-table"><tbody>';
+          html += "<tr><td colspan='4' style='font-size:0.7rem;color:var(--text-muted);'>墙钟分解(加总 = 总计)</td></tr>";
+          if (du.phase1_wall != null) html += "<tr><td><strong>阶段1 runs</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(含准备)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.phase1_wall) + "</td></tr>";
+          if (du.phase2_wall != null) html += "<tr><td><strong>阶段2 aggregate</strong></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.phase2_wall) + "</td></tr>";
+          if (du.read_runs_wall) html += "<tr><td style='padding-left:1.5rem;'>· 读产物</td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.read_runs_wall) + "</td></tr>";
+          if (du.comparator_wall) html += "<tr><td style='padding-left:1.5rem;'>· 盲比较</td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.comparator_wall) + "</td></tr>";
+          if (du.analyzer_wall) html += "<tr><td style='padding-left:1.5rem;'>· 深度分析</td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.analyzer_wall) + "</td></tr>";
+          if (du.total) html += "<tr><td><strong>总计</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(墙钟·真实等待,不含报告生成)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.total) + "</td></tr>";
+          html += "</tbody></table>";
+        }
+        // 子块2:LLM 累计(各类调用时长加总;并发叠加,可 ≥ 墙钟,与墙钟分解是两个维度)
+        if (du.grader || du.comparator || du.analyzer || du.audit || du.executor) {
+          html += '<table class="benchmark-table" style="margin-top:0.75rem;"><tbody>';
+          html += "<tr><td colspan='4' style='font-size:0.7rem;color:var(--text-muted);'>LLM 累计(并发叠加,非墙钟)</td></tr>";
+          if (du.grader) html += "<tr><td><strong>⏱ grader</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(单评累计)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.grader) + "</td></tr>";
+          if (du.comparator) html += "<tr><td><strong>⏱ comparator</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(盲比较)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.comparator) + "</td></tr>";
+          if (du.analyzer) html += "<tr><td><strong>⏱ analyzer</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(深度分析)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.analyzer) + "</td></tr>";
+          if (du.audit) html += "<tr><td><strong>⏱ 遵循性</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(audit)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.audit) + "</td></tr>";
+          if (du.executor) html += "<tr><td><strong>执行</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(executor 累计)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.executor) + "</td></tr>";
+          html += "</tbody></table>";
+        }
+        html += '</div>';
       }
 
       // ── Compliance aggregate(过程层,插盲评前:客观结果 → 过程 → 主观结果)──

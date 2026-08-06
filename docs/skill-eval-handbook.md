@@ -479,7 +479,7 @@ skill 不是一个运行时加载的模块。skill-eval 做的是：
 
 ```
 output/
-├── benchmark.json          # 聚合：双率 delta + 盲比较 + 深度分析
+├── benchmark.json          # 聚合：双率 delta + 盲比较 + 深度分析；`llm_duration_seconds` 耗时两维度(墙钟分解加总=总计 / LLM 累计并发叠加)
 ├── report.html             # 自包含 HTML 报告
 ├── gate.json               # gate 命令产出（非 run 产出）
 ├── scorecard.json          # 静态评分卡（run 末尾自动产）

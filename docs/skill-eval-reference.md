@@ -266,6 +266,9 @@ output/
   without_skill/
     eval-<id>/run-1/ ...
   benchmark.json             ← 聚合结果(含 comparison_summary 盲评聚合;--changed-from 子集跑时另记 selection)
+                              `llm_duration_seconds` 两维度:墙钟分解(phase1_wall+phase2_wall=total,加总成立;
+                              phase2 再拆 read_runs_wall/comparator_wall/analyzer_wall;不含写后的报告生成)
+                              + LLM 累计(scoring/grader/comparator/analyzer/audit/executor,并发叠加、可 ≥ 墙钟)
   scorecard.json             ← run 末尾自动产(静态评分卡;也可 analyze -o 单独产)
   vet-report.json            ← run 末尾自动产(原生安全扫描;也可 vet -o 单独产)
   report.html                ← run 末尾自动产(也可 skill-eval report 重生成/带 --previous)
