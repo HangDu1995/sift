@@ -23,6 +23,19 @@ def _raise(err):
     return _f
 
 
+@pytest.fixture(autouse=True)
+def _stub_http_creds(monkeypatch):
+    """_llm_http_call 在调 urlopen **前**先解析凭据(ANTHROPIC_AUTH_TOKEN / BASE_URL),
+    CI 无凭据(os.environ 与 ~/.claude/settings.json 都没)会先抛 RuntimeError,urlopen 的
+    mock 永远到不了——被测的「HTTP 错码 → 异常分派」根本没执行。stub _anthropic_env 返假
+    凭据,隔离掉凭据解析(非本测试关注),让错码映射真正走到 urlopen。本地有凭据时这条
+    无影响(假凭据覆盖真凭据,行为一致)。"""
+    monkeypatch.setattr(
+        utils, "_anthropic_env",
+        lambda key: "http://fake-host" if key == "ANTHROPIC_BASE_URL" else "fake-token",
+    )
+
+
 def test_rate_limited_not_runtime_error_subclass():
     """_HttpRateLimited 非 RuntimeError 子类(防被通用 except RuntimeError 误吞,要触发 AIMD)。"""
     assert not issubclass(utils._HttpRateLimited, RuntimeError)
@@ -42,9 +55,12 @@ def test_llm_http_call_529_still_throttled(monkeypatch):
 
 
 def test_llm_http_call_other_code_still_runtime_error(monkeypatch):
-    """其他 HTTP 错(如 400)仍 RuntimeError(暴露、走既有重试/兜底)。"""
+    """其他 HTTP 错(如 400)仍 RuntimeError(暴露、走既有重试/兜底)。
+
+    match='400' 防假绿:若凭据解析先抛的 RuntimeError 混进来(消息是「缺凭据」不含 400),
+    会响亮失败而非误绿——逼着走到真正的 urlopen 400 路径。"""
     monkeypatch.setattr(utils.urllib.request, "urlopen", _raise(_http_err(400)))
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="400"):
         utils._llm_http_call("prompt", "m", 10, {"type": "object"}, None)
 
 
