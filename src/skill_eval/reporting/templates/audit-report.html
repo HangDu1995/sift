@@ -397,7 +397,9 @@
           var details = document.createElement('details');
           if (hasFailOrNa) details.setAttribute('open', '');  // FAIL/NA 组默认展开,全 PASS 折叠
           var sum = document.createElement('summary');
-          sum.textContent = key;  // textContent 自动转义,无 XSS
+          // 组标题 headline 优先(与卡片主标题 renderInstruction 一致),回退 instruction_text
+          // (= 分组 key,即判官锚点)。同组 finding 共享 headline,取 fs[0] 即可。
+          sum.textContent = (fs[0] && fs[0].headline) || key;  // textContent 自动转义,无 XSS
           details.appendChild(sum);
           fs.forEach(function (f) { details.appendChild(findingRow(f)); });
           gc.appendChild(details);
