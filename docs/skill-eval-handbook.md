@@ -275,7 +275,7 @@ skill-eval critique path/to/skill/ --runs 3     # 多数投票跑 3 次,稳边�
 几个关键概念：
 
 - **L1 vs L2 是题型，不是"有没有 expectations"**。L1（单元级）测模型对 skill 规则的理解对不对，通常纯推理、无 fixture；L2（Mock 场景）测在有 fixture 的场景里能不能正确产出文件。两者都能同时有 expectations 和 assertions。
-- **expectations vs assertions 是两个判分层**。`expectations` 是自然语言预期语句，由 LLM 判；`assertions` 是结构化程序化断言（类型 + 参数），由程序判。一道题可以只有其一，也可以都有。
+- **expectations vs assertions 是两个判分层**。`expectations` 是自然语言预期语句，由 LLM 判；`assertions` 是结构化断言（类型 + 参数），主要由程序判（Tier 1），少数语义类（Tier 3）仍由 LLM 判（第 5 章细讲）。一道题可以只有其一，也可以都有。
 - **expected_output 是给阅卷参考的，绝不喂给被测 Claude**。把它拼进 prompt 等于把答案泄露给考生，A/B 对照会失真。skill-eval 只在评分侧用它。
 - **fixtures** 是前置文件（如输入数据），会被拷进工作区。
 - **source_dir** 是 eval 自带的额外目录（如 skill 的 `scripts/`、被处理的样例代码），会和 fixtures 一起拷进工作区——skill 依赖、但不在 `references/` 里的东西靠它带进考场（见 4.3 的依赖拷贝坑）。
@@ -464,6 +464,24 @@ skill-eval run path/to/skill/ --changed-from v1/             # 改 skill 后只�
 
 评分里若出现 **UNEVAL（评不出来）**——某条 expectation/assertion LLM 判不了（transcript 截断 / 解析失败 / 信息不足），区别于 FAIL（确定错）——会触发自动重试（`--max-retries`，默认 2），重试目录形如 `run-1-retry-1`。**重试有上限、不是无限重试到评出来为止**：耗尽次数仍 UNEVAL 就原样落盘，所以最终 grading 不保证全 PASS/FAIL，可能仍含 UNEVAL（以及 TIMEOUT/ERROR）。
 
+#### 4.3.1 这些阶段哪些调 LLM（对应 §7.15）
+
+上面 7 步按"调不调模型、调的是哪种模型"分一下——这跟 §7.15「audit 的阶段流水线」是同一种看法：把流程拆成阶段、标清每个是程序还是 LLM。步骤 1–2（搭工作区、拼 prompt）是纯程序、不展开；从步骤 3 起：
+
+| 阶段 | 类型 | 干什么 |
+|---|---|---|
+| 执行 executor（步骤 3 spawn） | 被测 LLM | `claude -p` 跑题干活的那个 Claude——**是被测对象，不是判分模型**；token 单列、不计入评分成本 |
+| 评分 grading | 混合 | expectations[LLM] + Tier 1 断言[程序] + Tier 3 断言[LLM]，产 `grading.json` 双率（§5） |
+| 遵循性 compliance | 混合 | 6 阶段流水线：extract[程序] / refine[LLM] / headline[LLM] / rebuild[程序] / judge[LLM] / postprocess[程序]（§7.15） |
+| 校准 calibration | 程序 | 评分 × 遵循性交叉的**纯算术**，产 `calibration.json`，不调 LLM（§8） |
+| 聚合 aggregate | 混合 | 主体读各 run 的 JSON 算统计[程序] + **尾部还挂两个 LLM 步骤**：盲比较 comparator[LLM] + 深度分析 analyzer[LLM]（§6） |
+
+要点：
+
+- **调 LLM 的有三处**：grading（expectations + Tier 3）、compliance（refine / headline / judge）、aggregate（comparator / analyzer）。grading 里的 Tier 1 断言、整个 calibration 都是纯程序——零 token、零阅卷噪声。
+- **两种 LLM 别混**：步骤 3 spawn 的 Claude 是**被测对象**（执行任务，token 单列、不算评分成本）；后三处的 LLM 是**判分 / 分析模型**（评执行得好不好）。报告的 token 表把两者分开列。
+- **aggregate 不是纯聚合**：它主体是程序的（读 JSON 算双率 / token / 耗时汇总），但尾部把 comparator + analyzer 也吸了进来（各自 `try/except`，失败跳过不炸）——所以"聚合"这一步既产程序统计、也产 LLM 结论。
+
 ### 4.4 skill 怎么"注入"：拼进 prompt，不是加载
 
 skill 不是一个运行时加载的模块。skill-eval 做的是：
@@ -505,7 +523,12 @@ output/
 
 ## 第五章 评分引擎
 
-评分回答"输出对不对"。它分两个判分层，结果汇成双率。
+评分回答"输出对不对"。**被判的东西分两类**（别混，后面所有概念都建在这上面）：
+
+- **expectations** —— 题目里写的自然语言预期语句（如"输出文件存在""内容按日期升序"），由 **LLM 判**，是一条独立的判分线。
+- **assertions** —— 结构化断言（如 `FILE_EXISTS` / `LLM_GRADE`），按能力分两档 **tier**：Tier 1 程序判、Tier 3 LLM 判。**tier 只管 assertions，不管 expectations。**
+
+于是 LLM 判的有两处（expectations + Tier 3 断言）、程序判的只有 Tier 1 断言；判完按判定方式（`programmatic` / `llm`）汇成**双率**（见 5.4）。
 
 > **Tier 是断言的能力分级，只有两档**：Tier 1（确定性，程序判定）和 Tier 3（语义，LLM 判定），**没有 Tier 2**。编号沿用 skill-creator（Anthropic 官方的 skill 脚手架工具，skill-eval 沿用了它的一些命名）的分级传统——原体系里 Tier 2 是同属"程序/客观"侧的另一档（skill-eval 的 `grading_models.py` 注释还留着"programmatic(Tier1/2 客观)"字样），skill-eval 把它并进了 Tier 1（`TOOL_CALLED`/`STEP_COUNT` 这种查 tool_trace / 运行时行为的，现在就归在 Tier 1 下）。所以"跳过 2"是历史命名残留，能力光谱就是"程序判 → LLM 判"两档。
 
@@ -528,11 +551,14 @@ output/
 
 设计哲学是"**能程序化查的就程序化查**"——凡是能客观验证的（文件在不在、内容匹不匹配、工具调没调），一律用断言，不浪费 LLM、也不引入阅卷噪声。
 
-### 5.2 LLM 语义判分（Tier 3）
+### 5.2 LLM 语义判分
 
-有些东西没法客观验证（"分析是否合理""解释是否清晰"），交给 LLM 判。类型有 `LLM_GRADE`（语义评分）、`LLM_FACT`（事实核查）、`LLM_NOT_DELEGATE`（检查模型有没有把不该委托的子任务甩出去）。LLM 判官用结构化输出 + 强制 evidence 引用，每条判定必须附证据。结构化输出通过 `claude --json-schema` 硬约束落地（判官输出 schema 验证过的结构化对象，代码直接解析，不再从散文里抠 JSON）。
+LLM 判的有**两条独立的线**，别并成一个"Tier 3"：
 
-`expectations`（自然语言预期语句）也走 LLM 判，归到 LLM 侧。
+- **（a）expectations**（自然语言预期语句）：题目自带的人话预期（"输出文件存在""解释清晰"……）——LLM 读 transcript + 产物判每条过没过。这条**跟 tier 无关，所有 expectations 一律 LLM 判**。
+- **（b）Tier 3 断言**（结构化语义断言）：assertions 里那些没法客观验证的语义类型——`LLM_GRADE`（语义评分）、`LLM_FACT`（事实核查）、`LLM_NOT_DELEGATE`（查模型有没有把不该委托的子任务甩出去）。判官用结构化输出 + 强制 evidence 引用，每条必附证据；结构化通过 `claude --json-schema` 硬约束落地（schema 验证过的对象，代码直接解析，不从散文里抠 JSON）。
+
+两条都进 LLM 侧（`source=llm`），区别只在：expectations 是题目里的自然语言预期，Tier 3 是出题时显式声明的结构化语义断言。
 
 ### 5.3 三种评分模式
 

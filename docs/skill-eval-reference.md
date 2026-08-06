@@ -804,7 +804,7 @@ skill-eval batch-report batch-workspace/ --open
 | `level` | 否 | 测试层级：`L1`/`L2`，默认 `L1` |
 | `fixtures` | 否 | 前置文件列表 |
 | `expectations` | 否 | 语义预期语句列表（LLM 判） |
-| `assertions` | 否 | 程序化断言列表（程序判） |
+| `assertions` | 否 | 结构化断言列表（Tier 1 程序判 / Tier 3 语义类 LLM 判） |
 | `timeout` | 否 | per-eval 超时覆盖（秒）；不设则用 `--timeout` |
 | `source_dir` | 否 | 从 skill 目录拷进工作区的源目录 |
 | `flags` | 否 | 后处理标记（如 `degraded:no-llm`）；默认空 |
