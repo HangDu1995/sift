@@ -40,7 +40,7 @@ def _run_ab_eval(
     from skill_eval.execution.benchmark import BenchmarkAggregator
 
     lc = _log_console(fmt)
-    _wall_start = time.perf_counter()  # run 墙钟(run→aggregate→report 全程;传 benchmark.llm_duration_seconds.total)
+    _wall_start = time.perf_counter()  # 命令起点;phase1_wall = 此处到 run_ab_test 结束(含 setup),aggregate 自测 phase2,total=phase1+phase2
 
     # 三选一互斥:samples(随机估)/ ids(手动精确)/ changed-from(自动精确)。
     _selectors = [eval_ids, eval_samples, changed_from]
@@ -127,7 +127,7 @@ def _run_ab_eval(
     agg = BenchmarkAggregator(model=model, enable_llm=scoring_config.enable_llm)
     try:
         benchmark = agg.aggregate(iteration_dir, skill_path, sides=sides,
-                                  wall_duration=time.perf_counter() - _wall_start)
+                                  phase1_wall=time.perf_counter() - _wall_start)
     except Exception as exc:
         console.print(f"[red]Error:[/red] Benchmark aggregation failed: {exc}")
         console.print(f"  iteration_dir: {iteration_dir}")

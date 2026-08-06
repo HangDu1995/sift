@@ -114,14 +114,16 @@ class BatchScheduler:
                         )
                 return on_run_progress
 
+            _run_start = time.perf_counter()
             ab = ABTestRunner(run_config, self.scoring_config, on_progress=make_batch_progress(skill_path, idx, total))
             iteration_dir = ab.run_ab_test(skill_dir, eval_set)
+            phase1_wall = time.perf_counter() - _run_start
 
             agg_start = time.time()
             sys.stderr.write(f"[{idx}/{total}] {skill_path}: aggregating...\n")
             sys.stderr.flush()
             agg = BenchmarkAggregator(model=run_config.model, timeout=self.scoring_config.llm_timeout, enable_llm=self.scoring_config.enable_llm)
-            benchmark = agg.aggregate(iteration_dir, skill_dir)
+            benchmark = agg.aggregate(iteration_dir, skill_dir, phase1_wall=phase1_wall)
             (iteration_dir / "benchmark.json").write_text(
                 json.dumps(benchmark.model_dump(mode="json"), indent=2, ensure_ascii=False),
                 encoding="utf-8",

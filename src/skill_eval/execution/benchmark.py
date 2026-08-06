@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -110,8 +111,11 @@ class BenchmarkAggregator:
         # 盲比较只服务于主观题;programmatic-only(enable_llm=False)时 run_comparisons 跳过
         self.enable_llm = enable_llm
 
-    def aggregate(self, iteration_dir: Path, skill_path: Path = Path(), sides: list | None = None, wall_duration: float | None = None) -> BenchmarkData:
+    def aggregate(self, iteration_dir: Path, skill_path: Path = Path(), sides: list | None = None, phase1_wall: float = 0.0) -> BenchmarkData:
         import sys
+        # phase2 墙钟:aggregate 自身耗时(读 run 产物 + comparator + analyzer + 字段构建)。
+        # total = phase1_wall(调用方传,从命令起点含 setup)+ phase2_wall,严格加总(见末尾)。
+        _p2_start = time.perf_counter()
         sys.stderr.write("aggregate: reading run results...\n")
         sys.stderr.flush()
 
@@ -456,6 +460,11 @@ class BenchmarkAggregator:
         if executor_total:
             # executor 是 cc 跑任务的 token,非评分 LLM 调用 → 累 input 但不计 calls(count=0)
             total_acc.add({"input_tokens": executor_total, "output_tokens": 0}, count=0)
+        # 墙钟分解:phase1 含 setup→run_ab_test(调用方传),phase2 = aggregate 自身。
+        # 各自 round 到 3 位后再加 → total 严格 == phase1_wall + phase2_wall(免 rounding 抖)。
+        # 其后的 static/vet/report 生成是写后步骤、自指不入 total(viewer 注明)。
+        p1_wall = round(phase1_wall or 0.0, 3)
+        p2_wall = round(time.perf_counter() - _p2_start, 3)
         main_benchmark = main_benchmark.model_copy(update={
             "llm_token_usage": {
                 "scoring": scoring_total.snapshot(),  # grader+comparator+analyzer 合计(向后兼容)
@@ -467,14 +476,16 @@ class BenchmarkAggregator:
                 "total": total_acc.snapshot(),
             },
             "llm_duration_seconds": {
-                # 分列=各类调用时长加总(可 ≥ 墙钟,并行所致);total=墙钟,独立测,不由分列加
+                "phase1_wall": p1_wall,
+                "phase2_wall": p2_wall,
+                # 分列=各类 LLM 调用时长加总(并发叠加,可 ≥ 墙钟,与墙钟分解是两个维度)
                 "scoring": round(comparator_dur.snapshot() + analyzer_dur.snapshot() + grader_dur.snapshot(), 3),
                 "grader": round(grader_dur.snapshot(), 3),
                 "comparator": round(comparator_dur.snapshot(), 3),
                 "analyzer": round(analyzer_dur.snapshot(), 3),
                 "audit": round(audit_dur.snapshot(), 3),
                 "executor": round(executor_dur, 3),
-                "total": round(wall_duration or 0.0, 3),
+                "total": round(p1_wall + p2_wall, 3),  # = p1_wall + p2_wall(两者已 3 位,和恰 3 位)
             },
         })
 

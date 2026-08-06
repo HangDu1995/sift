@@ -1,4 +1,5 @@
-"""Phase 2.5: aggregate 汇 llm_duration_seconds——total=wall_duration(独立测,非分列和)。"""
+"""aggregate 汇 llm_duration_seconds——墙钟 total 严格 = phase1_wall + phase2_wall;
+分列(scoring/grader/.../executor)是并发叠加的调用时长加总,与墙钟是两个维度(可 > total)。"""
 import json
 from pathlib import Path
 from skill_eval.execution.benchmark import BenchmarkAggregator
@@ -19,7 +20,8 @@ def _make_run(run_dir, total_tokens=100, grader_dur=None, compliance_dur=None):
 
 
 def test_aggregate_populates_llm_duration(tmp_path):
-    """scoring(grader+comparator+analyzer)+ audit(compliance)+ executor(timing)+ total(墙钟)。"""
+    """分列=scoring(grader+comparator+analyzer)+ audit(compliance)+ executor(timing);
+    墙钟:total = phase1_wall + phase2_wall。"""
     from unittest.mock import patch
     cfg = tmp_path / "with_skill"
     _make_run(cfg / "eval-1" / "run-1", total_tokens=100, grader_dur=2.0, compliance_dur=3.0)
@@ -37,24 +39,29 @@ def test_aggregate_populates_llm_duration(tmp_path):
 
     with patch("skill_eval.execution.benchmark.run_comparisons", side_effect=fake_run_comparisons), \
          patch("skill_eval.execution.benchmark.run_analysis", side_effect=fake_run_analysis):
-        bench = agg.aggregate(tmp_path, wall_duration=15.0)
+        bench = agg.aggregate(tmp_path, phase1_wall=15.0)
     du = bench.llm_duration_seconds
+    # 分列(并发叠加,调用时长加总)
     assert du["scoring"] == 2.0 + 1.5 + 4.0   # grader + comparator + analyzer(合计)
     assert du["grader"] == 2.0 and du["comparator"] == 1.5 and du["analyzer"] == 4.0  # scoring 细分
     assert du["audit"] == 3.0                  # compliance rollup
     assert du["executor"] == 0.5               # timing total_duration_seconds
-    assert du["total"] == 15.0                 # 墙钟(独立测,≠ 分列和)
+    # 墙钟分解(加总 = total)
+    assert du["phase1_wall"] == 15.0
+    assert du["phase2_wall"] > 0.0
+    assert du["total"] == du["phase1_wall"] + du["phase2_wall"]
 
 
 def test_aggregate_duration_total_not_sum_of_segments(tmp_path):
-    """核心约束:total ≠ 分列和(并行所致),total 独立 wall_duration。"""
+    """墙钟 total 与分列和是两个维度:分列(并行叠加)可 > total(phase1+phase2 墙钟)。"""
     from unittest.mock import patch
     cfg = tmp_path / "with_skill"
     _make_run(cfg / "eval-1" / "run-1", total_tokens=100, grader_dur=10.0, compliance_dur=10.0)
     agg = BenchmarkAggregator(model=None)
     with patch("skill_eval.execution.benchmark.run_comparisons"), \
          patch("skill_eval.execution.benchmark.run_analysis"):
-        bench = agg.aggregate(tmp_path, wall_duration=5.0)
+        bench = agg.aggregate(tmp_path, phase1_wall=5.0)
     du = bench.llm_duration_seconds
-    assert du["total"] == 5.0                                 # 墙钟
-    assert du["scoring"] + du["audit"] + du["executor"] > du["total"]  # 分列和 > total(并行)
+    assert du["total"] == du["phase1_wall"] + du["phase2_wall"]              # 墙钟加总
+    assert du["phase1_wall"] == 5.0
+    assert du["scoring"] + du["audit"] + du["executor"] > du["total"]        # 分列和 > 墙钟(并行)
