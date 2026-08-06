@@ -402,11 +402,50 @@ def test_resolve_http_model_none_reads_env(monkeypatch):
 
 
 def test_resolve_http_model_none_and_no_env_raises(monkeypatch):
-    """既没传 model 也没 env → 裸 HTTP 无默认模型,loud 抛(走重试/兜底,不静默)。"""
-    from skill_eval.utils import _resolve_http_model
+    """既没传 model、env 与 settings.json 都无 → 裸 HTTP 无默认模型,loud 抛。"""
+    import skill_eval.utils as u
     monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
+    # 否则回退读真实 ~/.claude/settings.json(本机有 ANTHROPIC_MODEL)→ 不抛、测试假绿
+    monkeypatch.setattr(u, "_CLAUDE_SETTINGS_PATH", "/nonexistent/settings.json")
+    monkeypatch.setattr(u, "_claude_settings_cache", None)
     with pytest.raises(RuntimeError):
-        _resolve_http_model(None)
+        u._resolve_http_model(None)
+
+
+def test_resolve_http_model_falls_back_to_settings(monkeypatch, tmp_path):
+    """model=None 且 env 无 → 回退 ~/.claude/settings.json 的 ANTHROPIC_MODEL,剥后缀。"""
+    import json as _j
+    import skill_eval.utils as u
+    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
+    p = tmp_path / "settings.json"
+    p.write_text(_j.dumps({"env": {"ANTHROPIC_MODEL": "glm-5.2[1m]"}}), encoding="utf-8")
+    monkeypatch.setattr(u, "_CLAUDE_SETTINGS_PATH", str(p))
+    monkeypatch.setattr(u, "_claude_settings_cache", None)
+    assert u._resolve_http_model(None) == "glm-5.2"
+
+
+def test_anthropic_env_env_precedence_over_settings(monkeypatch, tmp_path):
+    """os.environ 与 settings.json 都有 → env 优先(显式 export / IDE 注入赢)。"""
+    import json as _j
+    import skill_eval.utils as u
+    p = tmp_path / "settings.json"
+    p.write_text(_j.dumps({"env": {"ANTHROPIC_BASE_URL": "https://from-config"}}), encoding="utf-8")
+    monkeypatch.setattr(u, "_CLAUDE_SETTINGS_PATH", str(p))
+    monkeypatch.setattr(u, "_claude_settings_cache", None)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://from-env")
+    assert u._anthropic_env("ANTHROPIC_BASE_URL") == "https://from-env"
+
+
+def test_anthropic_env_falls_back_to_settings(monkeypatch, tmp_path):
+    """os.environ 无 → 回退 settings.json env 块(cc 同源;next dev 子进程走这条)。"""
+    import json as _j
+    import skill_eval.utils as u
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    p = tmp_path / "settings.json"
+    p.write_text(_j.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "cfg-token"}}), encoding="utf-8")
+    monkeypatch.setattr(u, "_CLAUDE_SETTINGS_PATH", str(p))
+    monkeypatch.setattr(u, "_claude_settings_cache", None)
+    assert u._anthropic_env("ANTHROPIC_AUTH_TOKEN") == "cfg-token"
 
 
 # ── _llm_http_call:裸 HTTP 直连(forced tool_use)──
@@ -512,6 +551,49 @@ def test_http_call_missing_tooluse_raises_loud(monkeypatch):
     }))
     _http_env(monkeypatch)
     with pytest.raises(RuntimeError):
+        u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+
+
+def test_http_call_uses_settings_creds_when_env_missing(monkeypatch, tmp_path):
+    """os.environ 无凭据(如 cannbot-insight next dev 子进程)→ 回退 ~/.claude/settings.json
+    的 token/base,请求 Authorization / 端点用 config 值(与 cc 同源 → cc 能跑它就能跑)。"""
+    import json as _j
+    import skill_eval.utils as u
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["headers"] = req.headers
+        captured["url"] = req.full_url
+        return _FakeResp({
+            "content": [{"type": "tool_use", "input": {"items": []}}],
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        })
+
+    monkeypatch.setattr(u.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    p = tmp_path / "settings.json"
+    p.write_text(_j.dumps({"env": {
+        "ANTHROPIC_AUTH_TOKEN": "cfg-token",
+        "ANTHROPIC_BASE_URL": "https://from-config/api/anthropic",
+    }}), encoding="utf-8")
+    monkeypatch.setattr(u, "_CLAUDE_SETTINGS_PATH", str(p))
+    monkeypatch.setattr(u, "_claude_settings_cache", None)
+    u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+    assert captured["headers"].get("Authorization") == "Bearer cfg-token"
+    assert captured["url"] == "https://from-config/api/anthropic/v1/messages"
+
+
+def test_http_call_missing_creds_raises_clear(monkeypatch):
+    """os.environ 与 settings.json 都无凭据 → 清晰 RuntimeError(点名缺哪个 + cc 同源提示),
+    非 KeyError;裸 HTTP 不该静默到 urlopen 才炸。"""
+    import skill_eval.utils as u
+    monkeypatch.setattr(u.urllib.request, "urlopen", lambda *a, **k: None)  # 不该被调到
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.setattr(u, "_CLAUDE_SETTINGS_PATH", "/nonexistent/settings.json")
+    monkeypatch.setattr(u, "_claude_settings_cache", None)
+    with pytest.raises(RuntimeError, match="ANTHROPIC_AUTH_TOKEN"):
         u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
 
 

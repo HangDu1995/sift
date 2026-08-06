@@ -31,19 +31,64 @@ class _HttpRateLimited(Exception):
     """
 
 
+_CLAUDE_SETTINGS_PATH = os.path.expanduser("~/.claude/settings.json")
+_claude_settings_cache: dict[str, str] | None = None
+
+
+def _claude_settings_env() -> dict[str, str]:
+    """``~/.claude/settings.json`` 的 ``env`` 块(cc CLI 自身的凭据/model 来源)。
+
+    裸 HTTP 解析凭据时 os.environ 缺了就回退读这里:VSCode/SDK 把 ``ANTHROPIC_*`` 注入
+    **交互 shell** 的 env,但非交互启动的子进程(如 cannbot-insight 的 ``next dev`` spawn
+    出来的 skill-eval)继承不到 → 裸 HTTP 撞 ``KeyError`` /「无可用 model」全批失败(audit
+    静默出 UNRESOLVED)。回退读 cc 同源的 settings.json,让裸 HTTP 在 **cc 能跑的任何上下文**
+    都能跑(实测:剥光 os.environ 后从 settings.json 读 base/token/model 一发即通)。
+
+    读失败 / 无 env 块 → 空 dict(不抛,交调用方判缺 loud 报)。模块级缓存(文件 audit
+    期间不变);测试 monkeypatch ``_CLAUDE_SETTINGS_PATH`` 后须同时清 ``_claude_settings_cache``。
+    """
+    global _claude_settings_cache
+    if _claude_settings_cache is None:
+        # 局部变量攒好再一次赋值:若先赋空 dict 再填,并发线程会在窗口期看到「非 None 的空」
+        # 跳过初始化 → 返空 → model/token 解析失败(refine 多批并发实测踩到、靠重试兜回)。
+        cache: dict[str, str] = {}
+        try:
+            with open(_CLAUDE_SETTINGS_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+            env = data.get("env") if isinstance(data, dict) else None
+            if isinstance(env, dict):
+                cache = {k: str(v) for k, v in env.items()}
+        except (OSError, ValueError):
+            pass
+        _claude_settings_cache = cache
+    return _claude_settings_cache
+
+
+def _anthropic_env(key: str) -> str | None:
+    """解析一个 ``ANTHROPIC_*`` 配置值:os.environ 优先(显式 export / IDE 注入),
+    回退 ``~/.claude/settings.json`` env 块(cc CLI 同源)。两处都无 → None。
+
+    让裸 HTTP 的凭据解析与 cc 一致(cc 读 settings.json,故 cc 在缺 os.environ 的
+    子进程里仍能跑);裸 HTTP 原先只读 os.environ → 在那些上下文里系统性失败。
+    """
+    return os.environ.get(key) or _claude_settings_env().get(key)
+
+
 def _resolve_http_model(model: str | None) -> str:
     """裸 HTTP 用的真实模型 id。
 
     cc CLI 的 model 别名(如 ``glm-5.2[1m]`` 的 ``[1m]`` 上下文窗口后缀)裸 API 不收
     (spike 实证 code 1211「模型不存在」)→ 剥首个 ``[`` 后缀。``model=None``(audit 默认
-    不传 ``--model`` 的常态)→ **镜像 cc**:读 ``ANTHROPIC_MODEL`` env(cc 的默认模型来源,
-    本环境 ``=glm-5.2[1m]``)再剥后缀;env 也没有才抛(裸 HTTP 无内置默认)。
+    不传 ``--model`` 的常态)→ **镜像 cc**:经 ``_anthropic_env`` 解析(os.environ 优先、
+    回退 ``~/.claude/settings.json`` env 块,与 cc 同源)再剥后缀;两处都无才抛
+    (裸 HTTP 无内置默认)。
     """
     if not model:
-        model = os.environ.get("ANTHROPIC_MODEL")
+        model = _anthropic_env("ANTHROPIC_MODEL")
     if not model:
         raise RuntimeError(
-            "裸 HTTP 无可用 model:未传 --model 且环境无 ANTHROPIC_MODEL"
+            "裸 HTTP 无可用 model:未传 --model 且 os.environ 与 "
+            "~/.claude/settings.json env 块均无 ANTHROPIC_MODEL"
         )
     i = model.find("[")
     return model[:i] if i != -1 else model
@@ -75,14 +120,22 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
         }],
         "tool_choice": {"type": "tool", "name": "emit"},
     }
+    token = _anthropic_env("ANTHROPIC_AUTH_TOKEN")
+    base = _anthropic_env("ANTHROPIC_BASE_URL")
+    if not token or not base:
+        missing = "ANTHROPIC_AUTH_TOKEN" if not token else "ANTHROPIC_BASE_URL"
+        raise RuntimeError(
+            f"裸 HTTP 缺凭据:os.environ 与 ~/.claude/settings.json env 块均无 "
+            f"{missing}(cc CLI 同源读 settings.json;确认 GLM 凭据已配置)"
+        )
     headers = {
-        "Authorization": f"Bearer {os.environ['ANTHROPIC_AUTH_TOKEN']}",
+        "Authorization": f"Bearer {token}",
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
         # best-effort 身份(减 529 触发,非保证——保证靠 529→cc 兜底):让后端尽量当 cc 放行。
         "User-Agent": "claude-code/2.1.220",
     }
-    base = os.environ["ANTHROPIC_BASE_URL"].rstrip("/")
+    base = base.rstrip("/")
     req = urllib.request.Request(
         base + "/v1/messages", data=json.dumps(body).encode(),
         headers=headers, method="POST",
