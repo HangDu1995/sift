@@ -13,7 +13,8 @@ from skill_eval.models import (
     GradingResult,
     GradingSummary,
 )
-from skill_eval.utils import call_claude
+from skill_eval.concurrency import _LLMRetryExhausted, call_llm_with_retry
+from skill_eval.scoring._jsonschema import inline_schema
 
 # 结构化输出 schema:tier3 判官走 --json-schema,约束 JSON 不可畸形(CLI 拒顶层 array,
 # 故包 items;call_claude 透明解开 → _extract_json_array 照常命中,正则 fallback 兜底)。
@@ -37,6 +38,24 @@ _TIER3_SCHEMA = {
     "required": ["items"],
 }
 
+# grade() 给 LLM 的结构化 schema(forced tool_use 用)。从 GradingResult 派生,剔除
+# internal/可选字段——grade() 今天只产 expectations+summary,其余(claims/feedback/
+# user_notes_summary/execution_metrics/timing/error/cache_key)恒空,留 schema 里会逼
+# 模型填=超出换传输的行为变更。**最后经 inline_schema 把 $ref/$defs 就地展开**:部分
+# Anthropic 兼容端点(如 GLM)不解析 tool input_schema 里的 $ref,必填 summary 是 $ref
+# 时模型看不到目标形状 → 返回 {} → grade 全 UNEVAL(实测 100%)。inline 后无此患。
+_GRADER_FULL = GradingResult.model_json_schema()
+_GRADING_INTERNAL = {"cache_key", "error", "execution_metrics", "timing",
+                     "claims", "eval_feedback", "user_notes_summary"}
+_GRADING_PROPS = {k: v for k, v in _GRADER_FULL["properties"].items()
+                 if k not in _GRADING_INTERNAL}
+GRADING_SCHEMA: dict = inline_schema({
+    "type": "object",
+    "properties": _GRADING_PROPS,
+    "required": [r for r in _GRADER_FULL.get("required", []) if r in _GRADING_PROPS],
+    **({"$defs": _GRADER_FULL["$defs"]} if "$defs" in _GRADER_FULL else {}),
+})
+
 
 class LLMGrader:
     def __init__(self, model: str | None = None, timeout: int = 120):
@@ -59,7 +78,7 @@ class LLMGrader:
         on_usage=None,
     ) -> GradingResult:
         prompt = self._build_prompt(eval_case, transcript, output_dir)
-        response = self._call_claude(prompt, on_usage=on_usage)
+        response = self._call_claude(prompt, on_usage=on_usage, schema=GRADING_SCHEMA)
 
         if not response or not response.strip():
             return self._build_uneval_result(eval_case, "LLM grading returned empty response")
@@ -250,8 +269,8 @@ class LLMGrader:
 
     def _call_claude(self, prompt: str, *, on_usage=None, schema=None) -> str:
         try:
-            return call_claude(prompt, model=self.model, timeout=self.timeout, max_turns=1, on_usage=on_usage, schema=schema)
-        except RuntimeError:
+            return call_llm_with_retry(prompt, model=self.model, timeout=self.timeout, schema=schema, on_usage=on_usage, transport="http")
+        except _LLMRetryExhausted:
             return ""
 
     @staticmethod

@@ -36,7 +36,7 @@ def test_grader_grade_forwards_on_usage(tmp_path):
     sink = []
     fake, cap = _fake_that_reports_usage(
         '{"expectations":[],"summary":{"passed":0,"failed":0,"total":0,"pass_rate":0.0}}')
-    with patch("skill_eval.scoring.llm_grader.call_claude", side_effect=fake):
+    with patch("skill_eval.scoring.llm_grader.call_llm_with_retry", side_effect=fake):
         LLMGrader().grade(ec, "t", tmp_path, on_usage=sink.append)
     assert cap and cap[0] is not None, "grade 没把 on_usage 穿到 call_claude"
     assert sink == [_usage_payload()], "on_usage payload 没回灌"
