@@ -6,8 +6,8 @@ import json
 import random
 from pathlib import Path
 
+from skill_eval.concurrency import _LLMRetryExhausted, call_llm_with_retry
 from skill_eval.models import ComparisonExpectationResults, ComparisonResult
-from skill_eval.utils import call_claude
 
 
 def _recompute_expectation_counts(
@@ -34,6 +34,22 @@ def _recompute_expectation_counts(
         else:
             out[side] = results
     return out
+
+
+# comparator 给 LLM 的结构化 schema(forced tool_use 用)。从 ComparisonResult 派生,剔除
+# internal 字段(failed/pos_a_label/pos_b_label——由 _parse/_translate 填,LLM 不产),
+# LLM 只产 winner/reasoning/rubric/output_quality/expectation_results。$defs 必须保留:
+# 嵌套子模型经 $ref 引用,丢了成悬空 $ref(严格后端 400);required=[] 因字段全有默认。
+_FULL = ComparisonResult.model_json_schema()
+_CMP_PROPS = {k: v for k, v in _FULL["properties"].items()
+              if k not in ("failed", "pos_a_label", "pos_b_label")}
+COMPARATOR_SCHEMA: dict = {
+    "type": "object",
+    "properties": _CMP_PROPS,
+    "required": [r for r in _FULL.get("required", []) if r in _CMP_PROPS],
+}
+if "$defs" in _FULL:
+    COMPARATOR_SCHEMA["$defs"] = _FULL["$defs"]
 
 
 class BlindComparator:
@@ -110,8 +126,11 @@ class BlindComparator:
 
     def _call(self, prompt: str, *, on_usage=None) -> str:
         try:
-            return call_claude(prompt, model=self.model, timeout=self.timeout, max_turns=1, on_usage=on_usage)
-        except RuntimeError:
+            return call_llm_with_retry(
+                prompt, model=self.model, timeout=self.timeout,
+                schema=COMPARATOR_SCHEMA, on_usage=on_usage, transport="http",
+            )
+        except _LLMRetryExhausted:
             return ""
 
     def _parse(self, response: str) -> ComparisonResult:

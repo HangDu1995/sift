@@ -45,7 +45,7 @@ def test_grader_grade_forwards_on_usage(tmp_path):
 def test_comparator_compare_forwards_on_usage():
     sink = []
     fake, cap = _fake_that_reports_usage('{"winner":"A","reasoning":"t"}')
-    with patch("skill_eval.scoring.comparator.call_claude", side_effect=fake):
+    with patch("skill_eval.scoring.comparator.call_llm_with_retry", side_effect=fake):
         BlindComparator(rng=__import__("random").Random(0)).compare("a", "b", "p", on_usage=sink.append)
     assert cap and cap[0] is not None, "compare 没把 on_usage 穿到 call_claude"
     assert sink == [_usage_payload()]
@@ -58,14 +58,6 @@ def test_analyzer_analyze_benchmark_forwards_on_usage():
         PosthocAnalyzer().analyze_benchmark("{}", "", on_usage=sink.append)
     assert cap and cap[0] is not None, "analyze_benchmark 没把 on_usage 穿到 call_claude"
     assert sink == [_usage_payload()]
-
-
-def test_scoring_default_on_usage_is_none_keeps_text_mode():
-    """默认不传 on_usage → call_claude 收到 None(走 text 模式,行为不变)。"""
-    fake, cap = _fake_that_reports_usage('{"winner":"A","reasoning":"t"}')
-    with patch("skill_eval.scoring.comparator.call_claude", side_effect=fake):
-        BlindComparator(rng=__import__("random").Random(0)).compare("a", "b", "p")  # 不传 on_usage
-    assert cap[0] is None, "默认应 None"
 
 
 def test_score_checkpoints_forwards_on_usage_to_grader(tmp_path):

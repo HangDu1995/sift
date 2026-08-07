@@ -18,6 +18,7 @@ from skill_eval.models import (
 )
 from skill_eval.scoring.comparator import BlindComparator
 from skill_eval.scoring.analyzer import PosthocAnalyzer
+from skill_eval.concurrency import _LLMRetryExhausted
 
 
 VALID_COMPARISON_JSON = json.dumps({
@@ -267,7 +268,7 @@ class TestBlindComparator:
         assert er.total == 11
         assert er.pass_rate == 0.82
 
-    @patch("skill_eval.scoring.comparator.call_claude", return_value=VALID_COMPARISON_JSON)
+    @patch("skill_eval.scoring.comparator.call_llm_with_retry", return_value=VALID_COMPARISON_JSON)
     def test_compare_end_to_end(self, mock_claude):
         c = BlindComparator(rng=_FixedRng(True))  # with 放 A 位
         result = c.compare("with-output", "without-output", "eval prompt", ["exp 1"])
@@ -278,7 +279,7 @@ class TestBlindComparator:
         assert result.pos_b_label == "without"
         mock_claude.assert_called_once()
 
-    @patch("skill_eval.scoring.comparator.call_claude", return_value=VALID_COMPARISON_JSON)
+    @patch("skill_eval.scoring.comparator.call_llm_with_retry", return_value=VALID_COMPARISON_JSON)
     def test_compare_position_flip_flips_winner(self, mock_claude):
         # 同一份 LLM 响应(判 A 胜):with 放 A → with 胜;with 放 B → without 胜
         r_a = BlindComparator(rng=_FixedRng(True)).compare("w", "wo", "p")
@@ -286,7 +287,7 @@ class TestBlindComparator:
         assert r_a.winner == "with"
         assert r_b.winner == "without"
 
-    @patch("skill_eval.scoring.comparator.call_claude", return_value=VALID_COMPARISON_JSON)
+    @patch("skill_eval.scoring.comparator.call_llm_with_retry", return_value=VALID_COMPARISON_JSON)
     def test_compare_shuffle_swaps_prompt_position(self, mock_claude):
         # with_is_a=False → without 放 OUTPUT A、with 放 OUTPUT B(证明 position 真打乱)
         BlindComparator(rng=_FixedRng(False)).compare("WITH-MARKER", "WITHOUT-MARKER", "p")
@@ -294,7 +295,7 @@ class TestBlindComparator:
         assert "OUTPUT A ---\nWITHOUT-MARKER" in sent
         assert "OUTPUT B ---\nWITH-MARKER" in sent
 
-    @patch("skill_eval.scoring.comparator.call_claude", side_effect=RuntimeError("timeout"))
+    @patch("skill_eval.scoring.comparator.call_llm_with_retry", side_effect=_LLMRetryExhausted("exhausted"))
     def test_compare_call_failure(self, mock_claude):
         c = BlindComparator()
         result = c.compare("with", "without", "prompt")
@@ -315,7 +316,7 @@ class TestBlindComparator:
         c = BlindComparator()
         assert c._parse(VALID_COMPARISON_JSON).failed is False
 
-    @patch("skill_eval.scoring.comparator.call_claude", side_effect=RuntimeError("timeout"))
+    @patch("skill_eval.scoring.comparator.call_llm_with_retry", side_effect=_LLMRetryExhausted("exhausted"))
     def test_compare_marks_failed_on_call_failure(self, mock_claude):
         c = BlindComparator()
         result = c.compare("with", "without", "prompt")
@@ -324,7 +325,7 @@ class TestBlindComparator:
 
     # ── label 参数化(块 B:v1/v2 双 skill)──
 
-    @patch("skill_eval.scoring.comparator.call_claude", return_value=VALID_COMPARISON_JSON)
+    @patch("skill_eval.scoring.comparator.call_llm_with_retry", return_value=VALID_COMPARISON_JSON)
     def test_compare_v1v2_labels(self, mock_claude):
         """label_a/b 驱动 winner + dict key 语义:v1/v2 替代 with/without。"""
         c = BlindComparator(rng=_FixedRng(True))  # side0(output_a)放 A 位
@@ -336,7 +337,7 @@ class TestBlindComparator:
         assert result.rubric["v2"].overall_score == 5.4   # B → label_b
         assert "with" not in result.rubric and "without" not in result.rubric
 
-    @patch("skill_eval.scoring.comparator.call_claude", return_value=VALID_COMPARISON_JSON)
+    @patch("skill_eval.scoring.comparator.call_llm_with_retry", return_value=VALID_COMPARISON_JSON)
     def test_compare_default_labels_unchanged(self, mock_claude):
         """默认 label_a/b=with/without → 行为与改前一致(向后兼容)。"""
         c = BlindComparator(rng=_FixedRng(True))

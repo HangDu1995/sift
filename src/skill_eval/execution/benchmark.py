@@ -47,8 +47,8 @@ def _real_model_from_transcript(run_dir: Path) -> str:
 
     transcript.jsonl 是 cc stream-json 原文落盘,result event 顶层 modelUsage =
     {真实模型名: {token 明细}};取第一个 key(常规单模型)。无 transcript / 无
-    result event / 解析失败 → ""。comparator/analyzer 走 call_claude(text 模式)
-    不落盘,故三模型字段都借 executor 抓的这个真名(三者同源:同一 CLI/env 解析)。
+    result event / 解析失败 → ""。comparator/analyzer 不经 cc stream-json、
+    不落 transcript.jsonl,故三模型字段都借 executor 抓的这个真名(三者同源:同一 CLI/env 解析)。
     """
     tp = run_dir / "transcript.jsonl"
     if not tp.exists():
