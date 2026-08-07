@@ -37,6 +37,13 @@ def _collect_run_output(run_dir: Path) -> str:
     return "\n\n".join(parts) if parts else ""
 
 
+def _comp_path_for(ws_run: Path) -> Path:
+    """该对的 comparison-*.json 路径(eval 分层则带 eval- 前缀,否则直挂 iteration_dir)。"""
+    eval_name = ws_run.parent.name
+    suffix = f"{eval_name}-" if eval_name.startswith("eval-") else ""
+    return ws_run.parent.parent / f"comparison-{suffix}run{ws_run.name.split('-')[1]}.json"
+
+
 def _progress_bar(current, total, width) -> str:
     pct = min(current / total, 1.0) if total else 0
     filled = int(width * pct)
@@ -124,30 +131,43 @@ def run_comparisons(aggregator, iteration_dir: Path, sides: list | None = None, 
         return f"\r[{c}/{total}] comparison {bar} {pct:.0f}%{eta_str}"
 
     def _do_comparison(idx, ws_run, wos_run):
-        ws_output = _collect_run_output(ws_run)
-        wos_output = _collect_run_output(wos_run)
-        ws_grading = _load_grading(ws_run)
+        try:
+            ws_output = _collect_run_output(ws_run)
+            wos_output = _collect_run_output(wos_run)
+            ws_grading = _load_grading(ws_run)
 
-        merged_prompt_path = iteration_dir / "merged_prompt.txt"
-        eval_prompt = merged_prompt_path.read_text(encoding="utf-8")[:2000] if merged_prompt_path.exists() else ""
+            merged_prompt_path = iteration_dir / "merged_prompt.txt"
+            eval_prompt = merged_prompt_path.read_text(encoding="utf-8")[:2000] if merged_prompt_path.exists() else ""
 
-        expectations = []
-        if ws_grading:
-            expectations = [e.get("text", "") for e in ws_grading.get("expectations", []) if e.get("text")]
+            expectations = []
+            if ws_grading:
+                expectations = [e.get("text", "") for e in ws_grading.get("expectations", []) if e.get("text")]
 
-        result = _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectations, label_a, label_b, on_usage=on_usage, on_duration=on_duration)
-        if result is None:
+            result = _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectations, label_a, label_b, on_usage=on_usage, on_duration=on_duration)
+            if result is None:
+                result = ComparisonResult(winner="tie", reasoning="comparison failed after retries", failed=True)
+
+            _comp_path_for(ws_run).write_text(
+                json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            result = ComparisonResult(winner="tie",
+                                      reasoning=f"comparison crashed: {type(exc).__name__}",
+                                      failed=True)
+            sys.stderr.write(f"\r comparison crashed [{ws_run.parent.name}/{ws_run.name}]: "
+                             f"{type(exc).__name__}: {exc}\n")
+            sys.stderr.flush()
+            try:  # 写盘失败则跳过(stderr 已报错,fs 上无该对产物)
+                _comp_path_for(ws_run).write_text(
+                    json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
+        if getattr(result, "failed", False):   # 单点计数:None 耗尽 / 异常降级 各只计一次
             with lock:
                 failures[0] += 1
-            result = ComparisonResult(winner="tie", reasoning="comparison failed after retries", failed=True)
-
-        eval_name = ws_run.parent.name
-        suffix = f"{eval_name}-" if eval_name.startswith("eval-") else ""
-        comp_path = ws_run.parent.parent / f"comparison-{suffix}run{ws_run.name.split('-')[1]}.json"
-        comp_path.write_text(
-            json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
         with lock:
             completed_count[0] += 1
         sys.stderr.write(_progress_line())

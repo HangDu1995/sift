@@ -885,6 +885,52 @@ class TestComparisonRetry:
         assert results[0].failed is True  # 修复前为 False
 
 
+class TestComparisonPoolIsolation:
+    """单对 compare() 抛异常(非 failed)→ _do_comparison 兜成 failed tie、写
+    comparison-*.json,整池不崩、其余对正常(独立脆弱点:不切 http 也该修)。"""
+
+    @staticmethod
+    def _make_run(base: Path, marker: str) -> None:
+        (base / "outputs").mkdir(parents=True, exist_ok=True)
+        (base / "outputs" / "out.txt").write_text(marker, encoding="utf-8")
+
+    def test_crashing_pair_becomes_failed_tie_pool_continues(self, tmp_path: Path, monkeypatch, capfd):
+        class _CrashOnMarker:
+            def __init__(self, *a, **kw):
+                pass
+
+            def compare(self, output_a, output_b, eval_prompt=None, expectations=None,
+                        label_a=None, label_b=None, **kwargs):
+                if "CRASH" in output_a:
+                    raise ValueError("simulated crash")
+                return ComparisonResult(winner="with", reasoning="ok")
+
+        monkeypatch.setattr(comparison_suite, "BlindComparator", _CrashOnMarker)
+        self._make_run(tmp_path / "with_skill" / "run-1", "CRASH-MARKER")
+        self._make_run(tmp_path / "without_skill" / "run-1", "wo")
+        self._make_run(tmp_path / "with_skill" / "run-2", "ok")
+        self._make_run(tmp_path / "without_skill" / "run-2", "wo")
+
+        class _Agg:
+            enable_llm = True
+            model = None
+            timeout = 10
+
+        results = run_comparisons(_Agg(), tmp_path)   # 不抛
+        assert len(results) == 2                       # 整池完成(不击穿)
+        crashed = next(r for r in results if r.failed)
+        assert crashed.winner == "tie"                 # 降级 tie
+        ok = next(r for r in results if not r.failed)
+        assert ok.winner == "with"                     # 另一对正常返回
+        # crashed 对仍写 comparison-*.json(failed tie),保 fs 一致
+        cr1 = json.loads((tmp_path / "comparison-run1.json").read_text(encoding="utf-8"))
+        assert cr1["failed"] is True and cr1["winner"] == "tie"
+        cr2 = json.loads((tmp_path / "comparison-run2.json").read_text(encoding="utf-8"))
+        assert cr2["winner"] == "with"
+        err = capfd.readouterr().err
+        assert "crashed" in err                        # 不静默:stderr 显式报错
+
+
 class TestComparisonSummary:
     """ComparisonSummary.from_comparisons:win-rate 有效分母 = with+without+genuine tie,
     failed 排除(失败≠打平)。"""
