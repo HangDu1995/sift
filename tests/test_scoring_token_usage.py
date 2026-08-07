@@ -54,7 +54,7 @@ def test_comparator_compare_forwards_on_usage():
 def test_analyzer_analyze_benchmark_forwards_on_usage():
     sink = []
     fake, cap = _fake_that_reports_usage('["note"]')
-    with patch("skill_eval.scoring.analyzer.call_claude", side_effect=fake):
+    with patch("skill_eval.scoring.analyzer.call_llm_with_retry", side_effect=fake):
         PosthocAnalyzer().analyze_benchmark("{}", "", on_usage=sink.append)
     assert cap and cap[0] is not None, "analyze_benchmark 没把 on_usage 穿到 call_claude"
     assert sink == [_usage_payload()]

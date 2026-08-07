@@ -427,13 +427,13 @@ class TestPosthocAnalyzer:
         result = a._parse_analysis("")
         assert result is None
 
-    @patch("skill_eval.scoring.analyzer.call_claude", return_value='["note 1", "note 2"]')
+    @patch("skill_eval.scoring.analyzer.call_llm_with_retry", return_value='["note 1", "note 2"]')
     def test_analyze_benchmark_end_to_end(self, mock_claude):
         a = PosthocAnalyzer()
         notes = a.analyze_benchmark('{"benchmark": true}', "test skill")
         assert notes == ["note 1", "note 2"]
 
-    @patch("skill_eval.scoring.analyzer.call_claude", return_value=VALID_ANALYSIS_JSON)
+    @patch("skill_eval.scoring.analyzer.call_llm_with_retry", return_value=VALID_ANALYSIS_JSON)
     def test_analyze_comparison_end_to_end(self, mock_claude):
         a = PosthocAnalyzer()
         result = a.analyze_comparison(
