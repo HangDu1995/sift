@@ -9,6 +9,7 @@ import subprocess
 import threading
 import urllib.error
 import urllib.request
+import warnings
 from collections.abc import Callable
 
 
@@ -163,11 +164,24 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
             break
     else:
         raise RuntimeError(f"裸 HTTP 未返回 tool_use(force 失败?): {str(obj)[:300]}")
+    # 截断检测:stop_reason==max_tokens → forced tool_use 产出可能不完整。
+    # 项目无 logging → warnings.warn 进 stderr(即时可见、pytest.warns 可测);
+    # on_usage payload 带 truncated 留存(TokenUsageAccumulator 按 _KEYS 固定字段取,不受影响)。
+    # 不 raise/不重试(重试同样截断)——下游走现有 UNRESOLVED/UNEVAL 诚实兜底,但现在可见。
+    truncated = obj.get("stop_reason") == "max_tokens"
+    if truncated:
+        warnings.warn(
+            "LLM 响应被截断(stop_reason=max_tokens, max_tokens 上限 4096):"
+            "forced tool_use 产出可能不完整,下游 parser 多半失败落 UNRESOLVED/UNEVAL。"
+            "反复出现时减小单批(audit _MAX_LLM_IN_BATCH)或切 generator 时提 max_tokens。",
+        )
     if on_usage is not None:
         usage = obj.get("usage")
         if isinstance(usage, dict):
             payload = dict(usage)
             payload.setdefault("total_cost_usd", 0.0)
+            if truncated:
+                payload["truncated"] = True
             on_usage(payload)
     return json.dumps(items, ensure_ascii=False)
 

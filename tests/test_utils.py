@@ -1,6 +1,8 @@
 # tests/test_utils.py
 """call_claude 的 subprocess 行为:timeout 必须真生效(kill 整组,含孙进程)。
 on_usage 回调(json 模式抓 token)+ TokenUsageAccumulator 并发累加。"""
+import pytest
+
 import io
 import json
 import os
@@ -595,6 +597,85 @@ def test_http_call_missing_creds_raises_clear(monkeypatch):
     monkeypatch.setattr(u, "_claude_settings_cache", None)
     with pytest.raises(RuntimeError, match="ANTHROPIC_AUTH_TOKEN"):
         u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+
+
+def test_http_call_truncated_warns_and_marks_usage(monkeypatch):
+    """stop_reason=max_tokens → warnings.warn(截断) + on_usage payload 带 truncated=True;
+    产出仍返回(不完整但不 raise,下游走现有 UNRESOLVED/UNEVAL 兜底)。"""
+    import json as _j
+    import skill_eval.utils as u
+    seen = {}
+    monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
+        "stop_reason": "max_tokens",
+        "content": [{"type": "tool_use", "input": {"items": [{"index": 0}]}}],
+        "usage": {"input_tokens": 100, "output_tokens": 200},
+    }))
+    _http_env(monkeypatch)
+    with pytest.warns(UserWarning, match="截断"):
+        out = u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, lambda p: seen.update(p))
+    assert seen["truncated"] is True               # 结构化留存
+    assert seen["input_tokens"] == 100             # 其余 usage 不受影响
+    assert _j.loads(out) == [{"index": 0}]         # 不完整也返回(不 raise)
+
+
+def test_http_call_truncated_without_usage_callback_still_warns(monkeypatch):
+    """on_usage=None + 截断 → 仍 warn、不崩(on_usage=None 分支安全)。"""
+    import skill_eval.utils as u
+    monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
+        "stop_reason": "max_tokens",
+        "content": [{"type": "tool_use", "input": {"items": []}}],
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }))
+    _http_env(monkeypatch)
+    with pytest.warns(UserWarning, match="截断"):
+        u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+
+
+def test_http_call_normal_stop_reason_no_truncated(monkeypatch):
+    """stop_reason=tool_use(正常)→ 无截断 warning、payload 无 truncated key。"""
+    import warnings as _w
+    import skill_eval.utils as u
+    seen = {}
+    monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
+        "stop_reason": "tool_use",
+        "content": [{"type": "tool_use", "input": {"items": [{"i": 1}]}}],
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }))
+    _http_env(monkeypatch)
+    with _w.catch_warnings(record=True) as wlist:
+        _w.simplefilter("always")
+        u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, lambda p: seen.update(p))
+    assert [w for w in wlist if "截断" in str(w.message)] == []
+    assert "truncated" not in seen
+
+
+def test_http_call_missing_stop_reason_no_truncated(monkeypatch):
+    """响应无 stop_reason 字段(现有所有 http 测试的形状)→ 无截断 warning、无 truncated(向后兼容)。"""
+    import warnings as _w
+    import skill_eval.utils as u
+    seen = {}
+    monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
+        "content": [{"type": "tool_use", "input": {"items": [{"i": 1}]}}],
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }))
+    _http_env(monkeypatch)
+    with _w.catch_warnings(record=True) as wlist:
+        _w.simplefilter("always")
+        u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, lambda p: seen.update(p))
+    assert [w for w in wlist if "截断" in str(w.message)] == []
+    assert "truncated" not in seen
+
+
+def test_token_accumulator_ignores_truncated_field():
+    """TokenUsageAccumulator.add 喂含 truncated 的 payload → 不炸、token 正确、truncated 被忽略
+    (按 _KEYS 固定字段取)。守 on_usage 带 truncated 不破坏 token 累加。"""
+    import skill_eval.utils as u
+    acc = u.TokenUsageAccumulator()
+    acc.add({"input_tokens": 10, "output_tokens": 5, "truncated": True, "total_cost_usd": 0.0})
+    snap = acc.snapshot()
+    assert snap["input_tokens"] == 10
+    assert snap["output_tokens"] == 5
+    assert "truncated" not in snap
 
 
 # ── call_claude transport 调度:cc(默认)/ http(529→cc 兜底)──
