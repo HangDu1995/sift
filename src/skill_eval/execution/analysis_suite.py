@@ -5,6 +5,13 @@ from pathlib import Path
 from skill_eval.models import AnalysisResult, BenchmarkData
 
 
+class _ComparisonAnalysisTransient(Exception):
+    """analyze_comparison 被调用(过了结构检查:清晰赢家 + 有 transcript)却没产出可解析
+    结果——瞬时失败(http 抖动/空响应/偶发不产 tool_use)。交 run_analysis 的应用层重试
+    循环兜底(call_llm_with_retry 只重 429/error、不重空响应)。区别于结构性 None
+    (平局/无赢家/无比较,在 early-return 阶段、不抛此异常、不重试)。"""
+
+
 def _load_transcript(run_dir: Path) -> str:
     transcript_path = run_dir / "transcript.md"
     if transcript_path.exists():
@@ -102,6 +109,11 @@ def run_comparison_analysis(aggregator, iteration_dir: Path, benchmark: Benchmar
     )
     if on_duration:
         on_duration(time.perf_counter() - _t0)
+    if result is None:
+        # 走到这里 = 已过全部结构检查(清晰赢家 + 有 transcript),analyze_comparison 却
+        # 返 None = LLM 调用瞬时失败(http 抖动/空响应/偶发不产 tool_use)。抛出交 run_analysis
+        # 的应用层重试循环兜底(call_llm_with_retry 只重 429/error,不重空响应)。
+        raise _ComparisonAnalysisTransient("analyze_comparison 无可解析结果(瞬时,可重试)")
     return result
 
 

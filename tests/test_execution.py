@@ -490,6 +490,52 @@ class TestBenchmarkAggregator:
         analyzer = type("A", (), {"analyze_comparison": lambda self, **kw: "OK"})()
         assert run_comparison_analysis(None, tmp_path, bd, analyzer) is None
 
+    def test_run_comparison_analysis_raises_on_transient_none(self, tmp_path: Path):
+        """analyze_comparison 被调用(已过结构检查:清晰赢家+有 transcript)却返 None
+        (瞬时:http 抖动/空响应/偶发不产 tool_use)→ 抛 _ComparisonAnalysisTransient
+        交 run_analysis 重试循环兜底,而非静默 None 丢深度分析。区别于结构性 None
+        (平局/无赢家/无比较,上方 early-return、不进这里、不抛——既有测试覆盖)。"""
+        from skill_eval.execution.analysis_suite import (
+            run_comparison_analysis, _ComparisonAnalysisTransient)
+        from skill_eval.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
+
+        skill_dir = tmp_path / "skill"; skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n", encoding="utf-8")
+        (tmp_path / "with_skill" / "run-1").mkdir(parents=True)
+        (tmp_path / "with_skill" / "run-1" / "transcript.md").write_text("WS", encoding="utf-8")
+        (tmp_path / "without_skill" / "run-1").mkdir(parents=True)
+        (tmp_path / "without_skill" / "run-1" / "transcript.md").write_text("WOS", encoding="utf-8")
+
+        bd = BenchmarkData(metadata=BenchmarkMetadata(skill_name="s", skill_path=str(skill_dir)),
+                           comparisons=[ComparisonResult(winner="with", reasoning="r")])  # 清晰赢家 → 进 analyze_comparison
+        analyzer = type("A", (), {"analyze_comparison": lambda self, **kw: None})()  # 瞬时:返 None
+        with pytest.raises(_ComparisonAnalysisTransient):
+            run_comparison_analysis(None, tmp_path, bd, analyzer)
+
+    def test_run_analysis_retries_transient_analysis_failure(self, tmp_path: Path):
+        """run_comparison_analysis 第一次抛 _ComparisonAnalysisTransient(瞬时)、第二次
+        成功 → run_analysis 重试循环兜底 → 返回非 None analysis(一次抖动不再丢深度分析)。"""
+        from skill_eval.execution.analysis_suite import (
+            run_analysis, _ComparisonAnalysisTransient)
+        from skill_eval.models import (
+            AnalysisResult, BenchmarkData, BenchmarkMetadata, ComparisonResult)
+        from skill_eval.models.benchmark_models import RunResultEntry, RunResultMetrics
+
+        bd = BenchmarkData(
+            metadata=BenchmarkMetadata(skill_name="s"),
+            runs=[RunResultEntry(eval_id=1, configuration="with_skill", run_number=1,
+                                 result=RunResultMetrics(pass_rate=1.0, passed=1, failed=0, total=1))],
+            comparisons=[ComparisonResult(winner="with", reasoning="r")],
+        )
+        sentinel = AnalysisResult(winner_strengths=["s"])   # 真 AnalysisResult(run_analysis 会 model_dump 落盘)
+        agg = BenchmarkAggregator(model=None, timeout=10)
+        with patch("skill_eval.scoring.analyzer.PosthocAnalyzer") as MockAn, \
+             patch("skill_eval.execution.analysis_suite.run_comparison_analysis",
+                   side_effect=[_ComparisonAnalysisTransient("flake"), sentinel]):
+            MockAn.return_value.analyze_benchmark.return_value = []
+            notes, analysis = run_analysis(agg, tmp_path, bd)
+        assert analysis is sentinel   # 重试后成功(旧代码:第一次 None → break → 永远丢)
+
     def test_aggregate_dual_rate_null_when_class_missing(self, tmp_path: Path):
         """某类 expectation 全无(pass_rate_xx 缺)→ 该双率 stats None、delta 该项 None。"""
         iteration = tmp_path  # iteration-1 死层已删:run 树根即 output_dir,config 目录直接落其下
