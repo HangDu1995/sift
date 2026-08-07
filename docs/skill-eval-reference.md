@@ -470,7 +470,7 @@ Written to /tmp/out/trigger-report.json · /tmp/out/trigger-report.html
 **操作建议（怎么改 description 才更容易 / 更精准地被触发）**：报告 `suggestions[]` 给可直接照做的建议，两路——
 
 - **规则建议**（永远给、零成本）：`recall`（should-trigger FAIL=漏召）→ 列出没触发的 prompt +「补触发关键词 / 动作动词」；`false_trigger`（should-not FAIL=误触）→「收窄 scope / 加边界排除语」；`unresolved` →「加大 `--runs` 重跑确认」；零 FAIL 零 unresolved → `all_good`（无需改）。
-- **LLM 建议**（**有失败才自动跑、无 flag**）：喂当前 description + 失败 probe 的 prompt，起草一个修订 description 草案（可直接抄改）+ 一行理由。相对 trigger 本体（每 probe × run = 1 次完整 cc spawn）这是一次单轮 LLM 调用、开销 <5%，全 PASS 跳过（零成本），故默认开、不设 flag。LLM 调用失败自动重试 2 次（限流是瞬态——trigger 本体跑完紧接着调，常撞后端限流窗口）；重试耗尽只丢这条、规则建议照在，终端打失败原因（疑似限流 / 超时 / 空 result）让你判断是瞬态还是真问题。
+- **LLM 建议**（**有失败才自动跑、无 flag**）：喂当前 description + 失败 probe 的 prompt，起草一个修订 description 草案（可直接抄改）+ 一行理由。相对 trigger 本体（每 probe × run = 1 次完整 cc spawn）这是一次单轮 LLM 调用、开销 <5%，全 PASS 跳过（零成本），故默认开、不设 flag。LLM 调用失败自动重试 2 次（限流是瞬态——trigger 本体跑完紧接着调，常撞后端限流窗口）；重试耗尽只丢这条、规则建议照在，终端打失败原因（疑似限流 / 空响应）让你判断是瞬态还是真问题。
 
 ### `coverage` — 出题漏测诊断
 
@@ -971,7 +971,7 @@ skill-eval batch-report batch-workspace/ --open
 | `unresolved` | spawn 异常 / cc 非零退出且没触发（限流）的 probe 数（**不进** recall / false_trigger_rate 分母） |
 | `token_usage` | `{total_tokens}`（所有 probe spawn 的 cc token 合计）+ 可选 `suggest`（LLM 建议那次调用的 input/output/cost，有失败才产生） |
 | `duration_seconds` | cc spawn 总墙钟（各 probe 各 run `RunOutput.duration_ms` 之和 / 1000；不含 LLM 建议那次调用；旧报告无此字段 → `0.0`） |
-| `suggestions[]` | 操作建议：`category`（`recall` / `false_trigger` / `unresolved` / `all_good` / `llm_rewrite`）+ `source`（`rule` / `llm`）+ `message`（中文文案，失败时带 probe 的 prompt 原文）+ `probe_ids` + `tokens` / `duration_seconds`（LLM 建议那次 `call_claude` 的消耗，含重试；`rule` 建议为 0）。规则建议永远给；`llm_rewrite` 仅在有失败时自动产生（见上「操作建议」） |
+| `suggestions[]` | 操作建议：`category`（`recall` / `false_trigger` / `unresolved` / `all_good` / `llm_rewrite`）+ `source`（`rule` / `llm`）+ `message`（中文文案，失败时带 probe 的 prompt 原文）+ `probe_ids` + `tokens` / `duration_seconds`（LLM 建议那次调用（走 `call_llm_with_retry`）的消耗，含重试；`rule` 建议为 0）。规则建议永远给；`llm_rewrite` 仅在有失败时自动产生（见上「操作建议」） |
 | `probes[]` | 每条 probe：`id` / `expect_trigger` / `prompt`（中性请求原文）/ `phrase_type`（`literal` 词面命中 / `paraphrase` 语义改写，anti-leakage 子串检查定）/ `length_bucket`（`short` / `medium` / `long`）/ `trigger_rate`（fired / runs；UNRESOLVED 时 `null`）/ `verdict`（PASS / FAIL / UNRESOLVED）/ `tokens` / `duration_seconds` / `transcript_path`（首个成功 run 的 transcript 路径 `probe-<id>/run-0/transcript.jsonl`，人审 / 重跑抓手；`--runs`>1 其余在同目录 `run-1…`，spawn 全失败则空） |
 | `breakdown` | 分层 rollup（纯诊断）：`by_phrase` / `by_length` 各含 `recall` / `false_trigger` 两方向，把主指标再按措辞（词面 / 语义）、长度（短 / 中 / 长）切；某组无 probe → `null`。旧报告无此字段 → `{}` |
 

@@ -68,7 +68,7 @@ def test_trigger_command_renders_unresolved_probe_without_crash(tmp_path, monkey
 
 
 def test_trigger_command_llm_suggestion_on_failure(tmp_path, monkeypatch):
-    """有失败 probe → 自动调 LLM 起草建议(call_claude mock)→ suggestions 含 llm_rewrite + token_usage.suggest。"""
+    """有失败 probe → 自动调 LLM 起草建议(call_llm_with_retry mock)→ suggestions 含 llm_rewrite + token_usage.suggest。"""
     from typer.testing import CliRunner
     from skill_eval.cli.main import app
 
@@ -89,12 +89,13 @@ def test_trigger_command_llm_suggestion_on_failure(tmp_path, monkeypatch):
     monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run",
                         lambda self, probes, base, **kw: fake)
 
-    def fake_call_claude(prompt, *, on_usage=None, **kw):
-        if on_usage:
-            on_usage({"input_tokens": 200, "output_tokens": 80, "total_cost_usd": 0.02})
-        return "修订 description:做 X\n理由:补了关键词"
+    def fake_call_llm_with_retry(prompt, *a, **k):
+        if k.get("on_usage"):
+            k["on_usage"]({"input_tokens": 200, "output_tokens": 80, "total_cost_usd": 0.02})
+        return json.dumps({"suggestion": "修订 description:做 X\n理由:补了关键词"})
 
-    monkeypatch.setattr("skill_eval.execution.trigger_suggest.call_claude", fake_call_claude)
+    monkeypatch.setattr("skill_eval.execution.trigger_suggest.call_llm_with_retry",
+                        fake_call_llm_with_retry)
 
     out = tmp_path / "out"
     r = CliRunner().invoke(app, ["trigger", str(skill), "-o", str(out), "--model", "m"])

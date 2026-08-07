@@ -13,10 +13,25 @@
 
 from __future__ import annotations
 
+import json
 import time
 
+from skill_eval.concurrency import _LLMRetryExhausted, call_llm_with_retry
 from skill_eval.models.trigger_report import Suggestion
-from skill_eval.utils import call_claude
+from skill_eval.scoring._jsonschema import inline_schema
+
+
+_SUGGEST_SCHEMA = inline_schema({
+    "type": "object",
+    "properties": {
+        "suggestion": {
+            "type": "string",
+            "description": "修订后的 description 文本(可直接照用,不要 markdown 标题/「以下是」开场);"
+            "末尾可附一行「理由:」简述改了什么(≤2 句)",
+        }
+    },
+    "required": ["suggestion"],
+})
 
 
 def _bullets(probes: list[dict]) -> str:
@@ -77,39 +92,24 @@ def build_rule_suggestions(probes: list[dict]) -> list[Suggestion]:
     return out
 
 
-def _classify_call_failure(exc: Exception) -> str:
-    """把 call_claude 的异常分类成给用户看的失败原因(限流/超时/cc 非零退出)。
-
-    ``_spawn_claude`` 失败时 raise 的 ``RuntimeError`` 消息含原始 stdout/stderr 片段;
-    智谱后端限流(过载)常含 529 / overloaded / 访问量过大,超时消息含 "timed out"。
-    """
-    msg = str(exc)
-    if "timed out" in msg:
-        return "超时"
-    low = msg.lower()
-    if any(k in low for k in ("529", "overloaded", "rate limit", "访问量过大", "限流", "too many")):
-        return "疑似限流(cc 非零退出)"
-    return "cc 非零退出"
-
-
 def build_llm_suggestion(
     description: str,
     failed_should_trigger: list[dict],
     failed_should_not: list[dict],
     model: str | None = None,
     timeout: int = 600,
-    retries: int = 2,
 ) -> tuple[Suggestion | None, dict, str | None]:
-    """有失败 probe 时,调 LLM 起草修订 description 草案(限流自动重试)。
+    """有失败 probe 时,调 LLM 起草修订 description 草案(http 直连 + 共享重试壳)。
 
     - 全 PASS(无失败)→ ``(None, {}, None)``,**不调** LLM(零成本)。
-    - 成功 → ``(Suggestion(category=llm_rewrite), usage, None)``。
-    - 重试耗尽 → ``(None, {}, reason)``:``reason`` 描述失败类目(限流/超时/空 result/cc 非
-      零退出),供 CLI 打印让用户判断是瞬态还是真问题。规则建议不受影响(调用方照给)。
+    - 成功 → ``(Suggestion(category=llm_rewrite), usage, None)``;message = LLM 给的修订
+      description 文本(可附「理由:」)。
+    - ``call_llm_with_retry`` 重试耗尽(429/error)→ ``(None, usage, "LLM 调用重试耗尽(疑似限流)")``;
+      http 返空(call_llm_with_retry 不重空响应)→ ``(None, usage, "LLM 返回空响应")``。
+      规则建议不受影响(调用方照给)。
 
-    限流是瞬态:trigger 本体跑完 10 万 token 后紧接着调,常撞智谱后端限流窗口 → cc 非零
-    退出。故默认重试 2 次(初次 + 2);每次失败本身耗时(超时/退出要几秒),充作重试间隔。
-    ``failed_*`` 是 per-probe dict 列表(含 ``id`` / ``prompt``)。
+    transport=http(forced tool_use + schema-safe),复用 run 侧共享重试壳(AIMD 门控 + 429 退避),
+    取代旧的手写 cc 重试。``failed_*`` 是 per-probe dict 列表(含 ``id`` / ``prompt``)。
     """
     if not failed_should_trigger and not failed_should_not:
         return None, {}, None
@@ -125,28 +125,36 @@ def build_llm_suggestion(
         f"{should_lines}\n"
         "- 这些任务本 skill【不应该】处理,但 cc 误触发了(description 过宽):\n"
         f"{should_not_lines}\n\n"
-        "请起草修订后的 description:直接给可用的 description 文本(不要 markdown 标题、"
+        "请在 suggestion 字段给出修订后的 description 文本(可直接照用,不要 markdown 标题、"
         "不要「以下是」之类开场),让它能触发上面「应该处理」的任务、不触发「不应该处理」"
-        "的任务。然后用一行「理由:」简述改了什么(≤2 句)。"
+        "的任务。文本末尾可附一行「理由:」简述改了什么(≤2 句)。"
     )
 
     usage: dict = {}
     start = time.perf_counter()
-    last_reason: str | None = None
-    for _attempt in range(retries + 1):  # 初次 + retries 次重试
-        try:
-            resp = call_claude(prompt, model=model, timeout=timeout, max_turns=1, on_usage=usage.update)
-        except Exception as exc:
-            last_reason = _classify_call_failure(exc)
-            continue
-        resp = (resp or "").strip()
-        if not resp:
-            last_reason = "空 result(cc 返回空文本,可能拒答/限流)"
-            continue
-        failed_ids = [p["id"] for p in failed_should_trigger] + [p["id"] for p in failed_should_not]
-        toks = (usage.get("input_tokens", 0) or 0) + (usage.get("output_tokens", 0) or 0)
-        return Suggestion(
-            category="llm_rewrite", source="llm", probe_ids=failed_ids, message=resp,
-            tokens=toks, duration_seconds=time.perf_counter() - start,
-        ), usage, None
-    return None, usage, last_reason
+    try:
+        resp = call_llm_with_retry(
+            prompt, model=model, timeout=timeout,
+            schema=_SUGGEST_SCHEMA, on_usage=usage.update, transport="http",
+        )
+    except _LLMRetryExhausted:
+        return None, usage, "LLM 调用重试耗尽(疑似限流)"
+    resp = (resp or "").strip()
+    if not resp:
+        return None, usage, "LLM 返回空响应"
+    try:
+        text = json.loads(resp).get("suggestion") or ""
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        text = resp  # tool_use 偶发非 JSON:整段当文本(诊断文案,不丢)
+    if not text.strip():
+        return None, usage, "LLM 返回空内容"
+    failed_ids = [p["id"] for p in failed_should_trigger] + [p["id"] for p in failed_should_not]
+    toks = 0
+    for _k in ("input_tokens", "output_tokens"):
+        v = usage.get(_k, 0)
+        if isinstance(v, (int, float)):
+            toks += v
+    return Suggestion(
+        category="llm_rewrite", source="llm", probe_ids=failed_ids,
+        message=text, tokens=toks, duration_seconds=time.perf_counter() - start,
+    ), usage, None
