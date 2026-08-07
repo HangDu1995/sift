@@ -382,7 +382,7 @@ def audit(
             f"[dim]LLM tokens:[/dim] input={tu.get('input_tokens', 0)} "
             f"output={tu.get('output_tokens', 0)}"
             + (f" cache_read={cache_read}" if cache_read else "")
-            + f" [dim]· cost=${tu.get('total_cost_usd', 0):.4f} · {tu['calls']} call(s)[/dim]"
+            + f" [dim]· {tu['calls']} call(s)[/dim]"  # cost 暂隐藏:http 路径不记 total_cost_usd,cc/http 混报误导;token 仍全记
         )
     if report.duration_seconds:
         console.print(f"[dim]耗时:[/dim] {report.duration_seconds:.0f}s")

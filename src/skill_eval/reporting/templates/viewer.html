@@ -1546,7 +1546,8 @@
         function _tokSeg(seg, showCost) {
           var inn = (seg.input_tokens || 0), out = (seg.output_tokens || 0);
           var s = "in " + inn.toLocaleString() + " / out " + out.toLocaleString();
-          if (showCost && seg.total_cost_usd) s += " · $" + Number(seg.total_cost_usd).toFixed(4);
+          // cost 暂隐藏:http 路径不记 total_cost_usd,显了是 cc 真值 + http $0 混杂误导;数据仍记,要显恢复下行
+          // if (showCost && seg.total_cost_usd) s += " · $" + Number(seg.total_cost_usd).toFixed(4);
           if (seg.calls) s += " · " + seg.calls + " calls";
           return s;
         }

@@ -210,7 +210,7 @@
       const table = document.getElementById("summary-table");
       const hasTime = allSkills.some(s => s.delta_time != null);
       const hasTokens = allSkills.some(s => s.delta_tokens != null);
-      const hasLLMCost = allSkills.some(s => s.benchmark && s.benchmark.llm_token_usage && s.benchmark.llm_token_usage.total && s.benchmark.llm_token_usage.total.total_cost_usd);
+      const hasLLMCost = false;  // cost 暂隐藏:http 路径不记 total_cost_usd,cc/http 混报误导;"评测 LLM 成本"列不显(下方 :246-250 渲染保留待恢复)
       const hasDuration = allSkills.some(s => s.benchmark && s.benchmark.llm_duration_seconds && s.benchmark.llm_duration_seconds.total);
       const hasComps = allSkills.some(s => s.has_comparisons);
       const hasAnalysis = allSkills.some(s => s.has_analysis);
