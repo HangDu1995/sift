@@ -22,7 +22,11 @@ from pathlib import Path
 
 import pytest
 
-from skill_eval.audit.auditor import _MAX_LLM_IN_BATCH, _LLM_RETRY_MAX, TranscriptAuditor
+from skill_eval.audit import auditor
+from skill_eval.audit.auditor import (
+    _MAX_LLM_IN_BATCH, _LLM_RETRY_MAX, TranscriptAuditor,
+    _judge_batch_with_retry, _RetryExhaustedType,
+)
 from skill_eval.models import InstructionCheck
 from skill_eval.models.audit_models import AuditCategory, AuditMethod, AuditReport, AuditVerdict
 from skill_eval.models.enums import (
@@ -2165,3 +2169,40 @@ def test_judge_batch_with_retry_forwards_transport_to_call_claude(monkeypatch):
         is_unparsed=lambda v: v[0] is None, transport="http",
     )
     assert seen["transports"] == ["cc", "http"]
+
+
+class TestRetryExhaustedCause:
+    """_judge_batch_with_retry 重试耗尽时,哨兵携带最后失败的原因。"""
+
+    def _judge(self, monkeypatch, fake_call):
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake_call)
+        monkeypatch.setattr(auditor.time, "sleep", lambda *a, **k: None)
+        monkeypatch.setattr(auditor.random, "uniform", lambda *a, **k: 0)
+        return _judge_batch_with_retry(
+            "p", None, 600, lambda text, n: [(None, "")], 1,
+            on_progress=None, label="测试", k=1, total=1,
+            is_unparsed=lambda v: v[0] is None, transport="http",
+        )
+
+    def _raise(self, exc):
+        def f(*a, **k):
+            raise exc
+        return f
+
+    def test_rate_limited_cause(self, monkeypatch):
+        from skill_eval.utils import _HttpRateLimited
+        r = self._judge(monkeypatch, self._raise(_HttpRateLimited("429")))
+        assert isinstance(r, _RetryExhaustedType) and r.cause == "rate_limited"
+
+    def test_timeout_cause(self, monkeypatch):
+        r = self._judge(monkeypatch, self._raise(RuntimeError("execution timed out")))
+        assert isinstance(r, _RetryExhaustedType) and r.cause == "timeout"
+
+    def test_unknown_runtime_cause(self, monkeypatch):
+        r = self._judge(monkeypatch, self._raise(RuntimeError("claude CLI down")))
+        assert isinstance(r, _RetryExhaustedType) and r.cause == "unknown"
+
+    def test_parse_failed_cause(self, monkeypatch):
+        # call 成功但 parse 全 None(LLM 返畸形)→ 0-解析重试耗尽
+        r = self._judge(monkeypatch, lambda *a, **k: "not json at all")
+        assert isinstance(r, _RetryExhaustedType) and r.cause == "parse_failed"

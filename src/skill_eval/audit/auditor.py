@@ -74,6 +74,7 @@ from skill_eval.audit.noise import annotate_aggregate_noise, annotate_noise
 from skill_eval.compliance.extractor import InstructionExtractor
 from skill_eval.errors import SkillEvalError
 from skill_eval.evals.opencode import transcript_source
+from skill_eval.execution.error_triage import classify_error
 from skill_eval.models import InstructionCheck, InstructionSource
 from skill_eval.models.audit_models import (
     AuditCategory,
@@ -145,13 +146,18 @@ def _emit(on_progress: ProgressFn | None, msg: str) -> None:
 
 
 # 重试耗尽标记:_judge_batch_with_retry 返回它时,调用方跳过写入、保留预置的全 N/A 兜底。
-# 用独立单例类型(非裸 object()):mypy 可据 `parsed is _RETRY_EXHAUSTED` 把返回值 narrow
-# 成 list,免去调用方 enumerate(parsed) 的类型告精(_judge_batch_with_retry 返回 list | 本类型)。
+# 用独立单例类型(非裸 object()):mypy 可据 isinstance 把 _judge_batch_with_retry 返回值
+# narrow 成 list,免去调用方 enumerate(parsed) 的类型告精(_judge_batch_with_retry 返回 list | 本类型)。
+# 带 cause:耗尽时携带最后失败的原因(第二期附到 UNRESOLVED finding)。调用方用 isinstance(非身份比较)
+# 判别,故从单例改成"每次耗尽构造一个带 cause 的实例"不破坏现有判别。
 class _RetryExhaustedType:
-    __slots__ = ()
+    __slots__ = ("cause",)
+
+    def __init__(self, cause: str = "unknown") -> None:
+        self.cause = cause
 
 
-_RETRY_EXHAUSTED = _RetryExhaustedType()
+_RETRY_EXHAUSTED = _RetryExhaustedType()  # 类型示例(函数耗尽时返回带 cause 的新实例)
 
 
 # ── 结构化输出 schema:判官走 --json-schema,源头约束格式不可畸形 ───────────────
@@ -251,6 +257,7 @@ def _judge_batch_with_retry(
     # (恒 [1/1] 是噪声、看着像坏掉的计数器),多批才带 "批 k/total"。
     batch_tag = f" 批 {k}/{total}" if total > 1 else ""
     prefix = f"[{label}]{batch_tag}"
+    last_cause = "unknown"
     for attempt in range(_LLM_RETRY_MAX + 1):
         if attempt > 0:
             time.sleep(_LLM_RETRY_DELAY * attempt)
@@ -268,6 +275,7 @@ def _judge_batch_with_retry(
         except _HttpRateLimited as exc:
             # 429(账户速率/并发限制):AIMD 乘性减并发 + 退避后重试(同账号同限,cc 也撞、
             # 不回退)。退避加抖动防多线程同步重试。在 RuntimeError 之前(更 specific,免被吞)。
+            last_cause = "rate_limited"  # typed,直接映射(不 classify)
             _LLM_LIMITER.on_throttled()
             _emit(
                 on_progress,
@@ -276,17 +284,19 @@ def _judge_batch_with_retry(
             time.sleep(_RATE_LIMIT_BACKOFF + random.uniform(0, 1))
             continue
         except RuntimeError as exc:
+            last_cause = classify_error(str(exc)).root_cause
             _emit(on_progress, f"  {prefix} 调用失败: {str(exc)[:120]}")
             continue
         _LLM_LIMITER.on_success()
         _emit(on_progress, f"  {prefix} 完成 ⏱ {time.monotonic() - t0:.0f}s")
         parsed = parse_fn(result_text, bn)
         if bn and all(is_unparsed(v) for v in parsed):
+            last_cause = "parse_failed"
             _emit(on_progress, f"  {prefix} ⚠ 0 条解析成功(LLM 输出畸形/截断?),重试…")
             continue
         return parsed
     _emit(on_progress, f"  {prefix} 重试耗尽 → 本批 {bn} 条全兜底 N/A")
-    return _RETRY_EXHAUSTED
+    return _RetryExhaustedType(cause=last_cause)
 
 
 def _run_batches_concurrent(
@@ -1175,6 +1185,7 @@ class TranscriptAuditor:
         transcript_name: str,
         evidence: str,
         category: AuditCategory = AuditCategory.CONDITIONAL,
+        cause: str = "unmentioned",
     ) -> AuditFinding:
         """没判成(UNRESOLVED)finding:LLM 失败 / 解析失败 / 畸形值 / 未提及 / indeterminate 无 reason。
 
@@ -1184,6 +1195,8 @@ class TranscriptAuditor:
         LLM 看了证据真判不了、重跑无益)。method=LLM(该条走了 LLM 路径但没出明确结论)。
         ``audit()`` 据此汇总"建议重跑"警告让人知道本次结果可能不完整。``category`` 默认
         CONDITIONAL,prohibition / step 各自传入对应类别,以反映真实指令类别。
+        ``cause`` 标"为什么没判成"(timeout/rate_limited/parse_failed=基础设施,可重跑;
+        unmentioned=语义;judge_error=判定器崩溃),纯诊断,不改 verdict。默认 unmentioned。
         """
         return AuditFinding(
             instruction_text=inst.instruction_text,
@@ -1195,6 +1208,7 @@ class TranscriptAuditor:
             category=category,
             evidence=evidence,
             transcript=transcript_name,
+            unresolved_cause=cause,
         )
 
     # ---- LLM 场景触发判定 ----------------------------------------------------
