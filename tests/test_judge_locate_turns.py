@@ -46,6 +46,11 @@ def _step_inst(text: str = "Step 1: 读取需求文档") -> InstructionCheck:
     )
 
 
+def _with_cause(mask: list) -> tuple[list, list[str]]:
+    """_llm_judge_* mock 适配:返回 (mask, cause_mask)(全 unmentioned,这些测试不验 cause)。"""
+    return mask, ["unmentioned"] * len(mask)
+
+
 # --- locate_turns=False → finding.turn_refs 恒空(即便 LLM 给了也丢) ------------
 
 
@@ -53,10 +58,10 @@ def test_locate_turns_off_drops_turn_refs_prohibition(monkeypatch) -> None:
     """prohibition:locate_turns=False 时即便 _llm_judge_prohibition 返回带 turn_refs 的 FAIL,
     finding.turn_refs 也恒空(跳过 sanitize/max_turn)。"""
     aud = TranscriptAuditor()
-    monkeypatch.setattr(aud, "_llm_judge_prohibition", lambda *a, **k: [
+    monkeypatch.setattr(aud, "_llm_judge_prohibition", lambda *a, **k: _with_cause([
         (AuditVerdict.FAIL, "在 T5 违规", [5, 9]),
         (AuditVerdict.INDETERMINATE, "T7 矛盾", [7]),
-    ])
+    ]))
     findings = aud._judge_prohibition(
         [_prohibition_inst(), _prohibition_inst("rule 2")],
         "text_no_markers", "t.jsonl", locate_turns=False,
@@ -68,10 +73,10 @@ def test_locate_turns_off_drops_turn_refs_prohibition(monkeypatch) -> None:
 def test_locate_turns_off_drops_turn_refs_step(monkeypatch) -> None:
     """step:locate_turns=False 时 FAIL/INDETERMINATE 的 turn_refs 也恒空。"""
     aud = TranscriptAuditor()
-    monkeypatch.setattr(aud, "_llm_judge_step", lambda *a, **k: [
+    monkeypatch.setattr(aud, "_llm_judge_step", lambda *a, **k: _with_cause([
         (AuditVerdict.FAIL, "T8 该走没走", [8]),
         (AuditVerdict.INDETERMINATE, "T5 矛盾", [5]),
-    ])
+    ]))
     findings = aud._judge_step(
         [_step_inst(), _step_inst("step 2")],
         "text_no_markers", "s.jsonl", locate_turns=False,

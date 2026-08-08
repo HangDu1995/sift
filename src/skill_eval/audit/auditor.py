@@ -615,6 +615,7 @@ class TranscriptAuditor:
                             findings.append(self._make_unresolved_finding(
                                 inst, tp.name,
                                 f"{_label}判定器异常,未出判定 → 没判成", _cat,
+                                cause="judge_error",
                             ))
             findings += self._judge_output(
                 buckets[AuditCategory.OUTPUT], transcript_text, tp.name
@@ -764,7 +765,7 @@ class TranscriptAuditor:
 
         # 未命中全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_applicable 内部分批循环,
         # 不再单次截断 + 超限保守 FAIL)。
-        applicable_mask = self._llm_judge_applicable(
+        applicable_mask, cause_mask = self._llm_judge_applicable(
             [inst for _, inst in unmatched], transcript_scene, model, timeout, on_progress, on_usage,
         )
 
@@ -814,8 +815,10 @@ class TranscriptAuditor:
             else:
                 # None:LLM 未给明确结论(调用失败/解析失败/该条未被提及/indeterminate 无 reason)
                 # → 没判成(UNRESOLVED):宁少报不乱报,判不准不报 FAIL,FAIL 只留给 LLM 明确判"该做没做"。
+                # cause 来自批级失败(infra)或默认 unmentioned(语义),纯诊断附因,不改 verdict。
                 findings[orig_i] = self._make_unresolved_finding(
-                    inst, transcript_name, "LLM 判定失败,无法确证是否该触发 → 没判成"
+                    inst, transcript_name, "LLM 判定失败,无法确证是否该触发 → 没判成",
+                    cause=cause_mask[local_pos],
                 )
 
         return [f for f in findings if f is not None]
@@ -862,7 +865,7 @@ class TranscriptAuditor:
 
         # 全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_prohibition 内部分批循环)。
         # locate_turns 透传:False 时 prompt 不含 turn 引用规则、不要求 LLM 输出 turn_refs。
-        violated_mask = self._llm_judge_prohibition(
+        violated_mask, cause_mask = self._llm_judge_prohibition(
             instructions, transcript_text, model, timeout, on_progress, on_usage,
             locate_turns=locate_turns,
         )
@@ -923,6 +926,7 @@ class TranscriptAuditor:
                 findings[i] = self._make_unresolved_finding(
                     inst, transcript_name, "LLM 判定失败,无法确证是否违规 → 没判成",
                     category=AuditCategory.PROHIBITION,
+                    cause=cause_mask[i],
                 )
 
         return [f for f in findings if f is not None]
@@ -972,7 +976,7 @@ class TranscriptAuditor:
 
         # 全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_step 内部分批循环)。
         # locate_turns 透传:False 时 prompt 不含 turn 引用规则、tool_section 无 [T{idx}]。
-        verdict_mask = self._llm_judge_step(
+        verdict_mask, cause_mask = self._llm_judge_step(
             instructions, transcript_text, model, timeout, tool_trace, on_progress, on_usage,
             locate_turns=locate_turns,
         )
@@ -1045,6 +1049,7 @@ class TranscriptAuditor:
                 findings[i] = self._make_unresolved_finding(
                     inst, transcript_name, "LLM 判定失败,无法确证是否走过 → 没判成",
                     category=AuditCategory.STEP,
+                    cause=cause_mask[i],
                 )
 
         return [f for f in findings if f is not None]
@@ -1231,14 +1236,19 @@ class TranscriptAuditor:
         timeout: int,
         on_progress: ProgressFn | None = None,
         on_usage: Callable[[dict], None] | None = None,
-    ) -> list[tuple[AuditVerdict | None, str]]:
+    ) -> tuple[list[tuple[AuditVerdict | None, str]], list[str]]:
         """分批 call_claude 判每条未命中指令在该场景是否"该触发"(每批 _MAX_LLM_IN_BATCH(10) 条,处理全部)。
 
-        返回与 candidates 等长的列表,每元素 ``(verdict, reason)``:
-        - (FAIL, "")     = 该触发(该做没做)
-        - (NA, reason)   = 不涉及(场景不触发,带 LLM 给的"为何不涉及";空则调用方退兜底套话)
-        - (INDETERMINATE, reason) = 判不准(LLM 看了场景但证据真矛盾/缺失,带具体 reason)
-        - (None, "")     = 没判成(调用/解析失败/未提及/indeterminate 无 reason)
+        返回 ``(mask, cause_mask)``,均与 candidates 等长:
+
+        - ``mask`` 每元素 ``(verdict, reason)``:
+          - (FAIL, "")     = 该触发(该做没做)
+          - (NA, reason)   = 不涉及(场景不触发,带 LLM 给的"为何不涉及";空则调用方退兜底套话)
+          - (INDETERMINATE, reason) = 判不准(LLM 看了场景但证据真矛盾/缺失,带具体 reason)
+          - (None, "")     = 没判成(调用/解析失败/未提及/indeterminate 无 reason)
+        - ``cause_mask`` 每元素 str(verdict 为 None 时读,附到 UNRESOLVED finding):
+          批级失败(耗尽/异常)覆写成 infra cause(timeout/rate_limited/parse_failed/…),
+          默认 "unmentioned"(批成功但该条 None = LLM 未提及)。
 
         按 ``_MAX_LLM_IN_BATCH`` 分批循环:每批独立 call_claude + ``_parse_applicable``,
         合并成完整 mask(长度=len(candidates))。批内 prompt 的 index 从 0 计(本地 index),
@@ -1246,11 +1256,12 @@ class TranscriptAuditor:
         写回全量 mask 的对应区段——**绝不**用批内 index 直接当下标(会错位/覆盖)。
         某批调用异常(RuntimeError)→ 先重试 ``_LLM_RETRY_MAX`` 次,仍失败则该批保持
         (None, "")(调用方标 UNRESOLVED + audit 汇总"建议重跑"警告),其余批照常处理。
-        空 candidates → range 空 → 不调 LLM,返回 [](调用方 ``_judge_conditional`` 已在
+        空 candidates → range 空 → 不调 LLM,返回 ([], [])(调用方 ``_judge_conditional`` 已在
         unmatched 为空时短路,这里作兜底)。
         """
         n = len(candidates)
         mask: list[tuple[AuditVerdict | None, str]] = [(None, "")] * n
+        cause_mask: list[str] = ["unmentioned"] * n  # 批成功但该条 None(未提及)的默认 cause
         total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
         # 先攒齐所有批次的 prompt(build-only),再统一交 _run_batches_concurrent 并发跑
         # (同类多批并发;全局在飞 call_claude 由 _LLM_SEMAPHORE 门控)。
@@ -1281,7 +1292,7 @@ class TranscriptAuditor:
                 '"reason": "applicable=false 时必填(写为何场景不涉及该指令);indeterminate 时必填(写具体矛盾/缺失)"}\n'
             )
             specs.append((start, bn, k, prompt))
-        successes, _failures = _run_batches_concurrent(
+        successes, failures = _run_batches_concurrent(
             specs, self._parse_applicable, model, timeout, on_progress, on_usage,
             "条件性", total, lambda v: v[0] is None,
             schema=_APPLICABLE_SCHEMA,
@@ -1290,7 +1301,10 @@ class TranscriptAuditor:
         for start, parsed in successes:
             for j, val in enumerate(parsed):
                 mask[start + j] = val  # 本地 j → 全量 start+j(批间 index 映射)
-        return mask
+        for start, bn, cause in failures:
+            for j in range(bn):
+                cause_mask[start + j] = cause  # 批级失败(耗尽/异常)覆写成 infra cause
+        return mask, cause_mask
 
     @staticmethod
     def _parse_applicable(text: str, n: int) -> list[tuple[AuditVerdict | None, str]]:
@@ -1555,14 +1569,18 @@ class TranscriptAuditor:
         on_usage: Callable[[dict], None] | None = None,
         *,
         locate_turns: bool = False,
-    ) -> list[tuple[AuditVerdict | None, str, list[int]]]:
+    ) -> tuple[list[tuple[AuditVerdict | None, str, list[int]]], list[str]]:
         """分批 call_claude 判每条禁令在本次执行里是否被违反(每批 _MAX_LLM_IN_BATCH(10) 条,处理全部)。
 
-        返回与 candidates 等长的列表,每元素 ``(verdict, evidence, turn_refs_raw)``:
-        - (FAIL, ev, tr)          = 已违反
-        - (PASS, ev, tr)          = 未违反
-        - (INDETERMINATE, ev, tr) = 判不准(LLM 看了证据真矛盾/缺失,带具体 evidence)
-        - (None, "", [])          = 没判成(调用/解析失败/未提及/畸形值/indeterminate 无 evidence)
+        返回 ``(results, cause_mask)``,均与 candidates 等长:
+
+        - ``results`` 每元素 ``(verdict, evidence, turn_refs_raw)``:
+          - (FAIL, ev, tr)          = 已违反
+          - (PASS, ev, tr)          = 未违反
+          - (INDETERMINATE, ev, tr) = 判不准(LLM 看了证据真矛盾/缺失,带具体 evidence)
+          - (None, "", [])          = 没判成(调用/解析失败/未提及/畸形值/indeterminate 无 evidence)
+        - ``cause_mask`` 每元素 str(verdict 为 None 时读):批级失败覆写成 infra cause,
+          默认 "unmentioned"(批成功但该条 None = LLM 未提及)。
 
         ``turn_refs_raw`` 是 LLM 输出的原样引用(未 sanitize,可能含垃圾);``_judge_prohibition``
         调 ``_sanitize_turn_refs`` 后验过滤后,只在 FAIL/INDETERMINATE finding 上挂。
@@ -1571,10 +1589,11 @@ class TranscriptAuditor:
         批内 index 从 0 计、结果按 ``results[start:start+bn]`` 写回全量(批间 index 映射,
         绝不用批内 index 直接当下标)。某批 RuntimeError → 先重试 ``_LLM_RETRY_MAX`` 次,
         仍失败则该批保持 (None, "", [])(调用方标 UNRESOLVED + "建议重跑"警告),
-        其余批继续。空 candidates → 不调 LLM,返回 []。
+        其余批继续。空 candidates → 不调 LLM,返回 ([], [])。
         """
         n = len(candidates)
         results: list[tuple[AuditVerdict | None, str, list[int]]] = [(None, "", [])] * n
+        cause_mask: list[str] = ["unmentioned"] * n
         total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
         # 先攒齐所有批次的 prompt,再统一交 _run_batches_concurrent 并发跑(同类多批并发)。
         specs: list[tuple[int, int, int, str]] = []
@@ -1618,7 +1637,7 @@ class TranscriptAuditor:
                 "}\n"
             )
             specs.append((start, bn, k, prompt))
-        successes, _failures = _run_batches_concurrent(
+        successes, failures = _run_batches_concurrent(
             specs, self._parse_prohibition, model, timeout, on_progress, on_usage,
             "禁令", total, lambda v: v[0] is None,
             schema=_PROHIBITION_SCHEMA,
@@ -1627,7 +1646,10 @@ class TranscriptAuditor:
         for start, parsed in successes:
             for j, val in enumerate(parsed):
                 results[start + j] = val  # 本地 j → 全量 start+j
-        return results
+        for start, bn, cause in failures:
+            for j in range(bn):
+                cause_mask[start + j] = cause
+        return results, cause_mask
 
     @staticmethod
     def _parse_prohibition(
@@ -1695,15 +1717,19 @@ class TranscriptAuditor:
         on_usage: Callable[[dict], None] | None = None,
         *,
         locate_turns: bool = False,
-    ) -> list[tuple[AuditVerdict | None, str, list[int]]]:
+    ) -> tuple[list[tuple[AuditVerdict | None, str, list[int]]], list[str]]:
         """分批 call_claude 判每个步骤在本次执行里是否被走过(每批 _MAX_LLM_IN_BATCH(10) 条,处理全部)。
 
-        返回与 candidates 等长的列表,每元素 ``(verdict, evidence, turn_refs_raw)``:
-        - (PASS, ev, tr)          = 走过
-        - (FAIL, ev, tr)          = 该走没走
-        - (NA, ev, tr)            = 场景不涉及
-        - (INDETERMINATE, ev, tr) = 判不准(LLM 看了证据真矛盾/缺失,带具体 evidence)
-        - (None, "", [])          = 没判成(调用/解析失败/未提及/未知 verdict/非字符串/indeterminate 无 evidence)
+        返回 ``(results, cause_mask)``,均与 candidates 等长:
+
+        - ``results`` 每元素 ``(verdict, evidence, turn_refs_raw)``:
+          - (PASS, ev, tr)          = 走过
+          - (FAIL, ev, tr)          = 该走没走
+          - (NA, ev, tr)            = 场景不涉及
+          - (INDETERMINATE, ev, tr) = 判不准(LLM 看了证据真矛盾/缺失,带具体 evidence)
+          - (None, "", [])          = 没判成(调用/解析失败/未提及/未知 verdict/非字符串/indeterminate 无 evidence)
+        - ``cause_mask`` 每元素 str(verdict 为 None 时读):批级失败覆写成 infra cause,
+          默认 "unmentioned"(批成功但该条 None = LLM 未提及)。
 
         ``turn_refs_raw`` 是 LLM 输出的原样引用(未 sanitize);``_judge_step`` 调
         ``_sanitize_turn_refs`` 后验过滤后,只在 FAIL/INDETERMINATE finding 上挂。
@@ -1712,10 +1738,11 @@ class TranscriptAuditor:
         批内 index 从 0 计、结果按 ``results[start:start+bn]`` 写回全量(批间 index 映射,
         绝不用批内 index 直接当下标)。某批 RuntimeError → 先重试 ``_LLM_RETRY_MAX`` 次,
         仍失败则该批保持 (None, "", [])(调用方标 UNRESOLVED + "建议重跑"警告),
-        其余批继续。空 candidates → 不调 LLM,返回 []。
+        其余批继续。空 candidates → 不调 LLM,返回 ([], [])。
         """
         n = len(candidates)
         results: list[tuple[AuditVerdict | None, str, list[int]]] = [(None, "", [])] * n
+        cause_mask: list[str] = ["unmentioned"] * n
         total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
         # 先攒齐所有批次的 prompt,再统一交 _run_batches_concurrent 并发跑(同类多批并发)。
         specs: list[tuple[int, int, int, str]] = []
@@ -1787,7 +1814,7 @@ class TranscriptAuditor:
                 "}\n"
             )
             specs.append((start, bn, k, prompt))
-        successes, _failures = _run_batches_concurrent(
+        successes, failures = _run_batches_concurrent(
             specs, self._parse_step, model, timeout, on_progress, on_usage,
             "步骤", total, lambda v: v[0] is None,
             schema=_STEP_SCHEMA,
@@ -1796,7 +1823,10 @@ class TranscriptAuditor:
         for start, parsed in successes:
             for j, val in enumerate(parsed):
                 results[start + j] = val  # 本地 j → 全量 start+j
-        return results
+        for start, bn, cause in failures:
+            for j in range(bn):
+                cause_mask[start + j] = cause
+        return results, cause_mask
 
     @staticmethod
     def _parse_step(

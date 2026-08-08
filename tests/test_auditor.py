@@ -222,6 +222,7 @@ class TestUnmatchedLlm:
 
         f = findings[0]
         assert f.verdict == AuditVerdict.UNRESOLVED  # 不报 FAIL,标 UNRESOLVED(没判成)
+        assert f.unresolved_cause == "unknown"  # "claude CLI down" 未命中模式 → unknown
         assert f.category == AuditCategory.CONDITIONAL
         assert f.method == AuditMethod.LLM  # 低置信度(判不准兜底,非 LLM 明确判 N/A)
         assert "无法确证" in f.evidence
@@ -2248,3 +2249,68 @@ class TestRunBatchesReturnsFailures:
         successes, failures = self._run(monkeypatch, lambda p, *a, **k: [{}], specs)
         assert successes == [(0, [{}])]
         assert failures == []
+
+
+class TestUnresolvedCauseThreading:
+    """红线 + 贯通:UNRESOLVED finding 带 infra cause;非 UNRESOLVED 恒 None。"""
+
+    def test_runtime_error_unknown_cause(self, monkeypatch):
+        """call_claude 持续 RuntimeError(未命中模式)→ UNRESOLVED,cause=unknown。"""
+        def boom(*a, **k):
+            raise RuntimeError("claude CLI down")
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        monkeypatch.setattr(auditor.time, "sleep", lambda *a, **k: None)  # 重试退避免真等(3s×2)
+        f = TranscriptAuditor()._judge_conditional([_tool_inst()], [], "场景", "t.jsonl")[0]
+        assert f.verdict == AuditVerdict.UNRESOLVED
+        assert f.unresolved_cause == "unknown"
+
+    def test_timeout_cause(self, monkeypatch):
+        def boom(*a, **k):
+            raise RuntimeError("execution timed out after 600s")
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        monkeypatch.setattr(auditor.time, "sleep", lambda *a, **k: None)
+        f = TranscriptAuditor()._judge_conditional([_tool_inst()], [], "场景", "t.jsonl")[0]
+        assert f.verdict == AuditVerdict.UNRESOLVED
+        assert f.unresolved_cause == "timeout"
+
+    def test_rate_limited_cause(self, monkeypatch):
+        from skill_eval.utils import _HttpRateLimited
+        def boom(*a, **k):
+            raise _HttpRateLimited("429")
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        monkeypatch.setattr(auditor.time, "sleep", lambda *a, **k: None)
+        monkeypatch.setattr(auditor.random, "uniform", lambda *a, **k: 0)
+        f = TranscriptAuditor()._judge_conditional([_tool_inst()], [], "场景", "t.jsonl")[0]
+        assert f.verdict == AuditVerdict.UNRESOLVED
+        assert f.unresolved_cause == "rate_limited"
+
+    def test_parse_failed_cause(self, monkeypatch):
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude",
+                            lambda *a, **k: "not json at all")
+        monkeypatch.setattr(auditor.time, "sleep", lambda *a, **k: None)  # 0-解析重试退避免真等
+        f = TranscriptAuditor()._judge_conditional([_tool_inst()], [], "场景", "t.jsonl")[0]
+        assert f.verdict == AuditVerdict.UNRESOLVED
+        assert f.unresolved_cause == "parse_failed"
+
+    def test_cause_only_on_unresolved(self, monkeypatch):
+        """红线:FAIL finding 的 unresolved_cause 恒 None。"""
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude",
+                            lambda *a, **k: '[{"index": 0, "applicable": true}]')
+        f = TranscriptAuditor()._judge_conditional([_tool_inst()], [], "场景", "t.jsonl")[0]
+        assert f.verdict == AuditVerdict.FAIL
+        assert f.unresolved_cause is None
+
+    def test_unmentioned_when_llm_omits_one_in_batch(self, monkeypatch):
+        """批成功但 LLM 只提了部分指令 → 未被提及的那条 UNRESOLVED,cause=unmentioned(语义,非 infra)。
+
+        单条 + LLM 返空数组会走 0-解析重试(parse_failed),触发不了 unmentioned。
+        unmentioned 需:多指令同批、LLM 解出部分、漏掉的部分留 None → 批成功(非全 None)
+        → 漏的那条 cause_mask 保持默认 unmentioned。
+        """
+        monkeypatch.setattr("skill_eval.audit.auditor.call_claude",
+                            lambda *a, **k: '[{"index": 0, "applicable": true}]')  # 只提 index 0
+        findings = TranscriptAuditor()._judge_conditional(
+            [_tool_inst(), _tool_inst()], [], "场景", "t.jsonl")
+        assert findings[0].verdict == AuditVerdict.FAIL        # 被提及 → 判定
+        assert findings[1].verdict == AuditVerdict.UNRESOLVED  # 未提及 → 没判成
+        assert findings[1].unresolved_cause == "unmentioned"

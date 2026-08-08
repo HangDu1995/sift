@@ -45,6 +45,15 @@ def _step_inst(text: str = "Step 1: 读取需求文档") -> InstructionCheck:
     )
 
 
+def _with_cause(mask: list) -> tuple[list, list[str]]:
+    """_llm_judge_* mock 适配:返回 (mask, cause_mask)。
+
+    _llm_judge_* 第二期起返回 (mask, cause_mask);这些测试不验 UNRESOLVED/cause,
+    用全 unmentioned 填满 cause_mask(同长),仅保形状正确。
+    """
+    return mask, ["unmentioned"] * len(mask)
+
+
 # --- _sanitize_turn_refs (pure function) --------------------------------------
 
 
@@ -195,11 +204,11 @@ def test_judge_prohibition_attaches_sanitized_turn_refs(monkeypatch) -> None:
     aud = _auditor()
     # transcript_text 内含 [T1] / [T20] 标记 → _max_turn_from_text = 20
     ttext = "[T1] assistant: 开始\n[T20] assistant: 结束"
-    monkeypatch.setattr(aud, "_llm_judge_prohibition", lambda *a, **k: [
+    monkeypatch.setattr(aud, "_llm_judge_prohibition", lambda *a, **k: _with_cause([
         (AuditVerdict.FAIL, "在 T15 违规", [15, 999, -1]),    # 999>20 丢,-1<1 丢 → [15]
         (AuditVerdict.PASS, "ok", [3]),                         # PASS → 清空 []
         (AuditVerdict.INDETERMINATE, "T12 矛盾", [12]),         # INDETERMINATE → 保留 [12]
-    ])
+    ]))
     insts = [_prohibition_inst(text=f"rule {i}") for i in range(3)]
 
     findings = aud._judge_prohibition(insts, ttext, "p.jsonl", locate_turns=True)
@@ -214,9 +223,9 @@ def test_judge_prohibition_segment_absence_empty(monkeypatch) -> None:
     """段级缺席的 FAIL:LLM 给空 turn_refs(全程未发生)→ finding.turn_refs 保持空。"""
     aud = _auditor()
     ttext = "[T1] assistant: 开始\n[T5] assistant: 结束"
-    monkeypatch.setattr(aud, "_llm_judge_prohibition", lambda *a, **k: [
+    monkeypatch.setattr(aud, "_llm_judge_prohibition", lambda *a, **k: _with_cause([
         (AuditVerdict.FAIL, "全程未发生违规行为", []),
-    ])
+    ]))
 
     findings = aud._judge_prohibition([_prohibition_inst()], ttext, "p.jsonl", locate_turns=True)
 
@@ -232,9 +241,9 @@ def test_judge_step_segment_absence_empty(monkeypatch) -> None:
     """
     aud = _auditor()
     ttext = "[T1] assistant: 开始\n[T5] assistant: 结束"
-    monkeypatch.setattr(aud, "_llm_judge_step", lambda *a, **k: [
+    monkeypatch.setattr(aud, "_llm_judge_step", lambda *a, **k: _with_cause([
         (AuditVerdict.FAIL, "全程未走这步", []),
-    ])
+    ]))
 
     findings = aud._judge_step([_step_inst()], ttext, "s.jsonl", locate_turns=True)
 
@@ -246,9 +255,9 @@ def test_judge_prohibition_no_turn_markers_still_runs(monkeypatch) -> None:
     """transcript_text 无 [T{idx}] 标记(max_turn=0)→ sanitize 全丢,FAIL 仍判但 turn_refs=[]。"""
     aud = _auditor()
     ttext = "纯文本执行记录,无 turn 标记"
-    monkeypatch.setattr(aud, "_llm_judge_prohibition", lambda *a, **k: [
+    monkeypatch.setattr(aud, "_llm_judge_prohibition", lambda *a, **k: _with_cause([
         (AuditVerdict.FAIL, "T5 违规", [5]),   # max_turn=0 → 5 全丢
-    ])
+    ]))
 
     findings = aud._judge_prohibition([_prohibition_inst()], ttext, "p.jsonl", locate_turns=True)
 
@@ -260,12 +269,12 @@ def test_judge_step_attaches_sanitized_turn_refs(monkeypatch) -> None:
     """step 的 FAIL/INDETERMINATE 挂 sanitized turn_refs;PASS/NA 不挂。"""
     aud = _auditor()
     ttext = "[T1] assistant: 开始\n[T10] assistant: 结束"
-    monkeypatch.setattr(aud, "_llm_judge_step", lambda *a, **k: [
+    monkeypatch.setattr(aud, "_llm_judge_step", lambda *a, **k: _with_cause([
         (AuditVerdict.FAIL, "T8 该走没走", [8, 999, 99]),  # 999/99>10 丢 → [8]
         (AuditVerdict.PASS, "走过", [2]),                   # PASS → []
         (AuditVerdict.NA, "不涉及", []),                    # NA → []
         (AuditVerdict.INDETERMINATE, "T5 矛盾", [5]),       # INDETERMINATE → [5]
-    ])
+    ]))
     insts = [_step_inst(text=f"step {i}") for i in range(4)]
 
     findings = aud._judge_step(insts, ttext, "s.jsonl", locate_turns=True)
@@ -281,9 +290,9 @@ def test_judge_step_unresolved_keeps_empty(monkeypatch) -> None:
     """没判成(UNRESOLVED)的 finding.turn_refs 始终空(没出判定,谈不上指向哪个 turn)。"""
     aud = _auditor()
     ttext = "[T1] assistant: 开始"
-    monkeypatch.setattr(aud, "_llm_judge_step", lambda *a, **k: [
+    monkeypatch.setattr(aud, "_llm_judge_step", lambda *a, **k: _with_cause([
         (None, "", []),  # 没判成
-    ])
+    ]))
 
     findings = aud._judge_step([_step_inst()], ttext, "s.jsonl", locate_turns=True)
 
@@ -300,9 +309,9 @@ def test_conditional_finding_has_empty_turn_refs(monkeypatch) -> None:
     aud = _auditor()
     # transcript_scene(非 transcript_text)——conditional 用 user_turns 拼的 scene,
     # 本就不带 [T{idx}] 标记;即便带,conditional 也不挂 turn_refs。
-    monkeypatch.setattr(aud, "_llm_judge_applicable", lambda *a, **k: [
+    monkeypatch.setattr(aud, "_llm_judge_applicable", lambda *a, **k: _with_cause([
         (AuditVerdict.FAIL, ""),  # 该做没做(segment-level)
-    ])
+    ]))
 
     findings = aud._judge_conditional(
         [InstructionCheck(
