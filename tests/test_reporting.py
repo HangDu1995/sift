@@ -61,6 +61,24 @@ class TestBuildRunConfigExtraction:
         assert result["eval_id"] == 10
         assert result["run_number"] == 3
 
+    def test_build_run_fills_error_triage_from_grading_error(self, tmp_path: Path):
+        run_dir = self.build_run_dir(tmp_path, "with_skill/run-1", with_grading=False)
+        (run_dir / "grading.json").write_text(json.dumps({
+            "summary": {"pass_rate": 0.0, "passed": 0, "failed": 1, "total": 1},
+            "expectations": [],
+            "error": "claude -p timed out after 120s (killed process tree)",
+        }))
+        result = _build_run(tmp_path, run_dir)
+        assert result is not None
+        assert result["error_root_cause"] == "timeout"
+        assert result["error_suggestion"]
+
+    def test_build_run_no_error_yields_none(self, tmp_path: Path):
+        run_dir = self.build_run_dir(tmp_path, "with_skill/run-1")  # 无 error 字段
+        result = _build_run(tmp_path, run_dir)
+        assert result is not None
+        assert result.get("error_root_cause") is None
+
     def test_nested_with_retry(self, tmp_path: Path):
         run_dir = self.build_run_dir(tmp_path, "with_skill/eval-3/run-1-retry-2")
         result = _build_run(tmp_path, run_dir)

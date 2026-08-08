@@ -14,6 +14,8 @@ import webbrowser
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
+from skill_eval.execution.error_triage import classify_error
+
 METADATA_FILES = {"transcript.md", "user_notes.md", "metrics.json"}
 
 TEXT_EXTENSIONS = {
@@ -180,6 +182,9 @@ def _build_run(root: Path, run_dir: Path) -> dict | None:
         if prev_outputs:
             previous_output = _embed_file(prev_outputs[0])
 
+    error_str = (grading or {}).get("error", "") or ""
+    triage = classify_error(error_str) if error_str else None
+
     return {
         "id": str(run_dir.relative_to(root)),
         "eval_id": eval_id,
@@ -191,6 +196,8 @@ def _build_run(root: Path, run_dir: Path) -> dict | None:
         "compliance": compliance,
         "calibration": calibration,
         "previous_output": previous_output,
+        "error_root_cause": triage.root_cause if triage else None,
+        "error_suggestion": triage.suggestion if triage else None,
     }
 
 

@@ -1418,6 +1418,23 @@
         html += '</div>';
       }
 
+      // ── 失败根因:从 runs 聚合 error_root_cause,无则不显 ──
+      const triageRuns = (EMBEDDED_DATA.runs || []).filter(r => r.error_root_cause);
+      if (triageRuns.length) {
+        const causeCounts = {};
+        const causeSug = {};
+        triageRuns.forEach(r => {
+          causeCounts[r.error_root_cause] = (causeCounts[r.error_root_cause] || 0) + 1;
+          causeSug[r.error_root_cause] = r.error_suggestion || "";
+        });
+        html += '<div style="background:#fdecea;border:1px solid #e57373;border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
+        html += '<div style="font-family:Poppins,sans-serif;font-size:0.8rem;font-weight:600;color:#b71c1c;margin-bottom:0.5rem;">⚠ 失败根因 (' + triageRuns.length + ' 个失败 run)</div>';
+        Object.keys(causeCounts).sort((a, b) => causeCounts[b] - causeCounts[a]).forEach(c => {
+          html += '<div style="font-size:0.75rem;color:#b71c1c;margin-bottom:0.25rem;"><strong>' + causeCounts[c] + '× ' + escapeHtml(c) + '</strong> — ' + escapeHtml(causeSug[c]) + '</div>';
+        });
+        html += '</div>';
+      }
+
       // ── Scorecard (static analysis) ──
       const scorecard = EMBEDDED_DATA.scorecard;
       if (scorecard && (scorecard.checks || scorecard.score !== undefined)) {

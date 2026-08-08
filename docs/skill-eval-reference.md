@@ -276,6 +276,8 @@ output/
   gate.json                  ← 运行 gate 命令后产生(非 run 产出)
 ```
 
+> **失败根因**:run/audit 失败时,从原始 error 自动抽根因类别(timeout / 限流 / CLI 缺失 / 连不上 / 认证 / max_turns / session 不存在)+ 修复建议,免翻 log。三处可见:① `benchmark.json` 的 `runs[].error_root_cause`/`error_suggestion`(**纯诊断字段,不进 pass_rate/compliance 等判决**);② A/B 跑完终端「失败根因汇总」块;③ report.html「失败根因」section。`audit` 命令级失败(transcript 缺失/opencode 超时等)也终端额外打印根因。分不出的标 `unknown` + 原文,不假装分类。
+
 ### `gate` — 通过/失败判决
 
 对已有 benchmark.json 出通过/失败判决。**post-hoc 纯函数**——不重跑 claude、毫秒级、可反复改阈值重判（与 report/audit 一样，只读 run 的产物做后处理，不重新跑题）。
