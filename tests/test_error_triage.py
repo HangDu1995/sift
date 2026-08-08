@@ -1,7 +1,12 @@
 """失败三角化 classify_error 单元测。纯诊断层,不进判决。"""
 from __future__ import annotations
 
-from skill_eval.execution.error_triage import ErrorTriage, classify_error
+from skill_eval.execution.error_triage import (
+    ErrorTriage,
+    classify_error,
+    UNRESOLVED_CAUSE_INFO,
+    unresolved_cause_info,
+)
 
 
 class TestClassifyError:
@@ -69,3 +74,27 @@ class TestClassifyError:
             t = classify_error(text)
             assert t.root_cause == cause, f"{cause}: got {t.root_cause}"
             assert t.suggestion, f"{cause}: empty suggestion"
+
+
+class TestUnresolvedCauseInfo:
+    """UNRESOLVED cause → (标签, 建议) 展示映射(纯展示,不进判决)。"""
+
+    def test_infra_causes_reuse_phase1_suggestion(self) -> None:
+        # 基础设施 cause 复用第一期 classify_error 的 suggestion(非空)
+        for cause in ("timeout", "rate_limited", "connection"):
+            label, sug = unresolved_cause_info(cause)
+            assert label  # 非空标签
+            assert sug    # 复用了第一期 suggestion
+
+    def test_structural_causes_present(self) -> None:
+        assert "parse_failed" in UNRESOLVED_CAUSE_INFO
+        assert "unmentioned" in UNRESOLVED_CAUSE_INFO
+        assert "judge_error" in UNRESOLVED_CAUSE_INFO
+        for c in ("parse_failed", "unmentioned", "judge_error"):
+            label, sug = unresolved_cause_info(c)
+            assert label and sug
+
+    def test_unknown_cause_falls_back(self) -> None:
+        label, sug = unresolved_cause_info("totally_unrecognized")
+        assert label == "未知"
+        assert "请查" in sug  # 兜底建议

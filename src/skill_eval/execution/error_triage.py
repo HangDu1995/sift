@@ -69,3 +69,41 @@ def classify_error(error_str: str) -> ErrorTriage:
         root_cause="unknown",
         suggestion=f"(未识别根因)原文: {snippet} — 请查完整日志 / grading.json / error.txt",
     )
+
+
+# ── UNRESOLVED 根因展示映射(audit 第二期;纯展示,不进判决)──────────────
+# 复用第一期 _PATTERNS 的 cause→suggestion(派生,零行为变更),并补第二期结构性 cause。
+# 基础设施 cause 与第一期 classify_error 同名(timeout/rate_limited/…),建议直接复用;
+# parse_failed/unmentioned/judge_error 是 audit UNRESOLVED 独有、非 error 字符串模式,在此直定。
+_CAUSE_SUGGESTIONS: dict[str, str] = {cause: sug for _re, cause, sug in _PATTERNS}
+
+_CAUSE_LABEL: dict[str, str] = {
+    "timeout": "LLM 超时",
+    "rate_limited": "限流",
+    "connection": "连接异常",
+    "cli_missing": "CLI 缺失",
+    "auth": "认证失败",
+    "max_turns": "超过轮数上限",
+    "session_not_found": "session 丢失",
+    "parse_failed": "LLM 输出畸形/截断",
+    "unmentioned": "LLM 未给该条结论",
+    "judge_error": "判定器异常(代码 bug)",
+}
+
+# 注:"unknown" 不列 → 落 unresolved_cause_info 的默认兜底,建议恒非空。
+UNRESOLVED_CAUSE_INFO: dict[str, tuple[str, str]] = {
+    # 基础设施 cause:c 必在 _PATTERNS 里,直取 suggestion(不兜空)
+    c: (_CAUSE_LABEL.get(c, c), _CAUSE_SUGGESTIONS[c])
+    for c in ("timeout", "rate_limited", "connection", "cli_missing",
+              "auth", "max_turns", "session_not_found")
+}
+UNRESOLVED_CAUSE_INFO.update({
+    "parse_failed": (_CAUSE_LABEL["parse_failed"], "批调用成功但解析全空,多为瞬态——建议重跑"),
+    "unmentioned": (_CAUSE_LABEL["unmentioned"], "transcript 未覆盖或 LLM 未提及,重跑可能无益——检查出题/transcript"),
+    "judge_error": (_CAUSE_LABEL["judge_error"], "非 LLM 调用失败,请查完整日志/上报"),
+})
+
+
+def unresolved_cause_info(cause: str) -> tuple[str, str]:
+    """UNRESOLVED cause → (中文标签, 建议);未知 cause 兜底(不假装认识)。"""
+    return UNRESOLVED_CAUSE_INFO.get(cause, ("未知", f"(未识别 cause: {cause})请查日志"))
