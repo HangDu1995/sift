@@ -30,6 +30,7 @@ from skill_eval.concurrency import (
 )
 from skill_eval.cli.main import app, console
 from skill_eval.errors import SkillEvalError
+from skill_eval.execution.error_triage import classify_error
 from skill_eval.evals.opencode_db import export_session, list_sessions, resolve_session
 from skill_eval.evals.structured import is_structured_records, load_structured_records
 from skill_eval.models.audit_models import AuditVerdict
@@ -334,6 +335,8 @@ def audit(
         )
     except SkillEvalError as exc:
         console.print(f"[red]Error:[/red] {exc}")
+        triage = classify_error(str(exc))
+        console.print(f"[yellow]根因:[/yellow] {triage.root_cause} — {triage.suggestion}")
         raise typer.Exit(code=exc.exit_code)
     finally:
         # --db 导出的临时 json:引擎读完即清(用户要留存走手工 opencode export)

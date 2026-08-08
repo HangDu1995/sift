@@ -98,6 +98,32 @@ class _FakeAuditor:
         return _fake_report()
 
 
+def test_audit_skill_eval_error_prints_triage(monkeypatch, tmp_path):
+    """audit 撞 SkillEvalError(命令级)→ except 里 classify 打印根因+建议。"""
+    from skill_eval.errors import SkillEvalError
+
+    class _BoomAuditor:
+        def audit(self, *a, **kw):
+            raise SkillEvalError("opencode session export 超时(timeout 60s)")
+
+    monkeypatch.setattr(
+        "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _BoomAuditor()
+    )
+
+    sp = _skill_dir(tmp_path)
+    tp = _transcript(tmp_path)
+    out = tmp_path / "out"
+
+    r = runner.invoke(
+        app,
+        ["audit", str(sp), "--transcript", str(tp), "-o", str(out)],
+    )
+    assert r.exit_code != 0  # SkillEvalError → 非零退出
+    assert "超时" in r.output or "timeout" in r.output  # 原始消息保留
+    # triage 建议(timeout 类 → --timeout/--max-turns)
+    assert "--timeout" in r.output or "--max-turns" in r.output
+
+
 def test_audit_writes_report_and_prints_summary(monkeypatch, tmp_path):
     fake = _FakeAuditor()
     monkeypatch.setattr(
