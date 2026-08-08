@@ -92,6 +92,37 @@ class TestAuditFinding:
                 source="CONSTRAINT",
             )
 
+    def test_unresolved_cause_defaults_none(self) -> None:
+        """新字段默认 None,向后兼容(旧 JSON / 非 UNRESOLVED finding)。"""
+        f = AuditFinding(
+            instruction_text="x", source="CONSTRAINT",
+            verdict=AuditVerdict.PASS, method=AuditMethod.LLM,
+            category=AuditCategory.PROHIBITION, evidence="e", transcript="t.jsonl",
+        )
+        assert f.unresolved_cause is None
+
+    def test_unresolved_cause_settable(self) -> None:
+        f = AuditFinding(
+            instruction_text="x", source="CONSTRAINT",
+            verdict=AuditVerdict.UNRESOLVED, method=AuditMethod.LLM,
+            category=AuditCategory.PROHIBITION, evidence="e", transcript="t.jsonl",
+            unresolved_cause="timeout",
+        )
+        assert f.unresolved_cause == "timeout"
+
+
+class TestAuditReportUnresolvedBreakdown:
+    def test_default_empty(self) -> None:
+        r = AuditReport(skill_name="s", transcripts=[], summary={}, findings=[])
+        assert r.unresolved_breakdown == {}
+
+    def test_legacy_json_no_field_loads_as_empty(self) -> None:
+        # 旧 report JSON 无 unresolved_breakdown 字段 → 默认 {}
+        legacy = {"skill_name": "s", "transcripts": [], "summary": {},
+                  "findings": []}
+        r = AuditReport.model_validate(legacy)
+        assert r.unresolved_breakdown == {}
+
 
 class TestAuditReport:
     """AuditReport 构造 + 默认值 + 序列化往返。"""

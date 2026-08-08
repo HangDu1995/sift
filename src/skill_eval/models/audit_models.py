@@ -112,6 +112,10 @@ class AuditFinding(BaseModel):
     # 序号语义:cc / structured 切片保留会话全局序号;opencode 切片经 message 子集往返重建、按段内
     # 位置 re-stamp,seq 是段内 local(非会话全局)。旧 JSON 无此字段 → 空(向后兼容)。
     turn_refs: list[int] = Field(default_factory=list)
+    # 失败根因分类(纯诊断,第二期):UNRESOLVED finding 才设,标"为什么没判成"。
+    # timeout/rate_limited/parse_failed=基础设施(可重跑);unmentioned=语义(transcript 未覆盖,
+    # 重跑可能无益);judge_error=判定器自身崩溃。其余 verdict 恒 None。旧 JSON → None(向后兼容)。
+    unresolved_cause: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -188,3 +192,6 @@ class AuditReport(BaseModel):
     # 其余阶段 calls=0 是本地程序常态,note 为空。
     # 各阶段 seconds 之和 ≈ duration_seconds(rebuild/judge 在 transcript 循环里累加)。空 = 旧 report。
     stage_breakdown: list[dict] = Field(default_factory=list)
+    # UNRESOLVED findings 按 unresolved_cause 的聚合计数(cause → count),诊断"没判成"的根因分布。
+    # 空 = 无 UNRESOLVED 或旧 report(默认空,向后兼容)。纯诊断,不进任何 gate/判决。
+    unresolved_breakdown: dict[str, int] = Field(default_factory=dict)
