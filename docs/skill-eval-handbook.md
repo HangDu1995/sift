@@ -788,6 +788,8 @@ audit 是诊断工具——它的结果不像 run 那样能靠“消噪”磨出
 - 真模糊 → 报 INDETERMINATE（必须带具体矛盾/缺失证据，空 reason 降级回 UNRESOLVED）；
 - audit 汇总 UNRESOLVED 条数 > 0 时在报告顶部出"建议重跑"警告。
 
+**每条 UNRESOLVED 带根因**（`unresolved_cause`，纯诊断）：`timeout`/`rate_limited`/`parse_failed`/… = **基础设施失败**（重跑常能救回）；`unmentioned` = transcript 未覆盖 / LLM 未提及（**重跑可能无益**）；`judge_error` = 判定器自身异常。终端 + HTML（「没判成根因」块）显根因分布，顶层 `unresolved_breakdown` 聚合——把笼统的"建议重跑"细化成「该重跑 vs 重跑无益」。
+
 记住一句话：**"0 FAIL ≠ 全过"**——要看警告里 UNRESOLVED 是不是 0。没判成的条可能藏着真违规。
 
 ### 7.7 run 内的遵循性 = audit 命令

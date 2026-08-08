@@ -76,3 +76,44 @@ def test_html_segment_absence_empty_turn_refs_no_crash(tmp_path):
     html = out.read_text(encoding="utf-8")
     # 空 turn_refs 嵌入为 [](渲染端 turnBadge 见空即返回 '',不显占位)
     assert '"turn_refs": []' in html
+
+
+def _report_with_unresolved(cause="timeout"):
+    return AuditReport(
+        skill_name="wf",
+        transcripts=["s.jsonl"],
+        summary={"total": 1, "pass": 0, "fail": 0, "na": 0, "unresolved": 1},
+        findings=[
+            AuditFinding(
+                instruction_text="do X", source="CONSTRAINT",
+                verdict=AuditVerdict.UNRESOLVED, category=AuditCategory.PROHIBITION,
+                evidence="e", method=AuditMethod.LLM, transcript="s.jsonl",
+                unresolved_cause=cause,
+            )
+        ],
+        warnings=["1 条指令没判成(建议重跑)"],
+        unresolved_breakdown={cause: 1},
+    )
+
+
+def test_json_serializes_unresolved_cause_and_breakdown():
+    r = _report_with_unresolved("rate_limited")
+    d = json.loads(r.model_dump_json())
+    assert d["findings"][0]["unresolved_cause"] == "rate_limited"
+    assert d["unresolved_breakdown"] == {"rate_limited": 1}
+
+
+def test_html_template_renders_unresolved_breakdown_and_embeds_data():
+    """(①) 模板定义根因分布渲染片段;(②) unresolved_breakdown 嵌入 EMBEDDED_DATA。
+
+    同 turn_refs 测的双层惯例:pytest 不跑浏览器 JS,断模板片段存在 + 数据流入;
+    运行时渲染正确性靠 node --check(Step 5)。
+    """
+    html = AuditReportGenerator().generate_html(_report_with_unresolved("timeout"))
+    # ① 模板定义分布块渲染片段(改前 grep=0 = 真 RED 锚点)
+    assert "没判成根因" in html
+    assert "unresolved_breakdown" in html  # 模板 JS 引用该字段
+    # ② 数据流入 EMBEDDED_DATA(audit_viewer 用 indent=2 → dict 多行,断标量 token 而非整行)
+    assert '"timeout": 1' in html
+    # UNRESOLVED finding 的 cause 也随 model_dump 嵌入(scalar 值随 key 同行)
+    assert '"unresolved_cause": "timeout"' in html

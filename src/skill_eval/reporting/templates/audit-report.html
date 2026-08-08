@@ -177,6 +177,19 @@
         'INDETERMINATE': { cls: 'badge-indeterminate', icon: '?', label: '判不准' },
       };
 
+      // UNRESOLVED cause → 短中文标签(镜像 Python error_triage.UNRESOLVED_CAUSE_INFO 的 label;
+      // suggestion 不进 JS,分布块/标签用 label 即可)。未知 cause 透传原值。纯展示,不进判决。
+      var CAUSE_LABEL = {
+        timeout: 'LLM 超时', rate_limited: '限流', connection: '连接异常',
+        cli_missing: 'CLI 缺失', auth: '认证失败', max_turns: '超过轮数上限',
+        session_not_found: 'session 丢失', parse_failed: 'LLM 输出畸形/截断',
+        unmentioned: 'LLM 未给该条结论', judge_error: '判定器异常'
+      };
+      function causeTagHtml(cause) {
+        if (!cause) return '';
+        return '<span class="src" title="没判成的根因类别(诊断,不改判定)">' + escapeHtml(CAUSE_LABEL[cause] || cause) + '</span>';
+      }
+
       // method(判定方法)→ 标签:程序对账 / LLM。与 verdict(结果)正交:回答"怎么查的"。
       // 旧 confidence 假浮点已废;旧数据无 method 字段时显 "—"。
       function methodTag(m) {
@@ -220,10 +233,12 @@
         var noise = (f.verdict === 'FAIL' && f.noise_label) ? noiseBadge(f.noise_label, f.noise_reasons) : '';
         // turn 定位徽章(turn_refs 非空才显,即 FAIL / INDETERMINATE 违规);放噪声后、method 前,留徽章簇里
         var turn = turnBadge(f.turn_refs, vd.cls);
+        // UNRESOLVED cause 徽章(仅没判成才显,标"为什么没判成"的根因类别);留徽章簇里。
+        var unresolvedCause = (f.verdict === 'UNRESOLVED') ? causeTagHtml(f.unresolved_cause) : '';
         return '<div class="finding-head">' + verdictHtml +
           seqTag +
           '<span class="cat">' + escapeHtml(f.category || '') + '</span>' +
-          srcTag + derived + related + noise + turn +
+          srcTag + derived + related + noise + turn + unresolvedCause +
           methodTag(f.method) + '</div>' +
           renderInstruction(f) +
           '<div class="evidence">' + escapeHtml(f.evidence || '') + '</div>' +
@@ -325,6 +340,19 @@
           '<div id="audit-warnings" class="warnings"><h2>⚠️ 警告</h2><ul>' +
           warns.map(function (x) { return '<li>' + escapeHtml(x) + '</li>'; }).join('') +
           '</ul></div>');
+      }
+
+      // ②b UNRESOLVED 根因分布(诊断:没判成的指令从哪类失败来的;有 unresolved_breakdown 才显)
+      var ubd = EMBEDDED_DATA.unresolved_breakdown || {};
+      var ubdKeys = Object.keys(ubd);
+      if (ubdKeys.length) {
+        ubdKeys.sort(function (a, b) { return ubd[b] - ubd[a]; });  // 计数降序
+        var causeRows = ubdKeys.map(function (c) {
+          var label = CAUSE_LABEL[c] || c;
+          return '<div class="unresolved-cause"><strong>' + ubd[c] + '× ' + escapeHtml(label) + '</strong></div>';
+        }).join('');
+        root.insertAdjacentHTML('beforeend',
+          '<div class="warnings"><h2>○ 没判成根因</h2>' + causeRows + '</div>');
       }
 
       // ③ by_instruction 概要表:有聚合就显(单/多 transcript 都显)。fail 与 N/A 语义不同 → 两张表。
