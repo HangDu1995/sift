@@ -25,7 +25,7 @@ import pytest
 from skill_eval.audit import auditor
 from skill_eval.audit.auditor import (
     _MAX_LLM_IN_BATCH, _LLM_RETRY_MAX, TranscriptAuditor,
-    _judge_batch_with_retry, _RetryExhaustedType,
+    _judge_batch_with_retry, _RetryExhaustedType, _run_batches_concurrent,
 )
 from skill_eval.models import InstructionCheck
 from skill_eval.models.audit_models import AuditCategory, AuditMethod, AuditReport, AuditVerdict
@@ -2206,3 +2206,45 @@ class TestRetryExhaustedCause:
         # call 成功但 parse 全 None(LLM 返畸形)→ 0-解析重试耗尽
         r = self._judge(monkeypatch, lambda *a, **k: "not json at all")
         assert isinstance(r, _RetryExhaustedType) and r.cause == "parse_failed"
+
+
+class TestRunBatchesReturnsFailures:
+    """_run_batches_concurrent 返回 (successes, failures);耗尽批带 cause,异常批=judge_error。"""
+
+    def _run(self, monkeypatch, fake_judge, specs):
+        monkeypatch.setattr(auditor, "_judge_batch_with_retry", fake_judge)
+        successes, failures = _run_batches_concurrent(
+            specs, lambda text, n: [], None, 600, None, None, "测试", len(specs),
+            lambda v: False,
+        )
+        return successes, failures
+
+    def test_successes_and_failures_split(self, monkeypatch):
+        # spec = (start, bn, k, prompt);批2 耗尽(cause=timeout)。3 批 → 走并发分支,
+        # as_completed 完成序不确定 → successes 用 dict 比较(按 start 键,与顺序无关)。
+        specs = [(0, 2, 1, "p1"), (2, 2, 2, "p2"), (4, 1, 3, "p3")]
+
+        def fake(prompt, *a, **k):
+            if prompt == "p2":
+                return _RetryExhaustedType(cause="timeout")
+            return [{"v": prompt}]  # parsed list
+
+        successes, failures = self._run(monkeypatch, fake, specs)
+        assert dict(successes) == {0: [{"v": "p1"}], 4: [{"v": "p3"}]}
+        assert failures == [(2, 2, "timeout")]
+
+    def test_exception_is_judge_error(self, monkeypatch):
+        specs = [(0, 1, 1, "p1")]
+
+        def boom(prompt, *a, **k):
+            raise ValueError("parse_fn bug")
+
+        successes, failures = self._run(monkeypatch, boom, specs)
+        assert successes == []
+        assert failures == [(0, 1, "judge_error")]
+
+    def test_no_failures_when_all_succeed(self, monkeypatch):
+        specs = [(0, 1, 1, "p1")]
+        successes, failures = self._run(monkeypatch, lambda p, *a, **k: [{}], specs)
+        assert successes == [(0, [{}])]
+        assert failures == []

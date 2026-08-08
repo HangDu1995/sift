@@ -311,8 +311,8 @@ def _run_batches_concurrent(
     is_unparsed: Callable[[Any], bool],
     schema: dict | None = None,
     transport: str = "cc",
-) -> list[tuple[int, list]]:
-    """把一类的所有 LLM 批次**并发**跑,返回 ``[(start, parsed)]``(仅成功批)。
+) -> tuple[list[tuple[int, list]], list[tuple[int, int, str]]]:
+    """把一类的所有 LLM 批次**并发**跑,返回 ``(successes, failures)``。
 
     旧实现每类内批次串行 → 一类 N 批 = N × 单批墙钟。本函数把同类的多批铺到本地
     ``ThreadPoolExecutor`` 并发;全局在飞 ``call_claude`` 由 ``_LLM_SEMAPHORE``(在
@@ -322,15 +322,20 @@ def _run_batches_concurrent(
     - 单批(``len(specs) <= 1``)→ 串行,免池开销(也是多数小 skill 的常态)。
     - 多批 → 本地池 ``max_workers=min(len(specs), _MAX_BATCH_CONCURRENT)``,``as_completed`` 回收。
 
-    **重试耗尽的批不进结果**:``_judge_batch_with_retry`` 返回 ``_RETRY_EXHAUSTED`` 时本函数
-    跳过该批(不产出 (start, parsed))→ 调用方 mask 对应区段保持预置的全 (None,"")/None
-    (audit 汇总"建议重跑"警告)。这样调用方无需判哨兵,拿到的 ``parsed`` 恒为 list(mypy 友好)。
+    返回 ``(successes, failures)``:
 
-    每个 spec = ``(start, bn, k, prompt)``:``start`` = 该批在全量 candidates 的起始下标
-    (调用方据此 ``mask[start+j]`` 写回);``bn`` = 本批条数;``k`` = 批序号(进度显示);
-    ``prompt`` = 该批的完整 prompt。返回的 ``parsed`` 为对应批的解析结果列表。
+    - ``successes`` = ``[(start, parsed)]``(成功批;调用方据此 ``mask[start+j]`` 写回)。
+    - ``failures`` = ``[(start, bn, cause)]``(耗尽批带 ``_RETRY_EXHAUSTED.cause``;异常穿透批
+      ``cause="judge_error"``)→ 调用方把 ``cause`` 写进并行 ``cause_mask`` 附到 UNRESOLVED finding(第二期)。
+
+    这样调用方拿到的 ``parsed`` 恒为 list(mypy 友好);耗尽/异常批的区段保持预置的全
+    ``(None, "")``/``None``(audit 汇总"建议重跑"警告),并多了一份"为什么没判成"的根因。
+
+    每个 spec = ``(start, bn, k, prompt)``:``start`` = 该批在全量 candidates 的起始下标;
+    ``bn`` = 本批条数;``k`` = 批序号(进度显示);``prompt`` = 该批的完整 prompt。
     """
     out: list[tuple[int, list]] = []
+    failed: list[tuple[int, int, str]] = []  # (start, bn, cause) 耗尽/异常穿透批
     if len(specs) <= 1:
         for start, bn, k, prompt in specs:
             try:
@@ -343,13 +348,16 @@ def _run_batches_concurrent(
                     transport=transport,
                 )
             except Exception as exc:
-                # _judge_batch_with_retry 只 except RuntimeError;非 RuntimeError(parse_fn
-                # 抛、代码 bug)穿透时,该批兜底 N/A(保持调用方预置 None → UNRESOLVED),不击穿。
+                # _judge_batch_with_retry 只 except RuntimeError/_HttpRateLimited;非 RuntimeError
+                # 穿透(parse_fn 抛、代码 bug)→ 该批兜底,cause=judge_error,不击穿。
                 _emit(on_progress, f"  [{label}] 批 {k} 异常 → 兜底 N/A: {str(exc)[:120]}")
+                failed.append((start, bn, "judge_error"))
                 continue
-            if not isinstance(parsed, _RetryExhaustedType):
+            if isinstance(parsed, _RetryExhaustedType):
+                failed.append((start, bn, parsed.cause))
+            else:
                 out.append((start, parsed))
-        return out
+        return out, failed
     workers = min(len(specs), _MAX_BATCH_CONCURRENT)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futs = {
@@ -365,16 +373,18 @@ def _run_batches_concurrent(
         }
         for fut in as_completed(futs):
             idx = futs[fut]
+            start, bn, _k, _prompt = specs[idx]
             try:
                 parsed = fut.result()
             except Exception as exc:
-                # future 抛未捕获异常(同上,非 RuntimeError 穿透 _judge_batch_with_retry):
-                # 该批兜底 N/A(不写回 → 预置 None → UNRESOLVED),其余批照常,不击穿整池。
                 _emit(on_progress, f"  [{label}] 批 {specs[idx][2]} 异常 → 兜底 N/A: {str(exc)[:120]}")
+                failed.append((start, bn, "judge_error"))
                 continue
-            if not isinstance(parsed, _RetryExhaustedType):
-                out.append((specs[idx][0], parsed))
-    return out
+            if isinstance(parsed, _RetryExhaustedType):
+                failed.append((start, bn, parsed.cause))
+            else:
+                out.append((start, parsed))
+    return out, failed
 
 
 class TranscriptAuditor:
@@ -1271,12 +1281,13 @@ class TranscriptAuditor:
                 '"reason": "applicable=false 时必填(写为何场景不涉及该指令);indeterminate 时必填(写具体矛盾/缺失)"}\n'
             )
             specs.append((start, bn, k, prompt))
-        for start, parsed in _run_batches_concurrent(
+        successes, _failures = _run_batches_concurrent(
             specs, self._parse_applicable, model, timeout, on_progress, on_usage,
             "条件性", total, lambda v: v[0] is None,
             schema=_APPLICABLE_SCHEMA,
             transport="http",
-        ):
+        )
+        for start, parsed in successes:
             for j, val in enumerate(parsed):
                 mask[start + j] = val  # 本地 j → 全量 start+j(批间 index 映射)
         return mask
@@ -1411,12 +1422,13 @@ class TranscriptAuditor:
                 '"indeterminate": true(仅分不清时), "reason": "indeterminate 时必填"}\n'
             )
             specs.append((start, bn, k, prompt))
-        for start, parsed in _run_batches_concurrent(
+        successes, _failures = _run_batches_concurrent(
             specs, self._parse_real, model, timeout, on_progress, on_usage,
             "精筛", total, lambda v: v is None,
             schema=_CLASSIFY_REAL_SCHEMA,
             transport="http",
-        ):
+        )
+        for start, parsed in successes:
             for j, val in enumerate(parsed):
                 mask[start + j] = val
         return mask
@@ -1501,12 +1513,13 @@ class TranscriptAuditor:
             )
             specs.append((start, bn, k, prompt))
         out: list[str] = [""] * n
-        for start, parsed in _run_batches_concurrent(
+        successes, _failures = _run_batches_concurrent(
             specs, self._parse_headline, model, timeout, on_progress, on_usage,
             "headline", total, lambda v: not v,
             schema=_HEADLINE_SCHEMA,
             transport="http",
-        ):
+        )
+        for start, parsed in successes:
             for j, val in enumerate(parsed):
                 out[start + j] = val
         return out
@@ -1605,12 +1618,13 @@ class TranscriptAuditor:
                 "}\n"
             )
             specs.append((start, bn, k, prompt))
-        for start, parsed in _run_batches_concurrent(
+        successes, _failures = _run_batches_concurrent(
             specs, self._parse_prohibition, model, timeout, on_progress, on_usage,
             "禁令", total, lambda v: v[0] is None,
             schema=_PROHIBITION_SCHEMA,
             transport="http",
-        ):
+        )
+        for start, parsed in successes:
             for j, val in enumerate(parsed):
                 results[start + j] = val  # 本地 j → 全量 start+j
         return results
@@ -1773,12 +1787,13 @@ class TranscriptAuditor:
                 "}\n"
             )
             specs.append((start, bn, k, prompt))
-        for start, parsed in _run_batches_concurrent(
+        successes, _failures = _run_batches_concurrent(
             specs, self._parse_step, model, timeout, on_progress, on_usage,
             "步骤", total, lambda v: v[0] is None,
             schema=_STEP_SCHEMA,
             transport="http",
-        ):
+        )
+        for start, parsed in successes:
             for j, val in enumerate(parsed):
                 results[start + j] = val  # 本地 j → 全量 start+j
         return results

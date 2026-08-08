@@ -87,7 +87,7 @@ def _capture_prompt(monkeypatch, captured: dict):
     """替换模块级 _run_batches_concurrent:不调 LLM,只把 specs(prompt 在第 4 元素)存起来。"""
     def fake(specs, *a, **k):
         captured["prompts"] = [spec[3] for spec in specs]
-        return []  # 不产出结果 → 调用方 mask 保持 (None,"",[]) → UNRESOLVED,无所谓
+        return [], []  # (successes, failures) 均空 → 调用方 mask 保持 (None,"",[]) → UNRESOLVED
     monkeypatch.setattr(auditor_mod, "_run_batches_concurrent", fake)
 
 
