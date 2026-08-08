@@ -30,7 +30,7 @@ from skill_eval.concurrency import (
 )
 from skill_eval.cli.main import app, console
 from skill_eval.errors import SkillEvalError
-from skill_eval.execution.error_triage import classify_error
+from skill_eval.execution.error_triage import classify_error, unresolved_cause_info
 from skill_eval.evals.opencode_db import export_session, list_sessions, resolve_session
 from skill_eval.evals.structured import is_structured_records, load_structured_records
 from skill_eval.models.audit_models import AuditVerdict
@@ -43,6 +43,22 @@ def _truncate(text: str, width: int = _TRUNCATE_WIDTH) -> str:
     """单行化 + 截断,供表格单元格展示(instruction_text / evidence 可能很长)。"""
     flat = text.replace("\n", " ").strip()
     return flat if len(flat) <= width else flat[: width - 1] + "…"
+
+
+def format_unresolved_breakdown(breakdown: dict[str, int]) -> str:
+    """UNRESOLVED 根因分布 → 一行字符串(按计数降序);空 → 空串。
+
+    用 unresolved_cause_info 取 (标签, 建议);保留旧"建议重跑"警告,此函数只产追加的分布行。
+    让用户从一条笼统警告变成能分辨「该重跑 vs 重跑无益」。纯展示,不进任何判决。
+    """
+    if not breakdown:
+        return ""
+    items = sorted(breakdown.items(), key=lambda kv: (-kv[1], kv[0]))
+    parts = []
+    for cause, n in items:
+        label, suggestion = unresolved_cause_info(cause)
+        parts.append(f"{n}× {label}({suggestion})")
+    return " · ".join(parts)
 
 
 def _fmt_ms(v: object) -> str:
@@ -394,6 +410,10 @@ def audit(
         console.print("[yellow]Warnings:[/yellow]")
         for w in report.warnings:
             console.print(f"  [yellow]- {w}[/yellow]")
+
+    breakdown_line = format_unresolved_breakdown(report.unresolved_breakdown)
+    if breakdown_line:
+        console.print(f"[yellow]UNRESOLVED 根因:[/yellow] {breakdown_line}")
 
     # 多 transcript:展示指令级聚合。fail 与 N/A(场景不适用)语义不同 → 分两张表:
     #   违规表看 fail%/fail/total(系统性违规,如"NEVER fabricate 在 75% 会话被违反");

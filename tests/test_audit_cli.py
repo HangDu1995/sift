@@ -474,3 +474,20 @@ def test_audit_with_kind_no_scope_hint(monkeypatch, tmp_path):
     r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "--kind", "skill", "-o", str(out)])
     assert r.exit_code == 0, r.output
     assert "收窄" not in r.output  # 带 --kind → 不提示
+
+
+from skill_eval.cli.commands.audit import format_unresolved_breakdown
+
+
+class TestFormatUnresolvedBreakdown:
+    def test_empty_returns_empty(self):
+        assert format_unresolved_breakdown({}) == ""
+
+    def test_orders_by_count_desc(self):
+        s = format_unresolved_breakdown({"rate_limited": 1, "timeout": 2})
+        assert s.index("2×") < s.index("1×")  # 计数大的在前
+        assert "LLM 超时" in s and "限流" in s  # 标签来自 unresolved_cause_info
+
+    def test_unknown_cause_uses_fallback_label(self):
+        s = format_unresolved_breakdown({"weird": 1})
+        assert "1×" in s and "未知" in s
