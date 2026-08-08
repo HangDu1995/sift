@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import Counter
 from pathlib import Path
 
 import typer
@@ -11,6 +12,24 @@ from skill_eval.cli.main import console
 from skill_eval.cli.progress import _ProgressState
 from skill_eval.errors import SkillEvalError
 from skill_eval.models import RunConfig, ScoringConfig
+
+
+def format_failure_triage(runs) -> list[str]:
+    """从 runs 聚合失败根因为待打印行(纯函数,可单测;镜像 _format_run_summary 模式)。
+
+    无 error run → [](不打印空块)。有 → 标题 + 按 root_cause 计数(众数优先)+ 对应建议。
+    纯诊断展示,不进任何判决。
+    """
+    triaged = [(r.error_root_cause, r.error_suggestion)
+               for r in runs if r.error_root_cause]
+    if not triaged:
+        return []
+    cause_counts = Counter(cause for cause, _ in triaged)
+    suggestion_of = {cause: sug for cause, sug in triaged}
+    lines = ["[bold]失败根因汇总:[/bold]"]
+    for cause, count in cause_counts.most_common():
+        lines.append(f"  {count}× {cause} — {suggestion_of[cause]}")
+    return lines
 
 
 def _run_ab_eval(
@@ -189,6 +208,10 @@ def _run_ab_eval(
                 console.print(f"\n[bold]Key strengths:[/bold]")
                 for s in strengths[:2]:
                     console.print(f"  • {s}")
+
+        # 4. 失败根因汇总(失败三角化):有 error run 才打印
+        for _line in format_failure_triage(benchmark.runs):
+            console.print(_line)
 
         console.print(f"\nBenchmark saved to: {benchmark_path}")
 
