@@ -28,7 +28,13 @@ from skill_eval.audit.auditor import (
     _judge_batch_with_retry, _RetryExhaustedType, _run_batches_concurrent,
 )
 from skill_eval.models import InstructionCheck
-from skill_eval.models.audit_models import AuditCategory, AuditMethod, AuditReport, AuditVerdict
+from skill_eval.models.audit_models import (
+    AuditCategory,
+    AuditFinding,
+    AuditMethod,
+    AuditReport,
+    AuditVerdict,
+)
 from skill_eval.models.enums import (
     CheckMethod,
     InstructionPriority,
@@ -2314,3 +2320,36 @@ class TestUnresolvedCauseThreading:
         assert findings[0].verdict == AuditVerdict.FAIL        # 被提及 → 判定
         assert findings[1].verdict == AuditVerdict.UNRESOLVED  # 未提及 → 没判成
         assert findings[1].unresolved_cause == "unmentioned"
+
+
+class TestUnresolvedBreakdown:
+    """_unresolved_breakdown:UNRESOLVED findings 按 cause 聚合计数(诊断,不进判决)。"""
+
+    def test_counts_by_cause(self):
+        from skill_eval.audit.auditor import _unresolved_breakdown
+        findings = [
+            AuditFinding(instruction_text="a", source="X", verdict=AuditVerdict.UNRESOLVED,
+                         method=AuditMethod.LLM, category=AuditCategory.PROHIBITION,
+                         evidence="e", transcript="t", unresolved_cause="timeout"),
+            AuditFinding(instruction_text="b", source="X", verdict=AuditVerdict.UNRESOLVED,
+                         method=AuditMethod.LLM, category=AuditCategory.PROHIBITION,
+                         evidence="e", transcript="t", unresolved_cause="timeout"),
+            AuditFinding(instruction_text="c", source="X", verdict=AuditVerdict.UNRESOLVED,
+                         method=AuditMethod.LLM, category=AuditCategory.PROHIBITION,
+                         evidence="e", transcript="t", unresolved_cause="rate_limited"),
+            AuditFinding(instruction_text="d", source="X", verdict=AuditVerdict.PASS,
+                         method=AuditMethod.LLM, category=AuditCategory.PROHIBITION,
+                         evidence="e", transcript="t", unresolved_cause=None),
+        ]
+        assert _unresolved_breakdown(findings) == {"timeout": 2, "rate_limited": 1}
+
+    def test_none_cause_counts_as_unknown(self):
+        from skill_eval.audit.auditor import _unresolved_breakdown
+        findings = [AuditFinding(instruction_text="a", source="X", verdict=AuditVerdict.UNRESOLVED,
+                                 method=AuditMethod.LLM, category=AuditCategory.PROHIBITION,
+                                 evidence="e", transcript="t", unresolved_cause=None)]
+        assert _unresolved_breakdown(findings) == {"unknown": 1}
+
+    def test_empty_when_no_unresolved(self):
+        from skill_eval.audit.auditor import _unresolved_breakdown
+        assert _unresolved_breakdown([]) == {}

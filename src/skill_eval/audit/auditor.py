@@ -387,6 +387,20 @@ def _run_batches_concurrent(
     return out, failed
 
 
+def _unresolved_breakdown(findings: list[AuditFinding]) -> dict[str, int]:
+    """UNRESOLVED findings 按 unresolved_cause 聚合计数(诊断用,不进任何判决)。
+
+    None cause(理论不应出现——Task 4b 已保证 UNRESOLVED 必带 cause)兜底成 "unknown"。
+    非 UNRESOLVED finding 不计(PASS/FAIL/NA/INDETERMINATE 恒 None,不进结果)。
+    """
+    out: dict[str, int] = {}
+    for f in findings:
+        if f.verdict == AuditVerdict.UNRESOLVED:
+            c = f.unresolved_cause or "unknown"
+            out[c] = out.get(c, 0) + 1
+    return out
+
+
 class TranscriptAuditor:
     """transcript 对账器:指令 vs 实测行为 → AuditFinding。
 
@@ -648,6 +662,7 @@ class TranscriptAuditor:
         unresolved = sum(1 for f in all_findings if f.verdict == AuditVerdict.UNRESOLVED)
         indeterminate = sum(1 for f in all_findings if f.verdict == AuditVerdict.INDETERMINATE)
         total = len(all_findings)
+        unresolved_causes = _unresolved_breakdown(all_findings)
         if unresolved:
             warnings.append(
                 f"{unresolved} 条指令没判成(UNRESOLVED:LLM 调用/解析失败/未提及)"
@@ -711,6 +726,7 @@ class TranscriptAuditor:
             token_usage=acc.snapshot(),
             duration_seconds=time.perf_counter() - _wall_start,
             stage_breakdown=stage_breakdown,
+            unresolved_breakdown=unresolved_causes,
         )
 
     def _judge_conditional(
