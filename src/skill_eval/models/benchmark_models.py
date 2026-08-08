@@ -58,6 +58,9 @@ class RunResultEntry(BaseModel):
     is_anomaly: bool = False
     anomaly_reason: str = ""
     retry_count: int = 0
+    # 失败三角化(纯诊断,不进判决):从 grading.error 抽的根因 + 修复建议。None = 该 run 无 error。
+    error_root_cause: str | None = None
+    error_suggestion: str | None = None
 
 
 class RunAnomaly(BaseModel):

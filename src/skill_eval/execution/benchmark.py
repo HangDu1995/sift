@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from skill_eval.execution.error_triage import classify_error
 from skill_eval.models import (
     AnomalyReport,
     BenchmarkData,
@@ -178,6 +179,7 @@ class BenchmarkAggregator:
                     continue
 
                 grading = json.loads(grading_path.read_text(encoding="utf-8"))
+                error_str = grading.get("error", "") or ""  # 失败三角化输入(纯诊断,不进判决)
                 summary = grading.get("summary", {})
 
                 timing = grading.get("timing") or {}
@@ -252,6 +254,7 @@ class BenchmarkAggregator:
                     except (json.JSONDecodeError, OSError):
                         pass
 
+                triage = classify_error(error_str) if error_str else None
                 entry = RunResultEntry(
                     eval_id=eval_id,
                     eval_name=eval_name,
@@ -273,6 +276,9 @@ class BenchmarkAggregator:
                     expectations=raw_expectations,
                     notes=notes,
                     retry_count=retry_count,
+                    # 失败三角化(纯诊断,不进判决):从 grading.error 抽根因 + 建议
+                    error_root_cause=triage.root_cause if triage else None,
+                    error_suggestion=triage.suggestion if triage else None,
                 )
                 runs.append(entry)
                 configs_data[config_name].append(entry_data)

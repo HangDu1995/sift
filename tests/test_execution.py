@@ -562,6 +562,34 @@ class TestBenchmarkAggregator:
         assert ws["pass_rate_llm"] is None  # 无 llm expectation
         assert benchmark.run_summary["delta"]["pass_rate_llm"] is None
 
+    def test_aggregate_fills_error_triage_from_grading_error(self, tmp_path: Path):
+        """grading.json 含 error → aggregate 填 RunResultEntry.error_root_cause/suggestion;
+        无 error → None(向后兼容)。纯诊断字段,不进 pass_rate 等判决。"""
+        iteration = tmp_path  # run 树根即 output_dir
+        for config in ("with_skill", "without_skill"):
+            config_dir = iteration / config / "run-1"
+            config_dir.mkdir(parents=True)
+            (config_dir / "outputs").mkdir()
+            grading = {
+                "expectations": [{"text": "t", "passed": False, "evidence": "e", "source": "error"}],
+                "summary": {"passed": 0, "failed": 1, "total": 1, "pass_rate": 0.0},
+            }
+            if config == "with_skill":  # 只有 with 侧有 error
+                grading["error"] = "claude -p timed out after 120s (killed process tree)"
+            (config_dir / "grading.json").write_text(json.dumps(grading), encoding="utf-8")
+            (config_dir / "timing.json").write_text(json.dumps({
+                "total_tokens": 100, "duration_ms": 5000, "total_duration_seconds": 5.0,
+            }), encoding="utf-8")
+        agg = BenchmarkAggregator()
+        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+            benchmark = agg.aggregate(iteration, tmp_path)
+        by_config = {r.configuration: r for r in benchmark.runs}
+        assert by_config["with_skill"].error_root_cause == "timeout"
+        assert by_config["with_skill"].error_suggestion  # 非空建议
+        assert by_config["without_skill"].error_root_cause is None  # 无 error → None
+        assert by_config["without_skill"].error_suggestion is None
+
     def test_aggregate_ignores_superseded_retry_base(self, tmp_path: Path):
         """benchmark 聚合 retry-glob bug 回归:被 retry 取代的失败 base 不当独立 run 计入。
         with eval-1 有 run-1(base 0.0)+ run-1-retry-1(最终 0.75),聚合应只算 retry-1。
