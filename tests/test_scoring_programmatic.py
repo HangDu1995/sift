@@ -106,6 +106,50 @@ class TestNotContains:
         assert not results[0].passed
 
 
+class TestScopeTranscript:
+    """scope:'transcript' = 只查 agent/skill 的文本输出(transcript),完全不碰文件。
+
+    只读/纯建议 agent(pr-reviewer 这类)不产文件,断言若带 path 指输入 fixture,
+    _contains_pattern 会去读输入文件而非 agent 的回答 → 同义反复恒 PASS / 恒 FAIL。
+    scope:'transcript' 把判卷对象从"文件"拨到"agent 的回答文本"。
+    """
+
+    def test_contains_pass_when_pattern_in_transcript(self, checker: ProgrammaticChecker, output_dir: Path):
+        ec = EvalCase(id=1, prompt="test", assertions=[
+            Assertion(name="blocked", type=AssertionType.CONTAINS_PATTERN,
+                      params={"pattern": "阻塞", "scope": "transcript"}),
+        ])
+        results = checker.check(ec, output_dir, transcript="review 标了 阻塞 不可合")
+        assert results[0].passed
+
+    def test_contains_ignores_files_when_scope_transcript(self, checker: ProgrammaticChecker, output_dir: Path):
+        # json.dump 存在于 transform.py(文件里),但 transcript 没有 → 必 FAIL
+        # 证明 scope:'transcript' 绕过文件搜索,不读输入/产物文件
+        ec = EvalCase(id=1, prompt="test", assertions=[
+            Assertion(name="json", type=AssertionType.CONTAINS_PATTERN,
+                      params={"pattern": "json\\.dump", "scope": "transcript"}),
+        ])
+        results = checker.check(ec, output_dir, transcript="完全不相关的 review 文本")
+        assert not results[0].passed
+
+    def test_not_contains_pass_when_absent_from_transcript(self, checker: ProgrammaticChecker, output_dir: Path):
+        ec = EvalCase(id=1, prompt="test", assertions=[
+            Assertion(name="no nit", type=AssertionType.NOT_CONTAINS,
+                      params={"pattern": "nitpick", "scope": "transcript"}),
+        ])
+        results = checker.check(ec, output_dir, transcript="干净的 review,无 nit")
+        assert results[0].passed
+
+    def test_not_contains_fail_when_present_in_transcript(self, checker: ProgrammaticChecker, output_dir: Path):
+        # nitpick 在 transcript → FAIL(即便文件里没有)
+        ec = EvalCase(id=1, prompt="test", assertions=[
+            Assertion(name="no nit", type=AssertionType.NOT_CONTAINS,
+                      params={"pattern": "nitpick", "scope": "transcript"}),
+        ])
+        results = checker.check(ec, output_dir, transcript="agent 开始 nitpick 命名风格")
+        assert not results[0].passed
+
+
 class TestNoAssertions:
     def test_empty(self, checker: ProgrammaticChecker, tmp_path: Path):
         ec = EvalCase(id=1, prompt="test", assertions=[])

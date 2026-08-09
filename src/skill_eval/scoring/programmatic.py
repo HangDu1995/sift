@@ -105,6 +105,15 @@ class ProgrammaticChecker:
 
     def _contains_pattern(self, params: dict, output_dir: Path, ctx: dict) -> tuple[AssertionVerdict, str]:
         pattern = params.get("pattern", "")
+        # scope:'transcript' = 只查 agent/skill 的文本输出,完全不碰文件。
+        # 只读/纯建议 agent 不产文件,带 path 的断言会读输入 fixture 而非 agent 的回答 →
+        # 同义反复恒 PASS(模式碰巧在输入里)/ 恒 FAIL(模式只在回答里)。scope 把判卷对象
+        # 从"文件"拨到"agent 的回答文本(transcript)"。
+        if params.get("scope") == "transcript":
+            transcript = ctx.get("transcript", "")
+            if transcript and re.search(pattern, transcript):
+                return AssertionVerdict.PASS, f"Pattern '{pattern}' found in transcript"
+            return AssertionVerdict.FAIL, f"Pattern '{pattern}' not found in transcript"
         filepath = params.get("path", "")
         target = output_dir / filepath if filepath else output_dir
         if target.is_file():
@@ -171,8 +180,14 @@ class ProgrammaticChecker:
             return AssertionVerdict.FAIL, f"Line count {count} > max {max_lines}"
         return AssertionVerdict.PASS, f"Line count: {count}"
 
-    def _not_contains(self, params: dict, output_dir: Path, _ctx: dict) -> tuple[AssertionVerdict, str]:
+    def _not_contains(self, params: dict, output_dir: Path, ctx: dict) -> tuple[AssertionVerdict, str]:
         pattern = params.get("pattern", "")
+        # scope:'transcript' = 只查 transcript(见 _contains_pattern 同名分支的说明)。
+        if params.get("scope") == "transcript":
+            transcript = ctx.get("transcript", "")
+            if transcript and re.search(pattern, transcript):
+                return AssertionVerdict.FAIL, f"Pattern '{pattern}' found in transcript (should be absent)"
+            return AssertionVerdict.PASS, f"Pattern '{pattern}' not found in transcript"
         filepath = params.get("path", "")
         target = output_dir / filepath if filepath else output_dir
         if target.is_file():

@@ -143,6 +143,8 @@ def test_build_transcript_prompt_agent_kind_uses_agent_wording():
     assert "## SKILL\n" not in prompt
     # rationale 指向 agent 职责,非 SKILL.md
     assert "agent 正文" in prompt
+    # 只读 agent 的断言查 transcript(回答文本),不指输入文件 path
+    assert "scope" in prompt and "transcript" in prompt
 
 
 def test_generate_from_transcript_agent_kind_routes_agent_prompt(monkeypatch, tmp_path):

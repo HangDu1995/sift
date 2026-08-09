@@ -68,9 +68,11 @@
 |---|---|---|
 | `FILE_EXISTS` | `filename` | 文件存在 |
 | `FILE_CONTAINS` | `filename`, `pattern`(正则) | 指定文件含正则 |
-| `CONTAINS_PATTERN` | `pattern`, `path`(可选) | 含正则;不给 `path` 则递归全目录 + transcript 兜底 |
+| `CONTAINS_PATTERN` | `pattern`, `path`(可选), `scope`(可选) | 含正则;不给 `path` 则递归全目录 + transcript 兜底;`scope:"transcript"` 只查 agent/skill 的文本输出,完全不碰文件(只读/纯建议 agent 用——见下) |
 | `JSON_HAS_FIELD` | `filename`, `field`(支持 `a.b.c` 嵌套) | JSON 文件含字段 |
-| `NOT_CONTAINS` | `pattern`, `path`(可选) | 不含正则(递归全目录) |
+| `NOT_CONTAINS` | `pattern`, `path`(可选), `scope`(可选) | 不含正则(递归全目录);`scope:"transcript"` 同上只查文本输出 |
+
+> **只读/纯建议 agent(`scope:"transcript"`)**:不产文件的 agent(如审 PR 给建议的 pr-reviewer),它的"答案"是 review 文本(transcript),不在任何文件里。若断言带 `path` 指输入 fixture 或省 `path` 走递归,grading 会去读**输入文件**而非 agent 的回答 → 模式碰巧在输入里就恒 PASS、模式只在回答里就恒 FAIL,判卷失效。`scope:"transcript"` 把判卷对象从"文件"拨到"agent 的回答文本"。出题(`init --kind agent`)对只读 agent 自动产带 `scope:"transcript"` 的断言。
 | `LINE_COUNT` | `min` / `max`, `path`(可选) | 行数在 [min,max](不给 path 则全目录合计) |
 | `TOOL_CALLED` | `tool_name`, `min_count`(默认 1) | 某工具调用次数 ≥ min_count |
 | `STEP_COUNT` | `min` / `max` | agentic 步数(turns)在 [min,max] |

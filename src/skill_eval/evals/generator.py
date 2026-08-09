@@ -300,8 +300,8 @@ description: {description}
         "单条、具体、可观测的预期。GOOD: 'response 指出具体行号'。BAD: '输出正确' / '遵循指令'(空泛不可查)"
       ],
       "assertions": [
-        {{ "name": "mentions X", "type": "CONTAINS_PATTERN", "params": {{ "pattern": "keyword" }} }},
-        {{ "name": "avoids Y", "type": "NOT_CONTAINS", "params": {{ "pattern": "forbidden" }} }}
+        {{ "name": "mentions X", "type": "CONTAINS_PATTERN", "params": {{ "pattern": "keyword", "scope": "transcript" }} }},
+        {{ "name": "avoids Y", "type": "NOT_CONTAINS", "params": {{ "pattern": "forbidden", "scope": "transcript" }} }}
       ],
       "rationale": "这题考 agent 哪条职责(对应 description / 正文哪点;同 agent 声明语言)"
     }}
@@ -312,7 +312,7 @@ description: {description}
 ## Rules
 - 语言:同 agent 声明正文
 - level: L1 = 不产文件 / 纯分析建议(大多数 agent);L2 = 产文件(产出的文件名写进 assertions 的 FILE_EXISTS)
-- 每条 expectation 都写对应 assertion(s)(可一条拆多个、可加隐含的);L1 用 CONTAINS_PATTERN / NOT_CONTAINS,L2 可加 FILE_EXISTS
+- 每条 expectation 都写对应 assertion(s)(可一条拆多个、可加隐含的);L1 用 CONTAINS_PATTERN / NOT_CONTAINS 且 **必须带 "scope":"transcript"**——只读 agent 不产文件,断言查 agent 的回答文本(transcript),不查输入文件(带 path 或省 scope 会去读输入 fixture 而非 agent 的回答,判卷失效);L2 产文件才用 "path":"<产物文件>" + FILE_EXISTS
 - rationale 每题必填:说清考哪条职责
 - 总 5-8 道,至少 1 道边界 / 错误场景"""
 
@@ -1284,7 +1284,8 @@ Output JSON ONLY:
             )
         L.append("\n## ASSERTION SCHEMA(scorer 读这些精确 key):\n"
                  '- FILE_EXISTS: {"filename": "<manifest path>"}\n'
-                 '- CONTAINS_PATTERN / NOT_CONTAINS: {"pattern": "<regex>", "path": "<manifest path>"}(path 必填)\n'
+                 '- CONTAINS_PATTERN / NOT_CONTAINS: {"pattern": "<regex>", "path": "<manifest path>"}(查产物文件内容)'
+                 ' 或 {"pattern": "<regex>", "scope": "transcript"}(只查 agent/skill 文本输出,不碰文件——只读/纯建议 agent 用这个,别 path 指输入文件)\n'
                  '- JSON_HAS_FIELD: {"filename": "...", "field": "..."}\n'
                  '- CUSTOM_SCRIPT: {"script": "<checker .py>", "args": []}——checker 必须同时是该 eval 的 fixture\n')
         L.append("\n## trap-A WARNING: transcript 是一次执行,not ground truth。别把它的错/绕路冻成期望;推导一般可验证的期望;不确定就略。\n")
@@ -1298,7 +1299,9 @@ Output JSON ONLY:
         if is_agent:
             L.append("生成 5-8 条 eval。语言同 transcript。匹配 description 声明的角色(它说管 X 就出 X 的题,不出它不该管的)。\n")
             L.append("level: L1=不产文件/纯分析建议(大多数 agent,如审 PR 给建议);产口头建议时挖 review 文本里的"
-                     "行号/严重度/关键词 → CONTAINS_PATTERN/NOT_CONTAINS;L2=产文件才 FILE_EXISTS。\n")
+                     "行号/严重度/关键词 → CONTAINS_PATTERN/NOT_CONTAINS **带 scope:'transcript'**(查 agent 回答文本,"
+                     "别用 path 指输入文件——否则 grading 读输入 fixture 而非 agent 的回答,判卷失效);"
+                     "L2=产文件才 FILE_EXISTS + path 指产物。\n")
         else:
             L.append("生成 5-8 条 eval(L1+L2 混)。语言同 transcript。\n")
         L.append(f"每条 eval 必须带 rationale({rationale_hint})与 confidence(0-1,审阅分诊用)。\n")

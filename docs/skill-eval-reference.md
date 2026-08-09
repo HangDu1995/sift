@@ -719,10 +719,10 @@ skill-eval batch-report batch-workspace/ --open
 |------|------|------|
 | `FILE_EXISTS` | 文件存在 | `filename` |
 | `FILE_CONTAINS` | 文件含子串 | `filename`, `pattern` |
-| `CONTAINS_PATTERN` | 正则匹配 | `pattern`, `path`(可选) |
+| `CONTAINS_PATTERN` | 正则匹配 | `pattern`, `path`(可选), `scope`(可选,`"transcript"` 时只查 agent/skill 文本输出不碰文件) |
 | `JSON_HAS_FIELD` | JSON 字段 | `filename`, `field`（支持 `a.b.c`） |
 | `LINE_COUNT` | 行数范围 | `min`/`max`(至少一个), `path`(可选) |
-| `NOT_CONTAINS` | 反向匹配 | `pattern`, `path`(可选) |
+| `NOT_CONTAINS` | 反向匹配 | `pattern`, `path`(可选), `scope`(可选,同上) |
 | `CUSTOM_SCRIPT` | 自定义脚本 | `script`, `args`(可选) |
 | `CROSS_FILE_CONSISTENCY` | 检查相对 import | `include`(可选, glob) |
 | `CODE_COMPILES` | 基础语法检查 | `include`(可选, glob) |

@@ -99,6 +99,20 @@ def test_agent_prompt_asks_llm_to_write_assertions_with_natural_expectations():
     assert ("写对应 assertion" in prompt) or ("写 assertions" in prompt)
 
 
+def test_agent_prompt_guides_scope_transcript_for_readonly():
+    """只读/纯建议 agent 不产文件:断言要查 agent 的回答文本(transcript),不是输入文件。
+
+    不带这层指导,LLM 会把断言 path 指向输入 fixture(或省 path 走 rglob 全目录),
+    grading 的 _contains_pattern 去读输入文件 → 同义反复恒 PASS / 恒 FAIL。
+    prompt 须明确:只读 agent 用 scope:'transcript' 查 review 文本。
+    """
+    gen = EvalInitGenerator()
+    prompt = gen._build_agent_prompt(
+        "reviewer", "审查 PR diff 给可执行修改建议",
+        "# 你是审查者\n只读不改", {"tools": ["Read"]})
+    assert "scope" in prompt and "transcript" in prompt
+
+
 def test_generate_for_agent_warns_on_thin_assertions(monkeypatch, tmp_path):
     """断言数<期望数(_auto_generate 补不上的自然语言 expectations)→ init warning 提示审。"""
     agent_md = tmp_path / "reviewer.md"

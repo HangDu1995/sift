@@ -3,45 +3,68 @@
   "evals": [
     {
       "id": 1,
-      "name": "happy path:硬编码 AWS 密钥 + 未引用 rm -rf(双黑名单)",
+      "name": "happy-path-blacklist-both-files",
       "prompt": "审查这份 PR 的 diff。src/auth.py 加了 AWS client 初始化、scripts/deploy.sh 改了清理脚本。逐文件审,给行级建议。",
-      "expected_output": "两条 🔴 阻塞建议:(1) src/auth.py 第 5-6 行硬编码 AWS access key(AKIA...)和 secret,改走环境变量/secret manager;(2) scripts/deploy.sh 第 3 行 rm -rf $DIR/* 未引用 $DIR 且无判空,空时展开成 rm -rf /*。每条带 [文件:行] + 🔴。总评:不可合,两项阻塞。",
+      "expected_output": "两条 🔴 阻塞项:[src/auth.py:5-6] 硬编码 AWS 密钥(AKIA.../wJalr... 直接写源码)→ 改走环境变量或 IAM role;[scripts/deploy.sh:3] rm -rf $DIR/* 未引用 $DIR(DIR 为空时展开成 rm -rf /*)→ 加双引号 + 判空守卫。总评:不可合,阻塞项为硬编码密钥与未引用 rm -rf。",
       "files": [],
       "expectations": [
-        "指出 src/auth.py 硬编码 AWS 凭据(access key AKIA... + secret),标 🔴 阻塞,给出行号(5-6 附近)",
-        "指出 scripts/deploy.sh 的 rm -rf $DIR/* 未引用变量 / 无判空,标 🔴 阻塞,给出行号(第 3 行)",
-        "每条建议格式为 [文件:行] (🔴/🟡/⚪) 问题 → 改的方向",
-        "总评明确不可合,列出阻塞项"
+        "指出 src/auth.py 硬编码 AWS 密钥(AKIAIOSFODNN7EXAMPLE / wJalr... 直接写进源码)",
+        "指出 scripts/deploy.sh 的 rm -rf $DIR 未引用变量风险",
+        "每条建议带 文件:行号 格式",
+        "标记 🔴 阻塞 严重度",
+        "总评说明阻塞项与能否合并"
       ],
       "assertions": [
         {
-          "name": "review 提到 AWS 凭据泄露",
+          "name": "catches-hardcoded-key",
           "type": "CONTAINS_PATTERN",
           "params": {
-            "pattern": "AKIA[A-Z0-9]{16}|硬编码|凭据|secret",
-            "path": "src/auth.py"
+            "pattern": "AKIA|硬编码|hardcoded|credential|密钥|secret",
+            "scope": "transcript"
           },
           "tier": "TIER1",
           "retry_on_uneval": true,
           "retry_max": 2
         },
         {
-          "name": "review 提到 rm -rf 风险",
+          "name": "catches-unquoted-rmrf",
           "type": "CONTAINS_PATTERN",
           "params": {
-            "pattern": "rm -rf|引用|判空|空时",
-            "path": "scripts/deploy.sh"
+            "pattern": "rm -rf|\\$DIR|未引用|unquoted|不加引号|引用",
+            "scope": "transcript"
           },
           "tier": "TIER1",
           "retry_on_uneval": true,
           "retry_max": 2
         },
         {
-          "name": "review 标了阻塞严重度",
+          "name": "line-level-auth",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "pattern": "src/auth\\.py:\\s*\\d",
+            "scope": "transcript"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "line-level-deploy",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "pattern": "scripts/deploy\\.sh:\\s*\\d",
+            "scope": "transcript"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "blocking-severity",
           "type": "CONTAINS_PATTERN",
           "params": {
             "pattern": "🔴|阻塞",
-            "path": "src/auth.py"
+            "scope": "transcript"
           },
           "tier": "TIER1",
           "retry_on_uneval": true,
@@ -64,193 +87,50 @@
       "source_dir_as": "",
       "timeout": null,
       "flags": [],
-      "rationale": "transcript 用户请求的 happy path;对应 agent 黑名单两条必修项(硬编码密钥 + 未引用 rm -rf),验证 agent 同时命中双黑名单并给行级 🔴 + 不可合总评。",
+      "rationale": "对应正文「高风险黑名单」两条直击(硬编码密钥 + 未引用 rm -rf)+ transcript 真实用户请求逐文件审;fixture 字节级取自 transcript 输入",
       "confidence": 0.95
     },
     {
       "id": 2,
-      "name": "单文件:仅 auth.py 硬编码密钥",
-      "prompt": "审查 src/auth.py 的改动。新增了 get_client(),初始化 S3 client。给行级建议。",
-      "expected_output": "一条 🔴 阻塞:src/auth.py 第 5-6 行硬编码 AWS access key 和 secret,改走环境变量。无其他 🔴🟡 则不提 nit。",
+      "name": "api-signature-mismatch-ai-diff",
+      "prompt": "审查这份 PR 的 diff。src/auth.py 加了 STS get_caller_identity 调用,用来取 caller ARN。",
+      "expected_output": "[src/auth.py:5] (🟡/🔴) client.get_caller_identity 不接受 AccountId 参数(真实签名无必填入参,AccountId 是返回字段)→ 删掉 AccountId=...,直接 client.get_caller_identity();可能是 AI 生成 diff 把返回字段当入参的幻觉,对照 boto3 文档核一遍。",
       "files": [],
       "expectations": [
-        "指出 src/auth.py 硬编码 AWS 凭据,标 🔴 阻塞,给出行号",
-        "建议改走环境变量 / secret manager",
-        "无其他 🔴🟡 时,不挑 nit(命名 / 注释 / 风格)"
+        "识别 get_caller_identity 真实签名(无必填参数)",
+        "指出 AccountId=... 是错误参数(AI 幻觉把返回字段当入参)",
+        "建议对照真实 boto3 文档核签名",
+        "带 文件:行号 + 严重度"
       ],
       "assertions": [
         {
-          "name": "review 提到 AWS 凭据泄露",
+          "name": "flags-signature-issue",
           "type": "CONTAINS_PATTERN",
           "params": {
-            "pattern": "AKIA[A-Z0-9]{16}|硬编码|凭据|secret",
-            "path": "src/auth.py"
+            "pattern": "get_caller_identity|签名|signature|参数|AccountId|不存在|幻觉",
+            "scope": "transcript"
           },
           "tier": "TIER1",
           "retry_on_uneval": true,
           "retry_max": 2
         },
         {
-          "name": "review 标了阻塞严重度",
+          "name": "line-level",
           "type": "CONTAINS_PATTERN",
           "params": {
-            "pattern": "🔴|阻塞",
-            "path": "src/auth.py"
-          },
-          "tier": "TIER1",
-          "retry_on_uneval": true,
-          "retry_max": 2
-        }
-      ],
-      "fixtures": [
-        {
-          "path": "src/auth.py",
-          "content": "import boto3\n\ndef get_client():\n    # AWS client for S3 access\n    aws_key = \"AKIAIOSFODNN7EXAMPLE\"\n    aws_secret = \"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\"\n    return boto3.client(\"s3\", aws_access_key_id=aws_key, aws_secret_access_key=aws_secret)\n"
-        }
-      ],
-      "level": "L1",
-      "mode": "",
-      "source_dir": "",
-      "source_dir_as": "",
-      "timeout": null,
-      "flags": [],
-      "rationale": "对应黑名单「硬编码密钥」单项;transcript 中 auth.py 的独立呈现,验证 agent 单文件场景不漏密钥、不分散注意力于 nit。",
-      "confidence": 0.85
-    },
-    {
-      "id": 3,
-      "name": "单文件:仅 deploy.sh 未引用 rm -rf",
-      "prompt": "审查 scripts/deploy.sh 的改动。清理脚本用 rm -rf。给行级建议。",
-      "expected_output": "一条 🔴 阻塞:scripts/deploy.sh 第 3 行 rm -rf $DIR/* 未引用 $DIR、且无判空,$DIR 为空时展开成 rm -rf /*。要求引用 \"${DIR:?}\" 或加判空。",
-      "files": [],
-      "expectations": [
-        "指出 scripts/deploy.sh rm -rf $DIR/* 未引用变量,标 🔴 阻塞,给出行号(第 3 行)",
-        "指出 $DIR 为空 / 未设时展开成 rm -rf /* 的灾难后果",
-        "建议引用 \"${DIR:?}\" 或显式判空"
-      ],
-      "assertions": [
-        {
-          "name": "review 提到 rm -rf 风险",
-          "type": "CONTAINS_PATTERN",
-          "params": {
-            "pattern": "rm -rf|引用|判空|空时|\\$\\{DIR",
-            "path": "scripts/deploy.sh"
+            "pattern": "src/auth\\.py:\\s*\\d",
+            "scope": "transcript"
           },
           "tier": "TIER1",
           "retry_on_uneval": true,
           "retry_max": 2
         },
         {
-          "name": "review 标了阻塞严重度",
-          "type": "CONTAINS_PATTERN",
-          "params": {
-            "pattern": "🔴|阻塞",
-            "path": "scripts/deploy.sh"
-          },
-          "tier": "TIER1",
-          "retry_on_uneval": true,
-          "retry_max": 2
-        }
-      ],
-      "fixtures": [
-        {
-          "path": "scripts/deploy.sh",
-          "content": "#!/bin/bash\nDIR=$1\nrm -rf $DIR/*\necho \"cleaned $DIR\"\n"
-        }
-      ],
-      "level": "L1",
-      "mode": "",
-      "source_dir": "",
-      "source_dir_as": "",
-      "timeout": null,
-      "flags": [],
-      "rationale": "对应黑名单「未引用 rm -rf」单项;transcript 中 deploy.sh 的独立呈现,验证 agent 识别 shell 引用 / 判空缺陷并给行号。",
-      "confidence": 0.85
-    },
-    {
-      "id": 4,
-      "name": "干净 diff:无黑名单命中 → 应 LGTM 不挑 nit",
-      "prompt": "审查这份 PR 的 diff。src/auth.py 改走环境变量读 AWS 凭据、scripts/deploy.sh 加了 set -euo pipefail 和判空。逐文件审,给行级建议。",
-      "expected_output": "无 🔴🟡;总评可合。无阻塞项时不挑 nit(命名 / 注释 / 风格)。",
-      "files": [],
-      "expectations": [
-        "不报硬编码密钥 / rm -rf / 其他 🔴🟡(干净 diff)",
-        "总评 LGTM / 可合",
-        "不挑 nit(边界:无 🔴🟡 时才允许 nit,这里应直接放行)"
-      ],
-      "assertions": [
-        {
-          "name": "review 未误报阻塞",
-          "type": "NOT_CONTAINS",
-          "params": {
-            "pattern": "🔴|阻塞",
-            "path": "src/auth.py"
-          },
-          "tier": "TIER1",
-          "retry_on_uneval": true,
-          "retry_max": 2
-        },
-        {
-          "name": "review 未误报 rm -rf 风险",
-          "type": "NOT_CONTAINS",
-          "params": {
-            "pattern": "rm -rf.*空|空时展开|阻塞",
-            "path": "scripts/deploy.sh"
-          },
-          "tier": "TIER1",
-          "retry_on_uneval": true,
-          "retry_max": 2
-        }
-      ],
-      "fixtures": [
-        {
-          "path": "src/auth.py",
-          "content": "import boto3\nimport os\n\ndef get_client():\n    return boto3.client(\n        \"s3\",\n        aws_access_key_id=os.environ[\"AWS_ACCESS_KEY_ID\"],\n        aws_secret_access_key=os.environ[\"AWS_SECRET_ACCESS_KEY\"],\n    )\n"
-        },
-        {
-          "path": "scripts/deploy.sh",
-          "content": "#!/bin/bash\nset -euo pipefail\nDIR=\"${1:?usage: deploy.sh <dir>}\"\nrm -rf \"${DIR:?}\"/*\necho \"cleaned $DIR\"\n"
-        }
-      ],
-      "level": "L1",
-      "mode": "",
-      "source_dir": "",
-      "source_dir_as": "",
-      "timeout": null,
-      "flags": [],
-      "rationale": "对应 agent 边界「无 🔴🟡 时不挑 nit」「不当格式化工具」;干净 diff 反向验证 agent 不误报、不放 nit。",
-      "confidence": 0.75
-    },
-    {
-      "id": 5,
-      "name": "AI 生成 diff 幻觉:调不存在的 boto3 方法",
-      "prompt": "审查 src/auth.py 的改动。新增 list_all_buckets(),调 boto3 列 bucket。给行级建议。",
-      "expected_output": "🔴 或 🟡:src/auth.py 第 5 行 client.list_buckets_v2() 不存在(boto3 S3 client 真实方法为 list_buckets),应 Grep / 查文档核实。幻觉 API,改方向:用 list_buckets()。",
-      "files": [],
-      "expectations": [
-        "识别 client.list_buckets_v2() 是幻觉 API(boto3 S3 client 无此方法,真实为 list_buckets)",
-        "标 🔴 或 🟡(运行必崩 → 至少 🟡,倾向 🔴)",
-        "给出行号(第 5 行)、改的方向(用 list_buckets())",
-        "体现 agent 失败机制「AI 生成的 diff」+ 步骤 3「每个调用对照真实签名核一遍」"
-      ],
-      "assertions": [
-        {
-          "name": "review 指出幻觉方法",
-          "type": "CONTAINS_PATTERN",
-          "params": {
-            "pattern": "list_buckets_v2|不存在|幻觉|list_buckets",
-            "path": "src/auth.py"
-          },
-          "tier": "TIER1",
-          "retry_on_uneval": true,
-          "retry_max": 2
-        },
-        {
-          "name": "review 标了严重度",
+          "name": "severity-tagged",
           "type": "CONTAINS_PATTERN",
           "params": {
             "pattern": "🔴|🟡|阻塞|建议",
-            "path": "src/auth.py"
+            "scope": "transcript"
           },
           "tier": "TIER1",
           "retry_on_uneval": true,
@@ -260,7 +140,7 @@
       "fixtures": [
         {
           "path": "src/auth.py",
-          "content": "import boto3\n\ndef list_all_buckets():\n    client = boto3.client(\"s3\")\n    return client.list_buckets_v2()\n"
+          "content": "import boto3\n\ndef get_caller_arn():\n    client = boto3.client(\"sts\")\n    resp = client.get_caller_identity(\n        AccountId=\"123456789012\"\n    )\n    return resp[\"Arn\"]\n"
         }
       ],
       "level": "L1",
@@ -269,38 +149,151 @@
       "source_dir_as": "",
       "timeout": null,
       "flags": [],
-      "rationale": "对应 agent 失败机制「AI 生成的 diff」+ 步骤 3「每个调用对照真实签名核一遍」;transcript 未直接覆盖但属 agent 声明职责核心(防幻觉),验证 agent 不放过看着像对的假 API。",
+      "rationale": "对应正文「失败机制-AI 生成的 diff」:每个调用都得对照真实签名核一遍,不能「看着像就对」",
       "confidence": 0.7
     },
     {
-      "id": 6,
-      "name": "严重度校准:deploy.sh 的 🟡(非 🔴)建议",
-      "prompt": "审查 scripts/deploy.sh 的改动。清理 + 解压 release。给行级建议。",
-      "expected_output": "🟡 建议(非 🔴):缺 set -euo pipefail、cd 后未校验、tar 解压前未校验来源;rm -rf 已引用 \"${DIR:?}\" 故不构成阻塞。不应把 🟡 升成 🔴。",
+      "id": 3,
+      "name": "test-green-logic-bug",
+      "prompt": "审查这份 PR 的 diff。src/auth.py 把 token 过期判断从 > 改成 >=,单元测试跑绿——但测试只覆盖了「刚签发」和「很久之前」两种,没测恰好 3600 秒的边界。",
+      "expected_output": "[src/auth.py:6] (🟡) 把 > 改成 >= 改变了恰好 3600 秒时的判定(从 valid 变 invalid),但测试没覆盖这个边界 → 补测 is_token_valid(now - 3600) 确认期望行为;CI 绿不代表逻辑对。",
       "files": [],
       "expectations": [
-        "rm -rf \"${DIR:?}\" 已引用判空 → 不报为 🔴 阻塞(不误伤已修复的黑名单项)",
-        "指出缺 set -euo pipefail / cd 未校验 等 🟡 建议",
-        "严重度校准准确:🟡 建议不升 🔴"
+        "识别 operator 改动(> → >=)是行为变更,不是「改着玩」",
+        "指出测试覆盖缺口(3600 边界没测到)",
+        "不要因 CI 绿就放行逻辑改",
+        "带 文件:行号 + 严重度"
       ],
       "assertions": [
         {
-          "name": "review 未把已引用 rm -rf 误报为阻塞",
-          "type": "NOT_CONTAINS",
+          "name": "flags-test-coverage-gap",
+          "type": "CONTAINS_PATTERN",
           "params": {
-            "pattern": "rm -rf.*🔴|rm -rf.*阻塞",
-            "path": "scripts/deploy.sh"
+            "pattern": "测试|覆盖|边界|3600|>=|绿",
+            "scope": "transcript"
           },
           "tier": "TIER1",
           "retry_on_uneval": true,
           "retry_max": 2
         },
         {
-          "name": "review 给出 🟡 建议",
+          "name": "line-level",
           "type": "CONTAINS_PATTERN",
           "params": {
-            "pattern": "🟡|建议|set -e|pipefail",
-            "path": "scripts/deploy.sh"
+            "pattern": "src/auth\\.py:\\s*\\d",
+            "scope": "transcript"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "severity-tagged",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "pattern": "🔴|🟡|阻塞|建议",
+            "scope": "transcript"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        }
+      ],
+      "fixtures": [
+        {
+          "path": "src/auth.py",
+          "content": "import time\n\ndef is_token_valid(issued_at):\n    now = time.time()\n    # changed from > to >= for clarity\n    if now - issued_at >= 3600:\n        return False\n    return True\n"
+        }
+      ],
+      "level": "L1",
+      "mode": "",
+      "source_dir": "",
+      "source_dir_as": "",
+      "timeout": null,
+      "flags": [],
+      "rationale": "对应正文「高风险黑名单-测试绿就放行逻辑改」+ 失败机制「逻辑改动必须看测试是否真的测到那条路径」",
+      "confidence": 0.75
+    },
+    {
+      "id": 4,
+      "name": "clean-auth-no-nitpick",
+      "prompt": "审查这份 PR 的 diff。src/auth.py 重构了 client 获取,改用 boto3 默认凭据链(IAM role / 环境变量自动解析)。",
+      "expected_output": "无 🔴🟡 问题,LGTM/可合。boto3.client(\"s3\") 走默认凭据链,无硬编码密钥,不挑风格 nit。",
+      "files": [],
+      "expectations": [
+        "识别此版本走默认凭据链,无硬编码密钥",
+        "不挑风格 nit(无 🔴🟡 时的边界)",
+        "总评说可合 / LGTM"
+      ],
+      "assertions": [
+        {
+          "name": "no-fabricated-blocking",
+          "type": "NOT_CONTAINS",
+          "params": {
+            "pattern": "🔴",
+            "scope": "transcript"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "lgtm-verdict",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "pattern": "LGTM|可合|没有阻塞|无阻塞|可以合并|无问题|未发现",
+            "scope": "transcript"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        }
+      ],
+      "fixtures": [
+        {
+          "path": "src/auth.py",
+          "content": "import boto3\n\ndef get_client():\n    return boto3.client(\"s3\")\n"
+        }
+      ],
+      "level": "L1",
+      "mode": "",
+      "source_dir": "",
+      "source_dir_as": "",
+      "timeout": null,
+      "flags": [],
+      "rationale": "对应正文「边界-没发现 🔴🟡 问题时别挑风格 nit」:测 agent 不滥报、不充当格式化工具",
+      "confidence": 0.7
+    },
+    {
+      "id": 5,
+      "name": "shell-clean-no-false-positive",
+      "prompt": "审查这份 PR 的 diff。scripts/deploy.sh 重写了清理脚本,加了 set -euo pipefail、判空守卫和变量引用。",
+      "expected_output": "无 🔴🟡 问题:DIR=\"${1:-}\" 已判空、rm -rf \"$DIR\"/* 已加双引号、set -euo pipefail 启用严格模式。LGTM/可合。",
+      "files": [],
+      "expectations": [
+        "识别 $DIR 已正确双引号引用(\"$DIR\")",
+        "识别有判空守卫([ -z \"$DIR\" ] && exit)",
+        "不在正确写法上误报未引用风险",
+        "总评 LGTM / 可合"
+      ],
+      "assertions": [
+        {
+          "name": "no-fabricated-blocking",
+          "type": "NOT_CONTAINS",
+          "params": {
+            "pattern": "🔴",
+            "scope": "transcript"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "lgtm-verdict",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "pattern": "LGTM|可合|没有阻塞|无阻塞|可以合并|无问题|未发现",
+            "scope": "transcript"
           },
           "tier": "TIER1",
           "retry_on_uneval": true,
@@ -310,7 +303,7 @@
       "fixtures": [
         {
           "path": "scripts/deploy.sh",
-          "content": "#!/bin/bash\nDIR=\"${1:?usage: deploy.sh <dir>}\"\nrm -rf \"${DIR:?}\"/*\ncd \"$DIR\"\ntar -xzf ../release.tar.gz\necho \"deployed\"\n"
+          "content": "#!/bin/bash\nset -euo pipefail\nDIR=\"${1:-}\"\n[ -z \"$DIR\" ] && { echo \"usage: $0 <dir>\"; exit 1; }\nrm -rf \"$DIR\"/*\necho \"cleaned $DIR\"\n"
         }
       ],
       "level": "L1",
@@ -319,7 +312,7 @@
       "source_dir_as": "",
       "timeout": null,
       "flags": [],
-      "rationale": "对应 agent 严重度分级 + 黑名单「未引用 rm -rf」的精确边界(已引用不拦);验证 agent 不误报已修复的 rm -rf、把建议级问题正确归到 🟡 而非升 🔴。",
+      "rationale": "对应正文「边界-别滥报」+ 反向测「未引用 rm -rf」检测器不误伤已正确引用的写法",
       "confidence": 0.7
     }
   ],

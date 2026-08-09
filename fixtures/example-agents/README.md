@@ -98,7 +98,7 @@ skill-eval run fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent \
 
 `init` → 数道 L1 题,**覆盖 pr-reviewer 的三类规则**——失败机制(大 diff skim / AI 生成幻觉 / 批量重命名误伤)、高风险黑名单(硬编码密钥 / `rm -rf` 未引用 / 测试绿放行)、边界;含考 agent 正确地「不做某事」的**反面边界题**(无阻塞时克制不 nitpick)。每道 rationale 都精准映射到一条具体规则。
 
-`init --from-transcript`(mining)→ 从 transcript 真实 session 挖题,产出 L1 expectations 为主(pr-reviewer 只读不产文件 → 无 `FILE_EXISTS`);transcript 种了硬编码密钥 + 未引用 `rm -rf` 双黑名单,挖出的题锚定 agent 正文职责(失败机制 / 黑名单 / 严重度),prompt 走 agent 导向(角色 / 工具白名单 / role-matching)。自带 [evals/evals.json](pr-reviewer/evals/evals.json) 即此 mining 版(提交进仓);init(从角色 或 mining)默认写此路径,重新生成会覆盖。
+`init --from-transcript`(mining)→ 从 transcript 真实 session 挖题,产出 L1 expectations 为主(pr-reviewer 只读不产文件 → 无 `FILE_EXISTS`);**断言带 `scope:"transcript"`**(查 agent 的 review 文本,不查输入文件——只读 agent 的"答案"是 review 文字不在文件里,见 [evals-format.md](../../docs/evals-format.md) 程序化表)。transcript 种了硬编码密钥 + 未引用 `rm -rf` 双黑名单,挖出的题锚定 agent 正文职责(失败机制 / 黑名单 / 严重度),prompt 走 agent 导向(角色 / 工具白名单 / role-matching)。自带 [evals/evals.json](pr-reviewer/evals/evals.json) 即此 mining 版(提交进仓);init(从角色 或 mining)默认写此路径,重新生成会覆盖。
 
 `run` → **绝对 pass_rate**(无 A/B 对照、无 delta / 胜率)。7 道 L1 题实测混合约 **90%+**(单 run 浮动,某次实跑 93%):黑名单 / 边界题多满分,失败机制题在八成档——部分道会因 agent 用了**非字面表述**而漏个别 `CONTAINS_PATTERN` 断言(如认出了硬编码 key 却没引用字面 `AKIA`),客观率(programmatic,卡字面)因此低于混合率。这是「断言 vs 自然表述」的真实诊断信号,非全 0 / 全 100 空转。控制台只打 `Pass rate: agent NN%`(无 vs 噪音);产物落 `agent/eval-*/run-*/`(grading / checkpoints / transcript / compliance),`benchmark.json` 的 `run_summary` 只有 `agent` 一个 key、**无 `delta`**。
 

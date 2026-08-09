@@ -550,8 +550,8 @@ output/
 |------|--------|----------|
 | `FILE_EXISTS` | 文件存在 | `filename` |
 | `FILE_CONTAINS` | 文件含子串 | `filename`, `pattern` |
-| `CONTAINS_PATTERN` | 正则匹配 | `pattern`, `path`(可选) |
-| `NOT_CONTAINS` | 反向匹配 | `pattern`, `path`(可选) |
+| `CONTAINS_PATTERN` | 正则匹配 | `pattern`, `path`(可选), `scope`(可选,`"transcript"` 只查文本输出不碰文件) |
+| `NOT_CONTAINS` | 反向匹配 | `pattern`, `path`(可选), `scope`(可选,同上) |
 | `JSON_HAS_FIELD` | JSON 字段 | `filename`, `field`（支持 `a.b.c`） |
 | `LINE_COUNT` | 行数范围 | `min`/`max`(至少一个) |
 | `TOOL_CALLED` | 检查工具调用（看 tool_trace） | `tool_name`, `min_count` |
