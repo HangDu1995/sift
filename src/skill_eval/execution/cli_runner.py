@@ -226,7 +226,7 @@ class ClaudeRunner:
         on_progress: Callable[[str], None] | None = None,
     ) -> RunOutput:
         """agent 模式 spawn:agent 正文(frontmatter 后 body)经 ``--append-system-prompt``
-        注入 cc 的 system 层(prompt 原样),测 agent 绝对质量(单臂,无 baseline)。
+        注入 cc 的 system 层(prompt 原样),测 agent 绝对质量(无 A/B 对照)。
 
         区别于 ``run()``(skill body 包 ``<skill>`` 拼 user prompt):agent 用 cc 原生
         system prompt 注入,贴近真实 dispatch 路径。``description`` 是主 agent 的路由线索、

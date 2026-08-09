@@ -468,6 +468,8 @@ skill-eval run path/to/skill/ --changed-from v1/             # 改 skill 后只�
 
 > with/without 模式下，without_skill 侧没注入 skill、谈不上遵循，只跑前 4 步 + 聚合（无 compliance / 无 calibration）；v1/v2 模式两边都有 skill，7 步全跑。
 
+> **agent 评测模式（`--kind agent`）走绝对质量、不做 A/B 对照**：只一个 `"agent"` config（无 with/without、无 delta、无盲比较），报绝对 pass_rate。注入也不同——agent 正文（frontmatter 后的 body）经 cc `--append-system-prompt` 进 **system 层**（不是 §4.4 那样拼进 user prompt），prompt 原样。评分 / 遵循性 / 校准照跑（单 config，各自对账 agent 正文里的指令）；`scorecard` + `vet` 不跑（它们是 SKILL.md 结构检查，对 agent.md 跑出假信号如「Missing SKILL.md」；agent 的静态质量由 `critique --kind agent` 覆盖）。需配 `--evals`（agent.md 不能像 skill 目录那样自动发现 evals.json）。
+
 评分里若出现 **UNEVAL（评不出来）**——某条 expectation/assertion LLM 判不了（transcript 截断 / 解析失败 / 信息不足），区别于 FAIL（确定错）——会触发自动重试（`--max-retries`，默认 2），重试目录形如 `run-1-retry-1`。**重试有上限、不是无限重试到评出来为止**：耗尽次数仍 UNEVAL 就原样落盘，所以最终 grading 不保证全 PASS/FAIL，可能仍含 UNEVAL（以及 TIMEOUT/ERROR）。
 
 #### 4.3.1 这些阶段哪些调 LLM（对应 §7.15）
@@ -498,6 +500,8 @@ skill 不是一个运行时加载的模块。skill-eval 做的是：
 所以"模型用了 skill"≈"模型读到了这份手册并照着做"。这也是为什么 SKILL.md 的写法直接决定效果——它就是模型看到的全部指令。
 
 > 一个常见坑：**references/ 在 skill 注入时会自动拷进工作区**（无需配置）；但 skill 依赖的 `scripts/` 等其它目录**不会**自动拷——若 SKILL.md 让模型运行 `scripts/foo.py` 或读取 references 以外的文件，得在 eval 里用 `source_dir` 把它拷进来，否则模型反复找不存在的文件直到 timeout，效果从"有增益"掉回"和不开一样"。看到 with/without delta 接近 0 时，先排查依赖目录进没进工作区。（客观 Δ 趋零时 viewer/batch 会主动标 ⚠ 提醒——但 ⚠ 只是「无增益」信号，首选按这里排查依赖这一常见假阳性；排除依赖后，才考虑 skill 是否已被模型原生能力覆盖、该收窄 scope。）
+
+> agent 评测（`--kind agent`）不走这套 user prompt 注入——agent 正文经 `--append-system-prompt` 进 cc 的 **system 层**，prompt 原样不包；也没有 references/scripts 拷贝（agent 是单 `.md` 声明，非 skill 目录）。详见 §4.3 agent 评测模式。
 
 ### 4.5 产物目录树
 

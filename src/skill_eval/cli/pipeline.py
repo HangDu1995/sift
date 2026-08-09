@@ -35,7 +35,7 @@ def format_failure_triage(runs) -> list[str]:
 def _format_pass_rate_line(side_keys, la, lb, a_mean, b_mean, pr_delta) -> str:
     """格式化 Pass rate 行(纯函数,可单测)。
 
-    单臂(len(side_keys)<2,agent 绝对质量)→ 只报绝对 pass_rate,无 vs/delta(无 baseline)。
+    agent 评测(len(side_keys)<2,绝对质量)→ 只报绝对 pass_rate,无 vs/delta(无 A/B 对照)。
     两臂 → ``A vs B + delta``(负 delta 标红)。"""
     if len(side_keys) < 2:
         return f"  Pass rate:  {la} {a_mean:.0f}%"
@@ -210,7 +210,7 @@ def _run_ab_eval(
         else:
             console.print(f"  Quality:   (add --model for blind comparison)")
 
-        # 2. Pass rate — mechanical assertions (客观侧;单臂只报绝对,两臂报 vs+delta)
+        # 2. Pass rate — mechanical assertions (客观侧;agent 评测只报绝对,两臂报 vs+delta)
         console.print(_format_pass_rate_line(side_keys, la, lb, a_mean, b_mean, pr_delta))
 
         # 3. Analysis insights

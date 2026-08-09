@@ -205,7 +205,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 
 ### `run` — A/B 评测
 
-两种模式：默认 A/B 评测（同一 skill 开/关对照，或 v1/v2 双 skill），或路径 1 真任务模式（`--task` 直接跑真实任务）。`--kind agent` 切换到 agent 评测：单臂绝对质量（无 with/without 对照），agent 正文经 `--append-system-prompt` 注入 system 层，产出单 config 绝对 pass_rate（无 delta/盲比较）；需配 `--evals`（agent.md 不能自动发现 evals.json）。与 `--task`、`--skill-b` 互斥。
+两种模式：默认 A/B 评测（同一 skill 开/关对照，或 v1/v2 双 skill），或路径 1 真任务模式（`--task` 直接跑真实任务）。`--kind agent` 切换到 agent 评测：绝对质量（无 with/without 对照），agent 正文经 `--append-system-prompt` 注入 system 层，产出单 config 绝对 pass_rate（无 delta/盲比较）；需配 `--evals`（agent.md 不能自动发现 evals.json）。与 `--task`、`--skill-b` 互斥。
 
 **参数**：
 
@@ -238,7 +238,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 | `--skill-b` | 无 | **v1/v2 模式**：第二个 skill 路径（两边各注入各自 skill）；不给则默认 with/without（同 skill 开/关） |
 | `--label-a` | skill 目录名 | v1/v2 模式 side A 显示标签 |
 | `--label-b` | skill 目录名 | v1/v2 模式 side B 显示标签 |
-| `--kind` | skill | 声明类型：`skill`（默认，A/B 对照）/ `agent`（单臂绝对质量：`--append-system-prompt` 注入 agent 正文，无 with/without 对照、无 delta/盲比较；与 `--task`、`--skill-b` 互斥；需 `--evals`） |
+| `--kind` | skill | 声明类型：`skill`（默认，A/B 对照）/ `agent`（绝对质量：`--append-system-prompt` 注入 agent 正文，无 with/without 对照、无 delta/盲比较；与 `--task`、`--skill-b` 互斥；需 `--evals`） |
 
 **`--changed-from` 判定的失败处理**：
 

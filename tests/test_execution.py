@@ -744,15 +744,15 @@ class TestComparisonSkipWhenProgrammaticOnly:
 
 
 class TestComparisonSingleArm:
-    """单臂 sides(agent 绝对质量,长度 1)→ run_comparisons 早返 [] 不 IndexError
-    (盲比较需两臂对照,单臂无对照)。"""
+    """agent 评测 sides(绝对质量,长度 1)→ run_comparisons 早返 [] 不 IndexError
+    (盲比较需两臂对照,agent 评测无对照)。"""
 
     def test_single_arm_returns_empty_no_crash(self, tmp_path: Path):
         agg = BenchmarkAggregator(model="m", enable_llm=True)
         sides = [("agent", tmp_path / "agent", "agent")]
         with patch("skill_eval.execution.comparison_suite.BlindComparator") as mock_cmp:
             assert run_comparisons(agg, tmp_path, sides=sides) == []
-        mock_cmp.assert_not_called()  # 单臂守卫在 BlindComparator 实例化之前
+        mock_cmp.assert_not_called()  # agent 评测守卫在 BlindComparator 实例化之前
 
 
 class TestComparisonPairing:
@@ -1372,7 +1372,7 @@ class TestABTestRunnerReferencesAutoCopy:
 
 class TestAgentKindRunner:
     """kind=agent 时 run_single_eval 调 ClaudeRunner.run_agent(--append-system-prompt 注入),
-    不调 run(skill body 拼 user prompt 那套)。单臂绝对质量。"""
+    不调 run(skill body 拼 user prompt 那套)。绝对质量。"""
 
     def test_runner_uses_run_agent_when_kind_agent(self, tmp_path: Path):
         from skill_eval.execution.runner import ABTestRunner

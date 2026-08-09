@@ -61,14 +61,14 @@ def build_sides(
 ) -> list[tuple[str, Path | None, str]]:
     """构建 sides spec:[(config_name, inject_skill, comp_label), ...]。
 
-    - kind="agent" → 单臂 [("agent", skill_path, "agent")](绝对质量无 baseline;与 skill_b 互斥)
+    - kind="agent" → 绝对质量 [("agent", skill_path, "agent")](无 A/B 对照;与 skill_b 互斥)
     - skill_b=None → 默认 with/without(side B 注入 None = skill 关 / baseline)
     - skill_b 给定 → v1/v2(两边都注入各自 skill,都开)
     v1/v2 的 config_name/label 默认取 skill 目录 basename,可被 label_a/b 覆盖。
     side A 恒为 positional skill(skill_path)。"""
     if kind == "agent":
         if skill_b is not None:
-            raise SkillEvalError("agent 单臂模式(绝对质量)与 --skill-b(A/B 对照)互斥")
+            raise SkillEvalError("agent 评测(绝对质量)与 --skill-b(A/B 对照)互斥")
         return [("agent", skill_path, "agent")]
     if skill_b is None:
         return [("with_skill", skill_path, "with"), ("without_skill", None, "without")]

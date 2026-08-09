@@ -78,14 +78,14 @@ def test_default_no_skill_b_threads_with_without_sides(tmp_path):
 
 
 def test_build_sides_agent_returns_single_arm(tmp_path):
-    """kind=agent → 单臂 [("agent", path, "agent")](绝对质量无 baseline)。"""
+    """kind=agent → 绝对质量 [("agent", path, "agent")](无 A/B 对照)。"""
     agent = tmp_path / "agent.md"
     agent.write_text("---\nname: r\ndescription: d\n---\nbody\n", encoding="utf-8")
     assert build_sides(agent, None, None, None, kind="agent") == [("agent", agent, "agent")]
 
 
 def test_build_sides_agent_rejects_skill_b(tmp_path):
-    """agent 单臂与 --skill-b(A/B)互斥 → SkillEvalError。"""
+    """agent 评测与 --skill-b(A/B)互斥 → SkillEvalError。"""
     agent = tmp_path / "agent.md"
     agent.write_text("---\nname: r\ndescription: d\n---\nbody\n", encoding="utf-8")
     skill_b = tmp_path / "b"
@@ -102,7 +102,7 @@ def test_build_sides_skill_default_unchanged(tmp_path):
 
 
 def test_run_ab_eval_agent_threads_single_arm_and_kind(tmp_path):
-    """kind=agent → build_sides 单臂 [("agent",...)] + RunConfig.kind=agent 透到 runner。"""
+    """kind=agent → build_sides 绝对质量 [("agent",...)] + RunConfig.kind=agent 透到 runner。"""
     agent = tmp_path / "agent.md"
     agent.write_text("---\nname: r\ndescription: d\n---\nbody\n", encoding="utf-8")
     eval_set = EvalSet(skill_name="r", evals=[EvalCase(id=1, prompt="do")])
@@ -260,7 +260,7 @@ def test_run_does_not_exit_on_negative_delta(tmp_path):
 
 
 def test_format_pass_rate_line_single_arm():
-    """单臂(agent)→ 只报绝对 pass_rate,无 vs/delta/side B 噪音。"""
+    """agent 评测 → 只报绝对 pass_rate,无 vs/delta/side B 噪音。"""
     from skill_eval.cli.pipeline import _format_pass_rate_line
     line = _format_pass_rate_line(["agent"], "agent", "side B", 80.0, 0.0, "—")
     assert "agent 80%" in line

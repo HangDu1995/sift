@@ -159,7 +159,7 @@ def test_run_cli_invalid_kind_exits_2(tmp_path):
 
 
 def test_run_cli_agent_rejects_skill_b(tmp_path):
-    """--kind agent(单臂)与 --skill-b(A/B)互斥 → exit 2。"""
+    """--kind agent 与 --skill-b(A/B)互斥 → exit 2。"""
     sp = _skill(tmp_path)
     sb = tmp_path / "b"
     sb.mkdir()
@@ -179,7 +179,7 @@ def test_run_cli_agent_rejects_task(tmp_path):
 
 
 def test_run_cli_agent_kind_threads(monkeypatch, tmp_path):
-    """--kind agent → _run_ab_eval 收 kind='agent'(单臂;evals 路径)。"""
+    """--kind agent → _run_ab_eval 收 kind='agent'(agent 评测;evals 路径)。"""
     captured = {}
 
     def fake_run_ab_eval(**kw):
@@ -198,3 +198,28 @@ def test_run_cli_agent_kind_threads(monkeypatch, tmp_path):
                             "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output
     assert captured.get("kind") == "agent"
+
+
+def test_run_cli_agent_skips_scorecard_and_vet(monkeypatch, tmp_path):
+    """kind=agent → 不产 scorecard.json/vet-report.json。
+
+    scorecard(11 项 SKILL.md 结构检查)+ vet(structure-check 报 'Missing SKILL.md')
+    的检查对象是 SKILL.md 目录结构,对 agent.md(单文件)跑出假信号——实测 vet 误报
+    BLOCKED、scorecard 9/11 因非 SKILL.md 结构 FAIL。故 agent 模式 run 末尾跳过这俩。
+    不 mock _emit_static_and_vet,让它真跑(对 agent.md)验证 kind=agent 早返不产。
+    """
+    out = tmp_path / "out"
+    out.mkdir()  # iteration_dir 预建(_emit_static_and_vet 写入目标)
+    monkeypatch.setattr("skill_eval.cli.commands.run._run_ab_eval",
+                        lambda **kw: (None, out))
+    monkeypatch.setattr("skill_eval.cli.commands.run._check_claude_or_exit", lambda: None)
+    monkeypatch.setattr("skill_eval.cli.commands.run._emit_report", lambda *a, **k: None)
+    sp = tmp_path / "agent.md"
+    sp.write_text("---\nname: r\ndescription: d\n---\nbody\n", encoding="utf-8")
+    evals = tmp_path / "evals.json"
+    evals.write_text('{"skill_name":"r","evals":[{"id":1,"prompt":"do"}]}', encoding="utf-8")
+    r = runner.invoke(app, ["run", str(sp), "--kind", "agent", "--evals", str(evals),
+                            "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    assert not (out / "scorecard.json").exists()   # agent 不产(SKILL.md 结构检查不适用)
+    assert not (out / "vet-report.json").exists()

@@ -1121,6 +1121,61 @@ class TestReportGeneratorStatic:
         assert "Duration 123s" in html
 
 
+    def test_generate_html_single_arm_no_ab_noise(self, tmp_path):
+        """agent 评测(绝对质量,run_summary 只有 'agent' 一个 config)→ viewer 不渲染 A/B 噪声:
+        ① 顶部 Δ 卡(通过率变化)换成「绝对通过率」卡(无 baseline,对齐控制台 _format_pass_rate_line
+        agent 评测行为);② Delta table 变单列(无空 side B 列、无「变化」列);③ Skill 卡标「Agent」。
+
+        改前:Δ 卡无条件渲染(agent 评测 delta={} → 显空「客观 — / 主观 —」)、Delta table 冒空 side B
+        列 + 全「—」变化列——agent 评测 report 看起来像漏了对照组的 A/B 表。
+
+        viewer 客户端渲染,pytest 验模板 JS 源码字面(守卫存在);运行时是否真跳过靠 node --check
+        (见 test_generate_html_viewer_script_passes_node_check)+ 重生成真 report 肉眼。
+        RED 锚点:改前模板无 isSingleArm / 绝对通过率 / if (!isSingleArm) / configA === "agent"。
+        """
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        benchmark = {
+            "metadata": {"skill_name": "pr-reviewer"},
+            "runs": [],
+            "run_summary": {
+                "agent": {
+                    "pass_rate": {"mean": 0.93, "stddev": 0.07, "min": 0.81, "max": 1.0},
+                    "pass_rate_programmatic": {"mean": 0.83, "stddev": 0.19, "min": 0.5, "max": 1.0},
+                },
+            },
+        }
+        html = ReportGenerator().generate_html(workspace, benchmark)
+        # agent 评测守卫 + 绝对通过率卡(替换无条件 Δ 卡)
+        assert "isSingleArm" in html
+        assert "绝对通过率" in html
+        # 副标只说"绝对质量",不提"单臂/无 baseline"(晦涩多余)
+        assert "绝对质量" in html
+        assert "单臂绝对质量" not in html
+        assert "无 A/B baseline" not in html
+        # Delta table side B / 变化列被 isSingleArm 守卫(双臂路径保留)
+        assert "if (!isSingleArm)" in html
+        # Skill 卡标 Agent(agent 评测;configA==="agent" 是 build_sides 硬编码的 config 名)
+        assert 'configA === "agent"' in html
+
+    def test_generate_html_duration_phase1_dynamic(self, tmp_path):
+        """耗时「阶段1」描述按真实 pipeline 动态(据 runs 的 compliance/calibration 信号拼),
+        不硬编码全套阶段。改前 :1623 硬编码'(准备·执行 executor·grader·遵循性 audit·calibration)',
+        --no-calibration 却仍显 calibration —— 与真实 pipeline 不符。
+
+        信号源:viewer.py _build_run 已读 run 目录 compliance.json/calibration.json,
+        run 对象带这俩字段,viewer.html 据 runs.some(r=>r.compliance/calibration) 拼阶段列表。
+        正常 skill(两者都有)→ 全显;agent+--no-calibration → 无 calibration。
+        RED:模板含 hasCalibration/p1Parts(改前硬编码字符串,无此变量)。
+        (viewer 客户端渲染,pytest 验模板字面;运行时靠 node --check + mock-DOM。)"""
+        workspace = tmp_path / "iteration-1"
+        workspace.mkdir()
+        html = ReportGenerator().generate_html(
+            workspace, {"metadata": {"skill_name": "x"}, "runs": [], "run_summary": {}})
+        assert "hasCalibration" in html   # 动态信号变量(改前硬编码,无)
+        assert "p1Parts" in html          # 阶段列表动态拼接
+
+
 class TestLoadAuxData:
     def test_load_vet_report(self, tmp_path: Path):
         v = tmp_path / "vet-report.json"

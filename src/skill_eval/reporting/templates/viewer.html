@@ -1284,6 +1284,7 @@
       const delta = summary.delta || {};
       const a = summary[configA] || {};
       const b = summary[configB] || {};
+      const isSingleArm = configs.length < 2;  // agent 评测(绝对质量,无 A/B 对照):不显 Δ / 对照列
 
       function mkCard(title, value, sub, color) {
         return '<div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;text-align:center;">'
@@ -1300,15 +1301,25 @@
       // (可能已被模型原生能力覆盖,dead weight)。客观为主(稳);主观不单独触发(漂,噪声大)。
       // NaN/None 不触发(诚实缺值,不报假趋零)。条件逻辑由 node -e 验变换。
       const isFlatDelta = v => { const n = parseFloat(v); return !isNaN(n) && Math.abs(n) <= 0.05; };
-      html += '<div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;text-align:center;">'
-        + '<div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem;">通过率变化 (Δ)</div>'
-        + '<div style="font-size:1.4rem;font-family:Poppins,sans-serif;font-weight:600;color:' + dClr(delta.pass_rate_programmatic) + ';">客观 ' + fmtD(delta.pass_rate_programmatic) + '</div>'
-        + '<div style="font-size:1.1rem;font-family:Poppins,sans-serif;font-weight:600;color:' + dClr(delta.pass_rate_llm) + ';">主观 ' + fmtD(delta.pass_rate_llm) + '</div>'
-        + '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;">客观稳 · 主观看方向</div>'
-        + (isFlatDelta(delta.pass_rate_programmatic)
-            ? '<div style="font-size:0.68rem;color:var(--accent);margin-top:0.4rem;border-top:1px dashed var(--border);padding-top:0.35rem;line-height:1.4;">⚠️ 客观 Δ≈0 · skill 未带来增益——先查依赖目录是否进工作区(常见假无增益);排除后可能 skill 已被模型原生能力覆盖,建议核查 scope</div>'
-            : '')
-        + '</div>';
+      if (isSingleArm) {
+        // agent 评测(绝对质量,无 A/B 对照):无 Δ,只报绝对三率(对齐控制台 _format_pass_rate_line 绝对质量行为)
+        html += '<div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;text-align:center;">'
+          + '<div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem;">绝对通过率</div>'
+          + '<div style="font-size:1.4rem;font-family:Poppins,sans-serif;font-weight:600;color:var(--text);">混合 ' + fmtDim(a.pass_rate && a.pass_rate.mean) + '</div>'
+          + '<div style="font-size:1.1rem;font-family:Poppins,sans-serif;font-weight:600;color:var(--text-muted);">客观 ' + fmtDim(a.pass_rate_programmatic && a.pass_rate_programmatic.mean) + ' · 主观 ' + fmtDim(a.pass_rate_llm && a.pass_rate_llm.mean) + '</div>'
+          + '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;">绝对质量</div>'
+          + '</div>';
+      } else {
+        html += '<div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;text-align:center;">'
+          + '<div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem;">通过率变化 (Δ)</div>'
+          + '<div style="font-size:1.4rem;font-family:Poppins,sans-serif;font-weight:600;color:' + dClr(delta.pass_rate_programmatic) + ';">客观 ' + fmtD(delta.pass_rate_programmatic) + '</div>'
+          + '<div style="font-size:1.1rem;font-family:Poppins,sans-serif;font-weight:600;color:' + dClr(delta.pass_rate_llm) + ';">主观 ' + fmtD(delta.pass_rate_llm) + '</div>'
+          + '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;">客观稳 · 主观看方向</div>'
+          + (isFlatDelta(delta.pass_rate_programmatic)
+              ? '<div style="font-size:0.68rem;color:var(--accent);margin-top:0.4rem;border-top:1px dashed var(--border);padding-top:0.35rem;line-height:1.4;">⚠️ 客观 Δ≈0 · skill 未带来增益——先查依赖目录是否进工作区(常见假无增益);排除后可能 skill 已被模型原生能力覆盖,建议核查 scope</div>'
+              : '')
+          + '</div>';
+      }
 
       // 盲评胜率(主观主指标,§45 与客观 delta_programmatic 并列报出;紧挨 Δ 卡 = 两主指标并列)
       if (compSummary) {
@@ -1384,7 +1395,7 @@
         }
       }
       if (metadata.skill_name) {
-        html += mkCard("Skill", metadata.skill_name, "", "var(--accent)");
+        html += mkCard(isSingleArm && configA === "agent" ? "Agent" : "Skill", metadata.skill_name, "", "var(--accent)");
       }
       // 模型:三角色(executor/comparator/analyzer)当前锁死同一 --model,值同 → 合一张卡标"同源"
       // (明示同源,别假装能独立配置误导);三值不同(将来 --comparator-model 等独立 flag)才按角色展开。
@@ -1508,9 +1519,9 @@
         html += '</div>';
       }
 
-      // ── Delta table ──
+      // ── Delta table(双臂:指标 × 两 config + 变化;agent 评测:指标 × 单 config,无对照/变化列)──
       html += '<table class="benchmark-table">';
-      html += "<thead><tr><th>指标</th><th>" + escapeHtml(configA.replace(/_/g, ' ')) + "</th><th>" + escapeHtml(configB.replace(/_/g, ' ')) + "</th><th>变化</th></tr></thead><tbody>";
+      html += "<thead><tr><th>指标</th><th>" + escapeHtml(configA.replace(/_/g, ' ')) + "</th>" + (isSingleArm ? "" : "<th>" + escapeHtml(configB.replace(/_/g, ' ')) + "</th><th>变化</th>") + "</tr></thead><tbody>";
 
       function fmtStat(stat, pct) {
         if (!stat) return "—";
@@ -1529,29 +1540,46 @@
 
       html += "<tr><td><strong>通过率</strong></td>";
       html += "<td>" + fmtStat(a.pass_rate, true) + "</td>";
-      html += "<td>" + fmtStat(b.pass_rate, true) + "</td>";
-      html += '<td class="' + deltaClass(delta.pass_rate) + '">' + (delta.pass_rate || "—") + "</td></tr>";
+      if (!isSingleArm) {
+        html += "<td>" + fmtStat(b.pass_rate, true) + "</td>";
+        html += '<td class="' + deltaClass(delta.pass_rate) + '">' + (delta.pass_rate || "—") + "</td>";
+      }
+      html += "</tr>";
       // 双率(与 compliance 双率同构):programmatic(客观,稳)/ llm(主观,漂)。只在任一 config 有该类时显
       if (a.pass_rate_programmatic || b.pass_rate_programmatic) {
         html += "<tr><td>　程序化通过率 <span style=\"font-size:0.7rem;color:var(--text-muted);\">(稳)</span></td>";
         html += "<td>" + fmtStat(a.pass_rate_programmatic, true) + "</td>";
-        html += "<td>" + fmtStat(b.pass_rate_programmatic, true) + "</td>";
-        html += '<td class="' + deltaClass(delta.pass_rate_programmatic) + '">' + (delta.pass_rate_programmatic || "—") + "</td></tr>";
+        if (!isSingleArm) {
+          html += "<td>" + fmtStat(b.pass_rate_programmatic, true) + "</td>";
+          html += '<td class="' + deltaClass(delta.pass_rate_programmatic) + '">' + (delta.pass_rate_programmatic || "—") + "</td>";
+        }
+        html += "</tr>";
       }
       if (a.pass_rate_llm || b.pass_rate_llm) {
         html += "<tr><td>　LLM 通过率 <span style=\"font-size:0.7rem;color:var(--text-muted);\">(漂,看方向)</span></td>";
         html += "<td>" + fmtStat(a.pass_rate_llm, true) + "</td>";
-        html += "<td>" + fmtStat(b.pass_rate_llm, true) + "</td>";
-        html += '<td class="' + deltaClass(delta.pass_rate_llm) + '">' + (delta.pass_rate_llm || "—") + "</td></tr>";
+        if (!isSingleArm) {
+          html += "<td>" + fmtStat(b.pass_rate_llm, true) + "</td>";
+          html += '<td class="' + deltaClass(delta.pass_rate_llm) + '">' + (delta.pass_rate_llm || "—") + "</td>";
+        }
+        html += "</tr>";
       }
 
       if (a.time_seconds || b.time_seconds) {
-        html += "<tr><td><strong>耗时 (秒)</strong></td><td>" + fmtStat(a.time_seconds, false) + "</td><td>" + fmtStat(b.time_seconds, false) + "</td>";
-        html += '<td class="' + deltaClass(delta.time_seconds) + '">' + (delta.time_seconds ? delta.time_seconds + "秒" : "—") + "</td></tr>";
+        html += "<tr><td><strong>耗时 (秒)</strong></td><td>" + fmtStat(a.time_seconds, false) + "</td>";
+        if (!isSingleArm) {
+          html += "<td>" + fmtStat(b.time_seconds, false) + "</td>";
+          html += '<td class="' + deltaClass(delta.time_seconds) + '">' + (delta.time_seconds ? delta.time_seconds + "秒" : "—") + "</td>";
+        }
+        html += "</tr>";
       }
       if (a.tokens || b.tokens) {
-        html += "<tr><td><strong>令牌数</strong></td><td>" + fmtStat(a.tokens, false) + "</td><td>" + fmtStat(b.tokens, false) + "</td>";
-        html += '<td class="' + deltaClass(delta.tokens) + '">' + (delta.tokens || "—") + "</td></tr>";
+        html += "<tr><td><strong>令牌数</strong></td><td>" + fmtStat(a.tokens, false) + "</td>";
+        if (!isSingleArm) {
+          html += "<td>" + fmtStat(b.tokens, false) + "</td>";
+          html += '<td class="' + deltaClass(delta.tokens) + '">' + (delta.tokens || "—") + "</td>";
+        }
+        html += "</tr>";
       }
       html += "</tbody></table>";
 
@@ -1592,7 +1620,15 @@
         if (du.phase1_wall != null || du.phase2_wall != null) {
           html += '<table class="benchmark-table"><tbody>';
           html += "<tr><td colspan='4' style='font-size:0.7rem;color:var(--text-muted);'>墙钟分解(加总 = 总计)</td></tr>";
-          if (du.phase1_wall != null) html += "<tr><td><strong>阶段1 runs</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(准备 · 执行 executor · grader 评分 · 遵循性 audit · calibration;并发交叠不再拆,各项 LLM 时长见下「LLM 累计」)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.phase1_wall) + "</td></tr>";
+          if (du.phase1_wall != null) {
+            // 阶段1 子阶段按真实 pipeline 拼(据 runs 的 compliance/calibration 信号,不硬编码全套)
+            var hasCompliance = (data.runs || []).some(function(r) { return r.compliance; });
+            var hasCalibration = (data.runs || []).some(function(r) { return r.calibration; });
+            var p1Parts = ["准备", "执行 executor", "grader 评分"];
+            if (hasCompliance) p1Parts.push("遵循性 audit");
+            if (hasCalibration) p1Parts.push("calibration");
+            html += "<tr><td><strong>阶段1 runs</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(" + p1Parts.join(" · ") + ";并发交叠不再拆,各项 LLM 时长见下「LLM 累计」)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.phase1_wall) + "</td></tr>";
+          }
           if (du.phase2_wall != null) html += "<tr><td><strong>阶段2 aggregate</strong></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.phase2_wall) + "</td></tr>";
           if (du.read_runs_wall) html += "<tr><td style='padding-left:1.5rem;'>· 读产物</td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.read_runs_wall) + "</td></tr>";
           if (du.comparator_wall) html += "<tr><td style='padding-left:1.5rem;'>· 盲比较</td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.comparator_wall) + "</td></tr>";

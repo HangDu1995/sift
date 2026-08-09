@@ -59,6 +59,7 @@ def _emit_static_and_vet(
     *,
     skip_static: bool = False,
     skip_vet: bool = False,
+    kind: str = "skill",
 ) -> None:
     """run 末尾:把静态评分卡 + 安全审查写进 iteration_dir(供 report 面板自动带上)。
 
@@ -67,7 +68,14 @@ def _emit_static_and_vet(
     成本、纯本地,末尾追加开销可忽略;vet 用原生扫描器(skip_external)保零依赖秒级。
 
     失败不阻断 run:两者是补充维度,挂了只让 report 缺那块,不影响动态评测(各自独立)。
+
+    agent 模式跳过:scorecard(11 项 SKILL.md 结构检查)+ vet(structure-check)的检查
+    对象是 SKILL.md 目录结构,对 agent.md(单文件)跑出假信号(vet 误报 'Missing SKILL.md'
+    → BLOCKED、scorecard 因非 SKILL.md 结构 FAIL)。agent 的静态质量由 critique --kind agent
+    覆盖,不靠这俩。
     """
+    if kind == "agent":
+        return
     if not skip_static:
         try:
             from skill_eval.static_analysis.analyzer import StaticAnalyzer
@@ -182,7 +190,7 @@ def run(
     ),
     label_a: Optional[str] = typer.Option(None, "--label-a", help="v1/v2 模式 side A 显示标签(默认 skill 目录 basename)"),
     label_b: Optional[str] = typer.Option(None, "--label-b", help="v1/v2 模式 side B 显示标签(默认 skill 目录 basename)"),
-    kind: str = typer.Option("skill", "--kind", help="声明类型:skill(默认,A/B 对照)/ agent(单臂绝对质量,--append-system-prompt 注入 agent 正文;需配 --evals)"),
+    kind: str = typer.Option("skill", "--kind", help="声明类型:skill(默认,A/B 对照)/ agent(绝对质量,--append-system-prompt 注入 agent 正文;需配 --evals)"),
 ):
     """Run A/B evaluation of a Skill, or path-1 live task (--task)."""
     skill_path = resolve_skill_dir(skill_path)
@@ -197,10 +205,10 @@ def run(
         console.print(f"[red]Error:[/red] --kind 只接受 skill / agent,收到 {kind!r}")
         raise typer.Exit(code=2)
     if kind == "agent" and task:
-        console.print("[red]Error:[/red] --kind agent 是 evals 路径(单臂绝对质量),与 --task(路径1 真任务)互斥")
+        console.print("[red]Error:[/red] --kind agent 是 evals 路径(绝对质量),与 --task(路径1 真任务)互斥")
         raise typer.Exit(code=2)
     if kind == "agent" and skill_b:
-        console.print("[red]Error:[/red] --kind agent 是单臂绝对质量,与 --skill-b(A/B 对照)互斥")
+        console.print("[red]Error:[/red] --kind agent 是绝对质量评测,与 --skill-b(A/B 对照)互斥")
         raise typer.Exit(code=2)
     # cc-check:非 --task(evals 路径恒用 cc)或 --task 且 cc 在 exec_list 时才需要
     if (not task) or ("cc" in exec_list):
@@ -321,6 +329,6 @@ def run(
     )
 
     # 末尾自动产静态评分卡 + 安全审查(写进 iteration_dir,供 report 面板自动带上)
-    _emit_static_and_vet(skill_path, iteration_dir, skip_static=no_static, skip_vet=no_vet)
+    _emit_static_and_vet(skill_path, iteration_dir, skip_static=no_static, skip_vet=no_vet, kind=kind)
     # 再聚合上面三者产 report.html(必须在 static/vet 之后:它们是输入)
     _emit_report(iteration_dir, skip_report=no_report)

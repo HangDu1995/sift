@@ -24,7 +24,7 @@ class RunConfig(BaseModel):
     outlier_threshold_multiplier: float = 3.0  # > N×MAD → anomaly
     min_runs_for_stats: int = 3  # Minimum runs before statistical checks kick in
     max_retries_per_eval: int = 2  # Max retries for UNEVAL/TIMEOUT
-    kind: str = "skill"  # 声明类型/注入模式:skill(skill body 拼 user prompt)/ agent(--append-system-prompt 注入 system 层,单臂绝对质量)
+    kind: str = "skill"  # 声明类型/注入模式:skill(skill body 拼 user prompt)/ agent(--append-system-prompt 注入 system 层,绝对质量)
 
 
 class ToolCallRecord(BaseModel):

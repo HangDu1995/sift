@@ -15,7 +15,7 @@
 - **评测线**([pr-reviewer.md](pr-reviewer.md)):一份**特意为展示 critique + 出题 + 打分而设计**的
   agent——角色(PR diff 审查)够丰富、写作质量有精心安排的强弱分布(失败机制 / 可执行步骤 /
   高风险黑名单写得实,但**故意没给完整 worked example**),让 `critique` 抓到真实缺口、
-  `init` 出多样且对口角色的题(含反面/边界题),`run` 再用这些题打**绝对质量分**(单臂无 baseline)。
+  `init` 出多样且对口角色的题(含反面/边界题),`run` 再用这些题打**绝对质量分**(无 A/B 对照)。
   不需要 session transcript。
 
 | agent | 角色 | 演示 | 可核验/可出的指令 |
@@ -92,9 +92,9 @@ skill-eval run fixtures/example-agents/pr-reviewer.md --kind agent \
 
 `init` → 数道 L1 题,**覆盖 pr-reviewer 的三类规则**——失败机制(大 diff skim / AI 生成幻觉 / 批量重命名误伤)、高风险黑名单(硬编码密钥 / `rm -rf` 未引用 / 测试绿放行)、边界;含考 agent 正确地「不做某事」的**反面边界题**(无阻塞时克制不 nitpick)。每道 rationale 都精准映射到一条具体规则。
 
-`run` → 单臂**绝对 pass_rate**(无 A/B baseline、无 delta / 胜率)。7 道 L1 题实测混合约 **90%+**(单 run 浮动,某次实跑 93%):黑名单 / 边界题多满分,失败机制题在八成档——部分道会因 agent 用了**非字面表述**而漏个别 `CONTAINS_PATTERN` 断言(如认出了硬编码 key 却没引用字面 `AKIA`),客观率(programmatic,卡字面)因此低于混合率。这是「断言 vs 自然表述」的真实诊断信号,非全 0 / 全 100 空转。控制台只打 `Pass rate: agent NN%`(无 vs 噪音);产物落 `agent/eval-*/run-*/`(grading / checkpoints / transcript / compliance),`benchmark.json` 的 `run_summary` 只有 `agent` 一个 key、**无 `delta`**。
+`run` → **绝对 pass_rate**(无 A/B 对照、无 delta / 胜率)。7 道 L1 题实测混合约 **90%+**(单 run 浮动,某次实跑 93%):黑名单 / 边界题多满分,失败机制题在八成档——部分道会因 agent 用了**非字面表述**而漏个别 `CONTAINS_PATTERN` 断言(如认出了硬编码 key 却没引用字面 `AKIA`),客观率(programmatic,卡字面)因此低于混合率。这是「断言 vs 自然表述」的真实诊断信号,非全 0 / 全 100 空转。控制台只打 `Pass rate: agent NN%`(无 vs 噪音);产物落 `agent/eval-*/run-*/`(grading / checkpoints / transcript / compliance),`benchmark.json` 的 `run_summary` 只有 `agent` 一个 key、**无 `delta`**。
 
-> 出题组成与 run 的 pass_rate 都会浮动(LLM 造题 + cc 方差),但稳定覆盖这三类规则、pass_rate 形态(单臂高分非空转)稳定;上面是定性描述,不写死具体道数 / 百分比。
+> 出题组成与 run 的 pass_rate 都会浮动(LLM 造题 + cc 方差),但稳定覆盖这三类规则、pass_rate 形态(绝对质量高分非空转)稳定;上面是定性描述,不写死具体道数 / 百分比。
 
 ### 期望 verdict(审计线,混合 = 对账有信号)
 
