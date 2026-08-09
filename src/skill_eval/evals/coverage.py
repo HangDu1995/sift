@@ -15,28 +15,33 @@ from skill_eval.parser import parse_skill_md
 from skill_eval.utils import call_claude
 
 
-def _build_coverage_prompt(name: str, description: str, content: str, eval_set: EvalSet) -> str:
+def _build_coverage_prompt(name: str, description: str, content: str, eval_set: EvalSet,
+                           kind: str | None = None) -> str:
+    is_agent = kind == "agent"
+    role_word = "AI agent" if is_agent else "Claude Code Skill"
+    def_head = "## Agent system prompt" if is_agent else "## Skill definition (SKILL.md)"
+    body_word = "agent 定义正文" if is_agent else "SKILL.md"
     eval_lines = []
     for e in eval_set.evals:
         rat = (e.rationale or "").strip() or "(无 rationale)"
         eval_lines.append(f'{e.id}. prompt: "{e.prompt}" | rationale: "{rat}"')
     evals_block = "\n".join(eval_lines) if eval_lines else "(无 eval)"
-    return f"""You are auditing eval coverage for a Claude Code Skill.
+    return f"""You are auditing eval coverage for a {role_word}.
 
-Skill name: {name}
-Skill description: {description}
+Name: {name}
+Description: {description}
 
-## Skill definition (SKILL.md)
+{def_head}
 {content}
 
 ## Existing evals (id / prompt / rationale)
 {evals_block}
 
 ## Task
-List the TESTABLE instruction points in the SKILL.md — each concrete rule / step /
+List the TESTABLE instruction points in the {body_word} — each concrete rule / step /
 capability / conditional branch an eval could verify (NOT prose or examples). For each:
 - label: short name
-- source_quote: the verbatim SKILL.md phrase it comes from
+- source_quote: the verbatim {body_word} phrase it comes from
 - covered_by: eval ids (from the list above) that VERIFY this point; [] if none
 
 Be strict: a point is "covered" only if an eval actually exercises it, not merely mentions it.
@@ -84,10 +89,14 @@ def _parse_coverage_response(response: str, skill_name: str) -> CoverageReport:
 
 
 def analyze_coverage(skill_path: Path, eval_set: EvalSet, *,
-                     model: str | None = None, timeout: int = 120) -> CoverageReport:
-    """一次 LLM:SKILL.md + evals → 覆盖映射 report。call_claude 失败 → 空 report(诊断不炸)。"""
+                     model: str | None = None, timeout: int = 120,
+                     kind: str | None = None) -> CoverageReport:
+    """一次 LLM:声明正文 + evals → 覆盖映射 report。call_claude 失败 → 空 report(诊断不炸)。
+
+    kind='agent' 时 prompt 用 agent 措辞(内容点提取吃 parse 后 body,skill/agent 通用)。
+    """
     name, description, content, _fm, _body = parse_skill_md(skill_path)
-    prompt = _build_coverage_prompt(name, description, content, eval_set)
+    prompt = _build_coverage_prompt(name, description, content, eval_set, kind=kind)
     usage: dict = {}
     start = time.perf_counter()
     try:

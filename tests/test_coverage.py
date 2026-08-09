@@ -88,6 +88,81 @@ def test_analyze_coverage_calls_claude_and_maps(monkeypatch, tmp_path):
     assert rep.duration_seconds >= 0.0
 
 
+def test_analyze_coverage_agent_kind_uses_agent_wording(monkeypatch, tmp_path):
+    """kind='agent' 的 coverage prompt 用 agent 措辞,非 'SKILL.md'。
+
+    内容点提取吃 parse 后的 body(agent.md 走得通),只改措辞 + 漏测处方带 --kind agent。
+    """
+    agent = tmp_path / "pr-reviewer.md"
+    agent.write_text("---\nname: pr-reviewer\ndescription: 审 PR diff\ntools: [Read, Grep]\n---\n# 审查者\n硬编码密钥必拦\n", encoding="utf-8")
+    captured = {}
+
+    def fake_call(prompt, model=None, timeout=120, max_turns=None, on_usage=None):
+        captured["prompt"] = prompt
+        if on_usage:
+            on_usage({"input_tokens": 1, "output_tokens": 1})
+        return '{"points": []}'
+
+    monkeypatch.setattr(cov, "call_claude", fake_call)
+    eval_set = EvalSet(skill_name="pr-reviewer", evals=[EvalCase(id=1, prompt="审 diff", rationale="硬编码密钥")])
+    analyze_coverage(agent, eval_set, model=None, timeout=120, kind="agent")
+
+    assert "Agent" in captured["prompt"]
+    assert "SKILL.md" not in captured["prompt"]
+
+
+def test_coverage_agent_md_default_path(monkeypatch, tmp_path):
+    """coverage 对 agent .md 默认找 parent/evals/evals.json(.md→parent 路径修),不打「不存在」警告。"""
+    runner = CliRunner()
+    adir = tmp_path / "pr-reviewer"; adir.mkdir()
+    agent = adir / "pr-reviewer.md"
+    agent.write_text("---\nname: pr-reviewer\ndescription: 审 PR diff\n---\n# 审查者\n规则\n", encoding="utf-8")
+    (adir / "evals").mkdir()
+    (adir / "evals" / "evals.json").write_text(json.dumps(
+        {"skill_name": "pr-reviewer", "evals": [{"id": 1, "prompt": "审 diff"}]}), encoding="utf-8")
+
+    def fake_analyze(skill_path, eval_set, *, model=None, timeout=120, kind=None):
+        return CoverageReport(skill_name="pr-reviewer", points=[])
+    monkeypatch.setattr(cov_cmd, "analyze_coverage", fake_analyze)
+
+    r = runner.invoke(cov_cmd.app, ["coverage", str(agent), "-o", str(tmp_path / "out"), "--kind", "agent"])
+    assert r.exit_code == 0, r.output
+    assert "不存在" not in r.output          # 没因路径踩坑
+
+
+def test_coverage_augment_agent_routes_generate_for_agent(monkeypatch, tmp_path):
+    """--kind agent --augment 路由到 generate_for_agent(非 skill 的 generate_with_llm)。"""
+    from skill_eval.evals.generator import EvalInitGenerator
+    runner = CliRunner()
+    adir = tmp_path / "pr-reviewer"; adir.mkdir()
+    agent = adir / "pr-reviewer.md"
+    agent.write_text("---\nname: pr-reviewer\ndescription: 审 PR diff\n---\n# 审查者\n规则\n", encoding="utf-8")
+    (adir / "evals").mkdir()
+    (adir / "evals" / "evals.json").write_text(json.dumps(
+        {"skill_name": "pr-reviewer", "evals": [{"id": 1, "prompt": "p", "rationale": "r"}]}), encoding="utf-8")
+
+    def fake_analyze(skill_path, eval_set, *, model=None, timeout=120, kind=None):
+        return CoverageReport(skill_name="pr-reviewer", points=[
+            CoveragePoint(label="漏测点X", source_quote="q", covered_by=[])])
+    monkeypatch.setattr(cov_cmd, "analyze_coverage", fake_analyze)
+
+    calls = {"agent": 0, "skill": 0}
+
+    def fake_for_agent(self, skill_path, existing_evals=None):
+        calls["agent"] += 1
+        return EvalSet(skill_name="pr-reviewer", evals=[EvalCase(id=0, name="new", prompt="新题", rationale="auto")])
+    monkeypatch.setattr(EvalInitGenerator, "generate_for_agent", fake_for_agent)
+
+    def fake_with_llm(self, skill_path, existing_evals=None):
+        calls["skill"] += 1
+        return EvalSet(skill_name="pr-reviewer", evals=[])
+    monkeypatch.setattr(EvalInitGenerator, "generate_with_llm", fake_with_llm)
+
+    r = runner.invoke(cov_cmd.app, ["coverage", str(agent), "-o", str(tmp_path / "out"), "--kind", "agent", "--augment"])
+    assert r.exit_code == 0, r.output
+    assert calls["agent"] == 1 and calls["skill"] == 0   # 走 agent 路,没走 skill 路
+
+
 def test_parse_response_strips_json_fence():
     fenced = '```json\n{"points": [{"label": "x", "source_quote": "q", "covered_by": ["2"]}]}\n```'
     rep = _parse_coverage_response(fenced, "my-skill")
@@ -121,7 +196,7 @@ def test_coverage_default_reports_gaps_and_writes_json(monkeypatch, tmp_path):
         "evals": [{"id": 1, "prompt": "分析日志", "rationale": "映射到已知码"}],
     }, ensure_ascii=False), encoding="utf-8")
 
-    def fake_analyze(skill_path, eval_set, *, model=None, timeout=120):
+    def fake_analyze(skill_path, eval_set, *, model=None, timeout=120, kind=None):
         return CoverageReport(skill_name="sk", points=[
             CoveragePoint(label="已覆盖", source_quote="q1", covered_by=[1]),
             CoveragePoint(label="安全事件升级", source_quote="若日志提到安全事件", covered_by=[]),
@@ -146,7 +221,7 @@ def test_coverage_no_gaps_reports_all_covered(monkeypatch, tmp_path):
     (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
     (edir / "evals.json").write_text(json.dumps({"skill_name": "sk", "evals": [{"id": 1, "prompt": "p"}]}), encoding="utf-8")
 
-    def fake_analyze(skill_path, eval_set, *, model=None, timeout=120):
+    def fake_analyze(skill_path, eval_set, *, model=None, timeout=120, kind=None):
         return CoverageReport(skill_name="sk", points=[
             CoveragePoint(label="全覆盖", source_quote="q", covered_by=[1])])
     monkeypatch.setattr(cov_cmd, "analyze_coverage", fake_analyze)
@@ -181,7 +256,7 @@ def test_coverage_augment_appends_flagged_dedup_evals(monkeypatch, tmp_path):
         "trigger_probes": [{"id": 1, "prompt": "tp", "expect_trigger": True}],
     }, ensure_ascii=False), encoding="utf-8")
 
-    def fake_analyze(skill_path, eval_set, *, model=None, timeout=120):
+    def fake_analyze(skill_path, eval_set, *, model=None, timeout=120, kind=None):
         from skill_eval.models.coverage_report import CoveragePoint, CoverageReport
         return CoverageReport(skill_name="sk", points=[
             CoveragePoint(label="安全事件升级", source_quote="q", covered_by=[])])  # 1 个漏测点
@@ -223,7 +298,7 @@ def test_coverage_augment_feeds_existing_evals(monkeypatch, tmp_path):
         "evals": [{"id": 1, "name": "EXISTING", "prompt": "p", "rationale": "## r"}],
     }, ensure_ascii=False), encoding="utf-8")
 
-    def fake_analyze(skill_path, eval_set, *, model=None, timeout=120):
+    def fake_analyze(skill_path, eval_set, *, model=None, timeout=120, kind=None):
         from skill_eval.models.coverage_report import CoveragePoint, CoverageReport
         return CoverageReport(skill_name="sk", points=[
             CoveragePoint(label="漏测点A", source_quote="q", covered_by=[])])

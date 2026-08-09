@@ -22,12 +22,21 @@ def coverage(
         False, "--augment",
         help="自动补漏测题:每个漏测点调 init 生成逻辑补题(带 review:coverage-augment flag,按 prompt 去重),写回 evals.json。",
     ),
+    kind: Optional[str] = typer.Option(
+        None, "--kind",
+        help="声明类型:agent=审 agent 定义正文的内容点(skill 默认);配 --augment 时走 generate_for_agent 出题。",
+    ),
 ):
-    """诊断 evals.json 对 SKILL.md 内容点的覆盖(漏测=0 覆盖的点;纯诊断无 gate)。"""
+    """诊断 evals.json 对声明(SKILL.md / agent.md)内容点的覆盖(漏测=0 覆盖的点;纯诊断无 gate)。"""
     skill_path = resolve_skill_dir(skill_path)
+    if kind is not None and kind not in ("skill", "agent"):
+        console.print(f"[red]Error:[/red] --kind 只接受 skill / agent,收到 {kind!r}")
+        raise typer.Exit(code=2)
     try:
         name, *_ = parse_skill_md(skill_path)
-        ef = evals_file or (skill_path / "evals" / "evals.json")
+        # agent .md 是文件 → 取 parent 找 evals/(同 init);skill 目录原样。
+        base = skill_path if skill_path.is_dir() else skill_path.parent
+        ef = evals_file or (base / "evals" / "evals.json")
         if not ef.exists():
             console.print(f"[yellow]⚠️ {ef} 不存在,先跑 init 生成考题。[/yellow]")
             raise typer.Exit(code=0)
@@ -41,7 +50,7 @@ def coverage(
             f"正在分析 {name} 的内容点 × eval 覆盖({len(eval_set.evals)} evals)…",
             spinner="dots",
         ):
-            report = analyze_coverage(skill_path, eval_set, model=model, timeout=timeout)
+            report = analyze_coverage(skill_path, eval_set, model=model, timeout=timeout, kind=kind)
 
         out_dir = output or (skill_path / "evals")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -52,18 +61,20 @@ def coverage(
         tok = (tu.get("input_tokens", 0) or 0) + (tu.get("output_tokens", 0) or 0)
         console.print(f"内容点 [bold]{len(report.points)}[/bold] · 漏测 [red]{len(gaps)}[/red]"
                       f" · 耗时 {report.duration_seconds:.1f}s · {tok} tok")
+        decl_word = "agent 定义" if kind == "agent" else "SKILL.md"
         if not gaps:
-            console.print("[green]✓ 无漏测:SKILL.md 内容点均有 eval 覆盖。[/green]")
+            console.print(f"[green]✓ 无漏测:{decl_word} 内容点均有 eval 覆盖。[/green]")
         else:
             console.print("[bold]漏测点(0 道题覆盖):[/bold]")
             for g in gaps:
                 console.print(f"  · [red]{g.label}[/red]")
                 if g.source_quote:
-                    console.print(f"      ↳ SKILL.md:「{g.source_quote[:120]}」", markup=False)
+                    console.print(f"      ↳ {decl_word}:「{g.source_quote[:120]}」", markup=False)
             console.print("[dim]补题:逐条人工 review 后,用以下命令定向补(或加 --augment 自动补):[/dim]")
+            kind_flag = " --kind agent" if kind == "agent" else ""
             for g in gaps:
                 safe_label = g.label.replace('"', "'")
-                console.print(f'  init {skill_path} --append --focus "{safe_label}"', markup=False)
+                console.print(f'  init {skill_path}{kind_flag} --append --focus "{safe_label}"', markup=False)
 
         if augment and gaps:
             from skill_eval.evals.generator import EvalInitGenerator
@@ -77,8 +88,11 @@ def coverage(
                 try:
                     with console.status(f"正在为「{g.label}」生成补题…", spinner="dots"):
                         # 喂现有 evals(含本批已补题)→ 共享内核定向补题 + 语义去重;
-                        # 下面的 prompt 字面去重作兜底。
-                        new_set = gen.generate_with_llm(skill_path, existing_evals=eval_set.evals)
+                        # 下面的 prompt 字面去重作兜底。agent 走 generate_for_agent。
+                        if kind == "agent":
+                            new_set = gen.generate_for_agent(skill_path, existing_evals=eval_set.evals)
+                        else:
+                            new_set = gen.generate_with_llm(skill_path, existing_evals=eval_set.evals)
                 except RuntimeError:
                     console.print(f"[dim]补「{g.label}」失败(限流/异常),跳过。[/dim]")
                     continue

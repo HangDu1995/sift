@@ -323,6 +323,12 @@ skill-eval add pdf/ --idea "..." --dry-run                          # 预览不�
 
 `--idea` 模式下自动分配 id、自动推导 assertions 和 fixtures。
 
+**给 agent 追加单题**：加 `--kind agent`——`--idea` 走 agent 单题 prompt（喂 agent system prompt + idea，产一道带 `scope:"transcript"` 断言、文件操作时带 fixtures 的 eval；平行 skill 的 `--idea`，见 §3.2 两条出题路）。手动模式（`--prompt --expectation`）kind 无关。
+
+```bash
+skill-eval add path/to/agent.md --kind agent --idea "审一个用 pickle 反序列化用户输入的 PR"
+```
+
 ### 3.4 定向补薄弱面：`--focus` + `--append`
 
 `init` 一次性生成整套时，LLM 有个系统性盲区——**倾向正面题 / happy path**，容易漏反面场景（skill 不该被触发的请求）、边界 / 错误处理（空输入、超大、损坏、异常）。`init --focus` + `--append` 帮你定向补这些盲区，且不丢之前生成 / 手改的题：
@@ -363,6 +369,13 @@ skill-eval coverage path/to/skill/ --augment      # 漏测点自动补题(写回
 coverage 不 spawn Claude 跑题——它做的是**一次性 LLM 映射**：喂 SKILL.md 正文 + 各 eval 的 `id` / `prompt` / `rationale`，让 LLM 列出 SKILL.md 的**可测内容点**（具体的规则 / 步骤 / 能力 / 条件分支，不含散文和示例），再判断每点被哪几道 eval 真的**验证**（不是仅在 prompt 里提到）。`covered_by` 为空的内容点 = **漏测**。
 
 产 `coverage-report.json`（机器读）+ `coverage-report.html`（人读，always 写，漏测行高亮红）+ 终端摘要（内容点 N · 漏测 M · 耗时 · token），并给每个漏测点一条 `init <skill> --append --focus "<label>"` 处方（人工定向补，复用 §3.4 的 `--focus` 机制）。
+
+**给 agent 诊断漏测**：加 `--kind agent`——内容点从 agent 定义正文切（措辞走 agent 导向），漏测处方带 `--kind agent`；`--augment` 自动补题走 `generate_for_agent`（非 skill 的 `generate_with_llm`）。
+
+```bash
+skill-eval coverage path/to/agent.md --kind agent            # 诊断 agent 定义内容点覆盖
+skill-eval coverage path/to/agent.md --kind agent --augment  # 漏测点自动补题(走 agent 出题)
+```
 
 **怎么读报告**
 

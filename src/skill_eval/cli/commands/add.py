@@ -26,6 +26,10 @@ def add(
     level: str = typer.Option("L1", "--level", help="Eval level: L1 or L2"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without saving"),
     model: Optional[str] = typer.Option(None, "--model", help="Model for LLM generation"),
+    kind: Optional[str] = typer.Option(
+        None, "--kind",
+        help="声明类型:agent=给 agent 出题(skill 默认)。配 --idea 时选 agent 单题 prompt。",
+    ),
 ):
     """Add eval cases to a skill's evals.json.
 
@@ -36,9 +40,15 @@ def add(
     Examples:
       skill-eval add pdf/ --idea "test encrypted PDF decryption"
       skill-eval add pdf/ --prompt "Decrypt secret.pdf" --expectation "produces output.pdf" --level L2
+      skill-eval add agent.md --kind agent --idea "审一个有 SQL 注入的 PR"
     """
     skill_path = resolve_skill_dir(skill_path)
-    evals_path = _discover_evals(skill_path)
+    if kind is not None and kind not in ("skill", "agent"):
+        console.print(f"[red]Error:[/red] --kind 只接受 skill / agent,收到 {kind!r}")
+        raise typer.Exit(code=2)
+    # agent .md 是文件 → 取 parent 找 evals/(同 init/coverage);skill 目录原样。
+    base = skill_path if skill_path.is_dir() else skill_path.parent
+    evals_path = _discover_evals(base)
     if not evals_path:
         console.print("[red]Error:[/red] no evals.json found. Run `skill-eval init` first.")
         raise typer.Exit(code=2)
@@ -54,7 +64,10 @@ def add(
         _check_claude_or_exit()
         usage: dict = {}
         start = time.perf_counter()
-        new_case = _generate_from_idea(skill_path, idea, level, model, on_usage=usage.update)
+        if kind == "agent":
+            new_case = _generate_agent_from_idea(skill_path, idea, model, on_usage=usage.update)
+        else:
+            new_case = _generate_from_idea(skill_path, idea, level, model, on_usage=usage.update)
         tok = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
         console.print(f"耗时 [bold]{time.perf_counter() - start:.1f}s[/bold] · {tok} tok")
     elif prompt:
@@ -145,6 +158,11 @@ def _generate_from_idea(skill_path: Path, idea: str, level: str, model: str | No
         raise typer.Exit(code=3)
 
     # Parse JSON from response
+    return _build_case_from_response(response, level)
+
+
+def _build_case_from_response(response: str, default_level: str) -> EvalCase:
+    """LLM 响应(JSON)→ EvalCase(skill/agent 单题共用)。解析失败 → Exit(3)。"""
     import re
     match = re.search(r"\{.*\}", response, re.DOTALL)
     if not match:
@@ -157,18 +175,16 @@ def _generate_from_idea(skill_path: Path, idea: str, level: str, model: str | No
         console.print("[red]Error:[/red] failed to parse LLM response")
         raise typer.Exit(code=3)
 
-    # Build EvalCase
     case = EvalCase(
         id=0,
         name=data.get("name", ""),
         prompt=data.get("prompt", ""),
         expectations=data.get("expectations", []),
-        level=data.get("level", level),
+        level=data.get("level", default_level),
     )
 
-    # Parse assertions
+    from skill_eval.models import Assertion, AssertionType, FixtureFile
     for a in data.get("assertions", []):
-        from skill_eval.models import Assertion, AssertionType
         try:
             case.assertions.append(Assertion(
                 name=a.get("name", ""),
@@ -178,19 +194,58 @@ def _generate_from_idea(skill_path: Path, idea: str, level: str, model: str | No
         except (ValueError, KeyError):
             continue
 
-    # Parse fixtures
     for f in data.get("fixtures", []):
-        from skill_eval.models import FixtureFile
-        case.fixtures.append(FixtureFile(
-            path=f.get("path", ""),
-            content=f.get("content", ""),
-        ))
+        case.fixtures.append(FixtureFile(path=f.get("path", ""), content=f.get("content", "")))
 
-    # Auto-add missing assertions
     from skill_eval.evals.generator import EvalInitGenerator
     case.assertions = EvalInitGenerator._auto_generate_assertions(case)
-
     return case
+
+
+def _generate_agent_from_idea(skill_path: Path, idea: str, model: str | None,
+                              *, on_usage=None) -> EvalCase:
+    """agent 单题:喂 agent system prompt + idea,产一道 eval(scope:transcript + fixtures)。
+
+    平行 skill 的 _generate_from_idea(走 agent 措辞 + scope:transcript 断言 + 文件落地 fixtures);
+    LLM 解析复用 _build_case_from_response。
+    """
+    name, description, _content, frontmatter, body = parse_skill_md(skill_path)
+    tools = (frontmatter or {}).get("tools", [])
+    prompt = (
+        "你在为一个 AI agent 设计一道评测用例。被评的是 agent 定义本身(system prompt 角色),不是 skill。\n\n"
+        f"## Agent\nname: {name}\ndescription: {description}\n\n"
+        f"## Agent system prompt(角色指令正文)\n{body[:6000]}\n\n"
+        f"## Agent 声明的工具白名单\n{tools}\n\n"
+        f"## Testing idea: {idea}\n\n"
+        "## Output: valid JSON only, no other text\n"
+        "```json\n"
+        "{\n"
+        '  "name": "agent-<scenario>",\n'
+        '  "level": "L1",\n'
+        '  "prompt": "主 agent / 用户会把这件事怎么交给它(具体场景 + 必要上下文,别泛泛)",\n'
+        '  "expectations": ["单条、具体、可观测的预期"],\n'
+        '  "assertions": [\n'
+        '    {"name": "mentions X", "type": "CONTAINS_PATTERN", "params": {"pattern": "keyword", "scope": "transcript"}},\n'
+        '    {"name": "avoids Y", "type": "NOT_CONTAINS", "params": {"pattern": "forbidden", "scope": "transcript"}}\n'
+        "  ],\n"
+        '  "fixtures": [\n'
+        '    {"path": "src/example.py", "content": "真实文件内容(带要审 / 跑的问题),agent 会真去 Read/Grep 它"}\n'
+        "  ]\n"
+        "}\n"
+        "```\n\n"
+        "## Rules\n"
+        "- 语言同 agent 声明正文\n"
+        '- expectations 单条、具体、可观测;每条写对应 assertion,带 "scope":"transcript"(查 agent 回答文本,不查输入文件)\n'
+        "- 若任务涉及文件(审 / 读 / 跑代码——agent 会用 Read/Grep/Bash 碰文件),把文件落地为 fixtures"
+        "(prompt 用路径引用,别把代码塞进 prompt 文本);纯建议、无文件操作的 agent 不带 fixtures\n"
+        '- fixture 是输入(给 agent 读 / 跑),断言用 scope:"transcript" 查回答,不用 path 指 fixture\n'
+    )
+    try:
+        response = call_claude(prompt, model=model, timeout=120, on_usage=on_usage)
+    except RuntimeError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=3)
+    return _build_case_from_response(response, "L1")
 
 
 def _display_eval(case: EvalCase) -> None:

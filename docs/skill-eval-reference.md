@@ -118,6 +118,9 @@ skill-eval add pdf/ --prompt "Decrypt file.pdf..." --expectation "output exists"
 
 # 预览
 skill-eval add pdf/ --idea "..." --dry-run
+
+# 给 agent 追加单题(走 agent 单题 prompt:scope:transcript 断言 + fixtures)
+skill-eval add path/to/agent.md --kind agent --idea "审一个有 SQL 注入的 PR"
 ```
 
 **参数**：
@@ -488,6 +491,8 @@ Written to /tmp/out/trigger-report.json · /tmp/out/trigger-report.html
 skill-eval coverage path/to/skill/                       # 默认:诊断漏测,出 JSON + HTML
 skill-eval coverage path/to/skill/ --augment             # 漏测点自动补题(写回 evals.json,需人审)
 skill-eval coverage path/to/skill/ --evals path/to/evals.json
+skill-eval coverage path/to/agent.md --kind agent        # 诊断 agent 定义内容点覆盖
+skill-eval coverage path/to/agent.md --kind agent --augment  # 漏测点自动补题(走 generate_for_agent)
 ```
 
 **参数**：
