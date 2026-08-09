@@ -297,8 +297,11 @@ description: {description}
       "prompt": "主 agent / 用户会把这件事怎么交给它(具体场景 + 必要上下文,别泛泛)",
       "expected_output": "好的完成长什么样(可观测的质量标准)",
       "expectations": [
-        "把要点用双引号括起来(如“指出具体行号”)——系统据此断言输出须包含",
-        "把禁止项写成 不应/不能 X(如 不应改业务代码)——系统据此断言输出须不含"
+        "单条、具体、可观测的预期。GOOD: 'response 指出具体行号'。BAD: '输出正确' / '遵循指令'(空泛不可查)"
+      ],
+      "assertions": [
+        {{ "name": "mentions X", "type": "CONTAINS_PATTERN", "params": {{ "pattern": "keyword" }} }},
+        {{ "name": "avoids Y", "type": "NOT_CONTAINS", "params": {{ "pattern": "forbidden" }} }}
       ],
       "rationale": "这题考 agent 哪条职责(对应 description / 正文哪点;同 agent 声明语言)"
     }}
@@ -308,8 +311,8 @@ description: {description}
 
 ## Rules
 - 语言:同 agent 声明正文
-- level: L1 = 不产文件 / 纯分析建议(大多数 agent);L2 = 产文件(在 expectations 里点名产出文件名)
-- 不用自己写 assertions——系统据 expectations 自动生成(双引号包住的词 → 须包含,不应/不能 → 须不含)
+- level: L1 = 不产文件 / 纯分析建议(大多数 agent);L2 = 产文件(产出的文件名写进 assertions 的 FILE_EXISTS)
+- 每条 expectation 都写对应 assertion(s)(可一条拆多个、可加隐含的);L1 用 CONTAINS_PATTERN / NOT_CONTAINS,L2 可加 FILE_EXISTS
 - rationale 每题必填:说清考哪条职责
 - 总 5-8 道,至少 1 道边界 / 错误场景"""
 
@@ -318,9 +321,9 @@ description: {description}
         """agent 出题:从 description/角色推 role-matching 任务 + 质量线。
 
         跟 skill generate_with_llm 不同:不按正文切段(skill 工作流语义)、不假设产文件。
-        断言靠 expectations 自动派生(_auto_generate_assertions;L1 CONTAINS/NOT_CONTAINS、
-        L2 额外 FILE_EXISTS)。LLM 失败 / 解析失败 → 空 EvalSet(agent 无确定性 fallback;
-        generate_template 的切段是 skill 专属,不适用)。
+        断言由 LLM 直接写(对齐 skill _build_llm_prompt);_auto_generate_assertions 作兜底
+        (LLM 写够的 assertions 直接用,自然语言 expectations 派生抽不到)。LLM 失败 / 解析失败
+        → 空 EvalSet(agent 无确定性 fallback;generate_template 的切段是 skill 专属,不适用)。
         """
         name, description, content, frontmatter, body = parse_skill_md(agent_path)
         prompt = self._build_agent_prompt(name, description, body, frontmatter,
@@ -335,6 +338,12 @@ description: {description}
         self._flag_missing_rationale(eval_set)
         for case in eval_set.evals:                       # agent 两级都派生(L2 也补 FILE_EXISTS)
             case.assertions = self._auto_generate_assertions(case)
+        for case in eval_set.evals:                       # 断言偏少 → init 提示审(兜底硬约束下漏写的少数)
+            if len(case.assertions) < len(case.expectations):
+                self._init_warnings.append(
+                    f"题{case.id} {case.name}: 断言 {len(case.assertions)} < 期望 "
+                    f"{len(case.expectations)},扫一眼该补的可程序化项"
+                    f"(纯主观 expectation 无断言正常)")
         return eval_set
 
     # ------------------------------------------------------------------
