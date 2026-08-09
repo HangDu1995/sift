@@ -239,3 +239,43 @@ def test_analyze_multi_run_all_fail_returns_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(crt, "call_claude", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
     rep = analyze_content_quality(skill, runs=3)
     assert rep.dimensions == []                         # 全失败 → 空 report(诊断不炸)
+
+
+# ---- subject 措辞(skill 分支字节不变 / agent 换准词;4 维共用)----
+def test_build_prompt_agent_uses_agent_terms():
+    """agent 模式 prompt 用 agent 措辞,不残留 'SKILL.md'。"""
+    prompt = _build_critique_prompt("reviewer", "你只审查代码不改码", subject="agent")
+    assert "reviewer" in prompt
+    assert "agent 定义正文" in prompt          # agent 分支准词
+    assert "Claude Code agent" in prompt      # 角色框定换准词
+    assert "SKILL.md" not in prompt           # 不残留 skill 词
+    for key in ("failure_mechanism", "actionable_specificity", "high_risk_blacklist", "examples"):
+        assert key in prompt                   # 4 维 rubric 不变
+
+
+def test_build_prompt_skill_branch_keeps_skillmd_wording():
+    """skill 分支保留 'SKILL.md 正文' 准词(字节不变,已 shipped 不造回归)。"""
+    prompt = _build_critique_prompt("sk", "body")          # 默认 subject
+    assert "SKILL.md 正文" in prompt
+    assert "Claude Code Skill" in prompt
+    explicit = _build_critique_prompt("sk", "body", subject="skill")
+    assert explicit == prompt                              # 显式 skill == 默认
+
+
+def test_analyze_threads_subject_agent_to_prompt(monkeypatch, tmp_path):
+    """analyze_content_quality(subject='agent') 把 subject 透到 prompt(agent 准词出现)。"""
+    agent_md = tmp_path / "reviewer.md"
+    agent_md.write_text(
+        "---\nname: reviewer\ndescription: 审查代码\n---\n# 你是审查者\n只读不改\n",
+        encoding="utf-8")
+    captured = {}
+
+    def fake_call(prompt, model=None, timeout=120, max_turns=None, on_usage=None):
+        captured["prompt"] = prompt
+        return _fake_response_four_dims()
+
+    monkeypatch.setattr(crt, "call_claude", fake_call)
+    rep = analyze_content_quality(agent_md, subject="agent")
+    assert "agent 定义正文" in captured["prompt"]
+    assert "SKILL.md" not in captured["prompt"]
+    assert len(rep.dimensions) == 4                          # 解析照常(parse_skill_md 直读 .md)

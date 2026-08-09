@@ -33,17 +33,29 @@ _KEYS = [r[0] for r in _RUBRIC]
 _NAMES = {r[0]: r[1] for r in _RUBRIC}
 _VALID_STATUS = {"met", "partial", "missing"}
 
+# prompt 措辞按对象选准词:skill 分支冻结成现状(已 shipped,字节不变不造回归);
+# agent 分支换准词(不把 agent.md 叫 SKILL.md)。4 维 rubric 两边共用,不动。
+# body_ref=「X 正文」(标题/evidence 槽),orig_ref=「X 原文」(禁整段重写槽,原文用「原文」非「正文」)。
+_SUBJECT_TERMS = {
+    "skill": {"role": "Claude Code Skill", "label": "Skill",
+              "body_ref": "SKILL.md 正文", "orig_ref": "SKILL.md 原文"},
+    "agent": {"role": "Claude Code agent", "label": "agent",
+              "body_ref": "agent 定义正文", "orig_ref": "agent 定义原文"},
+}
 
-def _build_critique_prompt(name: str, body: str) -> str:
+
+def _build_critique_prompt(name: str, body: str, subject: str = "skill") -> str:
+    _t = _SUBJECT_TERMS.get(subject, _SUBJECT_TERMS["skill"])
+    role, label, body_ref, orig_ref = _t["role"], _t["label"], _t["body_ref"], _t["orig_ref"]
     rules = "\n".join(
         f"{cn} {r[0]} —— {r[2]}\n   好例:{r[3]}  反例:{r[4]}"
         for cn, r in zip("①②③④", _RUBRIC)
     )
-    return f"""你是 Claude Code Skill 的正文内容质量评审。给「读者反馈」,不打分。
+    return f"""你是 {role} 的正文内容质量评审。给「读者反馈」,不打分。
 你的角色是读者:读到抽象/像废话/没演示的地方指出来,读到具体可执行的点也认可。
 反馈要像跟同事随口说一句,用大白话,**别写报告、别长篇大论**。
 
-## 待评审 Skill:{name} 的 SKILL.md 正文
+## 待评审 {label}:{name} 的 {body_ref}
 {body}
 
 ## 四条评审原则(逐条判断 status:met 满足 / partial 部分 / missing 缺失)
@@ -53,9 +65,9 @@ def _build_critique_prompt(name: str, body: str) -> str:
 对每条输出:
 - key: 上面的英文 key
 - status: met / partial / missing
-- evidence: SKILL.md 正文里支撑判断的**原文片段,数组**——每个不同位置一条(分属不同段落就拆成多条),每条只摘关键句、**别整段抄**;missing 给空数组 []
+- evidence: {body_ref}里支撑判断的**原文片段,数组**——每个不同位置一条(分属不同段落就拆成多条),每条只摘关键句、**别整段抄**;missing 给空数组 []
 - feedback: **认可 / 已做到的大白话,1 句**。met → 好在哪(点出具体哪一处);partial → 已经做到的部分;missing → 空字符串 ""
-- gap: **缺口的大白话,1-2 句**。met → 空字符串 "";partial/missing → 第一句说缺什么,第二句给个改的方向(可举个短例子,但只点到为止)。**绝对不要把 SKILL.md 原文整段重写出来,不要堆成长篇。**
+- gap: **缺口的大白话,1-2 句**。met → 空字符串 "";partial/missing → 第一句说缺什么,第二句给个改的方向(可举个短例子,但只点到为止)。**绝对不要把 {orig_ref}整段重写出来,不要堆成长篇。**
 
 输出 JSON ONLY,不要其他文字:
 {{"dimensions":[{{"key":"failure_mechanism","status":"partial","evidence":["处理错误要小心"],"feedback":"有提醒读者注意错误。","gap":"太泛了,没说具体栽在哪。补一条:某操作因某原因会失败,对应怎么查。"}},{{"key":"actionable_specificity","status":"met","evidence":["改完重新查对象拿真 ID","再用这个 ID 调用"],"feedback":"步骤具体、引用真实对象名,照着能干。","gap":""}},{{"key":"high_risk_blacklist","status":"missing","evidence":[],"feedback":"","gap":"没拉黑看起来对但会害死人的操作。补一条带原因的禁令。"}},{{"key":"examples","status":"missing","evidence":[],"feedback":"","gap":"只有规则没演示。补一段真实命令或输入→输出。"}}]}}"""
@@ -159,17 +171,19 @@ def _aggregate_runs(reports: list[ContentQualityReport], skill_name: str) -> Con
 
 
 def analyze_content_quality(skill_path: Path, *, model: str | None = None,
-                            timeout: int = 120, runs: int = 1) -> ContentQualityReport:
-    """SKILL.md body_text → 内容质量 report。call_claude 失败 → 空 report(诊断不炸)。
+                            timeout: int = 120, runs: int = 1,
+                            subject: str = "skill") -> ContentQualityReport:
+    """声明正文(SKILL.md / agent 定义.md)body_text → 内容质量 report。
 
-    runs=1(默认):单次调用。runs>1:跑 N 次多数投票聚合(每维 status 取多数、
-    原文取首个判出多数档的 run、显 X/N 可信度),稳定性换 N× 调用开销。
+    call_claude 失败 → 空 report(诊断不炸)。runs=1(默认)单次;runs>1 多数投票聚合
+    (每维 status 取多数、原文取首个判出多数档的 run、显 X/N 可信度)。
 
-    取 parse_skill_md 第 5 返回值 body_text(纯正文,不含 frontmatter description)——
-    4 条 rubric 评正文,description 留给 trigger/static_analysis。
+    subject=skill/agent 只选 prompt 措辞(4 维 rubric 两边共用);取 parse_skill_md 第 5
+    返回值 body_text(纯正文,不含 frontmatter description)——description 留给行为层
+    (skill→trigger-accuracy / agent→dispatch-accuracy),不进 critique。
     """
     name, _desc, _content, _fm, body = parse_skill_md(skill_path)
-    prompt = _build_critique_prompt(name, body)
+    prompt = _build_critique_prompt(name, body, subject)
     start = time.perf_counter()
 
     if runs <= 1:
