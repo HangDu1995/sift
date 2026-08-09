@@ -1,0 +1,8 @@
+{"agent":"pr-reviewer","message":{"role":"user","content":"审查这份 PR 的 diff。src/auth.py 加了 AWS client 初始化、scripts/deploy.sh 改了清理脚本。逐文件审,给行级建议。"}}
+{"agent":"pr-reviewer","message":{"role":"assistant","content":[{"type":"text","text":"先 Read 改动的两个文件,定位具体行。"},{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/workspace/src/auth.py"}}]}}
+{"agent":"pr-reviewer","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"r1","content":"import boto3\n\ndef get_client():\n    # AWS client for S3 access\n    aws_key = \"AKIAIOSFODNN7EXAMPLE\"\n    aws_secret = \"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\"\n    return boto3.client(\"s3\", aws_access_key_id=aws_key, aws_secret_access_key=aws_secret)\n"}]}}
+{"agent":"pr-reviewer","message":{"role":"assistant","content":[{"type":"tool_use","id":"r2","name":"Read","input":{"file_path":"/workspace/scripts/deploy.sh"}}]}}
+{"agent":"pr-reviewer","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"r2","content":"#!/bin/bash\nDIR=$1\nrm -rf $DIR/*\necho \"cleaned $DIR\"\n"}]}}
+{"agent":"pr-reviewer","message":{"role":"assistant","content":[{"type":"text","text":"boto3.client 签名我核一下。"},{"type":"tool_use","id":"g1","name":"Grep","input":{"pattern":"def client","path":"/workspace"}}]}}
+{"agent":"pr-reviewer","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"g1","content":"(无匹配;boto3 是外部库,本仓无源码)"}]}}
+{"agent":"pr-reviewer","message":{"role":"assistant","content":[{"type":"text","text":"[src/auth.py:5] (🔴) 硬编码 AWS 凭据 AKIAIOSFODNN7EXAMPLE —— 测试代码也别裸写密钥 → 改用环境变量/IAM role。\n[scripts/deploy.sh:3] (🔴) rm -rf $DIR/* 未引用变量,$DIR 空时展开成 rm -rf /* → 引号引用 \"$DIR\" 并判空。\n\n总评:2 个 🔴 阻塞(凭据泄露 + 误删风险),不可合。"}]}}

@@ -12,17 +12,20 @@
   multi-agent session,演示 `audit` 对 agent 的遵循性对账。agent 和 skill 在 skill-eval 里是
   **同一个抽象**(一份声明的指令 + 一段执行段),审 agent 用同一个 `audit` 命令——区别只在
   切段靠 `agent` 字段(被 dispatch)而非 `Skill` 调用(被 invoke)。
-- **评测线**([pr-reviewer.md](pr-reviewer.md)):一份**特意为展示 critique + 出题 + 打分而设计**的
+- **评测线**([pr-reviewer.md](pr-reviewer/pr-reviewer.md)):一份**特意为展示 critique + 出题 + 打分而设计**的
   agent——角色(PR diff 审查)够丰富、写作质量有精心安排的强弱分布(失败机制 / 可执行步骤 /
   高风险黑名单写得实,但**故意没给完整 worked example**),让 `critique` 抓到真实缺口、
   `init` 出多样且对口角色的题(含反面/边界题),`run` 再用这些题打**绝对质量分**(无 A/B 对照)。
-  不需要 session transcript。
+  另带一份 [transcripts/synthetic-clean.jsonl](pr-reviewer/transcripts/synthetic-clean.jsonl)
+  (pr-reviewer 审一个含硬编码密钥 + 未引用 `rm -rf` 的 PR 的 session),演示
+  `init --kind agent --from-transcript` **mining 出题**(从 agent 真实使用 session 挖题,
+  prompt 走 agent 导向,区别于从角色直接出题)。
 
 | agent | 角色 | 演示 | 可核验/可出的指令 |
 |---|---|---|---|
 | [test-runner/](test-runner/) | 跑测试 + 核查覆盖率 + 落报告 | audit | 跑 `pytest`、覆盖率 ≥80%、**严禁** `pytest -x`、写 `TEST_REPORT.md`、禁止捏造 |
 | [lint-reviewer/](lint-reviewer/) | 跑 linter + 复查 | audit | 使用 `./lint.sh`、跑 `ruff check`、必须报全错误、修复后必须复查 |
-| [pr-reviewer.md](pr-reviewer.md) | 审查 PR diff 给行级建议 | critique + 出题 + 打分 | 失败机制(大 diff/AI 生成/批量重命名)+ 黑名单(硬编码密钥/`rm -rf`/测试绿放行)+ 边界(不改码/不 nitpick) |
+| [pr-reviewer.md](pr-reviewer/pr-reviewer.md) | 审查 PR diff 给行级建议 | critique + 出题 + 打分 | 失败机制(大 diff/AI 生成/批量重命名)+ 黑名单(硬编码密钥/`rm -rf`/测试绿放行)+ 边界(不改码/不 nitpick) |
 
 ### 为什么域无关(不绑特定运行环境)
 
@@ -69,19 +72,22 @@ skill-eval audit fixtures/example-agents/lint-reviewer/ \
 
 ### 评测线:pr-reviewer(critique + 出题 + 打分)
 
-pr-reviewer 是原生 `.md`(真实 agent 形态,非物化 SKILL.md),直接喂文件路径:
+pr-reviewer 是原生 `.md`(真实 agent 形态,非物化 SKILL.md),直接喂文件路径;init 出的考卷默认写 `pr-reviewer/evals/evals.json`(像 skill 的 `<skill>/evals/`):
 
 ```bash
 # critique:审 agent 定义正文的内容质量(4 维读者反馈)
-skill-eval critique fixtures/example-agents/pr-reviewer.md --kind agent -o /tmp/pr-reviewer-critique
+skill-eval critique fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent -o /tmp/pr-reviewer-critique
 
-# init:给 agent 出题(从角色造 role-matching 考题)
-mkdir -p /tmp/pr-reviewer-evals
-skill-eval init fixtures/example-agents/pr-reviewer.md --kind agent -o /tmp/pr-reviewer-evals
+# init:给 agent 出题(从角色造 role-matching 考题)——默认写 pr-reviewer/evals/evals.json(像 skill)
+skill-eval init fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent
+
+# init --from-transcript:mining 出题(从 agent 真实使用 session 挖题,另一条出题路)
+skill-eval init fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent \
+  --from-transcript fixtures/example-agents/pr-reviewer/transcripts/synthetic-clean.jsonl
 
 # run:用出的题打 agent 绝对质量分(body 经 --append-system-prompt 注入 cc system 层,prompt 原样)
-skill-eval run fixtures/example-agents/pr-reviewer.md --kind agent \
-  --evals /tmp/pr-reviewer-evals/evals.json --runs 2 -o /tmp/pr-reviewer-run
+skill-eval run fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent \
+  --evals fixtures/example-agents/pr-reviewer/evals/evals.json --runs 2 -o /tmp/pr-reviewer-run
 ```
 
 **期望产出(真 LLM 实跑验证过):**
@@ -91,6 +97,8 @@ skill-eval run fixtures/example-agents/pr-reviewer.md --kind agent \
 - 🟡 示例驱动 部分——有零碎真实碎片(空变量炸 `/`、glob 改名误伤),但**没有完整 worked example**(贴一段真实 hunk 演示 Read→Grep→产出)。这是 pr-reviewer **故意留的真实缺口**,演示 critique 抓改进点的价值。
 
 `init` → 数道 L1 题,**覆盖 pr-reviewer 的三类规则**——失败机制(大 diff skim / AI 生成幻觉 / 批量重命名误伤)、高风险黑名单(硬编码密钥 / `rm -rf` 未引用 / 测试绿放行)、边界;含考 agent 正确地「不做某事」的**反面边界题**(无阻塞时克制不 nitpick)。每道 rationale 都精准映射到一条具体规则。
+
+`init --from-transcript`(mining)→ 从 transcript 真实 session 挖题,产出 L1 expectations 为主(pr-reviewer 只读不产文件 → 无 `FILE_EXISTS`);transcript 种了硬编码密钥 + 未引用 `rm -rf` 双黑名单,挖出的题锚定 agent 正文职责(失败机制 / 黑名单 / 严重度),prompt 走 agent 导向(角色 / 工具白名单 / role-matching)。自带 [evals/evals.json](pr-reviewer/evals/evals.json) 即此 mining 版(提交进仓);init(从角色 或 mining)默认写此路径,重新生成会覆盖。
 
 `run` → **绝对 pass_rate**(无 A/B 对照、无 delta / 胜率)。7 道 L1 题实测混合约 **90%+**(单 run 浮动,某次实跑 93%):黑名单 / 边界题多满分,失败机制题在八成档——部分道会因 agent 用了**非字面表述**而漏个别 `CONTAINS_PATTERN` 断言(如认出了硬编码 key 却没引用字面 `AKIA`),客观率(programmatic,卡字面)因此低于混合率。这是「断言 vs 自然表述」的真实诊断信号,非全 0 / 全 100 空转。控制台只打 `Pass rate: agent NN%`(无 vs 噪音);产物落 `agent/eval-*/run-*/`(grading / checkpoints / transcript / compliance),`benchmark.json` 的 `run_summary` 只有 `agent` 一个 key、**无 `delta`**。
 

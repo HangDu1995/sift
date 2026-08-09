@@ -1184,7 +1184,7 @@ Output JSON ONLY:
         from skill_eval.evals.transcript import build_digest
         if not Path(transcript_path).exists():
             raise SkillEvalError(f"transcript 文件不存在: {transcript_path}")
-        name, description, _content, _frontmatter, body = parse_skill_md(skill_path)
+        name, description, _content, frontmatter, body = parse_skill_md(skill_path)
         digest_path = transcript_path
         if kind:
             # 多单元 transcript:只取本 skill/agent 被调用/被 dispatch 期间的段(kind 选锚点),
@@ -1205,7 +1205,8 @@ Output JSON ONLY:
         if not digest.user_turns and not digest.manifest:
             raise SkillEvalError("transcript 未产出可用内容(无 user turn 也无文件)")
         skill_outputs = self._extract_skill_outputs(body)
-        prompt = self._build_transcript_prompt(name, description, body, digest, skill_outputs)
+        prompt = self._build_transcript_prompt(name, description, body, digest, skill_outputs,
+                                               kind=kind, frontmatter=frontmatter)
         # mining 是单次大-prompt LLM 调用,常 1-5 分钟;"Mining…"后长时间静默像卡死。
         # 加心跳(独立线程,call_claude 阻塞期间每 20s 报一次仍在跑),同 audit/path-1 进度诉求。
         stop = threading.Event()
@@ -1239,14 +1240,23 @@ Output JSON ONLY:
         return EvalSet(skill_name=name, evals=cases)
 
     def _build_transcript_prompt(self, name: str, description: str, body: str, digest,
-                                 skill_outputs: set[str] | None = None) -> str:
+                                 skill_outputs: set[str] | None = None,
+                                 kind: str | None = None,
+                                 frontmatter: dict | None = None) -> str:
         skill_outputs = skill_outputs or set()
+        is_agent = kind == "agent"
         manifest = sorted(digest.manifest | skill_outputs)
         produced = sorted(f.path for f in digest.produced_files)
         inputs = sorted(f.path for f in digest.input_files)
         L: list[str] = []
-        L.append("You are an expert at creating evaluation test cases for AI coding assistants.\n")
-        L.append("下面是 (a) Skill 定义 与 (b) 一份该 skill 真实使用 session 的 transcript digest。从 transcript 挖真实 evals,别凭空造。\n")
+        if is_agent:
+            L.append("You are an expert at creating evaluation test cases for AI agents.\n")
+            L.append("下面是 (a) Agent system prompt(角色指令正文) 与 (b) 一份该 agent 真实使用 session 的 transcript digest。"
+                     "从 transcript 挖真实 evals(会交给这个 agent 的任务),别凭空造。\n")
+            L.append("## Agent 声明的工具白名单\n" + str((frontmatter or {}).get('tools', [])) + "\n")
+        else:
+            L.append("You are an expert at creating evaluation test cases for AI coding assistants.\n")
+            L.append("下面是 (a) Skill 定义 与 (b) 一份该 skill 真实使用 session 的 transcript digest。从 transcript 挖真实 evals,别凭空造。\n")
         L.append("## REAL USER REQUESTS\n")
         for i, t in enumerate(digest.user_turns, 1):
             L.append(f"[user {i}] {t[:1500]}\n")
@@ -1278,12 +1288,20 @@ Output JSON ONLY:
                  '- JSON_HAS_FIELD: {"filename": "...", "field": "..."}\n'
                  '- CUSTOM_SCRIPT: {"script": "<checker .py>", "args": []}——checker 必须同时是该 eval 的 fixture\n')
         L.append("\n## trap-A WARNING: transcript 是一次执行,not ground truth。别把它的错/绕路冻成期望;推导一般可验证的期望;不确定就略。\n")
+        rationale_hint = ("对应 agent 正文哪条职责 或 transcript 哪个真实行为" if is_agent
+                          else "对应 SKILL.md 哪段/哪条 或 transcript 哪个行为")
         L.append('\n## Output JSON ONLY(EvalSet schema): {"skill_name":"...","evals":'
                  '[{"id":1,"name":"...","level":"L1|L2","prompt":"...","expected_output":"...",'
                  '"expectations":["..."],"assertions":[{"name":"...","type":"...","params":{...}}],'
                  '"fixtures":[{"path":"...","content":"..."}],'
-                 '"rationale":"<对应 SKILL.md 哪段/哪条 或 transcript 哪个行为>","confidence":0.0-1.0}]}\n')
-        L.append("生成 5-8 条 eval(L1+L2 混)。语言同 transcript。\n")
-        L.append("每条 eval 必须带 rationale(对应 SKILL.md 哪段/哪条,或 transcript 哪个真实行为)与 confidence(0-1,审阅分诊用)。\n")
-        L.append(f"\n## SKILL\nname: {name}\ndescription: {description}\n\n{body[:6000]}\n")
+                 '"rationale":"<' + rationale_hint + '>","confidence":0.0-1.0}]}\n')
+        if is_agent:
+            L.append("生成 5-8 条 eval。语言同 transcript。匹配 description 声明的角色(它说管 X 就出 X 的题,不出它不该管的)。\n")
+            L.append("level: L1=不产文件/纯分析建议(大多数 agent,如审 PR 给建议);产口头建议时挖 review 文本里的"
+                     "行号/严重度/关键词 → CONTAINS_PATTERN/NOT_CONTAINS;L2=产文件才 FILE_EXISTS。\n")
+        else:
+            L.append("生成 5-8 条 eval(L1+L2 混)。语言同 transcript。\n")
+        L.append(f"每条 eval 必须带 rationale({rationale_hint})与 confidence(0-1,审阅分诊用)。\n")
+        seg_head = "## Agent system prompt" if is_agent else "## SKILL"
+        L.append(f"\n{seg_head}\nname: {name}\ndescription: {description}\n\n{body[:6000]}\n")
         return "".join(L)

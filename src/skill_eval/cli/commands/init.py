@@ -58,7 +58,10 @@ def init(
 
         # 提前算 output 路径:append 模式要在生成前读已有 evals.json(喂定向补题 + 去重)
         if output is None:
-            evals_dir = skill_path / "evals"
+            # skill_path 经 resolve_skill_dir:SKILL.md/目录 → 目录;agent .md → 文件(原样)。
+            # .md 文件取 parent(agent 目录),让 agent 考卷默认写 <agent>/evals/(像 skill)。
+            base = skill_path if skill_path.is_dir() else skill_path.parent
+            evals_dir = base / "evals"
             evals_dir.mkdir(exist_ok=True)
             output = evals_dir / "evals.json"
         elif output.is_dir():

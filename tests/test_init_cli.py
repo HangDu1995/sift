@@ -150,6 +150,42 @@ def test_init_kind_threads_flag(monkeypatch, tmp_path):
     assert captured.get("kind") == "skill", f"--kind 没透到 generator: {captured}"
 
 
+def test_init_kind_agent_from_transcript_threads_kind(monkeypatch, tmp_path):
+    """init --kind agent --from-transcript:kind=agent 透到 generate_from_transcript(agent mining 路由)。
+
+    之前只测 skill 版透传;agent 版是 agent mining 入口,补覆盖。
+    """
+    captured = {}
+
+    def fake(self, sp, tp, on_heartbeat=None, kind=None):
+        captured["kind"] = kind
+        return _fake_evalset()
+
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript", fake)
+    sp = _skill_dir(tmp_path)
+    tp = tmp_path / "t.jsonl"; tp.write_text("{}", encoding="utf-8")
+    r = runner.invoke(app, ["init", str(sp), "--from-transcript", str(tp), "--kind", "agent",
+                            "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert captured.get("kind") == "agent", f"--kind agent 没透到 generator: {captured}"
+
+
+def test_init_agent_md_default_output_writes_to_agent_dir(monkeypatch, tmp_path):
+    """init <agent.md> 不传 -o → 默认写 agent 目录(.md 所在目录)的 evals/evals.json。
+
+    像 skill(<skill>/evals/evals.json):agent .md 经 resolve_skill_dir 保持文件,
+    init 默认 evals_dir 取 .md 的 parent(而非 .md/evals 会崩)。
+    """
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_for_agent",
+                        lambda self, sp, **k: _fake_evalset())
+    agent_dir = tmp_path / "pr-reviewer"; agent_dir.mkdir()
+    ap = agent_dir / "pr-reviewer.md"
+    ap.write_text("---\nname: pr-reviewer\ndescription: d\n---\n# body\n", encoding="utf-8")
+    r = runner.invoke(app, ["init", str(ap), "--kind", "agent"])
+    assert r.exit_code == 0, r.output
+    assert (agent_dir / "evals" / "evals.json").exists(), "evals.json 应默认写 agent 目录"
+
+
 def test_init_prints_unknown_field_warning(monkeypatch, tmp_path):
     """LLM 输出拼错字段(expected_output→expected)→ init 终端打印 unknown-field warn。
 

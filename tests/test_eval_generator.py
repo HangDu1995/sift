@@ -120,6 +120,59 @@ def test_build_transcript_prompt_contains_manifest_schema_and_trapA():
     assert "not ground truth" in prompt                     # trap-A
 
 
+def test_build_transcript_prompt_agent_kind_uses_agent_wording():
+    """kind=agent 的 mining prompt 用 agent 导向措辞(角色/system prompt/工具白名单),非 skill。
+
+    agent mining 对称缺口:_build_transcript_prompt 原只 skill 导向,agent 走它措辞失配。
+    """
+    gen = EvalInitGenerator()
+    digest = SessionDigest(
+        user_turns=["审查这份 PR diff"],
+        input_files=[FileContent(path="src/auth.py", content="AKIA")],
+        produced_files=[],
+    )
+    prompt = gen._build_transcript_prompt(
+        "pr-reviewer", "审查 PR diff 给建议", "# 你是审查者\n只读不改",
+        digest, kind="agent", frontmatter={"tools": ["Read", "Grep"]})
+    # agent 导向措辞
+    assert "Agent system prompt" in prompt
+    assert "角色" in prompt
+    assert "Read" in prompt and "Grep" in prompt          # 工具白名单喂进 prompt
+    # 不含 skill-only 措辞
+    assert "Skill 定义" not in prompt
+    assert "## SKILL\n" not in prompt
+    # rationale 指向 agent 职责,非 SKILL.md
+    assert "agent 正文" in prompt
+
+
+def test_generate_from_transcript_agent_kind_routes_agent_prompt(monkeypatch, tmp_path):
+    """generate_from_transcript(kind='agent') → 走 agent 版 prompt(含 agent 措辞,非 skill)。
+
+    验证 kind 从 generate_from_transcript 透到 _build_transcript_prompt 的 agent 分支。
+    """
+    import json
+    gen = EvalInitGenerator()
+    tp = tmp_path / "t.jsonl"
+    tp.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in [
+        {"agent": "pr-reviewer", "message": {"role": "user", "content": "审查这份 PR diff"}},
+        {"agent": "pr-reviewer", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "[src/auth.py:42] (🔴) 硬编码 AKIA"}]}},
+    ]), encoding="utf-8")
+    captured = {}
+
+    def fake_llm(prompt):
+        captured["prompt"] = prompt
+        return json.dumps({"skill_name": "pr-reviewer", "evals": []})
+
+    monkeypatch.setattr(gen, "_llm_call", fake_llm)
+    sp = tmp_path / "agent.md"
+    sp.write_text("---\nname: pr-reviewer\ndescription: 审查 PR diff\ntools:\n  - Read\n  - Grep\n"
+                  "---\n# 你是审查者\n只读不改\n", encoding="utf-8")
+    gen.generate_from_transcript(sp, tp, kind="agent")
+    assert "Agent system prompt" in captured["prompt"]
+    assert "Skill 定义" not in captured["prompt"]
+
+
 def test_generate_from_transcript_pipeline(monkeypatch, tmp_path):
     gen = EvalInitGenerator()
     # 假 transcript: 一个 Write
