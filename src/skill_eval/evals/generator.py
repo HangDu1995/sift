@@ -256,6 +256,88 @@ class EvalInitGenerator:
         return self.generate_template(skill_path)
 
     # ------------------------------------------------------------------
+    # Agent 出题(D6):从 description/角色推 role-matching 任务。
+    # 与 skill generate_with_llm 不同:不按正文切段(skill 工作流语义)、不假设产文件;
+    # 断言靠 expectations 自动派生。共享 _llm_call/_parse_llm_response/_auto_generate_assertions。
+    # ------------------------------------------------------------------
+
+    def _build_agent_prompt(self, name: str, description: str, body: str,
+                            frontmatter: dict, focus: str | None = None,
+                            existing_evals: list | None = None) -> str:
+        tools = frontmatter.get("tools", [])
+        existing_note = ""
+        if existing_evals:
+            prompts = "\n".join(f"- {e.prompt[:60]}" for e in existing_evals[:8])
+            existing_note = f"\n## 已有题(别重复,出新角度)\n{prompts}\n"
+        focus_note = f"\n## 定向补题方向\n{focus}\n" if focus else ""
+        return f"""你在为一个 AI agent 设计评测用例。被评的是 agent 定义本身(system prompt 角色),不是 skill。
+
+## Agent
+name: {name}
+description: {description}
+
+## Agent system prompt(角色指令正文)
+{body}
+
+## Agent 声明的工具白名单
+{tools}{existing_note}{focus_note}
+
+## 任务
+生成 5-8 道真实、会交给这个 agent 的考题。每道题要能区分好/坏 response(太 trivial 区分不了就没评测价值),且必须匹配 description 声明的角色(它说管 X 就出 X 的题,不出它不该管的)。
+
+## Output JSON (ONLY this, no other text)
+```json
+{{
+  "skill_name": "{name}",
+  "evals": [
+    {{
+      "id": 1,
+      "name": "agent-<scenario>",
+      "level": "L1",
+      "prompt": "主 agent / 用户会把这件事怎么交给它(具体场景 + 必要上下文,别泛泛)",
+      "expected_output": "好的完成长什么样(可观测的质量标准)",
+      "expectations": [
+        "把要点用双引号括起来(如“指出具体行号”)——系统据此断言输出须包含",
+        "把禁止项写成 不应/不能 X(如 不应改业务代码)——系统据此断言输出须不含"
+      ],
+      "rationale": "这题考 agent 哪条职责(对应 description / 正文哪点;同 agent 声明语言)"
+    }}
+  ]
+}}
+```
+
+## Rules
+- 语言:同 agent 声明正文
+- level: L1 = 不产文件 / 纯分析建议(大多数 agent);L2 = 产文件(在 expectations 里点名产出文件名)
+- 不用自己写 assertions——系统据 expectations 自动生成(双引号包住的词 → 须包含,不应/不能 → 须不含)
+- rationale 每题必填:说清考哪条职责
+- 总 5-8 道,至少 1 道边界 / 错误场景"""
+
+    def generate_for_agent(self, agent_path: Path,
+                           existing_evals: list | None = None) -> EvalSet:
+        """agent 出题:从 description/角色推 role-matching 任务 + 质量线。
+
+        跟 skill generate_with_llm 不同:不按正文切段(skill 工作流语义)、不假设产文件。
+        断言靠 expectations 自动派生(_auto_generate_assertions;L1 CONTAINS/NOT_CONTAINS、
+        L2 额外 FILE_EXISTS)。LLM 失败 / 解析失败 → 空 EvalSet(agent 无确定性 fallback;
+        generate_template 的切段是 skill 专属,不适用)。
+        """
+        name, description, content, frontmatter, body = parse_skill_md(agent_path)
+        prompt = self._build_agent_prompt(name, description, body, frontmatter,
+                                          focus=self.focus, existing_evals=existing_evals)
+        try:
+            response = self._llm_call(prompt)
+        except RuntimeError:
+            return EvalSet(skill_name=name, evals=[])
+        eval_set = self._parse_llm_response(response, name)
+        if eval_set is None:
+            return EvalSet(skill_name=name, evals=[])
+        self._flag_missing_rationale(eval_set)
+        for case in eval_set.evals:                       # agent 两级都派生(L2 也补 FILE_EXISTS)
+            case.assertions = self._auto_generate_assertions(case)
+        return eval_set
+
+    # ------------------------------------------------------------------
     # Trigger-accuracy probes — 读 description 生成 should/should-not 探题
     # (Task 6;init --trigger-probes 在 Task 7 接线)
     # ------------------------------------------------------------------

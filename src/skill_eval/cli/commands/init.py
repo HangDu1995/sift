@@ -25,8 +25,8 @@ def init(
     ),
     kind: Optional[str] = typer.Option(
         None, "--kind",
-        help="声明单元种类:只挖本 skill/agent 被调用/被 dispatch 期间段(skill=按 Skill 调用切;"
-             "agent=按 agent 归属切,同 audit --kind)",
+        help="声明类型:生成时 agent=按 agent 角色出题(默认/skill 走 skill 出题);"
+             "配 --from-transcript 选挖掘作用域(skill=按 Skill 调用切 / agent=按 agent 归属切)",
     ),
     timeout: int = typer.Option(
         600, "--timeout",
@@ -76,10 +76,12 @@ def init(
             except Exception:
                 console.print(f"[yellow]⚠️ 读已有 {output} 失败,改为覆盖写入。[/yellow]")
 
+        # --kind 通验(声明类型:生成时选 skill/agent 出题路径;配 --from-transcript 选挖掘作用域)
+        if kind is not None and kind not in ("skill", "agent"):
+            console.print(f"[red]Error:[/red] --kind 只接受 skill / agent,收到 {kind!r}")
+            raise typer.Exit(code=2)
+
         if from_transcript:
-            if kind is not None and kind not in ("skill", "agent"):
-                console.print(f"[red]Error:[/red] --kind 只接受 skill / agent,收到 {kind!r}")
-                raise typer.Exit(code=2)
             if not kind:
                 from skill_eval.audit.slice import invoked_skills
                 skills = invoked_skills(from_transcript)
@@ -95,8 +97,11 @@ def init(
                 on_heartbeat=lambda m: console.print(m), kind=kind,
             )
         elif generate_prompts:
-            with console.status("正在用 LLM 生成 L1 unit-level evals…", spinner="dots"):
-                eval_set = gen.generate_with_llm(skill_path, existing_evals=_existing_evals)
+            with console.status("正在用 LLM 生成 evals…", spinner="dots"):
+                if kind == "agent":
+                    eval_set = gen.generate_for_agent(skill_path, existing_evals=_existing_evals)
+                else:
+                    eval_set = gen.generate_with_llm(skill_path, existing_evals=_existing_evals)
         else:
             console.print("Generating template evals...")
             eval_set = gen.generate_template(skill_path)

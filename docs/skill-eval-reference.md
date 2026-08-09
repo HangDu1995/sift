@@ -71,7 +71,7 @@ skill-eval vet path/to/skill/ --skip-external # 跳过外部扫描器
 
 ### `init` — 初始化评测定义
 
-根据 SKILL.md 内容自动生成 `evals.json`。三种生成路径，优先级 `--from-transcript` > `--generate-prompts`（LLM）> 模板。
+根据 SKILL.md 内容自动生成 `evals.json`。三种生成路径，优先级 `--from-transcript` > `--generate-prompts`（LLM）> 模板。`--kind agent` 改为给 **agent 定义.md** 出题（读 description + system prompt 凭角色造 role-matching 考题，不切段、不假设产文件，断言靠 expectations 自动派生）——agent 的「没有 transcript 时的出题路」；有真实 dispatch session 时 `--from-transcript --kind agent` 保真度更高（挖真实派发场景）。
 
 > 生成的 `evals.json` 格式（字段 / AssertionType 全表 / expectations vs assertions / tier 坑）详见 [evals-format.md](evals-format.md)。
 
@@ -79,6 +79,7 @@ skill-eval vet path/to/skill/ --skip-external # 跳过外部扫描器
 skill-eval init path/to/skill/                                  # LLM 生成(默认)
 skill-eval init path/to/skill/ --num-evals 8                    # 限制数量
 skill-eval init path/to/skill/ --from-transcript session.jsonl  # 从真实会话挖 eval
+skill-eval init path/to/agent.md --kind agent                   # 给 agent 出题(读 agent 定义凭角色造 role-matching 题)
 ```
 
 **参数**：
@@ -90,7 +91,7 @@ skill-eval init path/to/skill/ --from-transcript session.jsonl  # 从真实会�
 | `--model` | 默认 | LLM 模型 |
 | `--num-evals` | 无 | 最多生成的 eval case 数量 |
 | `--from-transcript` | 无 | 从真实 session transcript 挖 evals（加料 SKILL.md，非替代） |
-| `--kind` | (无) | `skill`\|`agent`：只挖本 skill/agent 被调用/被 dispatch 期间段（同 audit --kind）；不传 + 检测到多 skill → 警告 |
+| `--kind` | (无) | 声明类型：生成时 `agent` = 按 agent 角色出题（读 agent 定义.md 凭 description/system prompt 造 role-matching 题，断言靠 expectations 自动派生）；默认/`skill` 走 skill 出题。配 `--from-transcript` 则选挖掘作用域（`skill`=按 Skill 调用切 / `agent`=按 agent 归属切，同 audit --kind；不传 + 多 skill → 警告） |
 | `--timeout` | 600 | LLM 调用超时秒数（mining 是单次大 prompt；撞超时 → degraded fallback） |
 | `--focus` | (无) | 定向生成某一类 eval 补盲区：`negative-cases`（反面场景）/ `edge-cases`（边界/错误）/ 任意自由文本（skill 特定方向）；常配 `--append`。`anti-triggers` 是旧名，保留为静默别名 |
 | `--append` | 关 | 追加到已有 evals.json（不覆盖）：读现有 evals 喂 LLM 定向补题（只补 `--focus` 面、与现有题语义去重），新 eval id 接续已有 `max+1` |

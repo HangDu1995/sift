@@ -291,7 +291,10 @@ skill-eval critique path/to/agent.md --kind agent   # 审 agent 定义正文(sys
 skill-eval init path/to/skill/                                  # LLM 生成（默认）
 skill-eval init path/to/skill/ --num-evals 8                    # 限制数量
 skill-eval init path/to/skill/ --from-transcript session.jsonl  # 从真实会话挖题
+skill-eval init path/to/agent.md --kind agent                   # 给 agent 出题（凭角色造 role-matching 题）
 ```
+
+`--kind agent` 把出题跨到 **agent 定义.md**：不按正文切段（那是 skill 工作流语义）、不假设产文件，而是让 LLM 据 agent 声明的角色（description + system prompt）出「会交给这个 agent 的真实考题」，断言靠 expectations 自动派生（双引号词→须包含，不应/不能→须不含）。这是 agent「没有 transcript 时的出题路」——保真度不如 `--from-transcript --kind agent`（后者挖真实派发场景），但新 agent 没跑过时是唯一来源。两路互补，同 skill 的 generate_with_llm vs generate_from_transcript。
 
 `init` 有三种生成模式，按优先级自动选择：
 

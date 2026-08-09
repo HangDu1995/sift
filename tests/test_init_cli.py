@@ -37,6 +37,29 @@ def test_init_with_from_transcript_routes(monkeypatch, tmp_path):
     assert called.get("tp") == tp and "default" not in called
 
 
+def test_init_kind_agent_calls_generate_for_agent(monkeypatch, tmp_path):
+    """init --kind agent 走 generate_for_agent(不走 skill 的 generate_with_llm)。"""
+    called = {}
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_for_agent",
+                        lambda self, sp, **k: called.__setitem__("agent", True) or _fake_evalset())
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_with_llm",
+                        lambda self, sp, **k: called.__setitem__("skill", True) or _fake_evalset())
+    agent_md = tmp_path / "reviewer.md"
+    agent_md.write_text("---\nname: reviewer\ndescription: 审查代码\n---\n# 你是审查者\n只读不改\n",
+                        encoding="utf-8")
+    r = runner.invoke(app, ["init", str(agent_md), "--kind", "agent", "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert called.get("agent") is True and "skill" not in called
+
+
+def test_init_kind_root_rejected(tmp_path):
+    """--kind root 在 init 不接受(只 skill/agent)→ 非零退出。"""
+    sp = _skill_dir(tmp_path)
+    r = runner.invoke(app, ["init", str(sp), "--kind", "root", "-o", str(tmp_path / "out")])
+    assert r.exit_code != 0
+    assert "skill / agent" in r.output
+
+
 def _fake_evalset_degraded():
     return EvalSet(skill_name="s", evals=[
         EvalCase(id=1, name="transcript-turn-1", prompt="p", level="L1", flags=["degraded:no-llm"])
