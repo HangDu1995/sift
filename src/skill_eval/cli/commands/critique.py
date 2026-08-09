@@ -15,19 +15,26 @@ _STATUS_BADGE = {"met": "[green]满足[/green]", "partial": "[yellow]部分[/yel
 
 @app.command()
 def critique(
-    skill_path: Path = typer.Argument(..., help="Path to skill directory"),
+    skill_path: Path = typer.Argument(..., help="Path to skill 目录或 agent/workflow 声明 .md"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output dir"),
     model: Optional[str] = typer.Option(None, "--model"),
     timeout: int = typer.Option(120, "--timeout"),
     runs: int = typer.Option(1, "--runs", help="多数投票跑 N 次(>1 启用,默认 1 单次)"),
+    kind: str = typer.Option("skill", "--kind", help="声明对象:skill(默认,审 SKILL.md)/ agent(审 agent 定义正文)"),
 ):
-    """诊断 SKILL.md 正文内容质量(4 维读者反馈;纯诊断无 gate)。"""
+    """诊断声明正文内容质量(4 维读者反馈;纯诊断无 gate)。
+
+    --kind agent 审 agent 定义正文(system prompt);默认 skill 审 SKILL.md 正文。
+    """
+    if kind not in ("skill", "agent"):
+        console.print(f"[red]Error:[/red] --kind 只接受 skill / agent,收到 {kind!r}")
+        raise typer.Exit(code=2)
     skill_path = resolve_skill_dir(skill_path)
     try:
         name, *_ = parse_skill_md(skill_path)
         with console.status(f"正在评审 {name} 的正文内容质量" + (f"(跑 {runs} 次投票)" if runs > 1 else "") + "…",
                              spinner="dots"):
-            report = analyze_content_quality(skill_path, model=model, timeout=timeout, runs=runs)
+            report = analyze_content_quality(skill_path, model=model, timeout=timeout, runs=runs, subject=kind)
 
         out_dir = output or (skill_path / "evals")
         out_dir.mkdir(parents=True, exist_ok=True)

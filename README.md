@@ -225,13 +225,14 @@ skill-eval coverage path/to/skill/ --augment    # 漏测点自动补题(写回 e
 
 ### `critique` — 正文内容质量诊断
 
-诊断 SKILL.md **正文内容质量**——补 `analyze`（11 项格式体检）只查格式、不查正文写得好不好的空白。一次 LLM 调用喂 SKILL.md 正文（不含 frontmatter——description 留给 trigger / analyze），按 4 维 rubric 给**读者反馈**（不是打分）：① 失败机制编码 ② 可执行具体性 ③ 高风险黑名单 ④ 示例驱动，每维 `met` / `partial` / `missing` + `evidence`（**每处引用一条**的数组，分属不同段落拆多条）+ `feedback`（✓ 认可 / 已做到）+ `gap`（✗ 缺口 + 方向），**大白话短句、不整段重写原文**。诊断定位、无门禁、独立 artifact（同 trigger / coverage，不并入 benchmark）；不依赖 evals.json（纯读 body）。rubric ①②③ 来自 SkillLens（论文每维 65–66% 预测 downstream utility，有数据验证）/ ④ 示例驱动是经验自加（无数据）。
+诊断 SKILL.md **正文内容质量**——补 `analyze`（11 项格式体检）只查格式、不查正文写得好不好的空白。一次 LLM 调用喂 SKILL.md 正文（不含 frontmatter——description 留给 trigger / analyze），按 4 维 rubric 给**读者反馈**（不是打分）：① 失败机制编码 ② 可执行具体性 ③ 高风险黑名单 ④ 示例驱动，每维 `met` / `partial` / `missing` + `evidence`（**每处引用一条**的数组，分属不同段落拆多条）+ `feedback`（✓ 认可 / 已做到）+ `gap`（✗ 缺口 + 方向），**大白话短句、不整段重写原文**。诊断定位、无门禁、独立 artifact（同 trigger / coverage，不并入 benchmark）；不依赖 evals.json（纯读 body）。rubric ①②③ 来自 SkillLens（论文每维 65–66% 预测 downstream utility，有数据验证）/ ④ 示例驱动是经验自加（无数据）。`--kind agent` 可审 **agent 定义正文**（system prompt）——4 维 rubric 与 skill 共用（agent 正文也是指令），只换 prompt 措辞。
 
 > **linter 降姿态**：给的是「读者反馈」不是「打分」——LLM 是外行评内行领域，rubric 判定会漂（同一份正文跑几次，界限分明的维度稳、边界维度只在相邻档抖），故只标 met/partial/missing 提示哪里薄弱、不进任何 gate。当 linter 提示读，别当权威判决。想稳就 `--runs N` 多数投票（每维显 `X/N` 可信度）。
 
 ```bash
 skill-eval critique path/to/skill/              # 诊断正文质量,出 JSON + HTML(单次,默认)
 skill-eval critique path/to/skill/ --runs 3     # 多数投票跑 3 次,稳边界维度(显 X/N)
+skill-eval critique path/to/agent.md --kind agent   # 审 agent 定义正文(system prompt),4 维共用
 ```
 
 产 `content-quality-report.json` + `content-quality-report.html`（always 写，同 coverage）。详见 [reference](docs/skill-eval-reference.md)。

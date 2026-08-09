@@ -222,7 +222,10 @@ skill-eval vet path/to/skill/ --skip-external # 只跑内置 2 个扫描器
 ```bash
 skill-eval critique path/to/skill/              # 诊断正文质量,出 JSON + HTML(单次跑,默认)
 skill-eval critique path/to/skill/ --runs 3     # 多数投票跑 3 次,稳边界维度(显 X/N 可信度)
+skill-eval critique path/to/agent.md --kind agent   # 审 agent 定义正文(system prompt),4 维共用
 ```
+
+`--kind agent` 把 critique 跨到 **agent**：agent 正文（system prompt）也是指令，4 维 rubric 原样共用，只换 prompt 措辞（不把 agent.md 叫 SKILL.md）；description 同样不进 critique（归行为层——agent 的派发质量是 `audit --kind agent` / 将来的 dispatch-accuracy 的事）。
 
 四条 rubric，每条判 `met`（满足）/ `partial`（部分）/ `missing`（缺失）+ `evidence`（**每处引用一条**的数组，分属不同段落拆多条）+ `feedback`（✓ 认可 / 已做到）+ `gap`（✗ 缺口 + 方向），**大白话短句、不整段重写原文**：
 

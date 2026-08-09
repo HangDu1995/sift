@@ -56,3 +56,49 @@ def test_critique_does_not_require_evals_json(monkeypatch, tmp_path):
     monkeypatch.setattr(crt_cmd, "analyze_content_quality", lambda *a, **kw: _fake_report())
     r = runner.invoke(crt_cmd.app, ["critique", str(skill), "-o", str(tmp_path / "out")])
     assert r.exit_code == 0, r.output                   # 不报缺 evals.json
+
+
+# ---- --kind(skill 默认 / agent / 非法拒收)----
+def test_critique_kind_agent_threads_subject(monkeypatch, tmp_path):
+    """critique --kind agent 把 subject='agent' 透传给 analyze_content_quality。"""
+    runner = CliRunner()
+    agent_md = tmp_path / "reviewer.md"
+    agent_md.write_text(
+        "---\nname: reviewer\ndescription: 审查代码\n---\n# 你是审查者\n只读不改\n",
+        encoding="utf-8")
+    captured = {}
+
+    def fake(path, *, model=None, timeout=120, runs=1, subject="skill"):
+        captured["subject"] = subject
+        return _fake_report()
+
+    monkeypatch.setattr(crt_cmd, "analyze_content_quality", fake)
+    r = runner.invoke(crt_cmd.app, ["critique", str(agent_md), "--kind", "agent",
+                                    "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert captured["subject"] == "agent"
+
+
+def test_critique_kind_defaults_skill(monkeypatch, tmp_path):
+    """不带 --kind 默认 skill(向后兼容,现有行为不变)。"""
+    runner = CliRunner()
+    skill = _make_skill(tmp_path)
+    captured = {}
+
+    def fake(path, *, model=None, timeout=120, runs=1, subject="skill"):
+        captured["subject"] = subject
+        return _fake_report()
+
+    monkeypatch.setattr(crt_cmd, "analyze_content_quality", fake)
+    r = runner.invoke(crt_cmd.app, ["critique", str(skill), "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert captured["subject"] == "skill"
+
+
+def test_critique_kind_invalid_rejected(tmp_path):
+    """--kind 只接受 skill/agent,非法值非零退出。"""
+    runner = CliRunner()
+    skill = _make_skill(tmp_path)
+    r = runner.invoke(crt_cmd.app, ["critique", str(skill), "--kind", "workflow"])
+    assert r.exit_code != 0
+    assert "skill / agent" in r.output

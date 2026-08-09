@@ -528,7 +528,7 @@ Written to path/to/skill/evals/coverage-report.json · path/to/skill/evals/cover
 
 ### `critique` — 正文内容质量诊断
 
-诊断 SKILL.md **正文内容质量**——补 [`analyze`](#analyze--静态分析) 的 11 项格式体检只查格式、不查正文写得好不好的空白。一次 LLM 调用喂 SKILL.md 正文（`parse_skill_md` 的 `body_text`，**不含 frontmatter description**——description 留给 [`trigger`](#trigger--触发准确度第-4-维) / `analyze`），按 4 维 rubric 给**读者反馈**（不是打分）：① 失败机制编码 ② 可执行具体性 ③ 高风险黑名单 ④ 示例驱动。每维 `met`（满足）/ `partial`（部分）/ `missing`（缺失）+ `evidence`（**字符串数组**，每处引用一条、分属不同段落拆多条）+ `feedback`（✓ 认可 / 已做到）+ `gap`（✗ 缺口 + 方向），**大白话短句、不整段重写 SKILL.md**。**不依赖 evals.json**（纯读 body）。
+诊断 SKILL.md **正文内容质量**——补 [`analyze`](#analyze--静态分析) 的 11 项格式体检只查格式、不查正文写得好不好的空白。一次 LLM 调用喂 SKILL.md 正文（`parse_skill_md` 的 `body_text`，**不含 frontmatter description**——description 留给 [`trigger`](#trigger--触发准确度第-4-维) / `analyze`），按 4 维 rubric 给**读者反馈**（不是打分）：① 失败机制编码 ② 可执行具体性 ③ 高风险黑名单 ④ 示例驱动。每维 `met`（满足）/ `partial`（部分）/ `missing`（缺失）+ `evidence`（**字符串数组**，每处引用一条、分属不同段落拆多条）+ `feedback`（✓ 认可 / 已做到）+ `gap`（✗ 缺口 + 方向），**大白话短句、不整段重写 SKILL.md**。**不依赖 evals.json**（纯读 body）。`--kind agent` 可审 **agent 定义正文**（system prompt）——4 维 rubric 与 skill 共用（agent 正文也是指令），只换 prompt 措辞，description 同样不进 critique。
 
 > **诊断定位、无门禁**（同 [`trigger`](#trigger--触发准确度第-4-维) / [`coverage`](#coverage--出题漏测诊断)）：**无 gate / 不出 exit-code 判决**，`content-quality-report.json` 是独立 artifact，**不并入 `benchmark.json`**。LLM 调用失败降级为空报告（exit 0，不炸）。
 
@@ -540,6 +540,7 @@ Written to path/to/skill/evals/coverage-report.json · path/to/skill/evals/cover
 skill-eval critique path/to/skill/                       # 诊断正文质量,出 JSON + HTML(单次,默认)
 skill-eval critique path/to/skill/ -o /tmp/out
 skill-eval critique path/to/skill/ --runs 3              # 多数投票跑 3 次,稳边界维度(显 X/N)
+skill-eval critique path/to/agent.md --kind agent        # 审 agent 定义正文(system prompt),4 维共用
 ```
 
 **参数**：
@@ -549,6 +550,7 @@ skill-eval critique path/to/skill/ --runs 3              # 多数投票跑 3 次
 | `--model` | 默认 | LLM 模型 |
 | `--timeout` | 120 | LLM 调用超时（秒） |
 | `--runs` | 1 | 多数投票跑 N 次（>1 启用：每维 status 取多数、原文取首个判出多数档的 run、显 `X/N` 可信度；见 handbook §2.3「结果会抖」） |
+| `--kind` | `skill` | 声明对象：`skill`（审 SKILL.md 正文）/ `agent`（审 agent 定义正文，即 system prompt）。4 维 rubric 两边共用，只换 prompt 措辞；description 不进 critique（归行为层 trigger/dispatch-accuracy） |
 | `--output` / `-o` | `<skill>/evals/` | 输出目录（写 `content-quality-report.json` + `content-quality-report.html`） |
 
 **终端输出**：
