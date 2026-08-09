@@ -32,6 +32,22 @@ def format_failure_triage(runs) -> list[str]:
     return lines
 
 
+def _format_pass_rate_line(side_keys, la, lb, a_mean, b_mean, pr_delta) -> str:
+    """格式化 Pass rate 行(纯函数,可单测)。
+
+    单臂(len(side_keys)<2,agent 绝对质量)→ 只报绝对 pass_rate,无 vs/delta(无 baseline)。
+    两臂 → ``A vs B + delta``(负 delta 标红)。"""
+    if len(side_keys) < 2:
+        return f"  Pass rate:  {la} {a_mean:.0f}%"
+    delta_color = ""
+    if isinstance(pr_delta, (int, float)) and pr_delta < 0:
+        delta_color = "red"
+    elif isinstance(pr_delta, str) and pr_delta.startswith("-"):
+        delta_color = "red"
+    delta_str = f"[{delta_color}]({pr_delta})[/{delta_color}]" if delta_color else f"({pr_delta})"
+    return f"  Pass rate:  {la} {a_mean:.0f}% vs {lb} {b_mean:.0f}% {delta_str}"
+
+
 def _run_ab_eval(
     skill_path: Path,
     eval_set,
@@ -54,6 +70,7 @@ def _run_ab_eval(
     skill_b: Path | None = None,
     label_a: str | None = None,
     label_b: str | None = None,
+    kind: str = "skill",
 ) -> tuple:
     from skill_eval.execution.runner import ABTestRunner, build_sides
     from skill_eval.execution.benchmark import BenchmarkAggregator
@@ -90,7 +107,7 @@ def _run_ab_eval(
         eval_ids = affected  # 灌进 by-id 通道
 
     # sides spec 单一事实源:skill_b 给定 → v1/v2 两 skill;None → 默认 with/without。
-    sides = build_sides(skill_path, skill_b, label_a, label_b)
+    sides = build_sides(skill_path, skill_b, label_a, label_b, kind=kind)
 
     total_evals = len(eval_set.evals)
     actual_evals = total_evals
@@ -131,9 +148,10 @@ def _run_ab_eval(
         per_eval_timeout=timeout,
         min_runs_for_stats=max(3, runs),
         max_retries_per_eval=max_retries,
+        kind=kind,
     )
 
-    progress_state = _ProgressState(actual_evals, runs)
+    progress_state = _ProgressState(actual_evals, runs, num_sides=len(sides))
     on_progress = _make_progress_callback(progress_state)
 
     try:
@@ -192,14 +210,8 @@ def _run_ab_eval(
         else:
             console.print(f"  Quality:   (add --model for blind comparison)")
 
-        # 2. Pass rate — mechanical assertions (客观侧)
-        delta_color = ""
-        if isinstance(pr_delta, (int, float)) and pr_delta < 0:
-            delta_color = "red"
-        elif isinstance(pr_delta, str) and pr_delta.startswith("-"):
-            delta_color = "red"
-        delta_str = f"[{delta_color}]({pr_delta})[/{delta_color}]" if delta_color else f"({pr_delta})"
-        console.print(f"  Pass rate:  {la} {a_mean:.0f}% vs {lb} {b_mean:.0f}% {delta_str}")
+        # 2. Pass rate — mechanical assertions (客观侧;单臂只报绝对,两臂报 vs+delta)
+        console.print(_format_pass_rate_line(side_keys, la, lb, a_mean, b_mean, pr_delta))
 
         # 3. Analysis insights
         if analysis and isinstance(analysis, dict):

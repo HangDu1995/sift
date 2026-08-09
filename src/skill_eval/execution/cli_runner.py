@@ -215,6 +215,46 @@ class ClaudeRunner:
             raise ClaudeRunnerError(f"claude -p exited with code {returncode}: {stderr[:500]}")
         return self._assemble(stdout, returncode, duration_ms, timed_out, timeout, stderr)
 
+    def run_agent(
+        self,
+        prompt: str,
+        agent_path: Path,
+        model: str | None = None,
+        timeout: int = 120,
+        cwd: Path | None = None,
+        max_turns: int = 10,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> RunOutput:
+        """agent 模式 spawn:agent 正文(frontmatter 后 body)经 ``--append-system-prompt``
+        注入 cc 的 system 层(prompt 原样),测 agent 绝对质量(单臂,无 baseline)。
+
+        区别于 ``run()``(skill body 包 ``<skill>`` 拼 user prompt):agent 用 cc 原生
+        system prompt 注入,贴近真实 dispatch 路径。``description`` 是主 agent 的路由线索、
+        不进 system prompt(只取 ``parse_skill_md`` 的 body,与 skill 注入只取 skill_body 对称)。
+        env 用 ``claude_cli_env()``(同 run,身份补全)。
+        """
+        project_root = cwd or find_project_root()
+        _name, _description, _content, _refs, body = parse_skill_md(agent_path)
+        cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
+               "--dangerously-skip-permissions", "--max-turns", str(max_turns),
+               "--append-system-prompt", body]
+        # prompt 原样传(不调 build_live_prompt——那是 skill body 拼 user prompt);body 进 system 层
+        if model:
+            cmd.extend(["--model", model])
+        env = claude_cli_env()
+        try:
+            stdout, returncode, duration_ms, timed_out, stderr = self._spawn(
+                cmd, project_root, env, timeout, on_progress)
+        except FileNotFoundError:
+            raise ClaudeRunnerError("'claude' CLI not found — ensure it is installed and in PATH")
+        if timed_out:
+            if stdout.strip():
+                return self._assemble(stdout, returncode, duration_ms, timed_out, timeout, stderr)
+            raise ClaudeRunnerError(f"claude -p timed out after {timeout}s (killed process tree)")
+        if returncode != 0 and not stdout.strip():
+            raise ClaudeRunnerError(f"claude -p exited with code {returncode}: {stderr[:500]}")
+        return self._assemble(stdout, returncode, duration_ms, timed_out, timeout, stderr)
+
     def _assemble(
         self,
         stdout: str,

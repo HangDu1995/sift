@@ -308,3 +308,53 @@ class TestBuildLivePrompt:
         from skill_eval.parser import parse_skill_md
         name, _desc, _content, _refs, body = parse_skill_md(sp)
         assert out == _build_non_interactive_prompt("the task", name, body)
+
+
+class TestRunAgent:
+    """run_agent:agent 正文(frontmatter 后 body)经 ``--append-system-prompt`` 注入 cc 的
+    system 层(prompt 原样),测 agent 绝对质量(单臂,无 baseline)。区别于 run()(skill
+    body 包 ``<skill>`` 拼 user prompt)——agent 用 cc 原生 system prompt 注入,贴近真实 dispatch。"""
+
+    def _make_agent_md(self, tmp_path):
+        p = tmp_path / "agent.md"
+        p.write_text(
+            "---\nname: reviewer\ndescription: ROUTE HINT KEEP OUT\n"
+            "tools: [Read]\n---\n# 角色\nagent body line here\n",
+            encoding="utf-8",
+        )
+        return p
+
+    def _mock_spawn_eof(self, monkeypatch):
+        """mock Popen:proc 立即 EOF(returncode 0)→ _spawn 返空 stdout 正常路径。"""
+        from unittest.mock import MagicMock
+        import skill_eval.execution.cli_runner as mod
+        proc = MagicMock()
+        proc.stdout.readline.return_value = b""
+        proc.stderr.read.return_value = b""
+        proc.wait.return_value = 0
+        proc.returncode = 0
+        mock_popen = MagicMock(return_value=proc)
+        monkeypatch.setattr(mod.subprocess, "Popen", mock_popen)
+        return mock_popen
+
+    def test_run_agent_appends_system_prompt_with_body(self, monkeypatch, tmp_path):
+        agent_md = self._make_agent_md(tmp_path)
+        mock_popen = self._mock_spawn_eof(monkeypatch)
+        ClaudeRunner().run_agent(prompt="the task", agent_path=agent_md, cwd=tmp_path)
+        cmd = mock_popen.call_args[0][0]
+        assert "--append-system-prompt" in cmd
+        idx = cmd.index("--append-system-prompt")
+        body_arg = cmd[idx + 1]
+        assert "agent body line here" in body_arg       # frontmatter 后正文注入 system 层
+        assert "ROUTE HINT KEEP OUT" not in body_arg     # description 是路由线索,不进 system prompt
+        assert "<skill name=" not in body_arg            # 不走 build_live_prompt(skill 拼 user prompt 那套)
+
+    def test_run_agent_prompt_passed_raw(self, monkeypatch, tmp_path):
+        agent_md = self._make_agent_md(tmp_path)
+        mock_popen = self._mock_spawn_eof(monkeypatch)
+        ClaudeRunner().run_agent(prompt="do the thing", agent_path=agent_md, cwd=tmp_path)
+        cmd = mock_popen.call_args[0][0]
+        p_idx = cmd.index("-p")
+        assert cmd[p_idx + 1] == "do the thing"          # prompt 原样传(不像 run() 经 build_live_prompt)
+        assert "NON-INTERACTIVE" not in cmd[p_idx + 1]   # 未被 _build_non_interactive_prompt 包裹
+        assert "<skill name=" not in cmd[p_idx + 1]

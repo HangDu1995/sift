@@ -20,7 +20,7 @@ class _ProgressState:
     """run 进度渲染:顶部 live bar(原地更新)+ 每次执行完成追加持久日志行。
 
     设计:每次 spawn(cc 跑一条 eval 的一个 side)= 一次「执行」,共
-    ``2 * runs * num_evals`` 次。每次执行的 config(with/BASE/side)、题名、判卷结果
+    ``num_sides * runs * num_evals`` 次(默认 2 臂 / agent 单臂 num_sides=1)。每次执行的 config(with/BASE/side)、题名、判卷结果
     (通过率 + 失败项,失败项标客观/主观)单独占一行、**持久保留**(不再被覆写),
     滚动累积成一条条执行记录;顶部一行原地更新的进度条给整体 % / ETA / 当前在跑的执行。
 
@@ -32,10 +32,10 @@ class _ProgressState:
     完成带 overall),故按 completed 自增即可精确捕获「一次执行结束」、自动跳过 retry。
     """
 
-    def __init__(self, num_evals: int, runs_per_config: int):
+    def __init__(self, num_evals: int, runs_per_config: int, num_sides: int = 2):
         self.num_evals = num_evals
         self.runs_per_config = runs_per_config
-        self.total_runs = 2 * runs_per_config * num_evals
+        self.total_runs = num_sides * runs_per_config * num_evals
         self.completed = 0
         self.skipped = 0
         self.failed = 0

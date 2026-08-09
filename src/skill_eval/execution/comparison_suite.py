@@ -94,6 +94,8 @@ def run_comparisons(aggregator, iteration_dir: Path, sides: list | None = None, 
     # sides = [(config_name, inject_skill, comp_label), ...];None → 默认 with/without(向后兼容)
     if sides is None:
         sides = [("with_skill", None, "with"), ("without_skill", None, "without")]
+    if len(sides) < 2:
+        return []  # 单臂(agent 绝对质量)无对照,不做盲比较
     side_a_dir = iteration_dir / sides[0][0]
     side_b_dir = iteration_dir / sides[1][0]
     if not side_a_dir.is_dir() or not side_b_dir.is_dir():

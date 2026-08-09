@@ -2,7 +2,7 @@
 
 > 与 [example-skills/](../example-skills/) 平级:那边演示**审 skill**(`Skill` 调用切段),
 > 这边演示 agent 的两条路——**审 agent**(`audit --kind agent` 按 `agent` 归属切段)和
-> **评测 agent**(`critique --kind agent` 内容质量 + `init --kind agent` 出题)。
+> **评测 agent**(`critique --kind agent` 内容质量 + `init --kind agent` 出题 + `run --kind agent` 打分)。
 
 ## 这是什么
 
@@ -12,16 +12,17 @@
   multi-agent session,演示 `audit` 对 agent 的遵循性对账。agent 和 skill 在 skill-eval 里是
   **同一个抽象**(一份声明的指令 + 一段执行段),审 agent 用同一个 `audit` 命令——区别只在
   切段靠 `agent` 字段(被 dispatch)而非 `Skill` 调用(被 invoke)。
-- **评测线**([pr-reviewer.md](pr-reviewer.md)):一份**特意为展示 critique + 出题而设计**的
+- **评测线**([pr-reviewer.md](pr-reviewer.md)):一份**特意为展示 critique + 出题 + 打分而设计**的
   agent——角色(PR diff 审查)够丰富、写作质量有精心安排的强弱分布(失败机制 / 可执行步骤 /
   高风险黑名单写得实,但**故意没给完整 worked example**),让 `critique` 抓到真实缺口、
-  `init` 出多样且对口角色的题(含反面/边界题)。不需要 session transcript。
+  `init` 出多样且对口角色的题(含反面/边界题),`run` 再用这些题打**绝对质量分**(单臂无 baseline)。
+  不需要 session transcript。
 
 | agent | 角色 | 演示 | 可核验/可出的指令 |
 |---|---|---|---|
 | [test-runner/](test-runner/) | 跑测试 + 核查覆盖率 + 落报告 | audit | 跑 `pytest`、覆盖率 ≥80%、**严禁** `pytest -x`、写 `TEST_REPORT.md`、禁止捏造 |
 | [lint-reviewer/](lint-reviewer/) | 跑 linter + 复查 | audit | 使用 `./lint.sh`、跑 `ruff check`、必须报全错误、修复后必须复查 |
-| [pr-reviewer.md](pr-reviewer.md) | 审查 PR diff 给行级建议 | critique + 出题 | 失败机制(大 diff/AI 生成/批量重命名)+ 黑名单(硬编码密钥/`rm -rf`/测试绿放行)+ 边界(不改码/不 nitpick) |
+| [pr-reviewer.md](pr-reviewer.md) | 审查 PR diff 给行级建议 | critique + 出题 + 打分 | 失败机制(大 diff/AI 生成/批量重命名)+ 黑名单(硬编码密钥/`rm -rf`/测试绿放行)+ 边界(不改码/不 nitpick) |
 
 ### 为什么域无关(不绑特定运行环境)
 
@@ -66,7 +67,7 @@ skill-eval audit fixtures/example-agents/lint-reviewer/ \
 > 审 agent 用 `--kind agent`(按 `agent` 归属切段,区别于审 skill 的 `--kind skill` 按
 > `Skill` 调用切)。详见 [docs/skill-eval-handbook.md](../../docs/skill-eval-handbook.md) §7.7。
 
-### 评测线:pr-reviewer(critique + 出题)
+### 评测线:pr-reviewer(critique + 出题 + 打分)
 
 pr-reviewer 是原生 `.md`(真实 agent 形态,非物化 SKILL.md),直接喂文件路径:
 
@@ -77,6 +78,10 @@ skill-eval critique fixtures/example-agents/pr-reviewer.md --kind agent -o /tmp/
 # init:给 agent 出题(从角色造 role-matching 考题)
 mkdir -p /tmp/pr-reviewer-evals
 skill-eval init fixtures/example-agents/pr-reviewer.md --kind agent -o /tmp/pr-reviewer-evals
+
+# run:用出的题打 agent 绝对质量分(body 经 --append-system-prompt 注入 cc system 层,prompt 原样)
+skill-eval run fixtures/example-agents/pr-reviewer.md --kind agent \
+  --evals /tmp/pr-reviewer-evals/evals.json --runs 2 -o /tmp/pr-reviewer-run
 ```
 
 **期望产出(真 LLM 实跑验证过):**
@@ -87,7 +92,9 @@ skill-eval init fixtures/example-agents/pr-reviewer.md --kind agent -o /tmp/pr-r
 
 `init` → 数道 L1 题,**覆盖 pr-reviewer 的三类规则**——失败机制(大 diff skim / AI 生成幻觉 / 批量重命名误伤)、高风险黑名单(硬编码密钥 / `rm -rf` 未引用 / 测试绿放行)、边界;含考 agent 正确地「不做某事」的**反面边界题**(无阻塞时克制不 nitpick)。每道 rationale 都精准映射到一条具体规则。
 
-> 出题组成(LLM 造题,哪几道 / 几道反面题)每次浮动,但稳定覆盖这三类规则;上面是定性描述,不写死具体道数。
+`run` → 单臂**绝对 pass_rate**(无 A/B baseline、无 delta / 胜率)。7 道 L1 题实测混合约 **90%+**(单 run 浮动,某次实跑 93%):黑名单 / 边界题多满分,失败机制题在八成档——部分道会因 agent 用了**非字面表述**而漏个别 `CONTAINS_PATTERN` 断言(如认出了硬编码 key 却没引用字面 `AKIA`),客观率(programmatic,卡字面)因此低于混合率。这是「断言 vs 自然表述」的真实诊断信号,非全 0 / 全 100 空转。控制台只打 `Pass rate: agent NN%`(无 vs 噪音);产物落 `agent/eval-*/run-*/`(grading / checkpoints / transcript / compliance),`benchmark.json` 的 `run_summary` 只有 `agent` 一个 key、**无 `delta`**。
+
+> 出题组成与 run 的 pass_rate 都会浮动(LLM 造题 + cc 方差),但稳定覆盖这三类规则、pass_rate 形态(单臂高分非空转)稳定;上面是定性描述,不写死具体道数 / 百分比。
 
 ### 期望 verdict(审计线,混合 = 对账有信号)
 

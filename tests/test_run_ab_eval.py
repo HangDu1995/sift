@@ -3,7 +3,11 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from skill_eval.cli.pipeline import _run_ab_eval
+from skill_eval.errors import SkillEvalError
+from skill_eval.execution.runner import build_sides
 from skill_eval.models import EvalSet, EvalCase, BenchmarkData, BenchmarkMetadata, RunOutput
 
 
@@ -71,6 +75,60 @@ def test_default_no_skill_b_threads_with_without_sides(tmp_path):
     expected = [("with_skill", skill, "with"), ("without_skill", None, "without")]
     assert captured["runner_sides"] == expected
     assert captured["agg_sides"] == expected
+
+
+def test_build_sides_agent_returns_single_arm(tmp_path):
+    """kind=agent → 单臂 [("agent", path, "agent")](绝对质量无 baseline)。"""
+    agent = tmp_path / "agent.md"
+    agent.write_text("---\nname: r\ndescription: d\n---\nbody\n", encoding="utf-8")
+    assert build_sides(agent, None, None, None, kind="agent") == [("agent", agent, "agent")]
+
+
+def test_build_sides_agent_rejects_skill_b(tmp_path):
+    """agent 单臂与 --skill-b(A/B)互斥 → SkillEvalError。"""
+    agent = tmp_path / "agent.md"
+    agent.write_text("---\nname: r\ndescription: d\n---\nbody\n", encoding="utf-8")
+    skill_b = tmp_path / "b"
+    skill_b.mkdir()
+    with pytest.raises(SkillEvalError, match="互斥"):
+        build_sides(agent, skill_b, None, None, kind="agent")
+
+
+def test_build_sides_skill_default_unchanged(tmp_path):
+    """回归:默认 kind=skill 时旧 2 臂 with/without 行为不变。"""
+    skill = _skill(tmp_path, "sk")
+    assert build_sides(skill, None, None, None) == [
+        ("with_skill", skill, "with"), ("without_skill", None, "without")]
+
+
+def test_run_ab_eval_agent_threads_single_arm_and_kind(tmp_path):
+    """kind=agent → build_sides 单臂 [("agent",...)] + RunConfig.kind=agent 透到 runner。"""
+    agent = tmp_path / "agent.md"
+    agent.write_text("---\nname: r\ndescription: d\n---\nbody\n", encoding="utf-8")
+    eval_set = EvalSet(skill_name="r", evals=[EvalCase(id=1, prompt="do")])
+    captured: dict = {}
+    iter_dir = tmp_path / "out"
+    iter_dir.mkdir(parents=True)
+
+    def fake_run_ab_test(self, skill_path, eval_set, sides=None):
+        captured["runner_sides"] = sides
+        captured["config_kind"] = self.config.kind  # ABTestRunner.config.kind
+        return iter_dir
+
+    def fake_aggregate(self, iteration_dir, skill_path=Path(), sides=None, **kwargs):
+        captured["agg_sides"] = sides
+        return BenchmarkData(metadata=BenchmarkMetadata(skill_name="r"))
+
+    with patch("skill_eval.execution.runner.ABTestRunner.run_ab_test", fake_run_ab_test), \
+         patch("skill_eval.execution.benchmark.BenchmarkAggregator.aggregate", fake_aggregate):
+        _run_ab_eval(
+            skill_path=agent, eval_set=eval_set, runs=1, model=None, workers=1,
+            timeout=10, max_turns=2, scoring="hybrid", no_calibration=True,
+            skip_compliance=True, output_dir=iter_dir, fmt="json", kind="agent",
+        )
+    assert captured["runner_sides"] == [("agent", agent, "agent")]
+    assert captured["agg_sides"] == [("agent", agent, "agent")]
+    assert captured["config_kind"] == "agent"
 
 
 def test_run_cli_v1v2_end_to_end(tmp_path):
@@ -199,3 +257,22 @@ def test_run_does_not_exit_on_negative_delta(tmp_path):
             skip_compliance=True, output_dir=tmp_path / "out", fmt="json",
         )
     assert bench is not None  # 到这行 = 没 exit
+
+
+def test_format_pass_rate_line_single_arm():
+    """单臂(agent)→ 只报绝对 pass_rate,无 vs/delta/side B 噪音。"""
+    from skill_eval.cli.pipeline import _format_pass_rate_line
+    line = _format_pass_rate_line(["agent"], "agent", "side B", 80.0, 0.0, "—")
+    assert "agent 80%" in line
+    assert "vs" not in line
+    assert "side B" not in line
+    assert "—" not in line  # 无 delta
+
+
+def test_format_pass_rate_line_two_sides_with_delta():
+    """两臂 → A vs B + delta(回归现有行为)。"""
+    from skill_eval.cli.pipeline import _format_pass_rate_line
+    line = _format_pass_rate_line(["with_skill", "without_skill"], "with", "BASE", 80.0, 40.0, 40.0)
+    assert "with 80%" in line and "BASE 40%" in line
+    assert "vs" in line
+    assert "40.0" in line  # delta

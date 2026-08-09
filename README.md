@@ -146,7 +146,7 @@ skill-eval freeze path/to/evals.json --name baseline
 
 ### `run` — A/B 评测
 
-两种模式：默认 with_skill vs without_skill 对照（或 v1/v2 双 skill），或路径 1 真任务模式（`--task` 直接跑真实任务）。产出 benchmark.json（含双率 delta + 盲比较聚合）。
+两种模式：默认 with_skill vs without_skill 对照（或 v1/v2 双 skill），或路径 1 真任务模式（`--task` 直接跑真实任务）。`--kind agent` 跑 agent 评测（单臂绝对质量，无 A/B 对照；配合 `init --kind agent` 出题 + `critique --kind agent` 审正文）。产出 benchmark.json（含双率 delta + 盲比较聚合；agent 模式只有单臂绝对 pass_rate）。
 
 ```bash
 skill-eval run path/to/skill/
@@ -157,6 +157,7 @@ skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo   # 路径 1
 skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo --executor opencode   # 同上，改用 opencode 跑
 skill-eval run path/to/skill/ --eval-ids 3,5                  # 只跑指定 id 的题（调试/回归某几道；和 --eval-samples 互斥）
 skill-eval run path/to/skill/ --changed-from v1/              # 改 skill 后只跑受影响的题（给基线目录；回归探针；和 --eval-ids/--eval-samples 互斥）
+skill-eval run path/to/agent.md --kind agent --evals evals.json --runs 2   # agent 评测（单臂绝对质量；--append-system-prompt 注入；需 --evals）
 ```
 
 关键参数：
@@ -174,6 +175,7 @@ skill-eval run path/to/skill/ --changed-from v1/              # 改 skill 后只
 | `--eval-samples` | — | 随机抽样跑 N 道或 pct%（如 `10` 或 `0.25`） |
 | `--eval-ids` | — | 只跑指定 id 的题（逗号分隔，如 `3,5,7`）；和 `--eval-samples`/`--changed-from` 三选一互斥 |
 | `--changed-from` | — | 改 skill 后给基线目录，自动 diff + LLM 判受影响 eval，只跑子集（回归探针；和 --eval-ids/--eval-samples 互斥） |
+| `--kind` | skill | skill（默认 A/B 对照）/ agent（单臂绝对质量，`--append-system-prompt` 注入 agent 正文；与 `--task`/`--skill-b` 互斥；需 `--evals`） |
 
 > `run` 是纯数据生产者——exit 0 只代表产数据成功，**通过/失败判决由 `gate` 出**。
 

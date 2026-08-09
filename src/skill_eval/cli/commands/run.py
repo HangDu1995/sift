@@ -182,6 +182,7 @@ def run(
     ),
     label_a: Optional[str] = typer.Option(None, "--label-a", help="v1/v2 模式 side A 显示标签(默认 skill 目录 basename)"),
     label_b: Optional[str] = typer.Option(None, "--label-b", help="v1/v2 模式 side B 显示标签(默认 skill 目录 basename)"),
+    kind: str = typer.Option("skill", "--kind", help="声明类型:skill(默认,A/B 对照)/ agent(单臂绝对质量,--append-system-prompt 注入 agent 正文;需配 --evals)"),
 ):
     """Run A/B evaluation of a Skill, or path-1 live task (--task)."""
     skill_path = resolve_skill_dir(skill_path)
@@ -191,6 +192,15 @@ def run(
     bad = [e for e in exec_list if e not in ("cc", "opencode")]
     if bad:
         console.print(f"[red]Error:[/red] 未知 executor: {', '.join(bad)}(支持: cc, opencode)")
+        raise typer.Exit(code=2)
+    if kind not in ("skill", "agent"):
+        console.print(f"[red]Error:[/red] --kind 只接受 skill / agent,收到 {kind!r}")
+        raise typer.Exit(code=2)
+    if kind == "agent" and task:
+        console.print("[red]Error:[/red] --kind agent 是 evals 路径(单臂绝对质量),与 --task(路径1 真任务)互斥")
+        raise typer.Exit(code=2)
+    if kind == "agent" and skill_b:
+        console.print("[red]Error:[/red] --kind agent 是单臂绝对质量,与 --skill-b(A/B 对照)互斥")
         raise typer.Exit(code=2)
     # cc-check:非 --task(evals 路径恒用 cc)或 --task 且 cc 在 exec_list 时才需要
     if (not task) or ("cc" in exec_list):
@@ -307,6 +317,7 @@ def run(
         skill_b=skill_b,
         label_a=label_a,
         label_b=label_b,
+        kind=kind,
     )
 
     # 末尾自动产静态评分卡 + 安全审查(写进 iteration_dir,供 report 面板自动带上)

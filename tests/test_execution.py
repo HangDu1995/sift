@@ -743,6 +743,18 @@ class TestComparisonSkipWhenProgrammaticOnly:
         assert len(result) == 1
 
 
+class TestComparisonSingleArm:
+    """单臂 sides(agent 绝对质量,长度 1)→ run_comparisons 早返 [] 不 IndexError
+    (盲比较需两臂对照,单臂无对照)。"""
+
+    def test_single_arm_returns_empty_no_crash(self, tmp_path: Path):
+        agg = BenchmarkAggregator(model="m", enable_llm=True)
+        sides = [("agent", tmp_path / "agent", "agent")]
+        with patch("skill_eval.execution.comparison_suite.BlindComparator") as mock_cmp:
+            assert run_comparisons(agg, tmp_path, sides=sides) == []
+        mock_cmp.assert_not_called()  # 单臂守卫在 BlindComparator 实例化之前
+
+
 class TestComparisonPairing:
     """配对 bug 回归:run_comparisons 必须按 (eval, run) 显式配对、
     with 侧有 retry 目录时取最终 retry,不能 glob+zip 错位(原 bug:retry 目录混入
@@ -1358,6 +1370,38 @@ class TestABTestRunnerReferencesAutoCopy:
         assert not without_ref.exists(), "without_skill 不注入 body,不该拷 references/"
 
 
+class TestAgentKindRunner:
+    """kind=agent 时 run_single_eval 调 ClaudeRunner.run_agent(--append-system-prompt 注入),
+    不调 run(skill body 拼 user prompt 那套)。单臂绝对质量。"""
+
+    def test_runner_uses_run_agent_when_kind_agent(self, tmp_path: Path):
+        from skill_eval.execution.runner import ABTestRunner
+        from skill_eval.models import (
+            RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase,
+        )
+        agent = tmp_path / "agent.md"
+        agent.write_text("---\nname: r\ndescription: d\n---\nbody\n", encoding="utf-8")
+        calls = {"run": 0, "run_agent": 0}
+
+        def fake_run(self, prompt, skill_path=None, **kwargs):
+            calls["run"] += 1
+            return RunOutput(exit_code=0, stdout="ok", transcript="done", result_text="done")
+
+        def fake_run_agent(self, prompt, agent_path=None, **kwargs):
+            calls["run_agent"] += 1
+            return RunOutput(exit_code=0, stdout="ok", transcript="done", result_text="done")
+
+        config = RunConfig(runs_per_config=1, output_dir=tmp_path / "out",
+                           skip_compliance=True, skip_calibration=True, max_workers=1, kind="agent")
+        runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
+        eval_set = EvalSet(skill_name="r", evals=[EvalCase(id=1, prompt="do")])
+        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run), \
+             patch("skill_eval.execution.runner.ClaudeRunner.run_agent", fake_run_agent):
+            runner.run_ab_test(agent, eval_set, sides=[("agent", agent, "agent")])
+        assert calls["run_agent"] == 1, "kind=agent 应调 run_agent(--append-system-prompt 注入)"
+        assert calls["run"] == 0, "kind=agent 不该调 run(skill body 拼 user prompt)"
+
+
 class TestABTestRunnerComplianceIsAudit:
     """遵循性引擎 = audit:开 compliance 时 with_skill 产 AuditReport 形 compliance.json,
     without_skill 不产;transcript.jsonl 落盘喂给 TranscriptAuditor。"""
@@ -1775,6 +1819,18 @@ class TestCacheKey:
         sB = self._skill(tmp_path / "b", "s", "# 步骤\n1. 做 B(改了指令)")
         assert _compute_cache_key(ec, sA, cfg, sc) != _compute_cache_key(ec, sB, cfg, sc), \
             "with 侧改了 SKILL 正文,cache_key 必须变"
+
+    def test_cache_key_differs_by_kind(self, tmp_path: Path):
+        """kind 进 cache key:同 eval + 同声明 + 仅 kind 不同(skill/agent)→ key 不等。
+        注入模式不同(skill body 拼 user prompt vs agent --append-system-prompt)= 不同实验,
+        防一份 .md 既是 skill 又是 agent 时 stale 误命中。"""
+        from skill_eval.execution.runner import _compute_cache_key
+        from skill_eval.models import RunConfig
+        ec, _cfg, sc = self._base()
+        skill = self._skill(tmp_path, "s", "# 步骤\n1. 做 A")
+        skill_key = _compute_cache_key(ec, skill, RunConfig(model="m1", kind="skill"), sc)
+        agent_key = _compute_cache_key(ec, skill, RunConfig(model="m1", kind="agent"), sc)
+        assert skill_key != agent_key
 
     def test_base_ignores_skill_body(self, tmp_path: Path):
         from skill_eval.execution.runner import _compute_cache_key

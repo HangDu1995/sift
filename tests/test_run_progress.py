@@ -34,6 +34,13 @@ def test_config_label():
     assert _config_label("with_skill") == "with"
     assert _config_label("without_skill") == "BASE"
     assert _config_label("data-transform") == "data-transform"
+    assert _config_label("agent") == "agent"  # 单臂 agent config_name(T9 锁定 fallback 兜住)
+
+
+def test_total_runs_reflects_num_sides():
+    """单臂(num_sides=1)→ total_runs = num_sides*runs*evals(非硬编码 2×);默认 2 臂不变。"""
+    assert _ProgressState(num_evals=2, runs_per_config=1, num_sides=1).total_runs == 2
+    assert _ProgressState(num_evals=2, runs_per_config=1).total_runs == 4  # 默认 2 臂回归
 
 
 def test_completion_emits_persistent_line(monkeypatch):
