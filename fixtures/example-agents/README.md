@@ -96,7 +96,7 @@ skill-eval run fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent \
 - ✅ 失败机制 / 可执行具体性 / 高风险黑名单 都满足——三块都写了「栽的原因 / 怎么核 / 为什么会害死人」,不是空喊;
 - 🟡 示例驱动 部分——有零碎真实碎片(空变量炸 `/`、glob 改名误伤),但**没有完整 worked example**(贴一段真实 hunk 演示 Read→Grep→产出)。这是 pr-reviewer **故意留的真实缺口**,演示 critique 抓改进点的价值。
 
-`init` → 数道 L1 题,**覆盖 pr-reviewer 的三类规则**——失败机制(大 diff skim / AI 生成幻觉 / 批量重命名误伤)、高风险黑名单(硬编码密钥 / `rm -rf` 未引用 / 测试绿放行)、边界;含考 agent 正确地「不做某事」的**反面边界题**(无阻塞时克制不 nitpick)。每道 rationale 都精准映射到一条具体规则。
+`init` → 数道 L1 题,**覆盖 pr-reviewer 的三类规则**——失败机制(大 diff skim / AI 生成幻觉 / 批量重命名误伤)、高风险黑名单(硬编码密钥 / `rm -rf` 未引用 / 测试绿放行)、边界;含考 agent 正确地「不做某事」的**反面边界题**(无阻塞时克制不 nitpick)。每道 rationale 都精准映射到一条具体规则。**每道带 fixtures**(待审代码文件落地,prompt 引用路径——agent 真 Read/Grep 文件而非读 prompt 文本);断言带 `scope:"transcript"`(查 agent 的 review 文本,fixture 是输入不查它)。
 
 `init --from-transcript`(mining)→ 从 transcript 真实 session 挖题,产出 L1 expectations 为主(pr-reviewer 只读不产文件 → 无 `FILE_EXISTS`);**断言带 `scope:"transcript"`**(查 agent 的 review 文本,不查输入文件——只读 agent 的"答案"是 review 文字不在文件里,见 [evals-format.md](../../docs/evals-format.md) 程序化表)。transcript 种了硬编码密钥 + 未引用 `rm -rf` 双黑名单,挖出的题锚定 agent 正文职责(失败机制 / 黑名单 / 严重度),prompt 走 agent 导向(角色 / 工具白名单 / role-matching)。自带 [evals/evals.json](pr-reviewer/evals/evals.json) 即此 mining 版(提交进仓);init(从角色 或 mining)默认写此路径,重新生成会覆盖。
 

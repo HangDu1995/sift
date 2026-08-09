@@ -303,6 +303,9 @@ description: {description}
         {{ "name": "mentions X", "type": "CONTAINS_PATTERN", "params": {{ "pattern": "keyword", "scope": "transcript" }} }},
         {{ "name": "avoids Y", "type": "NOT_CONTAINS", "params": {{ "pattern": "forbidden", "scope": "transcript" }} }}
       ],
+      "fixtures": [
+        {{ "path": "src/auth.py", "content": "真实文件内容(带要审的问题 / 要跑的代码),agent 会真去 Read/Grep 它" }}
+      ],
       "rationale": "这题考 agent 哪条职责(对应 description / 正文哪点;同 agent 声明语言)"
     }}
   ]
@@ -313,6 +316,7 @@ description: {description}
 - 语言:同 agent 声明正文
 - level: L1 = 不产文件 / 纯分析建议(大多数 agent);L2 = 产文件(产出的文件名写进 assertions 的 FILE_EXISTS)
 - 每条 expectation 都写对应 assertion(s)(可一条拆多个、可加隐含的);L1 用 CONTAINS_PATTERN / NOT_CONTAINS 且 **必须带 "scope":"transcript"**——只读 agent 不产文件,断言查 agent 的回答文本(transcript),不查输入文件(带 path 或省 scope 会去读输入 fixture 而非 agent 的回答,判卷失效);L2 产文件才用 "path":"<产物文件>" + FILE_EXISTS
+- fixtures:若任务涉及文件(审代码 / 跑测试 / 读配置——agent 会用 Read/Grep/Bash 碰文件),把相关文件作为 fixtures 落地(prompt 用**路径**引用,如「审查 src/auth.py 的改动」,**别把代码塞进 prompt 文本**——agent 要能真 Read/Grep 文件才算测到它的工作流,塞 prompt 里它就没文件可碰);纯建议、无文件操作的 agent 不带 fixtures。fixture 是**输入**(给 agent 读 / 跑的),断言仍用 scope:"transcript" 查 agent 的回答,**不要**用 path 指 fixture
 - rationale 每题必填:说清考哪条职责
 - 总 5-8 道,至少 1 道边界 / 错误场景"""
 

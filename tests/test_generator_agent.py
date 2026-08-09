@@ -113,6 +113,25 @@ def test_agent_prompt_guides_scope_transcript_for_readonly():
     assert "scope" in prompt and "transcript" in prompt
 
 
+def test_agent_prompt_stages_fixtures_for_file_operating_agents():
+    """直出 agent 出题也产 fixtures(输入文件落地),不把代码塞 prompt 文本。
+
+    对 pr-reviewer 这类 Read/Grep 文件审阅 agent,没 fixtures → agent 没文件可
+    Read/Grep → 测的是阅读理解不是真实工作流。mining 天然有(transcript 抽真文件),
+    直出原 schema 无 fixtures 字段 → 补:schema 加 fixtures + 指导文件操作 agent 把
+    待审/待跑文件落地(prompt 引用路径)。fixture 是输入,断言仍 scope:'transcript'。
+    """
+    gen = EvalInitGenerator()
+    prompt = gen._build_agent_prompt(
+        "reviewer", "审查 PR diff 给可执行修改建议",
+        "# 你是审查者\n只读不改", {"tools": ["Read", "Grep"]})
+    # schema 含 fixtures 字段
+    assert '"fixtures"' in prompt
+    # 指导:涉及文件的 agent 把文件落地为 fixture,prompt 引用路径(别塞 prompt 文本)
+    assert "路径" in prompt
+    assert "prompt 文本" in prompt or "塞进 prompt" in prompt or "塞 prompt" in prompt
+
+
 def test_generate_for_agent_warns_on_thin_assertions(monkeypatch, tmp_path):
     """断言数<期望数(_auto_generate 补不上的自然语言 expectations)→ init warning 提示审。"""
     agent_md = tmp_path / "reviewer.md"

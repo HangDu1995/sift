@@ -302,6 +302,13 @@ skill-eval init path/to/agent.md --kind agent                   # 给 agent 出�
 2. **`--generate-prompts`（LLM 生成，默认开）**：LLM 读 SKILL.md 自动出 L1/L2 题，并尝试推导程序化断言。
 3. **`--no-generate-prompts`（纯模板，不调 LLM）**：不调 LLM，纯规则从 SKILL.md 结构推导——把正文按 `##` 二级标题切成若干段，每段出一道 eval：prompt 由标题 + 描述里检测到的动作词拼成（如 `Convert a task related to <段> — …`），`expectations` 从段里的列表项（`-` / `*` / `1.`）逐条转成预期语句，`expected_output` 形如 `Successfully complete the <段> workflow (N steps)`。**"模板"不是磁盘文件**，而是 `evals/generator.py` 里的一套确定性推导规则（`_derive_prompt` / `_derive_expectations` / `_derive_assertions`）；唯一可配的"模板"是配置文件里按 domain 注入的领域断言（`domain_templates`）。**产出的不全是程序断言**——主体是 `expectations`（LLM 判的文本预期），程序断言（`FILE_EXISTS` / `CONTAINS_PATTERN` 等）只是从代码块 / import / 领域模板**抽得到才补**，纯规则类 skill 可能零断言。
 
+**两条出题路：凭声明生成 vs 从 transcript 挖**。三种模式里真正可比的是两条主路——**凭声明生成**（默认 `init` / `--kind agent`，LLM 读 SKILL.md 或 agent.md，凭声明的能力 / 角色出题）和**从 transcript 挖**（`--from-transcript`，从一份真实使用 session 挖题）。它们是**保真 vs 覆盖**的权衡，互补不替代：
+
+- **凭声明生成 → 覆盖广、保真低**。LLM 据声明出题，不受某场会话局限，能覆盖声明里的全部规则；但场景是 LLM **编的**，缺真实使用锚点。以 pr-reviewer（agent）实测：直出 7 道打满声明的 7 类规则（含大 diff、批量重命名），但每道都是凭角色造的、无真实场景锚定。
+- **从 transcript 挖 → 保真高、覆盖窄**。有且只有 **1 道**是逐字节真挖（还原会话里真实执行的任务，fixture 就是当时 Read 的真实文件），其余是 LLM 以 transcript 摘要做种子生成的变体；但覆盖被那场会话圈死——transcript 里没有的场景挖不出来。同 pr-reviewer：mining 5 道缺大 diff / 批量重命名（那场 transcript 没有这两类）。过反幻觉闭集（引用文件限定在 transcript 实际出现的）防臆造。
+
+> 怎么选：**还没真实跑过 → 只能凭声明生成**；**有一份真实好会话 → 挖一道真场景打底，再凭声明补覆盖盲区**。两路产出的题形态一致、可混用（挖的题 + 凭声明补的题拼进同一份 evals.json）。只读 / 纯建议 agent 两路都用 `scope:"transcript"` 断言（查 agent 的回答文本，不查输入 fixture，见 §5.1）、都把待审文件落地为 fixtures（prompt 引用路径，agent 真 Read/Grep）。
+
 挖题/生成失败时（LLM 超时 / 限流 / 退出码，或返回了但解析不出结构化 eval）不会静默产空，而是产一个**兜底 eval**：prompt 退到最朴素形态（transcript 挖题用真实 user turns、LLM 生成退到模板），`assertions` 往往为空，并打 `degraded:*` flag（transcript 挖题是 `degraded:no-llm`）。`init` 检测到后黄色告警——`⚠️ N 个 eval 为 degraded fallback(LLM 失败,未挖到结构化信号,assertions 可能为空):`，逐条列出哪些 eval + flag，并提示`建议重跑,或检查 claude CLI 可用性`。这样既不因一次失败就产不出题，也不假装成功。
 
 **字段名拼错也会告警**：LLM 生成时如果把字段名写错（如 `expected_output`→`expected`、`assertions`→`assertion`），pydantic 默认会**悄悄丢掉**该字段——考卷看着生成成功、实则缺那块，`run` 时才暴雷。`init` 会校验 LLM 输出的字段名，发现不认识的就告警 `⚠️ N 条 eval 含未知字段(已忽略;可能拼错)`，逐条指出哪条 eval 的哪些字段可疑，免得拿着残缺考卷还以为没问题。同样 warn 不拒（拒绝会掉进纯模板兜底，反而更差）。
