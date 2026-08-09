@@ -100,9 +100,9 @@ skill-eval run fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent \
 
 `init --from-transcript`(mining)→ 从 transcript 真实 session 挖题,产出 L1 expectations 为主(pr-reviewer 只读不产文件 → 无 `FILE_EXISTS`);**断言带 `scope:"transcript"`**(查 agent 的 review 文本,不查输入文件——只读 agent 的"答案"是 review 文字不在文件里,见 [evals-format.md](../../docs/evals-format.md) 程序化表)。transcript 种了硬编码密钥 + 未引用 `rm -rf` 双黑名单,挖出的题锚定 agent 正文职责(失败机制 / 黑名单 / 严重度),prompt 走 agent 导向(角色 / 工具白名单 / role-matching)。自带 [evals/evals.json](pr-reviewer/evals/evals.json) 即此 mining 版(提交进仓);init(从角色 或 mining)默认写此路径,重新生成会覆盖。
 
-`run` → **绝对 pass_rate**(无 A/B 对照、无 delta / 胜率)。自带考卷是 mining 版(5 道);pass_rate 单 run / 单卷浮动——直出 7 道某次实跑混合约 **93%**:黑名单 / 边界题多满分,失败机制题在八成档——部分道会因 agent 用了**非字面表述**而漏个别 `CONTAINS_PATTERN` 断言(如认出了硬编码 key 却没引用字面 `AKIA`),客观率(programmatic,卡字面)因此低于混合率。这是「断言 vs 自然表述」的真实诊断信号,非全 0 / 全 100 空转。控制台只打 `Pass rate: agent NN%`(无 vs 噪音);产物落 `agent/eval-*/run-*/`(grading / checkpoints / transcript / compliance),`benchmark.json` 的 `run_summary` 只有 `agent` 一个 key、**无 `delta`**。
+`run` → **绝对 pass_rate**(无 A/B 对照、无 delta / 胜率)。自带考卷是 mining 版(5 道),两次实跑混合约 **76%**:黑名单题(硬编码 key / 未引用 `rm -rf` / 测试绿放行)与失败机制题(大 diff / AI 生成幻觉 / 批量重命名)多满分——agent 抓得住真问题;但 **clean 边界题**(本无 🔴🟡 的干净 PR / 脚本)agent 倾向过度 nitpick、报出本不存在的阻塞点、没给 LGTM → `lgtm-verdict` + `no-fabricated-blocking` 断言 FAIL,探出 pr-reviewer 没守住自己「无阻塞就 LGTM、不挑风格」的边界。对照另一条出题路:直出(from-role)7 道某次实跑混合约 **93%**(覆盖 7 条规则更广、但 clean 边界题少);两数同是混合率,差值主要来自 mining 卷专种了探这条边界的 clean 题——**低分低得"对"**,是「断言对账抓到真实行为差距」的诊断信号,非全 0 / 全 100 空转。控制台只打 `Pass rate: agent NN%`(无 vs 噪音);产物落 `agent/eval-*/run-*/`(grading / checkpoints / transcript / compliance),`benchmark.json` 的 `run_summary` 只有 `agent` 一个 key、**无 `delta`**。
 
-> 出题组成与 run 的 pass_rate 都会浮动(LLM 造题 + cc 方差),但稳定覆盖这三类规则、pass_rate 形态(绝对质量高分非空转)稳定;上面是定性描述,不写死具体道数 / 百分比。
+> 出题组成与 run 的 pass_rate 都会浮动(LLM 造题 + cc 方差),但稳定覆盖这三类规则、pass_rate 形态(绝对质量、有真实 pass/fail 分布、非空转)稳定;上面的百分比是某次实跑锚点,非承诺值。
 
 ### 期望 verdict(审计线,混合 = 对账有信号)
 

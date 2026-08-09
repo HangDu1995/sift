@@ -276,3 +276,21 @@ def test_format_pass_rate_line_two_sides_with_delta():
     assert "with 80%" in line and "BASE 40%" in line
     assert "vs" in line
     assert "40.0" in line  # delta
+
+
+def test_format_run_header_single_arm():
+    """agent 评测(单臂)→ 'agent eval',不含 'A/B' 措辞(无 A/B 对照)。"""
+    from skill_eval.cli.pipeline import _format_run_header
+    line = _format_run_header(1, "pr-reviewer", 5, "", "", 2)
+    assert "agent eval" in line
+    assert "A/B" not in line
+    assert "pr-reviewer" in line
+    assert "5 evals" in line
+
+
+def test_format_run_header_two_sides():
+    """两臂 → 'A/B test'(回归现有行为)。"""
+    from skill_eval.cli.pipeline import _format_run_header
+    line = _format_run_header(2, "pdf", 7, "", "", 3)
+    assert "A/B test" in line
+    assert "agent eval" not in line

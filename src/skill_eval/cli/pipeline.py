@@ -48,6 +48,15 @@ def _format_pass_rate_line(side_keys, la, lb, a_mean, b_mean, pr_delta) -> str:
     return f"  Pass rate:  {la} {a_mean:.0f}% vs {lb} {b_mean:.0f}% {delta_str}"
 
 
+def _format_run_header(num_sides, skill_name, total_evals, selected, sampled, runs) -> str:
+    """格式化 run 启动头行(纯函数,可单测)。
+
+    agent 评测(num_sides<2,绝对质量)→ ``Running agent eval``(无 A/B 对照);
+    两臂 → ``Running A/B test``。措辞与 _format_pass_rate_line 的单臂判定一致。"""
+    verb = "agent eval" if num_sides < 2 else "A/B test"
+    return f"Running {verb}: {skill_name} ({total_evals} evals{selected}{sampled} × {runs} runs)"
+
+
 def _run_ab_eval(
     skill_path: Path,
     eval_set,
@@ -124,7 +133,7 @@ def _run_ab_eval(
         else:
             actual_evals = min(int(eval_samples), total_evals)
             sampled = f" (sampled {actual_evals}/{total_evals})"
-    lc.print(f"Running A/B test: {eval_set.skill_name} ({total_evals} evals{selected}{sampled} × {runs} runs)")
+    lc.print(_format_run_header(len(sides), eval_set.skill_name, total_evals, selected, sampled, runs))
 
     scoring_config = ScoringConfig(
         enable_programmatic=scoring in ("hybrid", "programmatic"),
