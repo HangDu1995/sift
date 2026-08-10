@@ -314,6 +314,7 @@ description: {description}
 
 ## Rules
 - 语言:同 agent 声明正文
+- expectations 一律写**完整句子**(有动词),包括格式/总评类(行号、严重度、总评结论)——别压成名词堆标签。BAD:"总评说明阻塞项与能否合并" / "带 文件:行号 + 严重度";GOOD:"总评里说清有哪些阻塞项、这个 PR 能不能合" / "每条建议都标了 文件:行号 和严重度"
 - level: L1 = 不产文件 / 纯分析建议(大多数 agent);L2 = 产文件(产出的文件名写进 assertions 的 FILE_EXISTS)
 - 每条 expectation 都写对应 assertion(s)(可一条拆多个、可加隐含的);L1 用 CONTAINS_PATTERN / NOT_CONTAINS 且 **必须带 "scope":"transcript"**——只读 agent 不产文件,断言查 agent 的回答文本(transcript),不查输入文件(带 path 或省 scope 会去读输入 fixture 而非 agent 的回答,判卷失效);L2 产文件才用 "path":"<产物文件>" + FILE_EXISTS
 - fixtures:若任务涉及文件(审代码 / 跑测试 / 读配置——agent 会用 Read/Grep/Bash 碰文件),把相关文件作为 fixtures 落地(prompt 用**路径**引用,如「审查 src/auth.py 的改动」,**别把代码塞进 prompt 文本**——agent 要能真 Read/Grep 文件才算测到它的工作流,塞 prompt 里它就没文件可碰);纯建议、无文件操作的 agent 不带 fixtures。fixture 是**输入**(给 agent 读 / 跑的),断言仍用 scope:"transcript" 查 agent 的回答,**不要**用 path 指 fixture
@@ -927,6 +928,9 @@ Output JSON ONLY:
             "- Every eval MUST include `rationale`: cite the exact SKILL.md span it tests (section / bullet / quoted rule, same language as SKILL.md). `confidence` (0.0-1.0) = how sure you are this eval cleanly tests that rule (for human review triage).\n"
             "- 5-10 evals covering the most important rules\n"
             "- NO vague expectations — every one must be objectively checkable\n"
+            "- Every expectation is a FULL SENTENCE with a verb — including format/structure requirements (output shape, ordering, fields). "
+            "Never compress to a noun-only label. BAD: 'correct output format'; "
+            "GOOD: 'the response lists each entry with its file name and line number'.\n"
             "- assertions use ONLY: CONTAINS_PATTERN, NOT_CONTAINS for text checks. "
             "NO FILE_EXISTS — L1 tests don't produce files.\n"
             "- Language: same as SKILL.md\n"
@@ -997,6 +1001,9 @@ Output JSON ONLY:
             "- For text-based fixtures (JSON/code), include the ACTUAL content. "
             "For binary fixtures (PDF/image), write a minimal placeholder.\n"
             "- L2 expectations must mention CONCRETE output: file names, counts, patterns.\n"
+            "- Every expectation is a FULL SENTENCE with a verb — including format/structure requirements. "
+            "Never a noun-only label. BAD: 'correct output format'; "
+            "GOOD: 'the generated file lists each entry with its name and line number'.\n"
             "- L1 assertions: CONTAINS_PATTERN, NOT_CONTAINS only. NO FILE_EXISTS on L1.\n"
             "- L2 assertions: FILE_EXISTS, CONTAINS_PATTERN, NOT_CONTAINS, JSON_HAS_FIELD.\n"
             "- Language: same as SKILL.md\n"
@@ -1309,6 +1316,8 @@ Output JSON ONLY:
         else:
             L.append("生成 5-8 条 eval(L1+L2 混)。语言同 transcript。\n")
         L.append(f"每条 eval 必须带 rationale({rationale_hint})与 confidence(0-1,审阅分诊用)。\n")
+        L.append("expectations 一律写完整句子(有动词),包括格式/总评类(行号、严重度、总评结论)——别压成名词堆标签。"
+                 "BAD:\"总评说明阻塞项与能否合并\";GOOD:\"总评里说清有哪些阻塞项、这个 PR 能不能合\"。\n")
         seg_head = "## Agent system prompt" if is_agent else "## SKILL"
         L.append(f"\n{seg_head}\nname: {name}\ndescription: {description}\n\n{body[:6000]}\n")
         return "".join(L)
