@@ -1,0 +1,528 @@
+{
+  "skill_name": "release-notes-writer",
+  "evals": [
+    {
+      "id": 1,
+      "name": "agent-vague-refactor-hides-breaking",
+      "prompt": "准备发 v0.3.0,从 v0.2.0 到 HEAD 这批 commit 要写 release notes。仓库在 ./,git log 输出我贴在 commits.txt。注意有两条 message 比较含糊(只写 refactor / chore),需要时去 diffs/<sha>.patch 看具体改动——别只看 message 就下结论。把 release notes 写到 RELEASE_NOTES.md 的 ## [0.3.0] 段。",
+      "expected_output": "好的产出:RELEASE_NOTES.md 的 [0.3.0] 段四分类齐全。abc1234(refactor auth)被识别为 ⚠️ Breaking 并带迁移说明(原本 login() 返回 token 字符串、现在返回 dict,用户要把 token = login(...) 改成 token = login(...)['token']);/api/v2/users 列在 Features;deps bump 进 Internal。agent 实际去读了 diffs/abc1234.patch 或 src/auth.py 才下结论,不是只凭 commit message。",
+      "files": [],
+      "expectations": [
+        "RELEASE_NOTES.md 文件被写到工作目录",
+        "release notes 把 abc1234(refactor auth)归到 ⚠️ Breaking 段,而不是 Internal 或 Features",
+        "Breaking 段带了迁移说明,明确告诉用户原本 login() 返回 token 字符串、现在返回 dict、调用代码要怎么改",
+        "Features 段列出了 /api/v2/users 这个新 endpoint",
+        "Internal 段(或合并一句)提了 dependency bump",
+        "agent 回答里能看到它真去读过 diffs/abc1234.patch 或 src/auth.py 来核实改动,而不是只凭 commit message 下的结论"
+      ],
+      "assertions": [
+        {
+          "name": "writes release notes file",
+          "type": "FILE_EXISTS",
+          "params": {
+            "filename": "RELEASE_NOTES.md"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "marks breaking section",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "Breaking|破坏"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "includes migration note",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "迁移|migration|token|dict|改"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "lists users endpoint as feature",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "api/v2/users|users endpoint"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "mentions deps bump",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "依赖|dependencies|bump"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "actually inspected diff or code",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "scope": "transcript",
+            "pattern": "diffs/abc1234|auth\\.py|git show abc1234"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        }
+      ],
+      "fixtures": [
+        {
+          "path": "commits.txt",
+          "content": "commit abc1234 (HEAD -> main, tag: v0.3.0)\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 12:00:00 2026\n\n    refactor: simplify auth module\n\ncommit def5678\nAuthor: dev <dev@example.com>\nDate:   Sun Aug 9 12:00:00 2026\n\n    feat: add /api/v2/users endpoint\n\ncommit ghi9012\nAuthor: dev <dev@example.com>\nDate:   Sat Aug 8 12:00:00 2026\n\n    chore: bump dependencies\n"
+        },
+        {
+          "path": "diffs/abc1234.patch",
+          "content": "--- a/src/auth.py\n+++ b/src/auth.py\n@@ -15,8 +15,7 @@ def logout(token):\n-def login(username, password):\n-    \"\"\"Login and return auth token string.\"\"\"\n-    token = _authenticate(username, password)\n-    return token\n+def login(username, password):\n+    \"\"\"Login and return auth response dict.\"\"\"\n+    token = _authenticate(username, password)\n+    return {\"token\": token, \"expires_in\": 3600, \"refresh_token\": _issue_refresh(token)}\n"
+        },
+        {
+          "path": "diffs/def5678.patch",
+          "content": "--- /dev/null\n+++ b/src/api_users.py\n@@ -0,0 +1,10 @@\n+from flask import Blueprint, jsonify\n+bp = Blueprint(\"users_v2\", __name__)\n+\n+@bp.route(\"/api/v2/users\", methods=[\"GET\"])\n+def list_users():\n+    return jsonify([{\"id\": u.id, \"email\": u.email} for u in _all_users()])\n"
+        },
+        {
+          "path": "diffs/ghi9012.patch",
+          "content": "--- a/requirements.txt\n+++ b/requirements.txt\n@@ -1,2 +1,2 @@\n-flask==2.3.0\n+flask==2.4.0\n"
+        },
+        {
+          "path": "src/auth.py",
+          "content": "def login(username, password):\n    \"\"\"Login and return auth response dict.\"\"\"\n    token = _authenticate(username, password)\n    return {\"token\": token, \"expires_in\": 3600, \"refresh_token\": _issue_refresh(token)}\n\ndef logout(token):\n    ...\n"
+        }
+      ],
+      "level": "L2",
+      "mode": "",
+      "source_dir": "",
+      "source_dir_as": "",
+      "timeout": null,
+      "flags": [],
+      "rationale": "考 agent 黑名单第二条(漏报 Breaking change)+ 失败机制第二条(含糊 / 模板化 commit message)。'refactor auth' 这条 message 完全看不出 breaking,只有去 diffs/abc1234.patch 才发现 login 返回类型从 str 变 dict——这是公开接口。好 agent 会去核实并归到 Breaking 带迁移说明;坏 agent 只看 msg 就归 Internal,漏报。",
+      "confidence": null
+    },
+    {
+      "id": 2,
+      "name": "agent-large-batch-internal-heavy",
+      "prompt": "准备发 v1.5.0,从 v1.4.0 到 HEAD 有 25 条 commit。commits.txt 是 git log 输出。仓库在 ./。把 release notes 写到 RELEASE_NOTES.md 的 ## [1.5.0] 段,要简洁——别把一堆 refactor / CI / test 当 feature 凑数。",
+      "expected_output": "好的产出:Features 段只列真正的新能力(就 dark mode 一条),Fixes 段列两条 bug 修复(空购物车崩溃、时区差一),Internal 把 20+ 条 refactor/CI/test/dep bump 合并成一句或最下端单列。没有把 refactor 当 feature 列。release notes 整体简洁,不把 25 条逐条展开。",
+      "files": [],
+      "expectations": [
+        "RELEASE_NOTES.md 文件被写到工作目录",
+        "Features 段只列真正的新用户可见能力(dark mode),不含 refactor / CI / test 类变更",
+        "Fixes 段列出了至少一条 bug 修复(空购物车崩溃或时区差一)",
+        "Internal 类的变更(refactor / CI / 测试 / 依赖 bump)被合并成一句或单列在最下面,不当 feature 列",
+        "release notes 整体简洁,没有把 25 条 commit 一条一条全展开"
+      ],
+      "assertions": [
+        {
+          "name": "writes release notes file",
+          "type": "FILE_EXISTS",
+          "params": {
+            "filename": "RELEASE_NOTES.md"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "features mentions dark mode",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "dark mode|暗色|深色|夜间|theme"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "fix section present",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "Fix|修复|Bug|崩溃|时区|cart|timezone"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "internal section consolidated",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "Internal|内部|refactor|依赖|测试|CI"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "does not list refactor under features",
+          "type": "NOT_CONTAINS",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "[Ff]eatures?[:：][^\\n]*[Rr]efactor"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        }
+      ],
+      "fixtures": [
+        {
+          "path": "commits.txt",
+          "content": "commit 001aaa1\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 09:00:00 2026\n\n    chore: bump pytest to 8.0\n\ncommit 002bbb2\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 10:00:00 2026\n\n    refactor: extract validation helpers\n\ncommit 003ccc3\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 11:00:00 2026\n\n    ci: switch to github actions\n\ncommit 004ddd4\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 12:00:00 2026\n\n    test: add coverage for utils\n\ncommit 005eee5\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 13:00:00 2026\n\n    refactor: rename internal _foo to _bar\n\ncommit 006fff6\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 14:00:00 2026\n\n    feat: add dark mode theme\n\ncommit 007ggg7\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 15:00:00 2026\n\n    chore: bump dependencies\n\ncommit 008hhh8\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 16:00:00 2026\n\n    refactor: simplify logging setup\n\ncommit 009iii9\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 17:00:00 2026\n\n    fix: crash on empty cart checkout\n\ncommit 010jjj0\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 18:00:00 2026\n\n    test: more api tests\n\ncommit 011kkk1\nAuthor: dev <dev@example.com>\nDate:   Tue Aug 11 09:00:00 2026\n\n    refactor: consolidate date parsers\n\ncommit 012lll2\nAuthor: dev <dev@example.com>\nDate:   Tue Aug 11 10:00:00 2026\n\n    ci: cache pip downloads\n\ncommit 013mmm3\nAuthor: dev <dev@example.com>\nDate:   Tue Aug 11 11:00:00 2026\n\n    chore: format code with black\n\ncommit 014nnn4\nAuthor: dev <dev@example.com>\nDate:   Tue Aug 11 12:00:00 2026\n\n    refactor: split large service module\n\ncommit 015ooo5\nAuthor: dev <dev@example.com>\nDate:   Tue Aug 11 13:00:00 2026\n\n    test: add fixture for orders\n\ncommit 016ppp6\nAuthor: dev <dev@example.com>\nDate:   Tue Aug 11 14:00:00 2026\n\n    fix: timezone off by one in scheduler\n\ncommit 017qqq7\nAuthor: dev <dev@example.com>\nDate:   Tue Aug 11 15:00:00 2026\n\n    refactor: dedupe error handlers\n\ncommit 018rrr8\nAuthor: dev <dev@example.com>\nDate:   Tue Aug 11 16:00:00 2026\n\n    chore: bump flask to 3.0\n\ncommit 019sss9\nAuthor: dev <dev@example.com>\nDate:   Tue Aug 11 17:00:00 2026\n\n    test: integration test for auth\n\ncommit 020ttt0\nAuthor: dev <dev@example.com>\nDate:   Tue Aug 11 18:00:00 2026\n\n    refactor: flatten imports\n\ncommit 021uuu1\nAuthor: dev <dev@example.com>\nDate:   Wed Aug 12 09:00:00 2026\n\n    ci: add python 3.12 to matrix\n\ncommit 022vvv2\nAuthor: dev <dev@example.com>\nDate:   Wed Aug 12 10:00:00 2026\n\n    refactor: inline trivial wrappers\n\ncommit 023www3\nAuthor: dev <dev@example.com>\nDate:   Wed Aug 12 11:00:00 2026\n\n    test: cover edge cases in pricing\n\ncommit 024xxx4\nAuthor: dev <dev@example.com>\nDate:   Wed Aug 12 12:00:00 2026\n\n    chore: update README badges\n\ncommit 025yyy5 (HEAD -> main, tag: v1.5.0)\nAuthor: dev <dev@example.com>\nDate:   Wed Aug 12 13:00:00 2026\n\n    refactor: move constants to top\n"
+        }
+      ],
+      "level": "L2",
+      "mode": "",
+      "source_dir": "",
+      "source_dir_as": "",
+      "timeout": null,
+      "flags": [],
+      "rationale": "考 agent 失败机制第一条(大批 commit 一次 skim——几十条揉成一条笼统 bullet,必漏 breaking、必掺假)+ 黑名单第三条(把 Internal 当 Feature 列,误导用户)。25 条里大头是 internal,真 feature 就 1 个、真 fix 2 个。好 agent 分门别类、internal 合并;坏 agent 要么揉一团、要么乱归 feature。",
+      "confidence": null
+    },
+    {
+      "id": 3,
+      "name": "agent-all-internal-no-visible-change",
+      "prompt": "准备发 v0.9.1。从 v0.9.0 到 HEAD 这批 commit 都在 commits.txt。把 release notes 写到 RELEASE_NOTES.md 的 ## [0.9.1] 段。",
+      "expected_output": "好的产出:release notes 明确写'本次发布无用户可见变更'(或同义表述),把 refactor / test / CI / dep bump 放最下面或合并一句。绝对不为了凑数编一个 feature 出来。",
+      "files": [],
+      "expectations": [
+        "RELEASE_NOTES.md 文件被写到工作目录",
+        "release notes 明确说本次发布无用户可见变更 / 无新功能 / 仅有内部改进(同义即可)",
+        "release notes 没有把 refactor / test / CI 类改动当作新功能列到 Features 段"
+      ],
+      "assertions": [
+        {
+          "name": "writes release notes file",
+          "type": "FILE_EXISTS",
+          "params": {
+            "filename": "RELEASE_NOTES.md"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "states no visible changes",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "无用户可见|无新功能|无可见变更|no user|无新增功能|内部改进|internal only|维护性"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "does not invent features section",
+          "type": "NOT_CONTAINS",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "✨.*Features\\s*[:：]\\s*[^无空]"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        }
+      ],
+      "fixtures": [
+        {
+          "path": "commits.txt",
+          "content": "commit 111aaa1\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 09:00:00 2026\n\n    refactor: extract validation helpers\n\ncommit 222bbb2\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 10:00:00 2026\n\n    test: add more unit tests for parser\n\ncommit 333ccc3\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 11:00:00 2026\n\n    ci: switch to github actions\n\ncommit 444ddd4\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 12:00:00 2026\n\n    chore: bump dependencies\n\ncommit 555eee5 (HEAD -> main, tag: v0.9.1)\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 13:00:00 2026\n\n    refactor: dedupe error handlers\n"
+        }
+      ],
+      "level": "L2",
+      "mode": "",
+      "source_dir": "",
+      "source_dir_as": "",
+      "timeout": null,
+      "flags": [],
+      "rationale": "考 agent 边界第一条(全是 Internal 的版本:明确写'本次发布无用户可见变更',别硬编 feature 凑数)。这是 release-notes-writer 最容易栽的克制问题——为了显得'有产出'而编能力。好 agent 直说无可见变更;坏 agent 编出 feature 列表。",
+      "confidence": null
+    },
+    {
+      "id": 4,
+      "name": "agent-batch-rename-hides-breaking",
+      "prompt": "准备发 v2.0.0。这批 commit 含一组字段重命名,详见 commits.txt。需要确认这些 rename 是不是影响了对外字段——可以读 diffs/<sha>.patch 或 src/types.py 核实命中点的语义。把 release notes 写到 RELEASE_NOTES.md 的 ## [2.0.0] 段。",
+      "expected_output": "好的产出:识别出 user_id → userId、created_at → createdAt 这类字段重命名是 breaking(对外 API / JSON response 字段名变了),归到 ⚠️ Breaking 段并带迁移说明(用户的 JSON 解析代码 / TypedDict 定义要改字段名)。不是当成纯内部 refactor 一笔带过。",
+      "files": [],
+      "expectations": [
+        "RELEASE_NOTES.md 文件被写到工作目录",
+        "release notes 把对外字段重命名(user_id → userId、created_at → createdAt)归到 ⚠️ Breaking 段",
+        "Breaking 段带了迁移说明,告诉用户 JSON 字段名改了、客户端 / 解析代码要怎么改",
+        "agent 回答里能看到它真去读过 diffs/ 下的 patch 或 src/types.py 来确认这些字段是对外暴露的"
+      ],
+      "assertions": [
+        {
+          "name": "writes release notes file",
+          "type": "FILE_EXISTS",
+          "params": {
+            "filename": "RELEASE_NOTES.md"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "marks breaking section",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "Breaking|破坏"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "mentions field rename",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "user_id|userId|created_at|createdAt|字段|field"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "includes migration note",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "迁移|migration|改|升级|客户端|解析"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "actually inspected diff or types",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "scope": "transcript",
+            "pattern": "diffs/|types\\.py|git show"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        }
+      ],
+      "fixtures": [
+        {
+          "path": "commits.txt",
+          "content": "commit aaa1001\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 09:00:00 2026\n\n    refactor: rename user_id field for consistency\n\ncommit bbb2002\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 10:00:00 2026\n\n    refactor: rename created_at field for consistency\n\ncommit ccc3003 (HEAD -> main, tag: v2.0.0)\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 11:00:00 2026\n\n    chore: bump dependencies\n"
+        },
+        {
+          "path": "diffs/aaa1001.patch",
+          "content": "--- a/src/types.py\n+++ b/src/types.py\n@@ -10,7 +10,7 @@ class User(TypedDict):\n-    user_id: str\n+    userId: str\n--- a/src/api.py\n+++ b/src/api.py\n@@ -40 +40 @@\n-    return jsonify({\"user_id\": user.id})\n+    return jsonify({\"userId\": user.id})\n--- a/src/serializers.py\n+++ b/src/serializers.py\n@@ -12 +12 @@\n-    return {\"user_id\": u.id, \"name\": u.name}\n+    return {\"userId\": u.id, \"name\": u.name}\n"
+        },
+        {
+          "path": "diffs/bbb2002.patch",
+          "content": "--- a/src/types.py\n+++ b/src/types.py\n@@ -11 +11 @@\n-    created_at: str\n+    createdAt: str\n--- a/src/api.py\n+++ b/src/api.py\n@@ -50 +50 @@\n-    return jsonify({\"created_at\": ts})\n+    return jsonify({\"createdAt\": ts})\n"
+        },
+        {
+          "path": "diffs/ccc3003.patch",
+          "content": "--- a/requirements.txt\n+++ b/requirements.txt\n@@ -1 +1 @@\n-requests==2.31.0\n+requests==2.32.0\n"
+        },
+        {
+          "path": "src/types.py",
+          "content": "from typing import TypedDict\n\nclass User(TypedDict):\n    userId: str\n    name: str\n    createdAt: str\n"
+        }
+      ],
+      "level": "L2",
+      "mode": "",
+      "source_dir": "",
+      "source_dir_as": "",
+      "timeout": null,
+      "flags": [],
+      "rationale": "考 agent 失败机制第三条(批量重命名 / 大范围 grep-replace 看着像 refactor,实际改了对外字段名)。三条 commit message 全是 'rename ... for consistency',看着无害。但 diffs 显示命中了 API response、serializers、TypedDict——都是对外契约。好 agent Grep 命中点逐个确认语义,识别为 Breaking 带迁移说明;坏 agent 当 Internal 一句带过。",
+      "confidence": null
+    },
+    {
+      "id": 5,
+      "name": "agent-no-fabrication-discipline",
+      "prompt": "准备发 v0.5.0。这批 commit 都在 commits.txt。把 release notes 写到 RELEASE_NOTES.md 的 ## [0.5.0] 段。",
+      "expected_output": "好的产出:release notes 严格基于 commits.txt 列出的变更——Features 只列 CSV 导出(只有这一条 feat),Fixes 列移动端分页 bug,Internal 列 chart helpers 提取 + dep bump。没有编造 commits.txt 里没出现的新能力(SSO、实时协作、AI 助手等热门词都不该出现)。",
+      "files": [],
+      "expectations": [
+        "RELEASE_NOTES.md 文件被写到工作目录",
+        "Features 段列出 CSV 导出这一项",
+        "Fixes 段列出移动端分页 bug",
+        "release notes 不出现 commits.txt 里完全没有的能力描述,比如 SSO、实时协作、AI 助手"
+      ],
+      "assertions": [
+        {
+          "name": "writes release notes file",
+          "type": "FILE_EXISTS",
+          "params": {
+            "filename": "RELEASE_NOTES.md"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "lists csv export feature",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "CSV|csv|导出"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "lists pagination fix",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "分页|pagination|移动|mobile"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "does not fabricate SSO or AI or collaboration",
+          "type": "NOT_CONTAINS",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "SSO|single sign|实时协作|AI 助手|assistant|collaboration"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        }
+      ],
+      "fixtures": [
+        {
+          "path": "commits.txt",
+          "content": "commit 321aaa1\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 09:00:00 2026\n\n    feat: export data to CSV\n\ncommit 322bbb2\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 10:00:00 2026\n\n    fix: pagination on mobile devices\n\ncommit 323ccc3\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 11:00:00 2026\n\n    refactor: extract chart helpers\n\ncommit 324ddd4 (HEAD -> main, tag: v0.5.0)\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 12:00:00 2026\n\n    chore: bump dependencies\n"
+        }
+      ],
+      "level": "L2",
+      "mode": "",
+      "source_dir": "",
+      "source_dir_as": "",
+      "timeout": null,
+      "flags": [],
+      "rationale": "考 agent 黑名单第一条(捏造没在 commit 里出现的变更——message 含糊时去核实,核不清就不写,宁可漏不可编)。commits.txt 故意只有 4 条简单变更,且没 SSO / 协作 / AI 这种热门词。好 agent 严格按 commit 写;坏 agent 为了'丰盛'编能力出来。",
+      "confidence": null
+    },
+    {
+      "id": 6,
+      "name": "agent-standard-four-category-flow",
+      "prompt": "准备发 v1.0.0。这批 commit 在 commits.txt。把 release notes 写到 RELEASE_NOTES.md 的 ## [1.0.0] 段。",
+      "expected_output": "好的产出:release notes 用了 ✨ Features / 🐛 Fixes / ⚠️ Breaking / 📦 Internal 四个分类(或同义标题),分类干净不混。Features 列 PDF 导出和键盘快捷键;Fixes 列登录跳转 bug;Breaking 列 v1 API 移除并带迁移说明(用户怎么改 endpoint 前缀);Internal 列依赖 bump。",
+      "files": [],
+      "expectations": [
+        "RELEASE_NOTES.md 文件被写到工作目录",
+        "release notes 把新能力(PDF 导出、键盘快捷键)放到 Features 段",
+        "release notes 把 bug 修复(登录跳转)放到 Fixes 段",
+        "release notes 把 v1 API 移除放到 Breaking 段并带迁移说明",
+        "release notes 把依赖 bump 放到 Internal 段,不当 feature 列"
+      ],
+      "assertions": [
+        {
+          "name": "writes release notes file",
+          "type": "FILE_EXISTS",
+          "params": {
+            "filename": "RELEASE_NOTES.md"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "features mentions pdf export",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "PDF|pdf|导出|export"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "features mentions shortcuts",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "快捷键|shortcut|键盘"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "fixes mentions login bug",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "登录|login|跳转|redirect|OAuth"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "breaking mentions v1 removal",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "v1|API v1|移除|removed|Breaking|破坏"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        },
+        {
+          "name": "internal mentions deps",
+          "type": "CONTAINS_PATTERN",
+          "params": {
+            "path": "RELEASE_NOTES.md",
+            "pattern": "依赖|dependencies|bump|Internal|内部"
+          },
+          "tier": "TIER1",
+          "retry_on_uneval": true,
+          "retry_max": 2
+        }
+      ],
+      "fixtures": [
+        {
+          "path": "commits.txt",
+          "content": "commit 444aaa1\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 09:00:00 2026\n\n    feat: export reports as PDF\n\ncommit 444bbb2\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 10:00:00 2026\n\n    feat: keyboard shortcuts for navigation\n\ncommit 444ccc3\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 11:00:00 2026\n\n    fix: login redirect loop after OAuth\n\ncommit 444ddd4\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 12:00:00 2026\n\n    breaking: remove deprecated /api/v1 endpoint\n\ncommit 444eee5 (HEAD -> main, tag: v1.0.0)\nAuthor: dev <dev@example.com>\nDate:   Mon Aug 10 13:00:00 2026\n\n    chore: bump dependencies\n"
+        }
+      ],
+      "level": "L2",
+      "mode": "",
+      "source_dir": "",
+      "source_dir_as": "",
+      "timeout": null,
+      "flags": [],
+      "rationale": "考 agent 主体能力(四分类正确:Features / Fixes / Breaking / Internal)。最基础的常规流程题,5 条 commit 各类典型代表,验证 agent 能把 feat / fix / breaking / chore 各归其位。其他题考陷阱,这题考底盘——底盘不过谈不上陷阱。",
+      "confidence": null
+    }
+  ],
+  "trigger_probes": []
+}

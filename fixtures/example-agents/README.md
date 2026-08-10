@@ -6,7 +6,7 @@
 
 ## 这是什么
 
-三份**域无关**的 agent 声明,演示 skill-eval 对 agent 的两条产品线:
+四份**域无关**的 agent 声明,演示 skill-eval 对 agent 的两条产品线:
 
 - **审计线**(test-runner / lint-reviewer):两份短、规则化的 agent + 一份它们被 dispatch 过的
   multi-agent session,演示 `audit` 对 agent 的遵循性对账。agent 和 skill 在 skill-eval 里是
@@ -20,12 +20,14 @@
   (pr-reviewer 审一个含硬编码密钥 + 未引用 `rm -rf` 的 PR 的 session),演示
   `init --kind agent --from-transcript` **mining 出题**(从 agent 真实使用 session 挖题,
   prompt 走 agent 导向,区别于从角色直接出题)。
+- **评测线·产文件**([release-notes-writer.md](release-notes-writer/release-notes-writer.md)):pr-reviewer 是**只读** agent(审 PR 给建议,断言全 `scope:transcript`);这份是互补——**产文件** agent(读 git commit、写 `RELEASE_NOTES.md`),演示 L2 评测的 **mixed 断言**(`FILE_EXISTS` + `path` 查产物 + `scope:transcript` 查调查过程)。规则结构平行 pr-reviewer(四步 + 高风险黑名单 + 失败机制 + 边界)。
 
 | agent | 角色 | 演示 | 可核验/可出的指令 |
 |---|---|---|---|
 | [test-runner/](test-runner/) | 跑测试 + 核查覆盖率 + 落报告 | audit | 跑 `pytest`、覆盖率 ≥80%、**严禁** `pytest -x`、写 `TEST_REPORT.md`、禁止捏造 |
 | [lint-reviewer/](lint-reviewer/) | 跑 linter + 复查 | audit | 使用 `./lint.sh`、跑 `ruff check`、必须报全错误、修复后必须复查 |
 | [pr-reviewer.md](pr-reviewer/pr-reviewer.md) | 审查 PR diff 给行级建议 | critique + 出题 + 打分 | 失败机制(大 diff/AI 生成/批量重命名)+ 黑名单(硬编码密钥/`rm -rf`/测试绿放行)+ 边界(不改码/不 nitpick) |
+| [release-notes-writer.md](release-notes-writer/release-notes-writer.md) | 读 git commit 写 release notes | critique + 出题 + 打分(L2 产文件) | 四类分档、Breaking 带迁移、别捏造、别把 Internal 当 Feature |
 
 ### 为什么域无关(不绑特定运行环境)
 
@@ -103,6 +105,28 @@ skill-eval run fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent \
 `run` → **绝对 pass_rate**(无 A/B 对照、无 delta / 胜率)。自带考卷是 mining 版(5 道),两次实跑混合约 **76%**:黑名单题(硬编码 key / 未引用 `rm -rf` / 测试绿放行)与失败机制题(大 diff / AI 生成幻觉 / 批量重命名)多满分——agent 抓得住真问题;但 **clean 边界题**(本无 🔴🟡 的干净 PR / 脚本)agent 倾向过度 nitpick、报出本不存在的阻塞点、没给 LGTM → `lgtm-verdict` + `no-fabricated-blocking` 断言 FAIL,探出 pr-reviewer 没守住自己「无阻塞就 LGTM、不挑风格」的边界。对照另一条出题路:直出(from-role)7 道某次实跑混合约 **93%**(覆盖 7 条规则更广、但 clean 边界题少);两数同是混合率,差值主要来自 mining 卷专种了探这条边界的 clean 题——**低分低得"对"**,是「断言对账抓到真实行为差距」的诊断信号,非全 0 / 全 100 空转。控制台只打 `Pass rate: agent NN%`(无 vs 噪音);产物落 `agent/eval-*/run-*/`(grading / checkpoints / transcript / compliance),`benchmark.json` 的 `run_summary` 只有 `agent` 一个 key、**无 `delta`**。
 
 > 出题组成与 run 的 pass_rate 都会浮动(LLM 造题 + cc 方差),但稳定覆盖这三类规则、pass_rate 形态(绝对质量、有真实 pass/fail 分布、非空转)稳定;上面的百分比是某次实跑锚点,非承诺值。
+
+### 评测线(产文件):release-notes-writer
+
+pr-reviewer 演示**只读** agent(断言全 `scope:transcript`);[release-notes-writer.md](release-notes-writer/release-notes-writer.md) 是互补——**产文件** agent(读 git commit、写 `RELEASE_NOTES.md`),演示 L2 评测的 **mixed 断言**(产物 + 过程)。直接喂 .md:
+
+```bash
+# critique:审 agent 定义正文的内容质量(4 维读者反馈)
+skill-eval critique fixtures/example-agents/release-notes-writer/release-notes-writer.md --kind agent -o /tmp/rn-critique
+
+# init:给 agent 出题(L2 产文件,断言 mixed)
+skill-eval init fixtures/example-agents/release-notes-writer/release-notes-writer.md --kind agent
+
+# run:用出的题打 agent 绝对质量分
+skill-eval run fixtures/example-agents/release-notes-writer/release-notes-writer.md --kind agent \
+  --evals fixtures/example-agents/release-notes-writer/evals/evals.json --runs 2 -o /tmp/rn-run
+```
+
+`init` → 数道 **L2** 题,断言 **mixed**(真 LLM 实跑验证过):
+- 每道 `FILE_EXISTS`(`{"filename":"RELEASE_NOTES.md"}`)查产物存不存在 + `CONTAINS_PATTERN`/`NOT_CONTAINS` 带 `path` 查产物**内容**(四类分档对不对 / Breaking 带没带迁移 / 别捏造 / 别把 Internal 当 Feature);
+- 考**调查严谨度**的题(refactor commit 藏 breaking、含糊 msg、批量重命名、大 batch)额外带 `scope:"transcript"` 查 agent **过程**(有没有真 `git show`/Grep 而非靠猜)。
+
+这演示了只读 agent 测不到的点:**产物对 ≠ 过程对**——`path` 查 outcome、`scope:"transcript"` 查 process,两种断言一道题共存。跟 pr-reviewer 互补:只读 → 全 `scope:transcript`;产文件 → `FILE_EXISTS` + `path`,process-heavy 的再加 `scope:"transcript"`。run 产出形态同 pr-reviewer(控制台 `Pass rate: agent NN%`、`run_summary` 只有 `agent` 无 `delta`);自带考卷是直出版,pass_rate 待实跑锚定。
 
 ### 期望 verdict(审计线,混合 = 对账有信号)
 

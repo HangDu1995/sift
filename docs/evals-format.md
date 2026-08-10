@@ -73,6 +73,8 @@
 | `NOT_CONTAINS` | `pattern`, `path`(可选), `scope`(可选) | 不含正则(递归全目录);`scope:"transcript"` 同上只查文本输出 |
 
 > **只读/纯建议 agent(`scope:"transcript"`)**:不产文件的 agent(如审 PR 给建议的 pr-reviewer),它的"答案"是 review 文本(transcript),不在任何文件里。若断言带 `path` 指输入 fixture 或省 `path` 走递归,grading 会去读**输入文件**而非 agent 的回答 → 模式碰巧在输入里就恒 PASS、模式只在回答里就恒 FAIL,判卷失效。`scope:"transcript"` 把判卷对象从"文件"拨到"agent 的回答文本"。出题(`init --kind agent`)对只读 agent 自动产带 `scope:"transcript"` 的断言。
+>
+> **产文件 agent(L2,mixed 断言)**:产文件的 agent(如读 git commit 写 `RELEASE_NOTES.md` 的 release-notes-writer),"答案"既在产物文件、也在推理过程。断言**混用**:`FILE_EXISTS`(`filename`)查产物存不存在、`CONTAINS_PATTERN`/`NOT_CONTAINS`(`path`)查产物**内容**(分档对不对 / 带没带迁移 / 别捏造);考**调查过程**的(有没有真 `git show` 而非靠猜)再加 `scope:"transcript"` 查 agent 推理文本——**产物对 ≠ 过程对**,靠猜蒙对的用 scope 抓。出题(`init --kind agent`)对 L2 agent 自动产这种 mixed 断言(FILE_EXISTS + path,process-heavy 的题再加 scope:transcript)。
 | `LINE_COUNT` | `min` / `max`, `path`(可选) | 行数在 [min,max](不给 path 则全目录合计) |
 | `TOOL_CALLED` | `tool_name`, `min_count`(默认 1) | 某工具调用次数 ≥ min_count |
 | `STEP_COUNT` | `min` / `max` | agentic 步数(turns)在 [min,max] |

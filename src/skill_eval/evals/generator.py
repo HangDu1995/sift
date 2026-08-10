@@ -316,7 +316,7 @@ description: {description}
 - 语言:同 agent 声明正文
 - expectations 一律写**完整句子**(有动词),包括格式/总评类(行号、严重度、总评结论)——别压成名词堆标签。BAD:"总评说明阻塞项与能否合并" / "带 文件:行号 + 严重度";GOOD:"总评里说清有哪些阻塞项、这个 PR 能不能合" / "每条建议都标了 文件:行号 和严重度"
 - level: L1 = 不产文件 / 纯分析建议(大多数 agent);L2 = 产文件(产出的文件名写进 assertions 的 FILE_EXISTS)
-- 每条 expectation 都写对应 assertion(s)(可一条拆多个、可加隐含的);L1 用 CONTAINS_PATTERN / NOT_CONTAINS 且 **必须带 "scope":"transcript"**——只读 agent 不产文件,断言查 agent 的回答文本(transcript),不查输入文件(带 path 或省 scope 会去读输入 fixture 而非 agent 的回答,判卷失效);L2 产文件才用 "path":"<产物文件>" + FILE_EXISTS
+- 每条 expectation 都写对应 assertion(s)(可一条拆多个、可加隐含的);L1 用 CONTAINS_PATTERN / NOT_CONTAINS 且 **必须带 "scope":"transcript"**——只读 agent 不产文件,断言查 agent 的回答文本(transcript),不查输入文件(带 path 或省 scope 会去读输入 fixture 而非 agent 的回答,判卷失效);L2 产文件:产物**存不存在**用 FILE_EXISTS + {{"filename":"<产物文件>"}};产物**内容**用 CONTAINS_PATTERN/NOT_CONTAINS + {{"path":"<产物文件>","pattern":"..."}}(FILE_EXISTS 是 filename、内容检查是 path,别混);另:若该题考 agent 的**过程**(有没有真看 diff / 逐条核 / Grep 确认,而非靠猜)——给过程标记加 {{"scope":"transcript","pattern":"..."}} 断言查 agent 推理文本(产物对 ≠ 过程对,靠猜蒙对的要抓)
 - fixtures:若任务涉及文件(审代码 / 跑测试 / 读配置——agent 会用 Read/Grep/Bash 碰文件),把相关文件作为 fixtures 落地(prompt 用**路径**引用,如「审查 src/auth.py 的改动」,**别把代码塞进 prompt 文本**——agent 要能真 Read/Grep 文件才算测到它的工作流,塞 prompt 里它就没文件可碰);纯建议、无文件操作的 agent 不带 fixtures。fixture 是**输入**(给 agent 读 / 跑的),断言仍用 scope:"transcript" 查 agent 的回答,**不要**用 path 指 fixture
 - rationale 每题必填:说清考哪条职责
 - 总 5-8 道,至少 1 道边界 / 错误场景"""
@@ -1312,7 +1312,7 @@ Output JSON ONLY:
             L.append("level: L1=不产文件/纯分析建议(大多数 agent,如审 PR 给建议);产口头建议时挖 review 文本里的"
                      "行号/严重度/关键词 → CONTAINS_PATTERN/NOT_CONTAINS **带 scope:'transcript'**(查 agent 回答文本,"
                      "别用 path 指输入文件——否则 grading 读输入 fixture 而非 agent 的回答,判卷失效);"
-                     "L2=产文件才 FILE_EXISTS + path 指产物。\n")
+                     "L2=产文件:产物存在用 FILE_EXISTS(filename)、产物内容用 CONTAINS_PATTERN/NOT_CONTAINS(path)(key 见上 ASSERTION SCHEMA,别混);另:若该题考 agent 的过程(真看 diff / 逐条核 / Grep 确认,非靠猜),给过程标记加 scope:'transcript' 断言查 agent 推理文本(产物对≠过程对,蒙对的要抓)。\n")
         else:
             L.append("生成 5-8 条 eval(L1+L2 混)。语言同 transcript。\n")
         L.append(f"每条 eval 必须带 rationale({rationale_hint})与 confidence(0-1,审阅分诊用)。\n")
