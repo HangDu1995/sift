@@ -7,6 +7,7 @@ from skill_eval.models.critique_report import ContentQualityReport, CritiqueDime
 def test_dimension_defaults():
     d = CritiqueDimension(key="examples", name="示例驱动")
     assert d.key == "examples"
+    assert d.group == "正文"        # 默认正文(desc 维由 _parse 显式设 "description")
     assert d.status == ""          # 默认空(由 _parse 填)
     assert d.evidence == []        # 默认空数组
     assert d.feedback == ""        # 默认空

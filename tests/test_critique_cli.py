@@ -18,10 +18,10 @@ def _fake_report():
                               evidence=[], feedback="", gap="补:别用 --force"),
             CritiqueDimension(key="examples", name="示例驱动", status="missing",
                               evidence=[], feedback="", gap="补 worked example"),
-            CritiqueDimension(key="desc_purpose_clarity", name="意图清晰", status="partial",
-                              evidence=["审性能回归"], feedback="点明了场景", gap="可说清产出"),
-            CritiqueDimension(key="desc_trigger_specificity", name="触发具体性", status="met",
-                              evidence=["重构代码时"], feedback="限定了触发时机", gap=""),
+            CritiqueDimension(key="desc_purpose_clarity", name="意图清晰", group="description",
+                              status="partial", evidence=["审性能回归"], feedback="点明了场景", gap="可说清产出"),
+            CritiqueDimension(key="desc_trigger_specificity", name="触发具体性", group="description",
+                              status="met", evidence=["重构代码时"], feedback="限定了触发时机", gap=""),
         ],
         token_usage={"input_tokens": 100, "output_tokens": 50}, duration_seconds=2.5,
     )
@@ -44,6 +44,7 @@ def test_critique_reports_dims_and_writes_json(monkeypatch, tmp_path):
     assert "满足" in r.output and "部分" in r.output and "缺失" in r.output  # 三态汇总
     assert "失败机制编码" in r.output                   # 维度名
     assert "漏 DB_HOST" in r.output                    # evidence 上报
+    assert "正文内容质量" in r.output and "description 质量" in r.output  # group 分节标题(正文 / description)
     assert "✓" in r.output and "✗" in r.output          # 认可(✓)与缺口(✗)分行
     assert "可补具体命令" in r.output                   # partial 的 gap 内容上报
     assert "(2/3)" in r.output                          # vote_tally 可信度显在维度头

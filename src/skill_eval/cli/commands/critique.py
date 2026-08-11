@@ -11,6 +11,8 @@ from skill_eval.parser import resolve_skill_dir, parse_skill_md
 from skill_eval.static_analysis.critique import analyze_content_quality
 
 _STATUS_BADGE = {"met": "[green]满足[/green]", "partial": "[yellow]部分[/yellow]", "missing": "[red]缺失[/red]"}
+# 维度按 group 分节显示:正文 4 维 / description 2 维,一眼分清评的是 body 还是 frontmatter 描述。
+_GROUP_LABEL = {"正文": "正文内容质量", "description": "description 质量"}
 
 
 @app.command()
@@ -51,7 +53,11 @@ def critique(
                       f" · 部分 [yellow]{sc['partial']}[/yellow]"
                       f" · 缺失 [red]{sc['missing']}[/red]"
                       f" · 耗时 {report.duration_seconds:.1f}s · {tok} tok")
+        prev_group = None
         for d in report.dimensions:
+            if d.group != prev_group:                      # group 切换 → 分节标题(正文 / description)
+                console.print(f"[bold]{_GROUP_LABEL.get(d.group, d.group)}[/bold]")
+                prev_group = d.group
             head = f"  {d.name} {_STATUS_BADGE.get(d.status, d.status)}"
             if d.vote_tally:
                 head += f" ({d.vote_tally})"

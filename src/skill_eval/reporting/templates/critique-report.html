@@ -18,6 +18,7 @@
     body { font-family: 'Lora', Georgia, serif; background: var(--bg); color: var(--text); margin: 2rem; }
     #critique-root { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 2rem; max-width: 960px; }
     h1 { font-family: 'Poppins', system-ui, sans-serif; font-size: 1.5rem; font-weight: 600; margin-bottom: 0.75rem; }
+    h2.group-head { font-family: 'Poppins', system-ui, sans-serif; font-size: 1.05rem; font-weight: 600; margin-top: 1.4rem; margin-bottom: 0.6rem; padding-bottom: 0.25rem; border-bottom: 1px solid var(--border); color: var(--text); }
     .summary { display: flex; flex-wrap: wrap; gap: 0.25rem; font-size: 0.95rem; margin-bottom: 1.25rem; }
     .summary span { margin-right: 0.8rem; }
     .badge-met { color: var(--green); font-weight: 600; }
@@ -55,7 +56,7 @@
       var tok = (tu.input_tokens||0) + (tu.output_tokens||0);
       var STATUS_CN = {met:'满足',partial:'部分',missing:'缺失'};
       var html = '';
-      html += '<h1>' + escapeHtml(D.skill_name) + ' · 正文内容质量</h1>';
+      html += '<h1>' + escapeHtml(D.skill_name) + ' · 内容质量</h1>';
       html += '<div class="summary">';
       html += '<span>满足 <b class="badge-met">' + sc.met + '</b></span>';
       html += '<span>部分 <b class="badge-partial">' + sc.partial + '</b></span>';
@@ -63,7 +64,14 @@
       if (tok) html += '<span class="badge-tokens">' + tok + ' tok</span>';
       var d = fmtDur(D.duration_seconds); if (d) html += '<span class="badge-tokens">耗时 ' + d + '</span>';
       html += '</div>';
+      var GROUP_LABEL = {'正文':'正文内容质量','description':'description 质量'};
+      var prevGroup = null;
       dims.forEach(function(dm){
+        var g = dm.group || '正文';
+        if (g !== prevGroup) {                            // group 切换 → 分节(正文 / description)
+          html += '<h2 class="group-head">' + escapeHtml(GROUP_LABEL[g] || g) + '</h2>';
+          prevGroup = g;
+        }
         var st = dm.status || 'missing';
         html += '<div class="dim ' + st + '">';
         html += '<div class="dim-head">' + escapeHtml(dm.name||'') + ' <span class="tag badge-' + st + '">' + STATUS_CN[st] + '</span>';

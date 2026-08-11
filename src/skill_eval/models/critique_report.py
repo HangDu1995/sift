@@ -1,14 +1,16 @@
-"""critique 报告模型(SKILL.md 正文内容质量诊断,4 维读者反馈态)。
+"""critique 报告模型(声明内容质量诊断:正文 4 维 + description 2 维,读者反馈态)。
 
-status 三态:met 满足 / partial 部分 / missing 缺失(不用 n/a——4 条 rubric 对任何
-skill 都适用,极简 skill 没"高风险操作"→ missing 正好提醒补)。
+status 三态:met 满足 / partial 部分 / missing 缺失(不用 n/a——rubric 对任何声明都适用,
+极简 skill 没"高风险操作"→ missing 正好提醒补)。每维带 ``group``(正文 / description),
+报告里分节显示、JSON 自带分组归属。
 """
 from pydantic import BaseModel, Field
 
 
 class CritiqueDimension(BaseModel):
-    key: str          # failure_mechanism / actionable_specificity / high_risk_blacklist / examples
+    key: str          # failure_mechanism / actionable_specificity / high_risk_blacklist / examples / desc_purpose_clarity / desc_trigger_specificity
     name: str         # 中文显示名
+    group: str = "正文"   # 正文 / description(这维评的是 body 还是 frontmatter description)
     status: str = ""  # met / partial / missing(空=未填,由 _parse 填)
     # 每处引用一条(LLM 自报,mostly-verbatim 非保证逐字);分属不同段落就拆多条,missing 空 []
     evidence: list[str] = Field(default_factory=list)

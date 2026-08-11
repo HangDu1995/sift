@@ -239,6 +239,7 @@ def _parse_critique_response(response: str, skill_name: str, *, keys: list[str] 
             gap = "LLM 未评审该条"   # 漏评提示放 gap(missing 显 ✗ 行)
         dims.append(CritiqueDimension(
             key=key, name=_NAMES[key], status=status,
+            group="description" if key in _DESC_KEYS else "正文",
             evidence=_coerce_evidence(d.get("evidence")),
             feedback=feedback, gap=gap,
         ))
@@ -333,7 +334,7 @@ _EMPTY_DESC_NOTE = "无 description 字段,无法评判 description 质量。"
 def _empty_desc_dims() -> list[CritiqueDimension]:
     """description 缺失时补 2 条 desc 维度(missing + note)——缺失本身是内容质量信号,显式报出。"""
     return [
-        CritiqueDimension(key=k, name=_NAMES[k], status="missing",
+        CritiqueDimension(key=k, name=_NAMES[k], status="missing", group="description",
                           evidence=[], feedback="", gap=_EMPTY_DESC_NOTE)
         for k in _DESC_KEYS
     ]
