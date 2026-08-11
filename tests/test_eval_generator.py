@@ -831,6 +831,33 @@ def test_supplement_directive_strong_constraint_and_focus():
     assert "read-log-file" in d
 
 
+def test_build_agent_prompt_uses_supplement_with_existing():
+    """_build_agent_prompt 接 _supplement_directive:有 existing + focus → prompt 含
+    硬约束补 gap 指令(TARGETED SUPPLEMENT / 不重复 / 现有题 rationale),不再是旧的软
+    提示「别重复,出新角度」。与 skill _build_llm_prompt 对称(补齐 agent 路径缺口)。"""
+    gen = EvalInitGenerator()
+    existing = [EvalCase(id=1, name="normal-diff", prompt="审常规 diff", level="L1",
+                         rationale="考常规 PR 审查")]
+    prompt = gen._build_agent_prompt(
+        name="reviewer", description="审 PR", body="# 审查\n只读",
+        frontmatter={"tools": ["Read", "Grep"]},
+        focus="negative-cases", existing_evals=existing)
+    assert "TARGETED SUPPLEMENT" in prompt          # 走 _supplement_directive(硬约束)
+    assert "duplicate" in prompt.lower()            # 去重硬约束
+    assert "考常规 PR 审查" in prompt                 # 现有题 rationale 喂进 prompt(语义去重证据)
+    assert "别重复,出新角度" not in prompt           # 旧软提示已撤
+
+
+def test_build_agent_prompt_focus_only_is_soft():
+    """无 existing(首次出题)+ focus → 软 focus directive,不走硬 supplement 约束。"""
+    gen = EvalInitGenerator()
+    prompt = gen._build_agent_prompt(
+        name="reviewer", description="审 PR", body="# 审查\n只读",
+        frontmatter={"tools": []}, focus="加密 PDF", existing_evals=None)
+    assert "加密 PDF" in prompt
+    assert "TARGETED SUPPLEMENT" not in prompt      # 无 existing 不走硬约束
+
+
 def test_build_llm_prompt_supplement_when_existing_evals():
     """_build_llm_prompt(existing_evals=...) → 注入补题指令(含现有题),在 Output JSON 前。"""
     gen = EvalInitGenerator()

@@ -265,12 +265,7 @@ class EvalInitGenerator:
                             frontmatter: dict, focus: str | None = None,
                             existing_evals: list | None = None) -> str:
         tools = frontmatter.get("tools", [])
-        existing_note = ""
-        if existing_evals:
-            prompts = "\n".join(f"- {e.prompt[:60]}" for e in existing_evals[:8])
-            existing_note = f"\n## 已有题(别重复,出新角度)\n{prompts}\n"
-        focus_note = f"\n## 定向补题方向\n{focus}\n" if focus else ""
-        return f"""你在为一个 AI agent 设计评测用例。被评的是 agent 定义本身(system prompt 角色),不是 skill。
+        prompt = f"""你在为一个 AI agent 设计评测用例。被评的是 agent 定义本身(system prompt 角色),不是 skill。
 
 ## Agent
 name: {name}
@@ -280,7 +275,7 @@ description: {description}
 {body}
 
 ## Agent 声明的工具白名单
-{tools}{existing_note}{focus_note}
+{tools}
 
 ## 任务
 生成 5-8 道真实、会交给这个 agent 的考题。每道题要能区分好/坏 response(太 trivial 区分不了就没评测价值),且必须匹配 description 声明的角色(它说管 X 就出 X 的题,不出它不该管的)。
@@ -320,6 +315,12 @@ description: {description}
 - fixtures:若任务涉及文件(审代码 / 跑测试 / 读配置——agent 会用 Read/Grep/Bash 碰文件),把相关文件作为 fixtures 落地(prompt 用**路径**引用,如「审查 src/auth.py 的改动」,**别把代码塞进 prompt 文本**——agent 要能真 Read/Grep 文件才算测到它的工作流,塞 prompt 里它就没文件可碰);纯建议、无文件操作的 agent 不带 fixtures。fixture 是**输入**(给 agent 读 / 跑的),断言仍用 scope:"transcript" 查 agent 的回答,**不要**用 path 指 fixture
 - rationale 每题必填:说清考哪条职责
 - 总 5-8 道,至少 1 道边界 / 错误场景"""
+        directive = self._supplement_directive(focus, existing_evals)
+        if directive:
+            # 注在 ## Output JSON 前(同 _build_llm_prompt),把这次生成目标改成定向补 gap、
+            # 对照现有题 prompt+rationale 语义去重——agent 与 skill 出题补题内核统一。
+            prompt = prompt.replace("## Output JSON", directive + "## Output JSON", 1)
+        return prompt
 
     def generate_for_agent(self, agent_path: Path,
                            existing_evals: list | None = None) -> EvalSet:
