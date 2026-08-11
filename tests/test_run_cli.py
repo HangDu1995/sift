@@ -223,3 +223,12 @@ def test_run_cli_agent_skips_scorecard_and_vet(monkeypatch, tmp_path):
     assert r.exit_code == 0, r.output
     assert not (out / "scorecard.json").exists()   # agent 不产(SKILL.md 结构检查不适用)
     assert not (out / "vet-report.json").exists()
+
+
+def test_resolve_skip_compliance_defaults_on():
+    """compliance 默认开(不再 runs<3 跳过):单 transcript 过程对账本就有效。
+    --no-compliance(True)→ 跳过;不传(None)/ --compliance(False)→ 跑。"""
+    from skill_eval.cli.commands.run import _resolve_skip_compliance
+    assert _resolve_skip_compliance(None) is False   # 默认开
+    assert _resolve_skip_compliance(True) is True    # --no-compliance 跳过
+    assert _resolve_skip_compliance(False) is False  # --compliance 显式开

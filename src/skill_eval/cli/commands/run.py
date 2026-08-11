@@ -145,6 +145,12 @@ def _render_security_report(report, console: Console) -> None:
     console.print(f"\n[{verdict_color}]VERDICT: {report.verdict}[/{verdict_color}] — {report.summary}")
 
 
+def _resolve_skip_compliance(no_compliance: bool | None) -> bool:
+    """compliance 默认开:单 transcript 过程对账本就有效(与独立 audit 同引擎、审 cc 已产出的
+    transcript、不 re-spawn cc),注入声明即跑。--no-compliance 显式跳过(如快速冒烟测试)。"""
+    return no_compliance if no_compliance is not None else False
+
+
 @app.command()
 def run(
     skill_path: Path = typer.Argument(..., help="Path to skill directory"),
@@ -168,7 +174,7 @@ def run(
     ),
     max_retries: int = typer.Option(2, "--max-retries", help="Max retries per eval on UNEVAL/error (each retry re-runs claude + scoring + compliance LLM; heavy skills may want 0-1 to save tokens)"),
     scoring: str = typer.Option("hybrid", "--scoring", help="Scoring mode: hybrid, programmatic, or llm"),
-    no_compliance: Optional[bool] = typer.Option(None, "--no-compliance/--compliance", help="Skip compliance checking (auto: on for --runs<3)"),
+    no_compliance: Optional[bool] = typer.Option(None, "--no-compliance/--compliance", help="Skip compliance checking (default: on)"),
     refine_instructions: bool = typer.Option(True, "--refine-instructions/--no-refine-instructions", help="精筛(默认开):LLM 砍掉 extractor 误抽的示例/占位伪指令(audit/compliance 提精度,精度>召回);--no-refine-instructions 关闭"),
     generate_headline: bool = typer.Option(True, "--headline/--no-headline", help="人话标题(默认开):独立 LLM 步骤把每条指令的原文 bullet 去噪+补主语压成一句显示标题(判定不读);--no-headline 关闭省那次 LLM"),
     no_calibration: bool = typer.Option(False, "--no-calibration", help="Skip scoring calibration"),
@@ -297,11 +303,9 @@ def run(
             f"[yellow]Environment:[/yellow] tools referenced but not found: {', '.join(missing)}"
         )
 
-    # Compliance: on by default for runs>=3, off for runs<3, explicit flag overrides
-    if no_compliance is None:
-        skip_compliance = runs < 3
-    else:
-        skip_compliance = no_compliance
+    # compliance 默认开(注入声明即跑):单 transcript 过程对账本就有效(与独立 audit 同引擎、
+    # 审 cc 已产出的 transcript、不 re-spawn cc)。--no-compliance 跳过(如快速冒烟测试)。
+    skip_compliance = _resolve_skip_compliance(no_compliance)
 
     _benchmark, iteration_dir = _run_ab_eval(
         skill_path=skill_path,

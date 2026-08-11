@@ -16,8 +16,9 @@ from skill_eval.models import (
 from skill_eval.concurrency import _LLMRetryExhausted, call_llm_with_retry
 from skill_eval.scoring._jsonschema import inline_schema
 
-# 结构化输出 schema:tier3 判官走 --json-schema,约束 JSON 不可畸形(CLI 拒顶层 array,
-# 故包 items;call_claude 透明解开 → _extract_json_array 照常命中,正则 fallback 兜底)。
+# 结构化输出 schema:tier3 判官走 http forced tool_use(call_llm_with_retry transport="http",
+# schema 作 tool input_schema、inline_schema 展开 $ref)。forced tool_use 的 input 必须是
+# object,故顶层 array 包进 items;_extract_json_array 照常命中,正则 fallback 兜底。
 _TIER3_SCHEMA = {
     "type": "object",
     "properties": {

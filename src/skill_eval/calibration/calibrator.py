@@ -2,7 +2,8 @@
 
 verdict 由结果(客观 pass_rate>=0.8 优先,无客观锚回退 mixed) x 过程(遵循性)矩阵决定,只押在 prohibition/output
 硬类违规(高精度)上;step/conditional 的 FAIL 只记 soft_notes,不驱动 verdict(避免
-LLM 方差污染判决)。gate 不读本结构,仅 viewer 显示用。
+LLM 方差污染判决)。gate 不读 per-run 本结构(只读聚合的 calibration_summary 抓 HIGH_SCORE_SUSPECT
+作 soft warning、不进 decision);viewer 显示本结构。
 """
 
 from __future__ import annotations

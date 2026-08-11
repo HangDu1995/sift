@@ -225,7 +225,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 | `--max-turns` | 10 | claude -p 最大轮数 |
 | `--max-retries` | 2 | 每 eval 在 UNEVAL/出错时的最大重试（每次重跑 claude+scoring+compliance，重 skill 可设 0-1 省 token） |
 | `--scoring` | hybrid | 评分模式：hybrid / programmatic / llm |
-| `--no-compliance` / `--compliance` | 自动 | 跳过/强制遵循性检查（默认自动：`--runs<3` 时开） |
+| `--no-compliance` / `--compliance` | 开 | 跳过/强制遵循性检查（默认开） |
 | `--refine-instructions` | 开启 | 遵循性判定前 LLM 精筛（默认开，`--no-refine-instructions` 关）：砍掉 extractor 误抽的示例/占位伪指令（提精度，per-SKILL 缓存，见 `audit`） |
 | `--headline` | 开启 | 人话标题（默认开，`--no-headline` 关）：独立 LLM 步骤把每条指令的原文 bullet 去噪+补主语压成一句显示标题（判定不读；refine 之后/judge 之前；per-声明缓存 `~/.cache/skill-eval/headline/`） |
 | `--no-calibration` | 关闭 | 跳过校准（结果×过程 coherence 判决） |
@@ -505,7 +505,7 @@ skill-eval coverage path/to/agent.md --kind agent --augment  # 漏测点自动�
 | `--timeout` | 120 | LLM 调用超时（秒） |
 | `--output` / `-o` | `<skill>/evals/` | 输出目录（写 `coverage-report.json` + `coverage-report.html`） |
 
-**内容点怎么来 + 为什么不建结构化表**：LLM 从 SKILL.md 列出**可测的指令点**（具体的规则 / 步骤 / 能力 / 条件分支——不含散文和示例），映射靠各 eval 的 `rationale`（`init` 自报的自由文本）+ `prompt` 的**语义**，**不建结构化 instruction_ref 表**——按 handbook §4.2 末尾「想要更可控的判定？」那段的逻辑：自动建的 eval↔指令对应表，准度和当场 LLM 判定（同一个 LLM）一样，却白搭维护复杂度；只有**人工逐条校对**的表才更准，而工具不做人工表。故 coverage 走 LLM 柔性映射。
+**内容点怎么来 + 为什么不建结构化表**：LLM 从 SKILL.md 列出**可测的指令点**（具体的规则 / 步骤 / 能力 / 条件分支——不含散文和示例），映射靠各 eval 的 `rationale`（`init` 自报的自由文本）+ `prompt` 的**语义**，**不建结构化 instruction_ref 表**：自动建的 eval↔指令对应表准度和当场 LLM 判定（同一个 LLM）一样，却白搭维护复杂度；只有**人工逐条校对**的表才更准，而工具不做人工表。故 coverage 每次跑时当场让 LLM 按语义判。
 
 > **诚实：LLM 估、有噪声**。内容点清单的粒度（怎么切一个点）是主观的，映射是 LLM 判的——都抖。**「0 覆盖」的大漏测可靠**（一个内容点没任何 eval 碰，是明确的盲区信号）；边界态的「半覆盖」（点被部分 eval 碰到）噪声大。它是**漏测预警、不是精确度量**——拿它定位明显盲区，别对每条 covered_by 过度解读。
 
