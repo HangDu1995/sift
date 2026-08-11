@@ -42,7 +42,7 @@ def test_report_roundtrip_no_counts_in_json():
     assert rep2.status_counts == {"met": 1, "partial": 0, "missing": 0}
 
 
-from skill_eval.static_analysis.critique import _build_critique_prompt, _parse_critique_response
+from skill_eval.static_analysis.critique import _build_critique_prompt, _build_desc_critique_prompt, _parse_critique_response
 
 
 def test_build_prompt_contains_four_rubrics_and_body():
@@ -134,7 +134,7 @@ def _fake_response_four_dims():
 def test_analyze_calls_claude_and_fills_body(monkeypatch, tmp_path):
     skill = tmp_path / "sk"
     skill.mkdir()
-    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n执行 deploy.sh\n", encoding="utf-8")
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: \"\"\n---\n# S\n执行 deploy.sh\n", encoding="utf-8")
     captured = {}
 
     def fake_call(prompt, model=None, timeout=120, max_turns=None, on_usage=None, **kw):
@@ -153,7 +153,7 @@ def test_analyze_calls_claude_and_fills_body(monkeypatch, tmp_path):
     schema = captured["kw"].get("schema")
     # inline schema 透传(forced tool_use);dimensions 嵌在 properties 下
     assert isinstance(schema, dict) and "dimensions" in schema["properties"]
-    assert len(rep.dimensions) == 4
+    assert len(rep.dimensions) == 6   # 4 body + 2 desc(空 description 补 missing-note)
     assert rep.token_usage.get("input_tokens") == 100  # on_usage 收了 token
     assert rep.duration_seconds >= 0.0
 
@@ -161,7 +161,7 @@ def test_analyze_calls_claude_and_fills_body(monkeypatch, tmp_path):
 def test_analyze_call_failure_returns_empty(monkeypatch, tmp_path):
     skill = tmp_path / "sk"
     skill.mkdir()
-    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: \"\"\n---\n# S\n规则X\n", encoding="utf-8")
     monkeypatch.setattr(crt, "_RETRY_DELAY", 0.0)     # 重试退避归零(不真睡)
     monkeypatch.setattr(crt, "call_claude", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
     rep = analyze_content_quality(skill, model=None, timeout=120)
@@ -177,7 +177,7 @@ def test_analyze_retries_on_empty_tool_use(monkeypatch, tmp_path):
     """http 偶发返空 tool_use({})→ 重试拿到有内容的响应,返正常 report(不当全 missing)。"""
     skill = tmp_path / "sk"
     skill.mkdir()
-    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: \"\"\n---\n# S\n规则X\n", encoding="utf-8")
     monkeypatch.setattr(crt, "_RETRY_DELAY", 0.0)
     responses = iter(["{}", _fake_response_four_dims()])   # 第 1 次 {} 退化,第 2 次正常
     calls = {"n": 0}
@@ -189,7 +189,7 @@ def test_analyze_retries_on_empty_tool_use(monkeypatch, tmp_path):
     monkeypatch.setattr(crt, "call_claude", fake_call)
     rep = analyze_content_quality(skill)
     assert calls["n"] == 2                              # {} 触发了 1 次重试
-    assert len(rep.dimensions) == 4                     # 拿到的是正常那次
+    assert len(rep.dimensions) == 6                     # 4 body + 2 desc-note(空 description)
     assert rep.dimensions[0].status == "met"
 
 
@@ -197,7 +197,7 @@ def test_analyze_retry_exhaustion_on_degenerate(monkeypatch, tmp_path):
     """反复返 {} → 重试耗尽返空 report(不当全 missing 假信号,也不炸)。"""
     skill = tmp_path / "sk"
     skill.mkdir()
-    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: \"\"\n---\n# S\n规则X\n", encoding="utf-8")
     monkeypatch.setattr(crt, "_RETRY_DELAY", 0.0)
     calls = {"n": 0}
 
@@ -215,7 +215,7 @@ def test_analyze_retries_on_rate_limited(monkeypatch, tmp_path):
     """429(_HttpRateLimited,非 RuntimeError)也要重试,不能裸抛炸掉 critique。"""
     skill = tmp_path / "sk"
     skill.mkdir()
-    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: \"\"\n---\n# S\n规则X\n", encoding="utf-8")
     monkeypatch.setattr(crt, "_RETRY_DELAY", 0.0)
     responses = iter([_HttpRateLimited("429 boom"), _fake_response_four_dims()])
     calls = {"n": 0}
@@ -230,7 +230,7 @@ def test_analyze_retries_on_rate_limited(monkeypatch, tmp_path):
     monkeypatch.setattr(crt, "call_claude", fake_call)
     rep = analyze_content_quality(skill)
     assert calls["n"] == 2                             # 429 触发 1 次重试
-    assert len(rep.dimensions) == 4                    # 重试后拿到正常响应
+    assert len(rep.dimensions) == 6                    # 4 body + 2 desc-note(空 description)
 
 
 def test_parse_response_valid_dict_no_dims_yields_four_missing():
@@ -281,7 +281,7 @@ def test_aggregate_runs_majority_and_selfish_text():
 def test_analyze_multi_run_aggregates_and_sums_tokens(monkeypatch, tmp_path):
     skill = tmp_path / "sk"
     skill.mkdir()
-    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: \"\"\n---\n# S\n规则X\n", encoding="utf-8")
     responses = iter([_resp("partial"), _resp("met"), _resp("partial")])
     calls = {"n": 0}
 
@@ -305,7 +305,7 @@ def test_analyze_multi_run_aggregates_and_sums_tokens(monkeypatch, tmp_path):
 def test_analyze_multi_run_all_fail_returns_empty(monkeypatch, tmp_path):
     skill = tmp_path / "sk"
     skill.mkdir()
-    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: \"\"\n---\n# S\n规则X\n", encoding="utf-8")
     monkeypatch.setattr(crt, "_RETRY_DELAY", 0.0)      # 重试退避归零(每 run 都重试耗尽)
     monkeypatch.setattr(crt, "call_claude", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
     rep = analyze_content_quality(skill, runs=3)
@@ -337,7 +337,7 @@ def test_analyze_threads_subject_agent_to_prompt(monkeypatch, tmp_path):
     """analyze_content_quality(subject='agent') 把 subject 透到 prompt(agent 准词出现)。"""
     agent_md = tmp_path / "reviewer.md"
     agent_md.write_text(
-        "---\nname: reviewer\ndescription: 审查代码\n---\n# 你是审查者\n只读不改\n",
+        "---\nname: reviewer\ndescription: \"\"\n---\n# 你是审查者\n只读不改\n",
         encoding="utf-8")
     captured = {}
 
@@ -349,4 +349,120 @@ def test_analyze_threads_subject_agent_to_prompt(monkeypatch, tmp_path):
     rep = analyze_content_quality(agent_md, subject="agent")
     assert "agent 定义正文" in captured["prompt"]
     assert "SKILL.md" not in captured["prompt"]
-    assert len(rep.dimensions) == 4                          # 解析照常(parse_skill_md 直读 .md)
+    assert len(rep.dimensions) == 6                          # 4 body + 2 desc-note(空 description)
+
+
+# ---- description 维度(frontmatter 描述的内在质量,独立 LLM call)----
+def _fake_desc_response(status: str = "partial") -> str:
+    """2-dim desc 响应:两条 desc 维度都 = status。"""
+    dims = [{"key": k, "status": status, "evidence": [status + "-ev"],
+             "feedback": status + "-fb", "gap": status + "-gap"}
+            for k in crt._DESC_KEYS]
+    return json.dumps({"dimensions": dims})
+
+
+def test_build_desc_prompt_contains_two_rubrics_and_desc():
+    prompt = _build_desc_critique_prompt("my-skill", "用户重构代码时审性能回归")
+    assert "my-skill" in prompt
+    assert "用户重构代码时审性能回归" in prompt   # description 喂进去了
+    for key in crt._DESC_KEYS:                    # 2 条 desc rubric key 都在
+        assert key in prompt
+    assert "好例" in prompt and "反例" in prompt
+    assert "JSON ONLY" in prompt
+
+
+def test_build_desc_prompt_agent_uses_agent_terms():
+    """agent 模式 desc prompt 用 agent 措辞,不残留 'SKILL.md'。"""
+    prompt = _build_desc_critique_prompt("reviewer", "审代码", subject="agent")
+    assert "reviewer" in prompt
+    assert "agent" in prompt
+    assert "SKILL.md" not in prompt
+    for key in crt._DESC_KEYS:
+        assert key in prompt
+
+
+def test_analyze_includes_desc_dims_when_description_present(monkeypatch, tmp_path):
+    """有 description → 额外一次 LLM call 评 2 维 desc,追加到 report(共 6 维);
+    description 只进 desc prompt、不进 body prompt。"""
+    skill = tmp_path / "sk"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text(
+        "---\nname: sk\ndescription: 帮用户重构代码时审性能回归\n---\n# S\n执行 deploy.sh\n",
+        encoding="utf-8")
+    prompts = []
+    responses = iter([_fake_response_four_dims(), _fake_desc_response("partial")])
+
+    def fake_call(prompt, *a, **kw):
+        prompts.append(prompt)
+        return next(responses)
+
+    monkeypatch.setattr(crt, "call_claude", fake_call)
+    rep = analyze_content_quality(skill)
+
+    assert len(rep.dimensions) == 6                          # 4 body + 2 desc
+    keys = {d.key for d in rep.dimensions}
+    assert set(crt._DESC_KEYS) <= keys
+    assert len(prompts) == 2                                 # body + desc 两次 call
+    assert "帮用户重构代码时审性能回归" in prompts[1]        # description 喂进 desc prompt
+    body_section = prompts[0].split("SKILL.md 正文")[1].split("##")[0]
+    assert "帮用户重构代码时审性能回归" not in body_section  # description 不漏进 body prompt
+
+
+def test_analyze_empty_description_yields_desc_missing_no_call(monkeypatch, tmp_path):
+    """description 缺失 → 不发 desc 调用,补 2 条 desc 维度(missing + note);
+    缺失本身是内容质量信号,要显式报出来。"""
+    skill = tmp_path / "sk"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: \"\"\n---\n# S\n规则X\n", encoding="utf-8")
+    calls = {"n": 0}
+
+    def fake_call(*a, **kw):
+        calls["n"] += 1
+        return _fake_response_four_dims()
+
+    monkeypatch.setattr(crt, "call_claude", fake_call)
+    rep = analyze_content_quality(skill)
+    assert calls["n"] == 1                                   # 只 body,没 desc 调用
+    desc_dims = [d for d in rep.dimensions if d.key in crt._DESC_KEYS]
+    assert len(desc_dims) == 2
+    assert all(d.status == "missing" for d in desc_dims)
+    assert all("description" in d.gap for d in desc_dims)    # note 点明缺 description
+
+
+def test_analyze_desc_call_failure_skips_desc_dims(monkeypatch, tmp_path):
+    """desc 调用重试耗尽 → 忽略 desc 维度(只返 body 4 维);降级不炸、不当假信号。"""
+    skill = tmp_path / "sk"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: 有描述\n---\n# S\n规则X\n", encoding="utf-8")
+    monkeypatch.setattr(crt, "_RETRY_DELAY", 0.0)
+    # body 一次成功;desc 三次全抛 429(_RETRY_MAX=2 → 共 3 次尝试)
+    responses = iter([_fake_response_four_dims(),
+                      _HttpRateLimited("boom"), _HttpRateLimited("boom"), _HttpRateLimited("boom")])
+
+    def fake_call(*a, **kw):
+        x = next(responses)
+        if isinstance(x, Exception):
+            raise x
+        return x
+
+    monkeypatch.setattr(crt, "call_claude", fake_call)
+    rep = analyze_content_quality(skill)
+    assert len(rep.dimensions) == 4                          # desc 忽略,只 body
+    assert not any(d.key in crt._DESC_KEYS for d in rep.dimensions)
+
+
+def test_analyze_multi_run_aggregates_desc_dims(monkeypatch, tmp_path):
+    """多 run:desc 维度也进多数投票(run1/2 partial,run3 met → 多数 partial,2/3)。"""
+    skill = tmp_path / "sk"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: 有描述\n---\n# S\n规则X\n", encoding="utf-8")
+    # 3 run,每 run = body + desc;desc 两 partial 一 met
+    seq = [_fake_response_four_dims(), _fake_desc_response("partial"),
+           _fake_response_four_dims(), _fake_desc_response("partial"),
+           _fake_response_four_dims(), _fake_desc_response("met")]
+    responses = iter(seq)
+    monkeypatch.setattr(crt, "call_claude", lambda *a, **kw: next(responses))
+    rep = analyze_content_quality(skill, runs=3)
+    clarity = [d for d in rep.dimensions if d.key == "desc_purpose_clarity"][0]
+    assert clarity.status == "partial"                       # 2/3 多数
+    assert clarity.vote_tally == "2/3"

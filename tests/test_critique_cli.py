@@ -18,6 +18,10 @@ def _fake_report():
                               evidence=[], feedback="", gap="补:别用 --force"),
             CritiqueDimension(key="examples", name="示例驱动", status="missing",
                               evidence=[], feedback="", gap="补 worked example"),
+            CritiqueDimension(key="desc_purpose_clarity", name="意图清晰", status="partial",
+                              evidence=["审性能回归"], feedback="点明了场景", gap="可说清产出"),
+            CritiqueDimension(key="desc_trigger_specificity", name="触发具体性", status="met",
+                              evidence=["重构代码时"], feedback="限定了触发时机", gap=""),
         ],
         token_usage={"input_tokens": 100, "output_tokens": 50}, duration_seconds=2.5,
     )
@@ -45,7 +49,7 @@ def test_critique_reports_dims_and_writes_json(monkeypatch, tmp_path):
     assert "(2/3)" in r.output                          # vote_tally 可信度显在维度头
     assert (out / "content-quality-report.json").exists()
     js = json.loads((out / "content-quality-report.json").read_text(encoding="utf-8"))
-    assert len(js["dimensions"]) == 4
+    assert len(js["dimensions"]) == 6   # 4 body + 2 description
 
 
 def test_critique_does_not_require_evals_json(monkeypatch, tmp_path):

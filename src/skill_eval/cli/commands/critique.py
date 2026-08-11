@@ -1,4 +1,4 @@
-"""critique 命令:诊断 SKILL.md 正文内容质量(4 维读者反馈态,纯诊断无 gate)。"""
+"""critique 命令:诊断声明内容质量(正文 4 维 + description 2 维,读者反馈态,纯诊断无 gate)。"""
 from pathlib import Path
 from typing import Optional
 
@@ -22,7 +22,7 @@ def critique(
     runs: int = typer.Option(1, "--runs", help="多数投票跑 N 次(>1 启用,默认 1 单次)"),
     kind: str = typer.Option("skill", "--kind", help="声明对象:skill(默认,审 SKILL.md)/ agent(审 agent 定义正文)"),
 ):
-    """诊断声明正文内容质量(4 维读者反馈;纯诊断无 gate)。
+    """诊断声明内容质量(正文 4 维 + description 2 维;纯诊断无 gate)。
 
     --kind agent 审 agent 定义正文(system prompt);默认 skill 审 SKILL.md 正文。
     """
@@ -32,7 +32,7 @@ def critique(
     skill_path = resolve_skill_dir(skill_path)
     try:
         name, *_ = parse_skill_md(skill_path)
-        with console.status(f"正在评审 {name} 的正文内容质量" + (f"(跑 {runs} 次投票)" if runs > 1 else "") + "…",
+        with console.status(f"正在评审 {name} 的内容质量" + (f"(跑 {runs} 次投票)" if runs > 1 else "") + "…",
                              spinner="dots"):
             report = analyze_content_quality(skill_path, model=model, timeout=timeout, runs=runs, subject=kind)
 
@@ -43,7 +43,7 @@ def critique(
         sc = report.status_counts
         tu = report.token_usage
         tok = (tu.get("input_tokens", 0) or 0) + (tu.get("output_tokens", 0) or 0)
-        console.print(f"正文内容质量 [bold]{name}[/bold]"
+        console.print(f"内容质量 [bold]{name}[/bold]"
                       f" · 满足 [green]{sc['met']}[/green]"
                       f" · 部分 [yellow]{sc['partial']}[/yellow]"
                       f" · 缺失 [red]{sc['missing']}[/red]"
