@@ -98,6 +98,21 @@ def invoked_skills(transcript_path: Path) -> list[str]:
     return seen
 
 
+def invoked_agents(transcript_path: Path) -> list[str]:
+    """transcript 里出现过的所有 agent 名(record.agent、去重、按首次出现顺序)。
+
+    供多 agent 检测:init --from-transcript 不切分时,若 transcript 涉及多 agent
+    (主 agent dispatch 了子 agent、或多个 agent 各自的段)会串味(把别 agent 的活动
+    当本 agent 挖)→ CLI 层据此警告、建议 --kind agent。与 ``invoked_skills`` 对称。
+    """
+    seen: list[str] = []
+    for rec in _records(transcript_path):
+        name = rec.get("agent")
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
 def scope_signals(transcript_paths: list[Path], name: str) -> set[str]:
     """扫 cc/structured transcript(非 opencode),返回可收窄的作用域锚点集合。
 

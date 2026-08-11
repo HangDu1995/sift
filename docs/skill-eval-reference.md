@@ -91,13 +91,13 @@ skill-eval init path/to/agent.md --kind agent                   # 给 agent 出�
 | `--model` | 默认 | LLM 模型 |
 | `--num-evals` | 无 | 最多生成的 eval case 数量 |
 | `--from-transcript` | 无 | 从真实 session transcript 挖 evals（加料 SKILL.md，非替代） |
-| `--kind` | (无) | 声明类型：生成时 `agent` = 按 agent 角色出题（读 agent 定义.md 凭 description/system prompt 造 role-matching 题，断言由 LLM 直接写）；默认/`skill` 走 skill 出题。配 `--from-transcript` 则选挖掘作用域（`skill`=按 Skill 调用切 / `agent`=按 agent 归属切，同 audit --kind；不传 + 多 skill → 警告） |
+| `--kind` | (无) | 声明类型：生成时 `agent` = 按 agent 角色出题（读 agent 定义.md 凭 description/system prompt 造 role-matching 题，断言由 LLM 直接写）；默认/`skill` 走 skill 出题。配 `--from-transcript` 则选挖掘作用域（`skill`=按 Skill 调用切 / `agent`=按 agent 归属切，同 audit --kind；不传 + 多 skill/agent → 警告） |
 | `--timeout` | 600 | LLM 调用超时秒数（mining 是单次大 prompt；撞超时 → degraded fallback） |
 | `--focus` | (无) | 定向生成某一类 eval 补盲区：`negative-cases`（反面场景）/ `edge-cases`（边界/错误）/ 任意自由文本（skill 特定方向）；常配 `--append`。`anti-triggers` 是旧名，保留为静默别名 |
 | `--append` | 关 | 追加到已有 evals.json（不覆盖）：读现有 evals 喂 LLM 定向补题（只补 `--focus` 面、与现有题语义去重），新 eval id 接续已有 `max+1` |
 | `--trigger-probes` | 关 | 生成 trigger-accuracy 探题（should-trigger / should-not-trigger），追加到 evals.json 的 `trigger_probes` 段（见 [evals-format.md](evals-format.md)）。LLM 读 description 出题；默认每方向 5 道，`--num-evals` = 每方向**上限**（trim 多余、不补下限）。不重生成已有 scoring evals（载入已有 evals.json 保留原题）；新探题 id 接续已有 trigger_probes `max+1`。配合 [`trigger`](#trigger--触发准确度第-4-维) 跑 |
 
-`--from-transcript` 解析 session transcript（模型、user turns、用到的 skill），重建 input_files / commands / produced_files，生成带结构化 assertions 的 eval。若 LLM 失败降级为 fallback eval，会带 `degraded:*` flag 并在终端告警（不再静默）。多 skill transcript 不传 `--kind` 时会把全部当本 skill 挖（可能串味）→ 终端告警，建议加 `--kind skill` 只挖本 skill 段。
+`--from-transcript` 解析 session transcript（模型、user turns、用到的 skill），重建 input_files / commands / produced_files，生成带结构化 assertions 的 eval。若 LLM 失败降级为 fallback eval，会带 `degraded:*` flag 并在终端告警（不再静默）。多声明单元 transcript（多个 skill、或主 agent dispatch 了子 agent）不传 `--kind` 时会把全部当本声明挖（可能串味）→ 终端告警，建议加对应 `--kind skill` / `--kind agent` 只挖本声明段。
 
 **字段名校验**：LLM 生成时若把字段名拼错（如 `expected_output`→`expected`、`assertions`→`assertion`），pydantic 默认会**静默丢弃**该字段——evals.json 看着生成成功、实则缺字段，`run` 时才暴雷。`init` 会在终端告警 `⚠️ N 条 eval 含未知字段(已忽略;可能拼错)`，逐条列出哪个 eval 的哪些字段可疑，免得考卷悄悄残缺。warn 不拒（拒绝会掉确定性模板 fallback，反而更差）。
 

@@ -86,13 +86,20 @@ def init(
 
         if from_transcript:
             if not kind:
-                from skill_eval.audit.slice import invoked_skills
+                from skill_eval.audit.slice import invoked_skills, invoked_agents
                 skills = invoked_skills(from_transcript)
                 if len(skills) > 1:
                     console.print(
                         f"[yellow]⚠️  transcript 涉及 {len(skills)} 个 skill"
                         f"({', '.join(skills)}),会把全部当本 skill 挖、可能串味;"
                         f"加 --kind skill 只挖本 skill 被调用期间段。[/yellow]"
+                    )
+                agents = invoked_agents(from_transcript)
+                if len(agents) > 1:
+                    console.print(
+                        f"[yellow]⚠️  transcript 涉及 {len(agents)} 个 agent"
+                        f"({', '.join(agents)}),会把全部当本声明挖、可能串味;"
+                        f"加 --kind agent 只挖本 agent 被 dispatch 期间段。[/yellow]"
                     )
             console.print(f"Mining evals from transcript [bold]{from_transcript}[/bold]...")
             eval_set = gen.generate_from_transcript(

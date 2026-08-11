@@ -170,6 +170,50 @@ def test_init_kind_agent_from_transcript_threads_kind(monkeypatch, tmp_path):
     assert captured.get("kind") == "agent", f"--kind agent 没透到 generator: {captured}"
 
 
+def _multi_agent_transcript(tmp_path):
+    import json
+    tp = tmp_path / "session.jsonl"
+    tp.write_text("\n".join(json.dumps(r) for r in [
+        {"agent": "orchestrator", "message": {"role": "assistant",
+            "content": [{"type": "text", "text": "派发子 agent"}]}},
+        {"agent": "reviewer", "message": {"role": "assistant",
+            "content": [{"type": "text", "text": "审代码"}]}},
+    ]), encoding="utf-8")
+    return tp
+
+
+def test_init_warns_multi_agent_without_kind(monkeypatch, tmp_path):
+    """init --from-transcript 不带 --kind、transcript 涉及多 agent → 警告建议 --kind agent。
+
+    对称多 skill 警告:agent mining 的切段机制(slice_transcript kind=agent)本身齐全,
+    缺的是这道「忘带 --kind」的提醒——不切分会拿整段 transcript 挖、串味。
+    """
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript",
+                        lambda self, sp, tp, on_heartbeat=None, kind=None: _fake_evalset())
+    agent_md = tmp_path / "reviewer.md"
+    agent_md.write_text("---\nname: reviewer\ndescription: 审查代码\n---\n# 审查\n只读\n",
+                        encoding="utf-8")
+    tp = _multi_agent_transcript(tmp_path)
+    r = runner.invoke(app, ["init", str(agent_md), "--from-transcript", str(tp),
+                            "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert "--kind agent" in r.output, f"多 agent 应警告建议 --kind agent:{r.output!r}"
+
+
+def test_init_no_multi_agent_warning_with_kind(monkeypatch, tmp_path):
+    """带了 --kind agent → 不触发多 agent 串味警告(会切段,不串味)。"""
+    monkeypatch.setattr("skill_eval.evals.generator.EvalInitGenerator.generate_from_transcript",
+                        lambda self, sp, tp, on_heartbeat=None, kind=None: _fake_evalset())
+    agent_md = tmp_path / "reviewer.md"
+    agent_md.write_text("---\nname: reviewer\ndescription: 审查代码\n---\n# 审查\n只读\n",
+                        encoding="utf-8")
+    tp = _multi_agent_transcript(tmp_path)
+    r = runner.invoke(app, ["init", str(agent_md), "--from-transcript", str(tp),
+                            "--kind", "agent", "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert "可能串味" not in r.output, f"带 --kind agent 不该再警告串味:{r.output!r}"
+
+
 def test_init_agent_md_default_output_writes_to_agent_dir(monkeypatch, tmp_path):
     """init <agent.md> 不传 -o → 默认写 agent 目录(.md 所在目录)的 evals/evals.json。
 

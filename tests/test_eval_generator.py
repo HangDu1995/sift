@@ -513,6 +513,23 @@ def test_invoked_skills_lists_all_in_order(tmp_path: Path):
     assert invoked_skills(tp) == ["skillA", "skillB"]
 
 
+def test_invoked_agents_lists_all_in_order(tmp_path: Path):
+    """invoked_agents:record.agent 去重 + 按首次出现顺序;无 agent 字段的 record 跳过。"""
+    import json
+    from skill_eval.audit.slice import invoked_agents
+    tp = tmp_path / "multi-agent.jsonl"
+    tp.write_text("\n".join(json.dumps(r) for r in [
+        {"agent": "orchestrator", "message": {"role": "assistant",
+            "content": [{"type": "text", "text": "a"}]}},
+        {"agent": "reviewer", "message": {"role": "assistant",
+            "content": [{"type": "text", "text": "b"}]}},
+        {"agent": "orchestrator", "message": {"role": "assistant",
+            "content": [{"type": "text", "text": "c"}]}},
+        {"message": {"role": "user", "content": "no-agent-field"}},
+    ]), encoding="utf-8")
+    assert invoked_agents(tp) == ["orchestrator", "reviewer"]
+
+
 def test_from_transcript_kind_isolates_target_segment(monkeypatch, tmp_path: Path):
     """--kind skill:只挖本 skill 段 → manifest 只含本 skill 文件,别 skill 的断言被 drop。
     对照:不切分(默认)会把别 skill 文件也当本 skill → 串味(两者都留)。"""
