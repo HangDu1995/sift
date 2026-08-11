@@ -12,7 +12,7 @@ from pathlib import Path
 
 from skill_eval.models.critique_report import ContentQualityReport, CritiqueDimension
 from skill_eval.parser import parse_skill_md
-from skill_eval.utils import call_claude
+from skill_eval.utils import call_claude, _HttpRateLimited
 
 # (key, 中文名, 定义, 好例, 反例)
 _RUBRIC: list[tuple[str, str, str, str, str]] = [
@@ -32,6 +32,34 @@ _RUBRIC: list[tuple[str, str, str, str, str]] = [
 _KEYS = [r[0] for r in _RUBRIC]
 _NAMES = {r[0]: r[1] for r in _RUBRIC}
 _VALID_STATUS = {"met", "partial", "missing"}
+
+# forced tool_use 的 inline schema(无 $ref——GLM 等 Anthropic 兼容端点不解析 tool input_schema
+# 的 $ref,必填字段是 $ref 时模型返 {})。key/status 用枚举锁形状,evidence/feedback/gap 自由文本。
+_CRITIQUE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "dimensions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "enum": _KEYS},
+                    "status": {"type": "string", "enum": ["met", "partial", "missing"]},
+                    "evidence": {"type": "array", "items": {"type": "string"}},
+                    "feedback": {"type": "string"},
+                    "gap": {"type": "string"},
+                },
+                "required": ["key", "status", "evidence", "feedback", "gap"],
+            },
+        }
+    },
+    "required": ["dimensions"],
+}
+
+# http 裸调用的有界重试:GLM forced tool_use 偶发返空 tool_use({})/撞 429,实锤多为瞬态,
+# 同 prompt 重试常解出(镜像 audit _judge_batch_with_retry 的"调用失败 / 解析为空"重试)。
+_RETRY_MAX = 2         # 空响应 / 调用失败 最多重试 2 次(共 3 次尝试)
+_RETRY_DELAY = 1.0     # 线性退避(秒 × 尝试序号)
 
 # prompt 措辞按对象选准词:skill 分支冻结成现状(已 shipped,字节不变不造回归);
 # agent 分支换准词(不把 agent.md 叫 SKILL.md)。4 维 rubric 两边共用,不动。
@@ -83,22 +111,41 @@ def _coerce_evidence(raw) -> list[str]:
     return []
 
 
+def _extract_json_obj(response: str) -> dict | None:
+    """从 LLM 响应抠 JSON 对象:先 json.loads,失败则正则兜底最大 {...}(fence 在大括号外被略过)。
+    返 dict;非 dict / 畸形 / 空 → None。_parse_critique_response 与 _response_has_content 共用。"""
+    try:
+        obj = json.loads(response)
+    except (json.JSONDecodeError, ValueError):
+        m = re.search(r"\{.*\}", response, re.S)
+        if not m:
+            return None
+        try:
+            obj = json.loads(m.group(0))
+        except (json.JSONDecodeError, ValueError):
+            return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _response_has_content(response: str) -> bool:
+    """LLM 响应是否至少含一条可用 dimension 判定(dimensions 数组里有合法 key 的条目)。
+    空 tool_use({}) / 空 dimensions / 全非法 key / 畸形 → False(退化,该重试)。"""
+    obj = _extract_json_obj(response)
+    if obj is None:
+        return False
+    dims = obj.get("dimensions")
+    return isinstance(dims, list) and any(
+        isinstance(d, dict) and d.get("key") in _NAMES for d in dims
+    )
+
+
 def _parse_critique_response(response: str, skill_name: str) -> ContentQualityReport:
     """解析 LLM 评审响应。畸形/空 → 空 report(宁少报不乱报)。
     按 key 归位(4 条固定,不依赖 LLM 返回顺序);漏条/非法 status → 该条默认 missing。
     正则抠最大 {...} 同 coverage(fence 在大括号外被自然略过);但有效 dict 无/空 dimensions
     (如 {"error":"rate limited"}) → 4 条全 missing(非空 report,提示 LLM 跑题);完全非 dict
     (畸形 JSON)→ 空 report。与 coverage(无 dimensions 返空)刻意分歧:missing 比 silent empty 显眼。"""
-    obj = None
-    try:
-        obj = json.loads(response)
-    except (json.JSONDecodeError, ValueError):
-        m = re.search(r"\{.*\}", response, re.S)
-        if m:
-            try:
-                obj = json.loads(m.group(0))
-            except (json.JSONDecodeError, ValueError):
-                obj = None
+    obj = _extract_json_obj(response)
     by_key: dict[str, dict] = {}
     if isinstance(obj, dict) and isinstance(obj.get("dimensions"), list):
         for d in obj["dimensions"]:
@@ -170,13 +217,46 @@ def _aggregate_runs(reports: list[ContentQualityReport], skill_name: str) -> Con
     return ContentQualityReport(skill_name=skill_name, dimensions=dims)
 
 
+def _critique_call(prompt: str, model: str | None, timeout: int) -> tuple[str | None, dict]:
+    """一次 critique LLM 调用(http 裸通道 + forced tool_use schema),含空响应 / 调用失败的
+    有界重试。
+
+    GLM forced tool_use 偶发返空 tool_use({})、或撞 429——实锤多为瞬态,同 prompt 重试常解出
+    (镜像 audit ``_judge_batch_with_retry`` 的"调用失败 / 解析为空"重试)。529 由 ``call_claude``
+    dispatcher 内部回退 cc,这里不操心。
+
+    返 ``(response, usage)``:``response`` 非 None = 拿到至少含一条可用 dimension 的响应;
+    None = 重试耗尽(调用反复失败 / 反复退化),调用方优雅降级(空 report)。``usage`` 是最后一次
+    尝试的 payload(failed attempt 不回调 on_usage,degenerate attempt 的会被后续覆盖)。
+    """
+    usage: dict = {}
+    response: str | None = None
+    for attempt in range(_RETRY_MAX + 1):
+        if attempt > 0:
+            time.sleep(_RETRY_DELAY * attempt)
+        try:
+            response = call_claude(
+                prompt, model=model, timeout=timeout,
+                on_usage=usage.update, schema=_CRITIQUE_SCHEMA, transport="http",
+            )
+        except (_HttpRateLimited, RuntimeError):
+            response = None
+            continue
+        if _response_has_content(response):
+            return response, usage
+        response = None           # 退化(空 tool_use / 畸形),重试
+    return None, usage
+
+
 def analyze_content_quality(skill_path: Path, *, model: str | None = None,
                             timeout: int = 120, runs: int = 1,
                             subject: str = "skill") -> ContentQualityReport:
     """声明正文(SKILL.md / agent 定义.md)body_text → 内容质量 report。
 
-    call_claude 失败 → 空 report(诊断不炸)。runs=1(默认)单次;runs>1 多数投票聚合
-    (每维 status 取多数、原文取首个判出多数档的 run、显 X/N 可信度)。
+    走 http 裸通道(forced tool_use + inline schema,省 cc 进程 spawn + ~25k 系统 prompt);
+    GLM forced tool_use 偶发空响应 / 429 由 ``_critique_call`` 有界重试兜。重试耗尽 / 调用失败
+    → 空 report(诊断不炸)。runs=1(默认)单次;runs>1 多数投票聚合(每维 status 取多数、
+    原文取首个判出多数档的 run、显 X/N 可信度)。
 
     subject=skill/agent 只选 prompt 措辞(4 维 rubric 两边共用);取 parse_skill_md 第 5
     返回值 body_text(纯正文,不含 frontmatter description)——description 留给行为层
@@ -187,27 +267,23 @@ def analyze_content_quality(skill_path: Path, *, model: str | None = None,
     start = time.perf_counter()
 
     if runs <= 1:
-        usage: dict = {}
-        try:
-            response = call_claude(prompt, model=model, timeout=timeout, on_usage=usage.update)
-        except RuntimeError:
+        response, usage = _critique_call(prompt, model, timeout)
+        if response is None:
             return ContentQualityReport(skill_name=name, duration_seconds=time.perf_counter() - start)
         rep = _parse_critique_response(response, name)
         rep.token_usage = usage
         rep.duration_seconds = time.perf_counter() - start
         return rep
 
-    # 多 run:逐次跑(顺序,避限流),成功的进 reports
+    # 多 run:逐次跑(顺序,避限流),每次 _critique_call 自带重试;拿到内容的进 reports
     snaps: list[dict] = []
     reports: list[ContentQualityReport] = []
     for _ in range(runs):
-        u: dict = {}
-        try:
-            response = call_claude(prompt, model=model, timeout=timeout, on_usage=u.update)
-            reports.append(_parse_critique_response(response, name))
-            snaps.append(u)
-        except RuntimeError:
+        response, u = _critique_call(prompt, model, timeout)
+        if response is None:
             continue
+        reports.append(_parse_critique_response(response, name))
+        snaps.append(u)
     if not reports:
         return ContentQualityReport(skill_name=name, duration_seconds=time.perf_counter() - start)
     agg = _aggregate_runs(reports, name)

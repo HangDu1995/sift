@@ -137,8 +137,9 @@ def test_analyze_calls_claude_and_fills_body(monkeypatch, tmp_path):
     (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n执行 deploy.sh\n", encoding="utf-8")
     captured = {}
 
-    def fake_call(prompt, model=None, timeout=120, max_turns=None, on_usage=None):
+    def fake_call(prompt, model=None, timeout=120, max_turns=None, on_usage=None, **kw):
         captured["prompt"] = prompt
+        captured["kw"] = kw
         if on_usage:
             on_usage({"input_tokens": 100, "output_tokens": 50})
         return _fake_response_four_dims()
@@ -148,6 +149,10 @@ def test_analyze_calls_claude_and_fills_body(monkeypatch, tmp_path):
 
     assert "执行 deploy.sh" in captured["prompt"]     # body_text 喂进去了
     assert "description" not in captured["prompt"].split("SKILL.md 正文")[1].split("##")[0]  # 不喂 frontmatter
+    assert captured["kw"].get("transport") == "http"  # 走裸 HTTP(省 cc spawn + 系统 prompt)
+    schema = captured["kw"].get("schema")
+    # inline schema 透传(forced tool_use);dimensions 嵌在 properties 下
+    assert isinstance(schema, dict) and "dimensions" in schema["properties"]
     assert len(rep.dimensions) == 4
     assert rep.token_usage.get("input_tokens") == 100  # on_usage 收了 token
     assert rep.duration_seconds >= 0.0
@@ -157,10 +162,75 @@ def test_analyze_call_failure_returns_empty(monkeypatch, tmp_path):
     skill = tmp_path / "sk"
     skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    monkeypatch.setattr(crt, "_RETRY_DELAY", 0.0)     # 重试退避归零(不真睡)
     monkeypatch.setattr(crt, "call_claude", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
     rep = analyze_content_quality(skill, model=None, timeout=120)
-    assert rep.dimensions == []                        # 失败 → 空 report(诊断不炸)
+    assert rep.dimensions == []                        # 重试耗尽 → 空 report(诊断不炸)
     assert rep.duration_seconds >= 0.0
+
+
+# ---- 空 tool_use 重试(http 路径偶发 {} 退化)----
+from skill_eval.utils import _HttpRateLimited
+
+
+def test_analyze_retries_on_empty_tool_use(monkeypatch, tmp_path):
+    """http 偶发返空 tool_use({})→ 重试拿到有内容的响应,返正常 report(不当全 missing)。"""
+    skill = tmp_path / "sk"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    monkeypatch.setattr(crt, "_RETRY_DELAY", 0.0)
+    responses = iter(["{}", _fake_response_four_dims()])   # 第 1 次 {} 退化,第 2 次正常
+    calls = {"n": 0}
+
+    def fake_call(*a, **kw):
+        calls["n"] += 1
+        return next(responses)
+
+    monkeypatch.setattr(crt, "call_claude", fake_call)
+    rep = analyze_content_quality(skill)
+    assert calls["n"] == 2                              # {} 触发了 1 次重试
+    assert len(rep.dimensions) == 4                     # 拿到的是正常那次
+    assert rep.dimensions[0].status == "met"
+
+
+def test_analyze_retry_exhaustion_on_degenerate(monkeypatch, tmp_path):
+    """反复返 {} → 重试耗尽返空 report(不当全 missing 假信号,也不炸)。"""
+    skill = tmp_path / "sk"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    monkeypatch.setattr(crt, "_RETRY_DELAY", 0.0)
+    calls = {"n": 0}
+
+    def fake_call(*a, **kw):
+        calls["n"] += 1
+        return "{}"                                    # 恒退化
+
+    monkeypatch.setattr(crt, "call_claude", fake_call)
+    rep = analyze_content_quality(skill)
+    assert calls["n"] == crt._RETRY_MAX + 1            # 重试预算用尽(初试 + _RETRY_MAX 次重试)
+    assert rep.dimensions == []                        # 退化 → 空 report(不当 4×missing 假信号)
+
+
+def test_analyze_retries_on_rate_limited(monkeypatch, tmp_path):
+    """429(_HttpRateLimited,非 RuntimeError)也要重试,不能裸抛炸掉 critique。"""
+    skill = tmp_path / "sk"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    monkeypatch.setattr(crt, "_RETRY_DELAY", 0.0)
+    responses = iter([_HttpRateLimited("429 boom"), _fake_response_four_dims()])
+    calls = {"n": 0}
+
+    def fake_call(*a, **kw):
+        calls["n"] += 1
+        x = next(responses)
+        if isinstance(x, Exception):
+            raise x
+        return x
+
+    monkeypatch.setattr(crt, "call_claude", fake_call)
+    rep = analyze_content_quality(skill)
+    assert calls["n"] == 2                             # 429 触发 1 次重试
+    assert len(rep.dimensions) == 4                    # 重试后拿到正常响应
 
 
 def test_parse_response_valid_dict_no_dims_yields_four_missing():
@@ -215,7 +285,7 @@ def test_analyze_multi_run_aggregates_and_sums_tokens(monkeypatch, tmp_path):
     responses = iter([_resp("partial"), _resp("met"), _resp("partial")])
     calls = {"n": 0}
 
-    def fake_call(prompt, model=None, timeout=120, max_turns=None, on_usage=None):
+    def fake_call(prompt, model=None, timeout=120, max_turns=None, on_usage=None, **kw):
         calls["n"] += 1
         if on_usage:
             on_usage({"input_tokens": 100, "output_tokens": 50, "service_tier": "standard"})
@@ -236,6 +306,7 @@ def test_analyze_multi_run_all_fail_returns_empty(monkeypatch, tmp_path):
     skill = tmp_path / "sk"
     skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\n# S\n规则X\n", encoding="utf-8")
+    monkeypatch.setattr(crt, "_RETRY_DELAY", 0.0)      # 重试退避归零(每 run 都重试耗尽)
     monkeypatch.setattr(crt, "call_claude", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
     rep = analyze_content_quality(skill, runs=3)
     assert rep.dimensions == []                         # 全失败 → 空 report(诊断不炸)
@@ -270,7 +341,7 @@ def test_analyze_threads_subject_agent_to_prompt(monkeypatch, tmp_path):
         encoding="utf-8")
     captured = {}
 
-    def fake_call(prompt, model=None, timeout=120, max_turns=None, on_usage=None):
+    def fake_call(prompt, model=None, timeout=120, max_turns=None, on_usage=None, **kw):
         captured["prompt"] = prompt
         return _fake_response_four_dims()
 
