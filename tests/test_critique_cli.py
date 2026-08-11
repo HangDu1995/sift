@@ -62,6 +62,22 @@ def test_critique_does_not_require_evals_json(monkeypatch, tmp_path):
     assert r.exit_code == 0, r.output                   # 不报缺 evals.json
 
 
+def test_critique_agent_md_default_output_no_crash(monkeypatch, tmp_path):
+    """critique --kind agent 直传 .md 文件(agent 声明)、不带 -o:输出落 .md 所在目录的
+    evals/,不崩(resolve_skill_dir 不动非 SKILL.md 文件 → 旧逻辑拼成 file/evals 崩)。"""
+    runner = CliRunner()
+    agent_dir = tmp_path / "reviewer"                   # 镜像 pr-reviewer/ 布局:.md 在子目录
+    agent_dir.mkdir()
+    agent_md = agent_dir / "reviewer.md"
+    agent_md.write_text("---\nname: reviewer\ndescription: 审代码\n---\n# 审查\n只读不改\n",
+                        encoding="utf-8")
+    monkeypatch.setattr(crt_cmd, "analyze_content_quality", lambda *a, **kw: _fake_report())
+    r = runner.invoke(crt_cmd.app, ["critique", str(agent_md), "--kind", "agent"])
+    assert r.exit_code == 0, r.output
+    # 默认输出落 .md 同级(evals/ 在 agent_dir 下,不是 file/evals)
+    assert (agent_dir / "evals" / "content-quality-report.json").exists()
+
+
 # ---- --kind(skill 默认 / agent / 非法拒收)----
 def test_critique_kind_agent_threads_subject(monkeypatch, tmp_path):
     """critique --kind agent 把 subject='agent' 透传给 analyze_content_quality。"""

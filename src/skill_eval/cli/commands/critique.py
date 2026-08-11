@@ -36,7 +36,10 @@ def critique(
                              spinner="dots"):
             report = analyze_content_quality(skill_path, model=model, timeout=timeout, runs=runs, subject=kind)
 
-        out_dir = output or (skill_path / "evals")
+        # agent/workflow 声明是单个 .md 文件(resolve_skill_dir 故意不动非 SKILL.md,
+        # 身份靠 frontmatter name)——输出落它所在目录的 evals/;目录则落自身 evals/。
+        base_dir = skill_path.parent if skill_path.is_file() else skill_path
+        out_dir = output or (base_dir / "evals")
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "content-quality-report.json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
 
