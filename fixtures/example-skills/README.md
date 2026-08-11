@@ -1,16 +1,17 @@
 # example-skills — 主力示例 skill
 
-5 个示例 skill + 1 条多 skill `--kind skill` 切分 demo transcript,演示 skill-eval 的评测路径。**每个示例擅长的路径不同**(取决于自带 `evals.json` / `transcript` / `trigger_probes` 与否),照下表选,照命令跑。
+6 个示例 skill + 1 条多 skill `--kind skill` 切分 demo transcript,演示 skill-eval 的评测 / 静态诊断能力。**每个示例擅长的面不同**(取决于自带 `evals.json` / `transcript` / `trigger_probes` / 是否为 critique 量身做),照下表选,照命令跑。
 
 ## 能力速查
 
-| skill | 领域 / 语言 | 路径3 `run`(evals.json) | 路径2 `audit`(transcript) | 路径1 `--task`(真任务) | 路径4 `trigger`(触发) | analyze / vet |
+| skill | 领域 / 语言 | 路径3 `run`(evals.json) | 路径2 `audit`(transcript) | 路径1 `--task`(真任务) | 路径4 `trigger`(触发) | analyze / vet / critique |
 |---|---|---|---|---|---|---|
 | [log-error-analyzer/](log-error-analyzer/) | 日志分诊 / 英 | ✅ 自带 evals.json | ✅ 自带 transcript | — | 需 `init --trigger-probes` | ✅ |
 | [log-error-analyzer-zh/](log-error-analyzer-zh/) | 日志分诊 / 中 | ✅ 自带 evals.json | ✅ 自带 transcript | — | 需 `init --trigger-probes` | ✅ |
 | [code-review-auditor/](code-review-auditor/) | 代码 review / 英 | 需先 `init` | — | ✅ 专为真任务设计 | 需 `init --trigger-probes` | ✅ |
 | [release-checklist-zh/](release-checklist-zh/) | 发布自检 / 中 | 需先 `init` | ✅ 自带 transcript | — | 需 `init --trigger-probes` | ✅ |
 | [incident-reporter/](incident-reporter/) | 事故分诊 / 中 | — | — | — | ✅ 自带 trigger_probes | ✅ |
+| [secret-rotator/](secret-rotator/) | 密钥轮换 / 中 | — | — | — | — | critique ✅(量身示例) |
 
 > **三条路径**:路径3 `run` 跑 evals.json 评测题 · 路径2 `audit` 对账历史 transcript(不 run)· 路径1 `--task --cwd` 跑真任务(不读 evals.json)。详见 [docs/example-skill.md](../../docs/example-skill.md)。
 
@@ -130,6 +131,22 @@ skill-eval trigger fixtures/example-skills/incident-reporter/ --runs 2 -o /tmp/t
 > - **不该触发的文本任务**(probe 3-5:转文字稿 / 摘要 / 周报):description「处理文本内容 / 生成报告」过宽 → 可能**误触**(false-trigger 高 → FAIL)。
 >
 > 跑完看 `trigger-report.json` + `trigger-report.html` + 终端:recall / false-trigger 各带样本量 + 耗时 + 总 token;per-probe verdict + 消耗;**操作建议**区——规则建议(漏召 → 补「事故/incident」关键词;误触 → 收窄到 incident scope)+ 有失败时自动起草的 LLM 改写 description 草案。**实际结果取决于 cc**(可能只看到误触、只看到漏召、或混合),核心学怎么读 recall / false-trigger + 用建议改 description。trigger 定位诊断、无 gate(不进 `benchmark.json`)。
+
+### secret-rotator(`critique` 内容质量诊断演示)
+
+上面 5 个演示 run / audit / task / trigger;这一个专为 [`critique`](../../docs/skill-eval-reference.md) 演示——SKILL.md **故意写成内容质量有区分度的混合态**(各维 verdict 不同),让 critique 的 6 维(正文 4 + description 2)各落不同档,跑出来一目了然它查什么、怎么读。
+
+```bash
+skill-eval critique fixtures/example-skills/secret-rotator/            # 6 维内容质量(正文 4 + description 2)
+skill-eval critique fixtures/example-skills/secret-rotator/ --runs 3   # 多数投票(压单次 LLM 方差)
+```
+
+> **设计 verdict(故意植入,跑完对照)**:4 个稳维 + 2 个边界维(实测 `--runs 3` 验过):
+> - **稳定 → 满足**:可执行具体性(5 步全带真命令 `vault kv get/put`、`kubectl create secret / apply`、`kubectl rollout restart` + 真产物 `rotation-log.json`)、意图清晰(description 写清干啥 / 何时用 / 产出什么)。
+> - **稳定 → 缺失**:高风险黑名单(**故意不写**禁令——没拉黑「密钥提交进 git」「put 新密钥前就 rollout restart(等于白做)」「delete secret 再重建(有空窗)」这类看着对但会出事的操作)、示例驱动(**故意不给** worked example,只有命令模板)。
+> - **边界维(故意设在 partial)**:失败机制编码(提了「高峰期频繁重启影响可用性」但**没写因果链**)、触发具体性(description **没排除**初次创建 / 证书轮换 / 普通 k8s 配置变更等相近场景)——**这两维 run-to-run 会在 partial↔met / partial↔missing 之间抖**,正演示 critique 的方差行为 + 为何要 `--runs` 多数投票(单跑可能落到任一侧,3 次投票取多数更稳)。
+>
+> 所以典型总分布是 **满足 2 + 缺失 2(稳)+ 边界 2(变)**,边界两维时而算 partial、时而滑到 met / missing——**对照「稳维是否点中(没拉黑危险操作 / 没 worked example → 缺失;真命令 + 清楚 description → 满足)」即可,别钉精确 verdict 数**。产出 `content-quality-report.json` + `.html`。跟 incident-reporter 同理:这是个**带故意缺口的教学样本**,不是写得好的范例——学怎么读 critique 的反馈去补自己的 skill。
 
 ### multi-skill-demo(`--kind skill` 多 skill 切分对账)
 
