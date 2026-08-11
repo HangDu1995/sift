@@ -23,8 +23,6 @@ from skill_eval.models.batch_models import (
     ScannerResult,
     SecurityFinding,
     SecurityReport,
-    SkillEntry,
-    SkillsManifest,
 )
 from skill_eval.models.benchmark_models import (
     AnalysisReport,
@@ -170,8 +168,6 @@ __all__ = [
     "ScannerResult",
     "SecurityFinding",
     "SecurityReport",
-    "SkillEntry",
-    "SkillsManifest",
     # Trigger-accuracy report
     "ProbeResult",
     "Suggestion",

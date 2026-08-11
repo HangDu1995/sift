@@ -188,18 +188,6 @@ class CalibrationSummary(BaseModel):
         return cls(sides=out)
 
 
-class SkillEntry(BaseModel):
-    path: str
-    depends_on: list[str] = Field(default_factory=list)
-    evals_path: str | None = None
-    disabled: bool = False
-
-
-class SkillsManifest(BaseModel):
-    name: str
-    skills: list[SkillEntry] = Field(default_factory=list)
-
-
 class SecurityFinding(BaseModel):
     scanner: str
     severity: SecuritySeverity

@@ -20,8 +20,6 @@
   - [coverage — 出题漏测诊断](#coverage--出题漏测诊断)
   - [critique — 正文内容质量诊断](#critique--正文内容质量诊断)
   - [report — HTML 报告](#report--html-报告)
-  - [batch — 批量评测](#batch--批量评测)
-  - [batch-report — 批量 HTML 报告](#batch-report--批量-html-报告)
 - [评测体系](#评测体系)
 - [JSON 输出格式](#json-输出格式)
 - [项目结构](#项目结构)
@@ -601,50 +599,6 @@ skill-eval report output/ --open # 生成并打开
 - **单次执行** — 浏览该 run 的 prompt、输出文件、评估详情（打分 + 遵循性 + 校准三层）。顶部下拉按 eval 分组，可直接跳转到指定 run（不必逐个翻「上一个/下一个」）；方向键仍可逐条翻
 - **整体汇总** — 门禁徽章 + 安全面板 + 评分卡 + 异常检测 + 通过率对比（双率）+ 盲评对比 + 深度分析 + 检查点总览（per-eval 程序/LLM/混合 3-dim 一览，点行跳明细）+ 逐项评测明细（per-run 3-dim + 检查项 ✓/✗ 矩阵）+ 遵循性聚合（整个考试）
 
-### `batch` — 批量评测
-
-跨多 skill 跑批量评测（仅 unit 层）。位置参数给 manifest JSON 或 skill 目录（目录则自动 discover）。
-
-**Manifest 格式**：
-
-```json
-{
-  "name": "my-project-skills",
-  "skills": [
-    {"path": "skills/data-transform", "depends_on": []},
-    {"path": "skills/report-gen", "depends_on": ["skills/data-transform"]}
-  ]
-}
-```
-
-**参数**：
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--runs` | 3 | 每种配置的运行次数（注意：与 `run` 的默认 1 不同） |
-| `--model` | 默认 | claude -p 模型 |
-| `--max-turns` | 10 | claude -p 最大轮数 |
-| `--max-retries` | 2 | 每 eval 最大重试 |
-| `--fail-fast` | 关闭 | 首个失败即停 |
-| `--workers` | 4 | 最大并行 worker 数 |
-| `--output` / `-o` | 无 | 输出目录 |
-
-### `batch-report` — 批量 HTML 报告
-
-```bash
-skill-eval batch-report batch-workspace/ --open
-```
-
-**参数**：
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--manifest` | 自动 | manifest.json 路径 |
-| `--output` / `-o` | workspace 下 | 输出 HTML 路径 |
-| `--open` | 关闭 | 生成后浏览器打开 |
-
-展示多 skill 对比、通过率对比、盲评胜率、各 Skill 详情。是独立顶层命令（非 `batch` 子命令）。
-
 ---
 
 ## 评测体系
@@ -909,7 +863,7 @@ skill-eval batch-report batch-workspace/ --open
 
 - 每个 config 的 `run_summary` 含 `pass_rate` / `pass_rate_programmatic` / `pass_rate_llm`（后两者可能为 `null`）+ `time_seconds` / `tokens`。
 - `delta` 全为有符号字符串（`+0.27`），= `configs[0] - configs[1]`（候选 - 基线）；双率项可能为 `null`。
-- **客观 Δ 趋零解读（D6）**：`delta.pass_rate_programmatic` 绝对值 ≤ 0.05（对齐染色阈值）= with/without 客观通过率无显著差异 = skill 相对 base 未带来增益。viewer「通过率变化」卡显 ⚠️ 警告、batch 表格/DAG delta 旁标 ⚠。**⚠ 只是「无增益」信号，不等于 skill 无用——先排查依赖目录是否进入工作区（常见假无增益，见 handbook），排除后再考虑 skill 已被模型原生能力覆盖（dead weight）、该核查 scope 或收窄**。客观为主（稳）；主观 Δ 不单独触发（漂）。
+- **客观 Δ 趋零解读（D6）**：`delta.pass_rate_programmatic` 绝对值 ≤ 0.05（对齐染色阈值）= with/without 客观通过率无显著差异 = skill 相对 base 未带来增益。viewer「通过率变化」卡显 ⚠️ 警告。**⚠ 只是「无增益」信号，不等于 skill 无用——先排查依赖目录是否进入工作区（常见假无增益，见 handbook），排除后再考虑 skill 已被模型原生能力覆盖（dead weight）、该核查 scope 或收窄**。客观为主（稳）；主观 Δ 不单独触发（漂）。
 - `comparison_summary.win_rate` = `a_wins/valid`（tie-计入）；`gate` 用 tie-排除版自行算。`win_rate_ci_lo/hi` = Wilson 95% 区间，viewer 盲评胜率卡显区间 + 显著性（样本不足标「不显著，建议加 run」）。
 - `delta.pass_rate_normalized_gain` = `(post-pre)/(1-pre)` 天花板修正（raw Δ 在高分段如 0.9→0.95 系统性低估改进）；viewer Δ 卡并列报出。
 - viewer 检查点总览：主侧（with）某 eval 跨 run 的程序通过率忽过忽挂（不全等）→ 题号旁 ⚠ 红旗，tooltip 给补跑命令 `run --eval-ids <id> --runs 更大`（补跑须调大 runs 才走 accumulate 累加，否则 fresh 会归档全部旧采样）。
@@ -1093,8 +1047,7 @@ skill-eval/
 │   ├── calibration/               # 评分校准
 │   ├── audit/                     # 真实 transcript 对账(TranscriptAuditor)
 │   ├── gating/                    # gate 判决纯函数(客观+主观双轴)
-│   ├── reporting/                 # HTML 报告
-│   └── batch/                     # 批量评测(DAG + 调度)
+│   └── reporting/                 # HTML 报告
 ├── tests/
 └── docs/
 ```
@@ -1124,7 +1077,6 @@ Skill-Eval 从 skill-creator 移植并改造了以下核心代码：
 - `calibration/` — 评分校准
 - `audit/` — 真实 transcript 对账
 - `gating/` — post-hoc 通过/失败判决
-- `batch/` — 批量评测（DAG）
 - `config/` — 配置系统
 
 ---
@@ -1157,7 +1109,6 @@ Skill-Eval 从 skill-creator 移植并改造了以下核心代码：
 |------|----------|
 | `vet` | Verdict = BLOCKED |
 | `analyze` | score < max_score |
-| `batch` | 有 eval 失败 |
 | `init`/`inspect`/`freeze`/`gate`/`report` | 2 = 输入错误 |
 
 ---

@@ -11,7 +11,7 @@
 - **校准 calibration** — 结果×过程 coherence：输出对了但过程违反硬性规则 → 高分存疑（5 态判决）
 - **post-hoc 门禁 + CI** — `gate` 独立命令出 PASS/FAIL，exit code 驱动 CI；`--format json` 合入 pipeline
 - **多作用域 transcript 审计 audit** — 把生产会话 transcript（cc / opencode 双源）与 SKILL.md 逐条对账；按 **skill / agent / root** 三种作用域切分：审被 `Skill` 调用的 skill 段、被 dispatch 的子 agent（`--kind agent`）、或顶层主 agent / 编排者（`--kind root`，整 workflow 审计的地基）；多 transcript 聚合可反推 skill 设计本身有没有问题
-- **路径1 真任务 + 批量** — `--task/--cwd` spawn 真任务（cc / opencode 双执行器）；`batch` DAG 调度多 skill
+- **路径1 真任务** — `--task/--cwd` spawn 真任务（cc / opencode 双执行器）
 - **基准题集冻结** — `freeze` 不可变签名 + skill_name 校验，跨 run / CI 复用同一份题
 - **触发准确度 trigger（第 4 维）** — 测 cc 仅凭 description 会不会自然触发 skill（前三层都 force-inject body、测不到的触发面）；纯诊断、不出 gate
 - **出题漏测诊断 coverage** — SKILL.md 内容点 × evals 覆盖映射，亮出 `run` 够不到的漏测盲区，`--augment` 复用 init 生成器自动补题；纯诊断、不出 gate
@@ -247,15 +247,6 @@ skill-eval report output/ --open
 ```
 
 读 `gate.json`（若存在）在标题旁渲染门禁徽章。
-
-### `batch` / `batch-report` — 批量评测与报告
-
-多 skill 按 DAG 拓扑顺序并行执行；`batch-report` 生成多 skill 对比 HTML。
-
-```bash
-skill-eval batch path/to/skills-dir/
-skill-eval batch-report batch-workspace/ --open
-```
 
 ---
 

@@ -225,22 +225,6 @@ FAIL: description_length, description_has_trigger,
 
 ---
 
-## 第三幕：批量评测
-
-三个正常 Skill 的 DAG：
-
-```bash
-skill-eval batch fixtures/test-skills/data-pipeline/manifest.json --runs 1
-```
-
-按 DAG 顺序依次评测 data-validator → data-transform → report-generator。
-
-```bash
-skill-eval report output/ --open
-```
-
----
-
 ## 附录 A：完整指标速查表
 
 | 指标 | 文件 | 公式 | 好 | 警告 | 坏 |
