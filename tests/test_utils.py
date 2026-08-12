@@ -544,16 +544,20 @@ def test_http_call_4xx_raises_runtime_loud(monkeypatch):
         u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
 
 
-def test_http_call_missing_tooluse_raises_loud(monkeypatch):
-    """forced tool_use 应恒返 tool_use;缺失=异常 → RuntimeError(不静默返空)。"""
+def test_http_call_missing_tooluse_raises_typed(monkeypatch):
+    """forced tool_use 应恒返 tool_use;缺失(GLM 主动不调,thinking 完 end_turn)= 异常
+    → _HttpNoToolUse(typed,交 dispatcher 回退 cc;非 RuntimeError,免被通用 except 误吞)。"""
     import skill_eval.utils as u
     monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
         "content": [{"type": "text", "text": "no tool"}],
+        "stop_reason": "end_turn",
         "usage": {"input_tokens": 1, "output_tokens": 1},
     }))
     _http_env(monkeypatch)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(u._HttpNoToolUse) as ei:
         u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+    assert not isinstance(ei.value, RuntimeError)   # 非 RuntimeError 子类
+    assert ei.value.stop_reason == "end_turn"
 
 
 def test_http_call_uses_settings_creds_when_env_missing(monkeypatch, tmp_path):
@@ -600,8 +604,8 @@ def test_http_call_missing_creds_raises_clear(monkeypatch):
 
 
 def test_http_call_truncated_warns_and_marks_usage(monkeypatch):
-    """stop_reason=max_tokens → warnings.warn(截断) + on_usage payload 带 truncated=True;
-    产出仍返回(不完整但不 raise,下游走现有 UNRESOLVED/UNEVAL 兜底)。"""
+    """stop_reason=max_tokens + 有 tool_use → warn(截断)+ on_usage 带 truncated=True
+    + 返回 tool_use(不 cc 回退;下游 parser 判完整性,不完整则 parse_failed 重试)。"""
     import json as _j
     import skill_eval.utils as u
     seen = {}
@@ -615,11 +619,11 @@ def test_http_call_truncated_warns_and_marks_usage(monkeypatch):
         out = u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, lambda p: seen.update(p))
     assert seen["truncated"] is True               # 结构化留存
     assert seen["input_tokens"] == 100             # 其余 usage 不受影响
-    assert _j.loads(out) == [{"index": 0}]         # 不完整也返回(不 raise)
+    assert _j.loads(out) == [{"index": 0}]         # 有 tool_use 就用(即使截断)
 
 
 def test_http_call_truncated_without_usage_callback_still_warns(monkeypatch):
-    """on_usage=None + 截断 → 仍 warn、不崩(on_usage=None 分支安全)。"""
+    """on_usage=None + 截断 + 有 tool_use → 仍 warn、返回(on_usage=None 分支安全、不崩)。"""
     import skill_eval.utils as u
     monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
         "stop_reason": "max_tokens",
@@ -629,6 +633,22 @@ def test_http_call_truncated_without_usage_callback_still_warns(monkeypatch):
     _http_env(monkeypatch)
     with pytest.warns(UserWarning, match="截断"):
         u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+
+
+def test_http_call_truncated_no_tooluse_raises_typed(monkeypatch):
+    """stop_reason=max_tokens + 没 tool_use(thinking 撑满,tool_use 没空间产)
+    → raise _HttpNoToolUse(stop_reason=max_tokens,交 dispatcher 回退 cc)。"""
+    import skill_eval.utils as u
+    monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
+        "stop_reason": "max_tokens",
+        "content": [{"type": "thinking", "thinking": "..."}],
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }))
+    _http_env(monkeypatch)
+    with pytest.warns(UserWarning, match="截断"):
+        with pytest.raises(u._HttpNoToolUse) as ei:
+            u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+    assert ei.value.stop_reason == "max_tokens"
 
 
 def test_http_call_normal_stop_reason_no_truncated(monkeypatch):
@@ -736,3 +756,23 @@ def test_call_claude_http_non_throttled_error_does_not_fallback(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="400"):
         u.call_claude("p", transport="http")
+
+
+def test_call_claude_http_no_tool_use_falls_back_to_cc(monkeypatch):
+    """transport='http' forced tool_use 拿不到(GLM 只回 thinking / 撑满 max_tokens)
+    → _HttpNoToolUse → 回退 _call_claude_cc(cc 多轮催出 + 降级文本兜底)。"""
+    import skill_eval.utils as u
+    calls = {"http": 0, "cc": 0}
+
+    def fake_http(*a, **k):
+        calls["http"] += 1
+        raise u._HttpNoToolUse("only thinking", stop_reason="end_turn")
+
+    def fake_cc(*a, **k):
+        calls["cc"] += 1
+        return "cc-fallback"
+
+    monkeypatch.setattr(u, "_llm_http_call", fake_http)
+    monkeypatch.setattr(u, "_call_claude_cc", fake_cc)
+    assert u.call_claude("p", transport="http") == "cc-fallback"
+    assert calls == {"http": 1, "cc": 1}

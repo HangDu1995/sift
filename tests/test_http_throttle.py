@@ -79,3 +79,18 @@ def test_call_claude_http_throttled_falls_back_to_cc(monkeypatch):
     monkeypatch.setattr(utils, "_llm_http_call", _raise(utils._HttpThrottled("529")))
     monkeypatch.setattr(utils, "_call_claude_cc", lambda *a, **k: "cc-result")
     assert utils.call_claude("prompt", model="m", transport="http") == "cc-result"
+
+
+def test_no_tool_use_not_runtime_error_subclass():
+    """_HttpNoToolUse 非 RuntimeError 子类(防被通用 except RuntimeError 误吞,要穿透到 dispatcher)。"""
+    assert not issubclass(utils._HttpNoToolUse, RuntimeError)
+
+
+def test_call_claude_http_no_tool_use_falls_back_to_cc(monkeypatch):
+    """forced tool_use 拿不到(GLM 只回 thinking / 撑满 max_tokens)→ _HttpNoToolUse → 回退 cc。"""
+    monkeypatch.setattr(
+        utils, "_llm_http_call",
+        _raise(utils._HttpNoToolUse("only thinking", stop_reason="end_turn")),
+    )
+    monkeypatch.setattr(utils, "_call_claude_cc", lambda *a, **k: "cc-result")
+    assert utils.call_claude("prompt", model="m", transport="http") == "cc-result"

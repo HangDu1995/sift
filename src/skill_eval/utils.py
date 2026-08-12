@@ -32,6 +32,28 @@ class _HttpRateLimited(Exception):
     """
 
 
+class _HttpNoToolUse(Exception):
+    """裸 HTTP forced tool_use 没拿到 tool_use 块(GLM 只回 thinking / thinking 撑满
+    ``_HTTP_MAX_TOKENS``)→ ``call_claude`` dispatcher 捕获、回退 cc(cc 多轮 tool_use
+    循环催出 + 降级文本兜底,http 单次 forced 做不到)。
+
+    独立类型(**非** RuntimeError 子类):避免被 ``_judge_batch_with_retry`` 的
+    ``except RuntimeError`` 误吞(那条走 classify_error 落 cause=unknown 重试 http,
+    系统性失败重试无用)——它要穿透到 ``call_claude`` dispatcher 做 cc 兜底。
+    """
+
+    def __init__(self, message="", stop_reason=None):
+        super().__init__(message)
+        self.stop_reason = stop_reason
+
+
+# 裸 HTTP forced tool_use 的输出上限。4096(协议级保守默认,所有 Anthropic 兼容端点都接受;
+# 不探 GLM 上限、不 baked 模型数)。曾试 8192 治 thinking 撑满,但实测 GLM 服务端 thinking 随
+# max_tokens 膨胀——8192 让每批 thinking 更长、整体慢;4096 下大部分批(thinking<4096)http
+# 一次过快,撑满没 tool_use 的少数批走 _HttpNoToolUse → cc 回退救回,整体优于 8192 全慢。
+_HTTP_MAX_TOKENS = 4096
+
+
 _CLAUDE_SETTINGS_PATH = os.path.expanduser("~/.claude/settings.json")
 _claude_settings_cache: dict[str, str] | None = None
 
@@ -105,6 +127,8 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
     schema 模式一致,下游 parser 零改动)。
 
     - **529**(过载/身份限流)→ ``_HttpThrottled``(交 ``call_claude`` dispatcher 回退 cc)。
+    - **没拿到 tool_use 块**(GLM 只回 thinking / thinking 撑满 ``_HTTP_MAX_TOKENS``)
+      → ``_HttpNoToolUse``(交 dispatcher 回退 cc:cc 多轮 tool_use 循环催出 + 降级文本兜底)。
     - **其它 HTTP 错**(4xx 配置)/ **传输错**(timeout / URLError)→ ``RuntimeError``
       (暴露、走既有重试/兜底;cc 同 endpoint 同样会 timeout,回退无意义)。
     - ``on_usage``:回 ``{input_tokens, output_tokens, …, total_cost_usd:0}``(裸 API 不返
@@ -112,7 +136,7 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
     """
     body = {
         "model": _resolve_http_model(model),
-        "max_tokens": 4096,
+        "max_tokens": _HTTP_MAX_TOKENS,
         "messages": [{"role": "user", "content": prompt}],
         "tools": [{
             "name": "emit",
@@ -156,25 +180,8 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
         raise RuntimeError(f"裸 HTTP {e.code}: {e.read().decode()[:500]}")
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise RuntimeError(f"裸 HTTP 传输失败: {e!r}")
-    # 抠 tool_use.input(forced tool_use 应恒有;缺失 = 异常,loud)
-    for b in obj.get("content", []):
-        if b.get("type") == "tool_use":
-            inp = b.get("input", {})
-            items = inp.get("items", inp)   # array schema 包 {"items":[...]} → 解开
-            break
-    else:
-        raise RuntimeError(f"裸 HTTP 未返回 tool_use(force 失败?): {str(obj)[:300]}")
-    # 截断检测:stop_reason==max_tokens → forced tool_use 产出可能不完整。
-    # 项目无 logging → warnings.warn 进 stderr(即时可见、pytest.warns 可测);
-    # on_usage payload 带 truncated 留存(TokenUsageAccumulator 按 _KEYS 固定字段取,不受影响)。
-    # 不 raise/不重试(重试同样截断)——下游走现有 UNRESOLVED/UNEVAL 诚实兜底,但现在可见。
+    # 先回 usage(无论成败,产出了 token 就该计;truncated 标记截断留存)。
     truncated = obj.get("stop_reason") == "max_tokens"
-    if truncated:
-        warnings.warn(
-            "LLM 响应被截断(stop_reason=max_tokens, max_tokens 上限 4096):"
-            "forced tool_use 产出可能不完整,下游 parser 多半失败落 UNRESOLVED/UNEVAL。"
-            "反复出现时减小单批(audit _MAX_LLM_IN_BATCH)或切 generator 时提 max_tokens。",
-        )
     if on_usage is not None:
         usage = obj.get("usage")
         if isinstance(usage, dict):
@@ -183,7 +190,31 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
             if truncated:
                 payload["truncated"] = True
             on_usage(payload)
-    return json.dumps(items, ensure_ascii=False)
+    # 抠 tool_use.input(forced tool_use 应恒有;缺失 = 异常)。
+    tool_items = None
+    for b in obj.get("content", []):
+        if b.get("type") == "tool_use":
+            inp = b.get("input", {})
+            tool_items = inp.get("items", inp)   # array schema 包 {"items":[...]} → 解开
+            break
+    # 截断(stop_reason=max_tokens):thinking 顶到上限 → tool_use 可能不完整(有但畸形/缺字段)。
+    # **有 tool_use 就用**(即使截断;下游 parser 判完整性,不完整则 parse_failed 重试),
+    # 不 cc 回退——曾用"截断就 cc 回退"但 GLM 频繁顶到 max_tokens 致大批请求走 cc(4-6× 慢)。
+    # warn 进 stderr(可观测);on_usage payload 带 truncated 留存(accumulator 按 _KEYS 取,不受影响)。
+    if truncated:
+        warnings.warn(
+            "LLM 响应被截断(stop_reason=max_tokens, max_tokens 上限 "
+            f"{_HTTP_MAX_TOKENS}):thinking 顶到上限,tool_use 可能不完整 → 下游 parser "
+            "可能 parse_failed。反复出现可减小单批(audit _MAX_LLM_IN_BATCH)。"
+        )
+    # 没拿到 tool_use(thinking 撑满没空间产 / GLM 主动 end_turn 不调)= forced 真失败
+    # → raise _HttpNoToolUse 交 dispatcher 回退 cc(cc 多轮催出 + 降级文本,绕过 http 单次 forced 死结)。
+    if tool_items is None:
+        raise _HttpNoToolUse(
+            f"裸 HTTP 未返回 tool_use(force 失败,thinking 撑满或 GLM 主动不调?): {str(obj)[:300]}",
+            stop_reason=obj.get("stop_reason"),
+        )
+    return json.dumps(tool_items, ensure_ascii=False)
 
 
 def claude_cli_env() -> dict:
@@ -320,13 +351,20 @@ def call_claude(
 
     ``transport``(代码级,默认 ``"cc"``):``"cc"`` → cc CLI(``_call_claude_cc``);
     ``"http"`` → 裸 HTTP 直连(``_llm_http_call``,省 cc 进程 spawn + ~25k 系统 prompt/批,
-    forced tool_use 保 schema)。裸 HTTP 撞 529(后端过载/身份限流)→ 回退 cc(最坏=今天)。
+    forced tool_use 保 schema)。裸 HTTP 撞 529(后端过载/身份限流)/ forced tool_use 拿不到
+    tool_use 块(GLM 只回 thinking / thinking 撑满 ``_HTTP_MAX_TOKENS`` → ``_HttpNoToolUse``)
+    → 回退 cc(cc 多轮催出 + 降级文本兜底);其余 HTTP 错(4xx/timeout→RuntimeError)不回退
+    (同 endpoint 无意义)。
     默认 ``"cc"`` 保持现有调用方 / ~35 处 mock 零改动。
     """
     if transport == "http":
         try:
             return _llm_http_call(prompt, model, timeout, schema, on_usage)
-        except _HttpThrottled:
+        except (_HttpThrottled, _HttpNoToolUse):
+            # 529(过载/身份限流)/ forced tool_use 拿不到 tool_use 块(GLM 只回 thinking /
+            # thinking 撑满 max_tokens)→ 回退 cc:cc 多轮 tool_use 循环催出 + 降级文本兜底,
+            # 绕过 http 单次 forced 的结构死结。其它错(4xx/timeout→RuntimeError)不回退——
+            # 同 endpoint 回退无意义。
             return _call_claude_cc(prompt, model, timeout, max_turns, on_usage, schema)
     return _call_claude_cc(prompt, model, timeout, max_turns, on_usage, schema)
 
