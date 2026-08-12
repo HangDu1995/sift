@@ -353,14 +353,22 @@ class InstructionExtractor:
         #   本就不适用却算 FAIL,prog 率被虚低。
         # - 文件级(references/<X>.md 或 scripts/<X>):独立必读,各自一条查真 Read
         #   (读 1/3 不该算全过)。
-        category_refs: set[str] = set()
-        file_refs: set[str] = set()
-        for ref in set(refs):
+        # 有序去重(set 跨进程顺序随 PYTHONHASHSEED 漂 → REFERENCE_USAGE 指令顺序随机
+        # → refine/headline 缓存 key 跨进程变 = 必 miss;judge 分批(每批 _MAX_LLM_IN_BATCH
+        # 条)边界也随顺序变 = verdict 跨进程漂)。按 refs(_REF_PATH_RE.findall 的确定性
+        # 出现序)去重,顺序跨进程稳定,缓存才命中、verdict 才可复现。
+        category_refs: list[str] = []
+        file_refs: list[str] = []
+        seen: set[str] = set()
+        for ref in refs:
+            if ref in seen:
+                continue
+            seen.add(ref)
             seg = ref.split("/")[-1]
             if ref.startswith("references/") and "." not in seg:
-                category_refs.add(ref)
+                category_refs.append(ref)
             else:
-                file_refs.add(ref)
+                file_refs.append(ref)
         if category_refs:
             checks.append(InstructionCheck(
                 source=InstructionSource.REFERENCE_USAGE,

@@ -221,6 +221,31 @@ class TestInstructionExtractor:
             "references/conventions.md",
         ]
 
+    def test_reference_usage_order_follows_appearance(self):
+        """REFERENCE_USAGE 指令顺序 = refs 在 body 的出现序(非 set 随机)。
+
+        set(refs) 跨进程顺序随 PYTHONHASHSEED 漂 → 指令顺序随机 → refine/headline 缓存
+        key 跨进程变(必 miss)+ judge 分批(每批 _MAX_LLM_IN_BATCH 条)边界变 → verdict
+        跨进程漂。有序去重后顺序 = findall 出现序,跨进程确定 → 缓存命中、verdict 可复现。
+        (test_reference_usage_file_level_individual 用 sorted 比对正是绕开旧 set 乱序;
+        本测试断言**原始顺序** = 出现序,锁死有序去重不被改回 set。)
+        """
+        ext = InstructionExtractor()
+        body = (
+            "## References\n"
+            "读 references/crash-workflow.md、references/error-code-detectives.md、"
+            "references/tiling-verification.md\n"
+            "再查 references/kernel-binary-matching.md 和 references/hang-deadlock-workflow.md\n"
+        )
+        refs = [c for c in ext.extract(body) if c.source == InstructionSource.REFERENCE_USAGE]
+        assert [r.params.get("script_path") for r in refs] == [
+            "references/crash-workflow.md",
+            "references/error-code-detectives.md",
+            "references/tiling-verification.md",
+            "references/kernel-binary-matching.md",
+            "references/hang-deadlock-workflow.md",
+        ]
+
     def test_reference_usage_category_mixed(self):
         """类别级 + 文件级混存:类别合并成 1 条;文件级若同时是列表项 step(HEADING_STEP 含
         同路径)则被覆盖、不再重复发 REFERENCE_USAGE(去重见 _dedup_covered_reference_usage)。"""
