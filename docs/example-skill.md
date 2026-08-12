@@ -1,29 +1,29 @@
 # Example Skill: log-error-analyzer
 
-`fixtures/example-skills/log-error-analyzer/` 是 skill-eval 的**主力示例 skill**(canary:工具改评测逻辑后最先用它复验判定没退化)——结构规整、可被三条评测路径共用,兼作 audit(路径2 transcript 对账)有效性的验证夹具。
+`fixtures/example-skills/log-error-analyzer/` 是 skill-eval 的**主力示例 skill**(canary:工具改评测逻辑后最先用它复验判定没退化)——结构规整、可被评测与审计两面共用,兼作 audit(transcript 对账)有效性的验证夹具。
 
 ## 为什么有它
 
-audit(路径2)的有效性需要正面验证:**真 LLM 在干净输入下能不能抓到真实违规**。此前两个 case 都不给力:
+audit 的有效性需要正面验证:**真 LLM 在干净输入下能不能抓到真实违规**。此前两个 case 都不给力:
 
 - **真实 skill**(dispatching-parallel-agents)是教程型,extractor 把示例文字当指令(49 条伪步骤),源头污染——LLM 再准也 0 真问题。(2026-07-21 起)此类教程型伪指令污染现可经 `audit`/`run` 的 `--refine-instructions` 在判定前 LLM 精筛砍掉(默认开,精度>召回);log-error-analyzer 仍坚持 extractor 友好写法,但别处遇教程型 skill 不必再手改 SKILL。
 - **mock 集成测试**(`test_audit_integration`)mock 了 LLM,只证管线逻辑(违规→FAIL 检出),不证"真 LLM 判得准"。
 
 log-error-analyzer 量身定做:SKILL.md 写得 extractor 友好(真步骤/禁令/reference,**无代码块**避 OUTPUT_FORMAT 假阳性),合成 transcript 植入**真实感**违规,真 LLM 跑 audit 看抓不抓得到。
 
-## 三路径共用(任务源不同)
+## 评测与审计两面共用
 
-example skill 的 `SKILL.md` 可被三条评测路径复用,但**任务源不同**(三路径定义见 `skill-eval-analysis.md` §48):
+example skill 的 `SKILL.md` 在评测与审计两面(以及 `--task` 真任务模式)都用作被测对象:
 
-| 路径 | 怎么跑 | example skill 用什么 | 状态 |
+| 用法 | 怎么跑 | example skill 用什么 | 状态 |
 |---|---|---|---|
-| 路径3 fixture run(当前主路) | `init` → `run`(evals.json 剧本 spawn;`--from-transcript` 是剧本来自 transcript 的变体) | `SKILL.md` + `evals.json` / transcript | ✅ 已验证 |
-| 路径2 audit(对账) | `audit --transcript`(不 run,审历史 trace) | `SKILL.md` + `transcripts/synthetic-violation.jsonl` | ✅ 已验证(canary) |
-| 路径1 live 真任务模式 | `run --task/--cwd` spawn 执行器(默认 cc;`--executor opencode`)在真任务上真跑(--cwd 拷贝隔离),审 re-run 的新 trace | `SKILL.md` + `--task`(真任务)+ `--cwd`(真代码库/真数据,非 fixture) | ✅ 已实现(code-review-auditor 验证) |
+| **评测**(fixture run) | `init` → `run`(evals.json 剧本 spawn;`--from-transcript` 是剧本来自 transcript 的变体) | `SKILL.md` + `evals.json` / transcript | ✅ 已验证 |
+| **审计**(transcript 对账) | `audit --transcript`(不 run,审历史 trace) | `SKILL.md` + `transcripts/synthetic-violation.jsonl` | ✅ 已验证(canary) |
+| **`--task` 真任务模式** | `run --task/--cwd` spawn 执行器(默认 cc;`--executor opencode`)在真任务上真跑(--cwd 拷贝隔离),审 re-run 的新 trace | `SKILL.md` + `--task`(真任务)+ `--cwd`(真代码库/真数据,非 fixture) | ✅ 已实现 |
 
-> **路径1 澄清(2026-07-11 更新)**:`run --task/--cwd` 是路径1 真任务模式——不读 evals.json,直接 spawn 跑真任务(默认 `cc`;`--executor opencode` 改用 opencode 跑,或 `--executor cc,opencode` 两个都跑;--cwd 真代码库/真数据,拷贝隔离)。example skill 自带的 `evals.json` 仍是 fixture(用它 `run` = 路径3)。路径1 用 example skill 的 `SKILL.md` 当被测对象,配 `--task`(真任务)+ `--cwd`(真材料)——code-review-auditor 即此模式的验证(审 skill-eval 真代码)。真环境动态评测由算子上库流程负责(skill-eval 只审 skill、不动态跑算子;原 P0-3 driver **已撤议**);**审 opencode 跑出的 session 已支持**——audit `--transcript` 除 cc `.jsonl` 外也吃 opencode session `.json`(见下)。
+> **`--task` 真任务模式**:`run --task/--cwd` 不读 evals.json,直接 spawn 跑真任务(默认 `cc`;`--executor opencode` 改用 opencode 跑,或 `--executor cc,opencode` 两个都跑;--cwd 真代码库/真数据,拷贝隔离)。example skill 自带的 `evals.json` 仍是 fixture(用它 `run` = 评测);`--task` 用 example skill 的 `SKILL.md` 当被测对象,配 `--task` + `--cwd`——code-review-auditor 即此模式的验证(审 skill-eval 真代码)。审 opencode 跑出的 session 已支持:audit `--transcript` 除 cc `.jsonl` 外也吃 opencode session `.json`。
 >
-> 路径2 和路径3 的 `--from-transcript` 变体**共用同一份 transcript**(audit 对账它、init --from-transcript 挖它)。
+> 审计和评测的 `--from-transcript` 变体**共用同一份 transcript**(audit 对账它、init --from-transcript 挖它)。
 
 ## 文件结构
 
@@ -80,7 +80,7 @@ audit 结果(pass=11/fail=12/na=5):**真违规大多穿透噪音被抓**——�
 ## 怎么跑
 
 ```bash
-# 路径2 audit —— 合成验证(真 LLM,约 1-3 分钟)
+# audit —— 合成验证(真 LLM,约 1-3 分钟)
 .venv/bin/skill-eval audit fixtures/example-skills/log-error-analyzer/ \
   --transcript fixtures/example-skills/log-error-analyzer/transcripts/synthetic-violation.jsonl \
   -o /tmp/example-audit
@@ -89,7 +89,7 @@ audit 结果(pass=11/fail=12/na=5):**真违规大多穿透噪音被抓**——�
 RUN_SLOW=1 .venv/bin/pytest tests/test_example_skill_canary.py -q
 ```
 
-## live 真跑结论(真实性)
+## 真跑结论(真实性)
 
 `run --runs 1`(spawn Claude with_skill 真跑 L2)产生**真实(非植入)transcript**——Claude 做对了:Read×3(读了 `app.log` + `error-codes.md` + `security-policy.md`)+ Write(写了 `error-report.json`),无编造。
 
@@ -120,16 +120,16 @@ scoring 层印证:with_skill 83% vs without_skill 54%(盲比较 with_skill 胜)�
 
 > **已于 2026-07-21 在 SKILL.md 钉死 `total_errors = len(errors)`(不含 unclassified),消除该歧义。** 此 skill 现为干净范本(中英版同步);重跑后 with_skill 会产出 `total_errors=2`、三层信号一致,上述「双通道打架」演示不再复现。本段保留为历史记录,说明双通道如何暴露指令含糊。
 
-## code-review-auditor:路径1 真任务模式验证
+## code-review-auditor:`--task` 真任务模式验证
 
-`code-review-auditor` 是专为**路径1**设计的 example skill——审 Python 代码找 bug/坏味道,任务天然对口真代码库(不像 log-error-analyzer 审日志)。用它验证 `run --task/--cwd` 真任务模式端到端。
+`code-review-auditor` 是专为 **`--task` 真任务模式** 设计的 example skill——审 Python 代码找 bug/坏味道,任务天然对口真代码库(不像 log-error-analyzer 审日志)。用它验证 `run --task/--cwd` 真任务模式端到端。
 
-### 三路径分工
-- 路径3(evals.json fixture):log-error-analyzer 已验(合成 + live)。
-- 路径2(audit 对账):log-error-analyzer 合成违规已验(canary)。
-- **路径1(真任务模式)**:code-review-auditor + `run --task/--cwd`——本节。
+### 三处分工
+- **评测**(evals.json fixture):log-error-analyzer 已验(合成 + 真跑)。
+- **审计**(audit 对账):log-error-analyzer 合成违规已验(canary)。
+- **`--task` 真任务模式**:code-review-auditor + `run --task/--cwd`——本节。
 
-### 怎么跑(路径1)
+### 怎么跑(`--task` 真任务模式)
 
 ```bash
 # spawn cc with code-review-auditor,审 skill-eval 真代码(--cwd 拷贝隔离不碰原)
@@ -146,7 +146,7 @@ scoring 层印证:with_skill 83% vs without_skill 54%(盲比较 with_skill 胜)�
 ### 端到端验证结论
 - **cc 真实行为**:Read 目标代码 → Read `code-patterns.md` → 深入 grep/Read 核实 → Write `review-report.json`。报告**真问题引用行**(L17 未用 import、L65-66 bare else 静默归 NA 等),没编造。
 - **audit**:total=35 pass=35 fail=0,证据硬(每条 Read/Write 命中 tool_trace、行号具体、NEVER fabricate 证据"grep 校验 import 确实未用"),**不是漏审的全 PASS 假象**。
-- **验证面**:路径1 真实性的"干净会话不乱报"——cc 真遵循 skill → audit 全 PASS 证据硬,与 log-error-analyzer 合成验证("违规抓得到")互补。
+- **验证面**:`--task` 真任务模式的"干净会话不乱报"——cc 真遵循 skill → audit 全 PASS 证据硬,与 log-error-analyzer 合成验证("违规抓得到")互补。
 
 ### 通用性
 `run --task/--cwd` 对任何 skill 通用(code-review 审代码 / 算子生成按规格 / 日志分析),同一套参数。`--cwd` 是工作目录(任务材料),不绑代码——材料是目录里的真实文件,`--task` 决定怎么用。

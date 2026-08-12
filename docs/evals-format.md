@@ -1,8 +1,8 @@
 # evals.json 考卷格式参考
 
-> evals.json 是 `run`(**路径3 fixture run**)的考卷:每条 eval 是一道题(prompt + 期望 + 断言 + 测试夹具)。`init` 生成它,`run` 跑它,`inspect` 体检它。
+> evals.json 是 `run`(fixture 评测)的考卷:每条 eval 是一道题(prompt + 期望 + 断言 + 测试夹具)。`init` 生成它,`run` 跑它,`inspect` 体检它。
 >
-> **谁读哪段**:`run` 读 `evals` 段;`trigger` 只读 `trigger_probes` 段(忽略 `evals`)。**谁不读 evals.json**:`audit`(路径2,读 transcript 对账)、`run --task`(路径1,真任务)。
+> **谁读哪段**:`run` 读 `evals` 段;`trigger` 只读 `trigger_probes` 段(忽略 `evals`)。**谁不读 evals.json**:`audit`(读 transcript 对账)、`run --task` 真任务模式。
 
 ## 顶层结构
 

@@ -1,11 +1,11 @@
 ---
 name: skill-eval-guide
 description: >
-  Use this skill whenever you need to evaluate, test, benchmark, or quality-check any skill (SKILL.md).
+  Use this skill whenever you need to evaluate, test, benchmark, or quality-check any skill (SKILL.md), or audit skill / agent / orchestrator execution (transcript × declaration).
   Trigger on: "evaluate", "test", "benchmark", "跑评测", "评测", "跑一下", "测试", "全面测评",
   "跑所有测评", "验证skill", "检查skill质量", "安全审查", "vet", "静态分析", "analyze",
   "回归", "regression", "对照", "门禁", "gate", "遵循性", "对账", "audit", "transcript",
-  "冻结基线", "freeze", "题集体检", "inspect", "batch", "跑batch", "多skill评测",
+  "冻结基线", "freeze", "题集体检", "inspect",
   "report", "报告", "init", "初始化evals", "add", "加eval".
   This skill provides EXACT commands to run for every skill-eval operation.
 type: guide
@@ -14,13 +14,12 @@ domain: quality-assurance
 
 # Skill Eval Guide — Agent 操作手册
 
-用 `skill-eval` CLI 对任意 skill 执行评测。三层质量保障（评分 / 遵循性 / 校准）+ 盲比较 + post-hoc 门禁。
+用 `skill-eval` CLI 做**评测**（skill / agent 的能力，`run`）和**审计**（skill / agent / 编排者的执行，`audit`）。评测三层质量保障（评分 / 遵循性 / 校准）+ 盲比较 + post-hoc 门禁。
 
-**12 个命令**（`skill-eval --help` 权威）：
+**10 个命令**（`skill-eval --help` 权威）：
 
 ```
-vet  analyze  init  add  run  report  batch-report  batch
-audit  inspect  freeze  gate
+vet  analyze  init  add  run  report  audit  inspect  freeze  gate
 ```
 
 ## 环境安装
@@ -61,7 +60,6 @@ python3 --version || python --version  # 必须：>= 3.10
 | 做 v1/v2 回归对照但没给第二个 skill | "回归对照需要第二个 skill 路径（`--skill-b`），请提供" |
 | 做门禁判决但没有 benchmark.json | "`gate` 需要先跑过 `run` 产出 benchmark.json" |
 | 做遵循性对账但没有 transcript | "`audit` 需要真实会话 transcript（cc `.jsonl` 或 opencode session `.json`），请提供" |
-| 做 batch 评测但没有 skills 目录或 manifest.json | "batch 评测需要一个包含多个 skill 的目录或 manifest.json，请提供" |
 
 > 注意位置参数差异：`inspect` / `freeze` 吃 **evals.json 路径**，`audit` 吃 **skill 目录 + `--transcript`**，其余多数吃 **skill 目录**。给错会被拒。
 
@@ -81,11 +79,11 @@ python3 --version || python --version  # 必须：>= 3.10
 | "题集体检" / "inspect" / "evals 质量" | `inspect` | 对 evals.json 静态体检（不执行） |
 | "冻结基线" / "freeze" / "固定题集" | `freeze` | evals.json → 命名 baseline 快照 |
 | "跑测试" / "A/B 测试" / "run" / "评测" | `run` | with/without 或 v1/v2 对照 |
-| "真任务" / "跑真实任务" / "live" | `run --task --cwd` | 路径1 真任务模式（不读 evals.json） |
+| "评测 agent" / "agent 评测" | `run --kind agent` | 绝对质量（无 A/B；配合 init/critique --kind agent） |
+| "真任务" / "跑真实任务" / "live" | `run --task --cwd` | `--task` 真任务模式（不读 evals.json，产 trace 喂 audit） |
 | "门禁" / "判决" / "通过没" / "gate" | `gate` | 对 benchmark.json 出 PASS/FAIL/N/A/UNCLEAR |
 | "遵循性对账" / "audit" / "按指令做了没" | `audit` | transcript × SKILL.md 对账 |
 | "生成报告" / "report" / "报告" | `report` | 单 skill HTML 报告 |
-| "批量评测" / "batch" / "多 skill" | `batch` + `batch-report` | 多 skill（unit 层）并行 |
 | "跑所有测评" / "全面测评" | `vet` → `analyze` → `run` → `gate` → `report` | 全流程串跑 |
 
 ---
@@ -221,13 +219,13 @@ skill-eval freeze /path/to/evals.json --name v1 --skill-version 1.2
 
 ### `run` — A/B 评测
 
-两种模式：默认 A/B（同一 skill 开/关对照，或 v1/v2 双 skill），或路径1 真任务模式（`--task`）。
+两种模式：默认 A/B（同一 skill 开/关对照，或 v1/v2 双 skill），或 `--task` 真任务模式。
 
 ```bash
 skill-eval run /path/to/skill --runs 3                            # with/without 对照
 skill-eval run v2/ --skill-b v1/ --evals baseline.json --runs 3   # v1/v2 回归对照
 skill-eval run /path/to/skill --scoring programmatic              # 仅程序化，零 LLM 评分成本
-skill-eval run /path/to/skill --task "重构 X 模块" --cwd ./repo   # 路径1 真任务模式
+skill-eval run /path/to/skill --task "重构 X 模块" --cwd ./repo   # --task 真任务模式
 ```
 
 关键参数：
@@ -239,8 +237,8 @@ skill-eval run /path/to/skill --task "重构 X 模块" --cwd ./repo   # 路径1 
 | `--scoring` | hybrid | hybrid / programmatic / llm |
 | `--skill-b` | — | v1/v2 模式：第二个 skill 路径（两边各注入各自 skill） |
 | `--label-a` / `--label-b` | 目录名 | v1/v2 模式两侧显示标签 |
-| `--task` / `--cwd` | — | **路径1 真任务模式**：直接跑真实任务（不读 evals.json），`--cwd` 拷贝隔离 |
-| `--no-compliance` / `--compliance` | 自动 | 跳过/强制遵循性（`--runs<3` 默认跳） |
+| `--task` / `--cwd` | — | **`--task` 真任务模式**：直接跑真实任务（不读 evals.json），`--cwd` 拷贝隔离 |
+| `--no-compliance` / `--compliance` | 开 | 跳过/强制遵循性（默认开，单 run 也产，不绑 `--runs`） |
 | `--security-gate` | 关 | 安全审查返回 BLOCKED/REVIEW_NEEDED 时判失败 |
 | `--no-static` / `--no-vet` / `--no-report` | 都产 | 跳过末尾自动产的静态评分卡 / 安全审查 / HTML 报告（默认都产，写进 iteration-1/；report.html 聚合 benchmark/评分卡/安全） |
 | `--model` | — | claude -p 模型（也控制盲比较/赛后分析是否执行） |
@@ -248,7 +246,7 @@ skill-eval run /path/to/skill --task "重构 X 模块" --cwd ./repo   # 路径1 
 
 - **默认 A/B**：位置参数 skill = 候选（side A）。不给 `--skill-b` → with/without 对照；给 `--skill-b <dir>` → v1/v2 双 skill。
 - **末尾自动产评分卡 + 安全审查 + HTML 报告**：A/B 模式跑完后，自动把 `scorecard.json`（静态 11 项）+ `vet-report.json`（原生安全扫描）+ `report.html`（聚合 benchmark/评分卡/安全的自包含 HTML）写进 `iteration-1/`，跑完即得报告（不用再单独 `skill-eval report`；该命令仍可用于 `--previous` 基线对照 / `--open` / 重生成）。三者秒级零 API 成本、各自失败不阻断 run；`--no-static` / `--no-vet` / `--no-report` 跳过。**仅 A/B 模式**——真任务模式（`--task`）无 iteration-1/，不产。
-- **路径1 真任务**（给 `--task`）：忽略 evals.json，在 `--cwd`（拷贝隔离）跑真任务，产 transcript 喂 `audit`，每 run 打印 operational 摘要。**执行器**：默认 `cc`（产 `run-*/transcript.jsonl`）；`--executor opencode` 改用 opencode（产 `run-*/transcript.json`，需 opencode CLI 在 PATH，模型在 `opencode.json` 配，省略 `--model`）；`--executor cc,opencode` 两执行器各跑 `--runs` 次。
+- **`--task` 真任务模式**：忽略 evals.json，在 `--cwd`（拷贝隔离）跑真任务，产 transcript 喂 `audit`，每 run 打印 operational 摘要。**执行器**：默认 `cc`（产 `run-*/transcript.jsonl`）；`--executor opencode` 改用 opencode（产 `run-*/transcript.json`，需 opencode CLI 在 PATH，模型在 `opencode.json` 配，省略 `--model`）；`--executor cc,opencode` 两执行器各跑 `--runs` 次。
 - **退出码**：`run` 是纯数据生产者——0 = 产数据成功（**不代表通过**），2 = 输入错误，3 = 执行错误。**通过/失败由 `gate` 判**。`--security-gate` 触发时退 1。
 
 ### `gate` — 通过/失败判决
@@ -273,9 +271,9 @@ skill-eval gate out/iteration-1/benchmark.json --no-programmatic-guard --min-win
 
 ### `audit` — 真实 transcript 对账
 
-把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。**不 re-run**，直接对账历史执行。每条 FAIL 自动标**疑似工具噪声 / skill 问题 / 待确认** + 理由（`noise_label` 徽章；判别法见 handbook §7.8）——fixture 下 FAIL 常混工具噪声（extractor 误提资源描述当步骤、evidence 自相矛盾），别据噪声误改 skill。
+把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。**不 re-run**，直接对账历史执行。每条 FAIL 自动标**疑似工具噪声 / skill 问题 / 待确认** + 理由（`noise_label` 徽章）——fixture 下 FAIL 常混工具噪声（extractor 误提资源描述当步骤、evidence 自相矛盾），别据噪声误改 skill。
 
-> 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行——`[条件性/禁令/步骤] 判定 N 条…` → `[条件性/禁令/步骤] 完成 ⏱ Xs`（类别名打头；>10 条分批才显 `批 k/总`）。两种失败（调用失败 / 0 条解析成功）都先自动重试最多 2 次再兜底 UNRESOLVED（没判成），重试打 `重试 n/2…`、耗尽打 `重试耗尽`。三个 LLM 类别判定器并发跑（max_workers=3），约 2× 提速，进度行交错但每行 `[类别]` 打头、一眼分清。看到 `[条件性/禁令/步骤] …` 滚动就是在跑。
+> 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行——`[条件性/禁令/步骤] 判定 N 条…` → `[条件性/禁令/步骤] 完成 ⏱ Xs`（类别名打头；>10 条分批才显 `批 k/总`）。两种失败（调用失败 / 0 条解析成功）都先自动重试最多 2 次再兜底 UNRESOLVED（没判成），重试打 `重试 n/2…`、耗尽打 `重试耗尽`。三个 LLM 类别判定器并发跑（全局在飞由 AIMD 自适应限），约 2× 提速，进度行交错但每行 `[类别]` 打头、一眼分清。看到 `[条件性/禁令/步骤] …` 滚动就是在跑。
 
 ```bash
 skill-eval audit /path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out/
@@ -286,7 +284,7 @@ skill-eval audit /path/to/skill/ --transcript big-multi-skill.jsonl --kind skill
 skill-eval audit /path/to/skill/ --transcript opencode-session.json
 ```
 
-> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`（逐行 JSON 记录，含 `Skill`/`Read`/`Write`/`Bash` tool_use）；opencode session `.json`（`opencode export <sessionID>` 的产出，顶层 `info`/`messages`，parts 嵌在 message 里、role/agent 在 `message.info`）。两者重建成同一 `SessionDigest` 再对账(经同一条 canonical 重建路径:归一到 cc-record 形 → 共享重建器,三源一致,见 handbook §7.7)。生产导出：`opencode session list` 找 id → `opencode export <id> > session.json`（`--sanitize` 可脱敏分享）。**拿到一个 opencode `.db` 文件**(别处拷来的库):直接 `audit --db handed.db` —— 内部自动 list/export/audit(单 session 自动选,多个列出让你挑;底层 = XDG 隔离 + `opencode export`,完整见 reference audit 段)。run 产的 transcript 默认 cc 格式（`.jsonl`）；给 `--executor opencode` 时产 opencode 格式（`.json`）。
+> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`（逐行 JSON 记录，含 `Skill`/`Read`/`Write`/`Bash` tool_use）；opencode session `.json`（`opencode export <sessionID>` 的产出，顶层 `info`/`messages`，parts 嵌在 message 里、role/agent 在 `message.info`）。两者重建成同一 `SessionDigest` 再对账(经同一条 canonical 重建路径:归一到 cc-record 形 → 共享重建器,三源一致)。生产导出：`opencode session list` 找 id → `opencode export <id> > session.json`（`--sanitize` 可脱敏分享）。**拿到一个 opencode `.db` 文件**(别处拷来的库):直接 `audit --db handed.db` —— 内部自动 list/export/audit(单 session 自动选,多个列出让你挑;底层 = XDG 隔离 + `opencode export`,完整见 reference audit 段)。run 产的 transcript 默认 cc 格式（`.jsonl`）；给 `--executor opencode` 时产 opencode 格式（`.json`）。
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
@@ -318,42 +316,6 @@ skill-eval report out/iteration-1/ --open # 生成并打开
 | `--open` | 关 | 生成后浏览器打开 |
 
 自动发现 `benchmark.json` / `scorecard.json` / `vet-report.json` / `gate.json`（存在则标题旁渲染门禁徽章）。
-
-### `batch` — 批量评测
-
-```bash
-# 用 skills 目录（自动 discover）
-skill-eval batch /path/to/skills-directory/ --runs 3 -o batch-workspace/
-
-# 用 manifest.json
-skill-eval batch manifest.json --runs 3
-```
-
-Manifest 格式：
-```json
-{"name": "project", "skills": [{"path": "skills/s1", "depends_on": []}, {"path": "skills/s2", "depends_on": ["skills/s1"]}]}
-```
-
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `--runs` | **3** | 每配置运行次数（注意：与 `run` 默认 1 不同） |
-| `--workers` / `--max-turns` / `--max-retries` | 4/10/2 | 执行控制 |
-| `--fail-fast` | 关 | 首个失败即停 |
-| `--output` / `-o` | batch-workspace/ | 输出目录 |
-
-仅 unit 层，按 DAG 拓扑并行。有 eval 失败 → exit 1。
-
-### `batch-report` — 批量 HTML 报告
-
-```bash
-skill-eval batch-report batch-workspace/ --open
-```
-
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `--manifest` | 自动 | manifest.json 路径 |
-| `--output` / `-o` | workspace 下 | 输出 HTML 路径 |
-| `--open` | 关 | 生成后浏览器打开 |
 
 ---
 
@@ -427,7 +389,7 @@ skill-eval run v2/ --skill-b v1/ --evals baseline.json --runs 3 -o out/
 skill-eval gate out/iteration-1/benchmark.json --min-win-rate 0.5
 ```
 
-### 真任务遵循性（路径1：跑真实任务 → 对账指令）
+### 真任务遵循性（`--task` 真任务 → 对账指令）
 
 ```bash
 # 跑真实任务（--cwd 拷贝隔离，cc 不碰原目录）
@@ -445,13 +407,6 @@ skill-eval run /path/to/skill --eval-ids 3,5 --runs 1 -o out/  # 只跑指定 id
 skill-eval run /path/to/skill --changed-from /path/to/v1 --runs 1 -o out/  # 改 skill 后只跑受影响的题(给基线目录;回归探针;和 --eval-samples/--eval-ids 互斥)
 ```
 
-### "批量评测多个 skill"
-
-```bash
-skill-eval batch /path/to/skills-dir/ --runs 3 -o batch-workspace/
-skill-eval batch-report batch-workspace/ --open
-```
-
 ---
 
 ## 评测产物
@@ -460,7 +415,7 @@ skill-eval batch-report batch-workspace/ --open
 output/iteration-1/
 ├── benchmark.json          # 聚合：双率 delta + comparisons + comparison_summary + analysis（--changed-from 子集跑时另记 selection）
 ├── report.html             # 自包含 HTML 报告（读 gate.json 显门禁徽章；run 末尾自动产）
-├── gate.json               # gate 命令产出（判决 + 两轴明细；非 run 产出）
+├── gate.json               # gate 命令产出（判决 + 四轴明细；非 run 产出）
 ├── scorecard.json          # run 末尾自动产（静态评分卡；也可 analyze -o 单独产）
 ├── vet-report.json         # run 末尾自动产（原生安全扫描；也可 vet -o 单独产）
 └── with_skill/             # v1/v2 模式换成各自标签名
@@ -513,7 +468,6 @@ PYEOF
 | calibration 高分存疑 | 输出对了但过程违反 prohibition/output 硬性规则；看 evidence 核对 |
 | benchmark.json 缺失 | aggregation 失败，单独 `skill-eval report iteration-1/` |
 | report 评分卡/安全面板空 | run 默认已自动产；若空说明跑了 `--no-static`/`--no-vet` 或 analyze/vet 失败（run 会打 Warning，不阻断）|
-| batch 显示 0 skills | 输入不是 skills 目录或 manifest.json 格式不对 |
 | LLM 断言返回 "Not evaluated" | 自动重试（默认最多 2 次）；仍 UNEVAL 则标记 INDETERMINATE（报告里区分显示，不混成 FAIL） |
 | 单次运行方差大 | `--runs 1` 仅快速验证；推荐 `--runs 3` 启用异常检测和统计有效性 |
 | 遵循性率低 | SKILL.md 指令有矛盾或太难遵循，重写指令 |

@@ -1,4 +1,4 @@
-# Skill-Eval：评测方法论与代码溯源
+# Skill-Eval：评测 + 审计方法论与代码溯源
 
 > 本文档阐述 skill-eval 评测与审计体系的来源——哪些是从现有系统移植的，哪些是新建的，以及背后的理论依据。
 
@@ -6,7 +6,7 @@
 
 ## 1. 来自 skill-creator 的移植
 
-skill-creator（位于 `/Users/layne/codes/skills/skills/skill-creator`）是 Claude Code 的 Skill 开发工具链，包含一套脚本用于创建、评测和优化 Skill。skill-eval 从中移植了以下核心代码，将其从松散脚本改造为结构化 CLI 工具：
+skill-creator（位于 `/Users/layne/codes/skills/skills/skill-creator`）是 Claude Code 的 Skill 开发工具链，包含一套脚本用于创建、评测和优化 Skill。skill-eval 的**评测部分**从中移植了以下核心代码（审计侧完全原创，见 §5），改造成结构化 CLI：
 
 | skill-creator 原始文件 | skill-eval 目标 | 改造内容 |
 |------------------------|----------------|----------|
@@ -21,7 +21,7 @@ skill-creator（位于 `/Users/layne/codes/skills/skills/skill-creator`）是 Cl
 
 **关键设计决策**：所有 JSON 输出字段名严格保持与 skill-creator 兼容。
 
-> **形态与演进**：skill-creator 是 Claude Code 的**交互式 meta-skill**（对话式建/测 skill、人评审迭代），不是 CLI。skill-eval 2026-04 从它移植评测脚本并改造成结构化 CLI 后，两者同期各自演化——skill-creator 在 2.0（2026-01）已具备成熟 Eval（A/B 对照、benchmark、盲比较、review UI、4 模式 Create/Eval/Improve/Benchmark），skill-eval 则往 CI / 批量 / 过程审计 / 客观门禁方向独立扩展。故 skill-eval 的价值不在"skill-creator 不能评测"（它能），而在**形态互补**：探索期对话式 vs 成熟期工程化 CLI。
+> **形态与演进**：skill-creator 是 Claude Code 的**交互式 meta-skill**（对话式建/测 skill、人评审迭代），不是 CLI。skill-eval 2026-04 从它移植评测脚本并改造成结构化 CLI 后，两者同期各自演化——skill-creator 在 2.0（2026-01）已具备成熟 Eval（A/B 对照、benchmark、盲比较、review UI、4 模式 Create/Eval/Improve/Benchmark），skill-eval 则往 CI / 过程审计 / 客观门禁方向独立扩展。它相对 skill-creator 的价值**不止形态互补**（探索期对话式 vs 成熟期工程化 CLI）——**根本差异在审计原创**：skill-creator 只评输出，skill-eval 独创过程审计（`audit`，审任意会话 transcript 有没有照声明走）。
 
 ---
 
@@ -59,11 +59,13 @@ skill-vetter 的扫描逻辑以原生 Python 重新实现：secrets-scan + struc
 - **结构化输出**：要求 LLM 返回 JSON 数组，可机械解析
 - **Evidence 强制**：每条判定必须附带证据引用
 
-skill-eval 在此基础上新增了批量评估、结果×过程 coherence 校准、盲比较和深度分析。
+skill-eval 在此基础上新增了结果×过程 coherence 校准、盲比较和深度分析。
 
 ---
 
-## 5. skill-eval 原创：三层评估架构
+## 5. skill-eval 原创：评测 + 审计两面
+
+skill-eval 相对 skill-creator 等工具的根本差异是**两面原创**——**评测**（能力行不行）和**审计**（过程照声明走没走）。评测侧把 skill-creator 的 A/B 对照延展为三层架构（评分 / 遵循性 / 校准），评测对象也从 skill 扩到 **agent**（§5.4，`--kind agent` 绝对质量模式；skill-creator 只评 skill）；审计侧（§5.2，`audit` 命令）是 skill-eval 完全原创——skill-creator 只跑自生成测试、无过程审计，skill-eval 把过程对账做成能审任意会话 transcript 的独立产品（评测内的 compliance 和它共享同一套引擎）。
 
 ### 5.1 A/B 对照实验 + delta 量化
 
@@ -71,15 +73,18 @@ skill-eval 在此基础上新增了批量评估、结果×过程 coherence 校�
 
 **理论**：随机对照实验（RCT）。with_skill 是实验组，without_skill 是对照组，delta 是处理效应。
 
-### 5.2 遵循性引擎（Compliance Engine）
+### 5.2 过程审计：compliance + 独立 audit（共享引擎）
 
 **来源**：原创。skill-creator 没有"过程遵循"检查。
 
-**理论**：Instruction Following 是 LLM 评估的独立维度 [Zhou et al., IFEval 2023]。输出正确但过程违规意味着结果不可归因于 Skill。
+**理论**：Instruction Following 是 LLM 评估的独立维度 [Zhou et al., IFEval 2023]。输出正确但过程违规，意味着结果不可归因于声明。
 
-**实现**：从 SKILL.md body 自动提取 6 类可检查指令（HEADING_STEP、TOOL_REQUIREMENT、CONSTRAINT、ANTI_FABRICATION、OUTPUT_FORMAT、REFERENCE_USAGE），按语义归 4 类（条件性 / 禁令 / 步骤 / 输出格式）各配方向正确的判法——每条出五态 verdict（`PASS` / `FAIL` / `N/A` 不适用 / `UNRESOLVED` 没判成 / `INDETERMINATE` 判不准）+ `method` 标（`PROGRAMMATIC` 程序对账 / `LLM` 语义判定）两个正交维度。程序化（tool_trace 命中 / 输出子串匹配）是确定性判定、不调 LLM；LLM 类承担语义判定（禁令主动查违规、步骤/条件性判走过或该走没走）。
+**引擎**（评测内 compliance 与独立 audit 共享）：`InstructionExtractor` 从声明正文静态抽 6 类指令（HEADING_STEP / TOOL_REQUIREMENT / CONSTRAINT / ANTI_FABRICATION / OUTPUT_FORMAT / REFERENCE_USAGE），按语义归 4 类（条件性 / 禁令 / 步骤 / 输出格式）各配方向正确的判法，每条出五态 verdict（`PASS` / `FAIL` / `N/A` 不适用 / `UNRESOLVED` 没判成 / `INDETERMINATE` 判不准）+ `method`（`PROGRAMMATIC` 程序对账 / `LLM` 语义判定）两个正交维度。声明驱动——声明可是 skill（SKILL.md）/ agent / 编排者，任意 .md 都能喂；`--kind skill/agent/root` 切对应执行段，cc / opencode transcript 都能审。
 
-> **引擎声明驱动、不绑 skill**：声明可是 skill（SKILL.md）、agent、或编排者——任意 .md 声明都能喂（`parse_skill_md` 接受目录 / SKILL.md / 任意声明 .md）；`--kind skill/agent/root` 切对应执行段（skill 调用 / 被 dispatch 的子 agent / 顶层主 agent），cc / opencode transcript 都能审。身份靠 frontmatter `name`（--kind 拿它当切片 target），不靠文件名。
+**两个产品共享这套引擎**：
+
+- **compliance**（run 内）：评测时顺手查一遍过程，产 `compliance.json`。
+- **audit**（独立命令）：审**任意**会话 transcript（历史会话 / `run --task` 产的 trace / opencode session），把过程对账做成独立产品——这是 skill-eval 相对 skill-creator 的**根本差异**（后者只跑自生成测试、无生产过程对账）。多作用域：`--kind skill`（被 `Skill` 调用）/ `agent`（被 dispatch 的子 agent）/ `root`（顶层主 agent / 编排者）三锚点各切各的、不并集。
 
 ### 5.3 校准（Calibration）—— 结果×过程 coherence
 
@@ -89,39 +94,32 @@ skill-eval 在此基础上新增了批量评估、结果×过程 coherence 校�
 
 5 态 verdict（可信/高分存疑/可修复/技能失效/过程未知）作为**独立信号**输出——与评分、遵循性并列，三层不合成单一总分。gate 读它作 **soft warning**（不进 decision、不折扣某个总分；仍是分诊辅助人判断）。
 
-### 5.4 批量评测
+### 5.4 agent 评测
 
-**来源**：skill-creator 没有多 Skill 依赖编排。
+**来源**：原创。skill-creator 只评 skill。
 
-**理论**：DAG 拓扑调度，按依赖顺序同层并行执行。
+**做法**：`run --kind agent` 把评测对象从 skill 扩到 agent——agent 正文（frontmatter 后的 body）经 `--append-system-prompt` 注入 system 层（不是 skill 那样拼进 user prompt），走**绝对质量**模式（单 config，无 with/without 对照、无 delta、无盲比较），报绝对 pass_rate。配合 `init --kind agent` 出题（凭 agent 角色造 role-matching 题）+ `critique --kind agent` 审 agent 正文。审计侧对称支持 `--kind agent`（审被 dispatch 的子 agent，见 §5.2）。
 
-### 5.5 配置驱动架构
+### 5.5 其他工程化扩展
 
-**理论**：关注点分离 + 12-Factor App 配置外置原则。框架代码零硬编码——所有领域知识通过 `eval-config.yaml` 注入。
+核心原创（§5.1–5.4）之外，skill-eval 还有一批工程化 / 诊断扩展（均为原创；静态分析 / 安全审查来源见 §2 / §3）：
 
-### 5.6 工程化扩展（2026-05 起）
-
-三层架构之外，skill-eval 在 2026-05 后陆续新增的能力（均为 skill-eval 原创；静态分析 / 安全审查来源见 §2 / §3）：
-
-| 能力 | 来源 | 解决的问题 |
-|------|------|-----------|
-| **确定性 programmatic 断言 + 双率** | 原创 | skill-creator 只有 LLM grader 单率；skill-eval 拆出零 LLM、不可作弊的客观判定（`FILE_EXISTS` / `TOOL_CALLED` 等）与 LLM 判定分开报 |
-| **post-hoc 门禁 + CI** | 原创 | skill-creator 交互式、无 exit code / 无 CI；skill-eval `gate` 出 PASS/FAIL，exit code 驱动 pipeline |
-| **路径2 audit** | 原创 | 真实会话 transcript 与 SKILL.md 对账（cc / opencode 双源），skill-creator 只跑自生成测试、无生产对账 |
-| **agent 对账（`--kind agent`）** | 原创 | 审被 dispatch 的 subagent（按 `agent` 归属字段切，非 Skill 调用锚点；扁平切、dual-nature 各审各的）—— audit 的 subagent 维度扩展 |
-| **root / workflow 对账（`--kind root`）** | 原创 | 审顶层主 agent / 编排者（按主作用域切：cc `parent_tool_use_id` 为空 / opencode `session.info.agent`），其声明常是 workflow 级 SKILL.md——audit 的整 session / workflow 维度，与 skill/agent 对称补齐多作用域三元 |
-| **路径1 真任务模式** | 原创 | `--task/--cwd` spawn 真任务 + 双执行器（cc / opencode） |
-| **基准题集 freeze** | 原创 | 不可变签名 + skill_name 校验，跨 run / CI 同卷（skill-creator 的 evals.json 可复用但无冻结） |
-| **refine + per-SKILL hash 缓存** | 原创 | LLM 精筛 extractor 误抽的伪指令（教程示例被当指令），按 SKILL.md hash 缓存 |
-| **FAIL 噪声判别** | 原创 | 区分"工具噪声 / 疑似 skill 问题 / 待确认"，避免读者误把工具噪声当 skill 缺陷 |
-| **结构化 records transcript** | 原创 | canonical 三源统一（cc / structured / opencode），供 audit 消费外部 producer |
-| **trigger-accuracy（第 4 维）** | 原创 | 测 cc 仅凭 description 是否自然触发 skill（should / should-not 两类探题），而非测 body 质量——前三层 force-inject body 测不到的触发面；纯诊断无 gate。含 anti-leakage 词面命中校验（探题不照抄 description）+ 措辞 / 长度分层诊断（看 cc 真懂还是靠字面命中触发） |
-| **coverage（出题漏测诊断）** | 原创 | 一次性 LLM 把 SKILL.md 内容点 × evals 做覆盖映射，`covered_by` 空 = 漏测盲区（`run` 够不到，再跑多少轮也测不着），`--augment` 复用 init 生成器自动补题；纯诊断无 gate |
-| **critique（正文内容质量诊断）** | 借鉴 SkillLens | 补 static_analysis 只查格式、不查正文内容质量的空白；LLM 按 4 维 rubric 给读者反馈（met/partial/missing + evidence），纯诊断无 gate。①②③ rubric 来自 SkillLens（有数据验证）/ ④ 示例驱动经验自加 |
+| 能力 | 解决的问题 |
+|------|-----------|
+| **确定性 programmatic 断言 + 双率** | skill-creator 只有 LLM grader 单率；skill-eval 拆出零 LLM、不可作弊的客观判定（`FILE_EXISTS` / `TOOL_CALLED` 等）与 LLM 判定分开报 |
+| **post-hoc 门禁 + CI** | skill-creator 交互式、无 exit code / 无 CI；skill-eval `gate` 出 PASS/FAIL，exit code 驱动 pipeline |
+| **`--task` 真任务模式** | `--task/--cwd` spawn 真任务 + 双执行器（cc / opencode），产 trace 喂 audit |
+| **基准题集 freeze** | 不可变签名 + skill_name 校验，跨 run / CI 同卷 |
+| **refine + per-声明 hash 缓存** | LLM 精筛 extractor 误抽的伪指令（教程示例被当指令），按声明 hash 缓存 |
+| **FAIL 噪声判别** | 区分"工具噪声 / 疑似声明问题 / 待确认"，避免读者误把工具噪声当声明缺陷 |
+| **结构化 records transcript** | canonical 三源统一（cc / structured / opencode），供 audit 消费外部 producer |
+| **trigger-accuracy（第 4 维）** | 测 cc 仅凭 description 是否自然触发 skill（非测 body 质量），前三层 force-inject body 测不到；纯诊断无 gate |
+| **coverage（出题漏测诊断）** | LLM 把声明内容点 × evals 做覆盖映射，亮出 run 够不到的漏测盲区，`--augment` 自动补题；纯诊断无 gate |
+| **critique（正文内容质量诊断）** | 补 static_analysis 只查格式、不查正文内容的空白；LLM 按 4 维 rubric 给读者反馈；纯诊断无 gate。rubric ①②③ 借鉴 SkillLens / ④ 经验自加 |
 
 ---
 
-## 6. 可信评测的六个支柱
+## 6. 可信评测与审计的支柱
 
 | 支柱 | 直接来源 | 防止的问题 |
 |------|----------|-----------|
@@ -130,7 +128,6 @@ skill-eval 在此基础上新增了批量评估、结果×过程 coherence 校�
 | **校准** | skill-eval 原创，跨层一致性 triangulation | 只看输出对就信、忽略过程违规 |
 | **过程遵循** | skill-eval 原创，IFEval + ISO 19011 | 输出正确的假阳性 |
 | **盲比较与深度分析** | skill-creator comparator.md + analyzer.md | 单一评分维度 |
-| **配置驱动** | 12-Factor App | 硬编码领域知识 |
 
 ---
 

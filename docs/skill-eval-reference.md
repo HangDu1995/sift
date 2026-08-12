@@ -1,8 +1,9 @@
 # Skill-Eval 参考手册
 
-本文档包含 Skill-Eval 的完整技术细节。
+本文档包含 Skill-Eval 的完整技术细节（命令参数、JSON schema、字段定义）。Skill-Eval 干两件事——**评测**（skill / agent 的能力）和 **审计**（skill / agent / 编排者的执行）：一面回答「能力行不行」，一面回答「过程照声明走没走」。评测主入口是 `run`、审计主入口是 `audit`，两者各成一章（见使用手册）。为什么这么设计、怎么用、怎么看结果讲透见[使用手册](skill-eval-handbook.md)；本档负责查具体参数 / 字段时回查。
 
 ---
+
 
 ## 目录
 
@@ -206,16 +207,16 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 
 ### `run` — A/B 评测
 
-两种模式：默认 A/B 评测（同一 skill 开/关对照，或 v1/v2 双 skill），或路径 1 真任务模式（`--task` 直接跑真实任务）。`--kind agent` 切换到 agent 评测：绝对质量（无 with/without 对照），agent 正文经 `--append-system-prompt` 注入 system 层，产出单 config 绝对 pass_rate（无 delta/盲比较）；需配 `--evals`（agent.md 不能自动发现 evals.json）。与 `--task`、`--skill-b` 互斥。
+两种模式：默认 A/B 评测（同一 skill 开/关对照，或 v1/v2 双 skill），或 `--task` 真任务模式（直接跑真实任务，产 trace 喂 audit）。`--kind agent` 切换到 agent 评测：绝对质量（无 with/without 对照），agent 正文经 `--append-system-prompt` 注入 system 层，产出单 config 绝对 pass_rate（无 delta/盲比较）；需配 `--evals`（agent.md 不能自动发现 evals.json）。与 `--task`、`--skill-b` 互斥。
 
 **参数**：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--evals` | 自动查找 | evals.json 路径 |
-| `--task` | 无 | **路径 1 真任务模式**：直接 spawn 跑此真实任务（不读 evals.json），产物 transcript 可喂 `audit` |
+| `--task` | 无 | **`--task` 真任务模式**：直接 spawn 跑此真实任务（不读 evals.json），产物 transcript 可喂 `audit` |
 | `--cwd` | 无 | 真任务模式工作目录（任务材料真实文件）；拷贝隔离，cc 不碰原目录 |
-| `--executor` | cc | 路径 1 执行器：`cc`（默认）/ `opencode` / `cc,opencode`（逗号分隔，多执行器各跑 `--runs` 次）。未知名 exit 2。`opencode` 需 opencode CLI 在 PATH，且用 `provider/model` 格式配置模型（`--model` 给 cc 用；opencode 省略 `--model` 走 `opencode.json` 默认）。cc 产 `run-*/transcript.jsonl`、opencode 产 `run-*/transcript.json`（audit 都吃）。**公平性注意**：opencode 无 `--max-turns` 对等，多执行器 sweep 时 cc 轮数有界、opencode 无界（已知不对称） |
+| `--executor` | cc | `--task` 执行器：`cc`（默认）/ `opencode` / `cc,opencode`（逗号分隔，多执行器各跑 `--runs` 次）。未知名 exit 2。`opencode` 需 opencode CLI 在 PATH，且用 `provider/model` 格式配置模型（`--model` 给 cc 用；opencode 省略 `--model` 走 `opencode.json` 默认）。cc 产 `run-*/transcript.jsonl`、opencode 产 `run-*/transcript.json`（audit 都吃）。**公平性注意**：opencode 无 `--max-turns` 对等，多执行器 sweep 时 cc 轮数有界、opencode 无界（已知不对称） |
 | `--runs` | 1 | 每种配置的运行次数 |
 | `--model` | 用户默认 | claude -p 模型 |
 | `--workers` | 4 | 最大并行 worker 数 |
@@ -233,7 +234,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 | `--no-report` | 关闭 | 跳过末尾自动产 HTML 报告（默认产 report.html；聚合 benchmark/评分卡/安全） |
 | `--output` / `-o` | output/ | 输出目录 |
 | `--eval-samples` | 无 | 运行 eval 的数量或比例（如 `10` 或 `0.25`）；**随机抽样**（不可控选哪几道） |
-| `--eval-ids` | 无 | 只跑指定 id 的题（逗号分隔，如 `3,5,7`）；**和 `--eval-samples`/`--changed-from` 三选一互斥**；id 不存在报错（列可用）；保序去重。路径1（`--task`）不读 evals、对它无效 |
+| `--eval-ids` | 无 | 只跑指定 id 的题（逗号分隔，如 `3,5,7`）；**和 `--eval-samples`/`--changed-from` 三选一互斥**；id 不存在报错（列可用）；保序去重。`--task` 模式不读 evals、对它无效 |
 | `--changed-from` | 无 | 改 skill 后只跑受影响的题：给**基线 skill 目录**，自动 diff 两边 SKILL.md 指令 + LLM 判受影响 eval（回归探针）；**和 `--eval-ids`/`--eval-samples` 互斥**。子集 delta 非整体测量，周期仍需全量兜底。失败处理见下 |
 | `--format` | table | 输出格式：table / json |
 | `--skill-b` | 无 | **v1/v2 模式**：第二个 skill 路径（两边各注入各自 skill）；不给则默认 with/without（同 skill 开/关） |
@@ -249,7 +250,7 @@ skill-eval freeze path/to/evals.json --name v1 --skill-version 1.2
 **两种模式**：
 
 - **默认 A/B**（无 `--task`）：位置参数 skill = 候选（side A）。不给 `--skill-b` → with/without 对照（同 skill 开/关）；给 `--skill-b <dir>` → v1/v2 双 skill 对照（两边各注入各自的 skill，标签默认取目录名）。
-- **路径 1 真任务模式**（给 `--task`）：忽略 evals.json，按 `--executor`（默认 `cc`，可 `opencode` 或 `cc,opencode` 多执行器各跑）在 `--cwd`（拷贝隔离）跑真任务，产 `run-*/transcript.jsonl`（cc）或 `run-*/transcript.json`（opencode），结尾打印 `audit` 命令提示。每 run 另在终端打印 operational 摘要（耗时 / turns / tokens / stop_reason / tool_calls + 结果头部，读自 `run-*/run_debug.json`）。此模式 `--evals`/`--scoring`/`--workers` 等大多不生效。
+- **`--task` 真任务模式**：忽略 evals.json，按 `--executor`（默认 `cc`，可 `opencode` 或 `cc,opencode` 多执行器各跑）在 `--cwd`（拷贝隔离）跑真任务，产 `run-*/transcript.jsonl`（cc）或 `run-*/transcript.json`（opencode），结尾打印 `audit` 命令提示。每 run 另在终端打印 operational 摘要（耗时 / turns / tokens / stop_reason / tool_calls + 结果头部，读自 `run-*/run_debug.json`）。此模式 `--evals`/`--scoring`/`--workers` 等大多不生效。
 
 > **退出码**：`run` 是纯数据生产者——exit 0 = 产数据成功，2 = 输入错误，3 = 执行错误。**通过/失败判决不再由 `run` 的退出码决定**（旧版读混合 `delta.pass_rate<0` 退 1 的逻辑已退役），改由独立 [`gate`](#gate--通过失败判决) 命令出。`--security-gate` 触发时仍退 1。
 
@@ -324,9 +325,9 @@ skill-eval gate output/benchmark.json --baseline freeze/baseline.json --strict-d
 
 > 想拿现成材料试手 + 对照预期结果：自带 3 个 audit 示例（合成违规 transcript，预期该抓的违规已逐条列明）+ 1 个 multi-skill-demo（演示 `--kind skill` 在一条多 skill transcript 里只对账一个 skill），见 [example-skills/README.md](../fixtures/example-skills/README.md)。
 
-> 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行——`[条件性/禁令/步骤] 判定 N 条…` → `[条件性/禁令/步骤] 完成 ⏱ Xs`（类别名打头括号化；指令 >10 条分批时才显 `批 k/总`，单批不显）。**两种失败都会先自动重试（最多 2 次）再兜底**：① 调用失败（超时 / 退出码 / 限流）；② 调用成功但整批 0 条解析成功（LLM 输出畸形/截断，原是看着"完成"却全 N/A 的静默盲点）——都大概率瞬态、重试常能救回。**判官现走 `--json-schema` 结构化输出约束**（条件性/禁令/步骤/refine 四个 audit 判官输出 schema 验证过的对象，畸形 JSON 从源头大幅减少；CLI 拒顶层 array，故 array 输出包 `{"items":[...]}`、代码侧解开；schema 偶尔不合规时降级走文本 fallback，上述重试兜底不变）。重试打 `重试 n/2…`，耗尽才 `重试耗尽 → 全兜底 N/A`（audit 汇总"未判定"警告提示重跑）。**第三道兜底**：单批或单个判定器抛**未捕获异常**（非上述瞬态失败，如解析逻辑 bug）也降级该批/该类为 UNRESOLVED——不击穿整个 audit、不翻转真假，与其余结果一起汇总提示重跑（并发下任一批/类失败都不连累其他）。看到 `[条件性/禁令/步骤] …` 滚动就是在跑，别误以为卡死。
+> 判定要逐批调 LLM（每批约 40–257s），跑期间**实时打印进度**：进每个 transcript 打头（`对账 transcript i/N: <name>`），每个 LLM 批前后各一行——`[条件性/禁令/步骤] 判定 N 条…` → `[条件性/禁令/步骤] 完成 ⏱ Xs`（类别名打头括号化；指令 >10 条分批时才显 `批 k/总`，单批不显）。**两种失败都会先自动重试（最多 2 次）再兜底**：① 调用失败（超时 / 退出码 / 限流）；② 调用成功但整批 0 条解析成功（LLM 输出畸形/截断，原是看着"完成"却全 N/A 的静默盲点）——都大概率瞬态、重试常能救回。**判官走 http forced tool_use + 结构化 schema**（tool input_schema，inline_schema 展开 $ref；条件性/禁令/步骤/refine 四个判官输出 schema 验证过的对象，畸形 JSON 从源头大幅减少；顶层须 object，故 array 输出包 `{"items":[...]}`、代码侧解开；schema 偶尔不合规时降级走文本 fallback，上述重试兜底不变）。重试打 `重试 n/2…`，耗尽才 `重试耗尽 → 全兜底 N/A`（audit 汇总"未判定"警告提示重跑）。**第三道兜底**：单批或单个判定器抛**未捕获异常**（非上述瞬态失败，如解析逻辑 bug）也降级该批/该类为 UNRESOLVED——不击穿整个 audit、不翻转真假，与其余结果一起汇总提示重跑（并发下任一批/类失败都不连累其他）。看到 `[条件性/禁令/步骤] …` 滚动就是在跑，别误以为卡死。
 
-> 三个 LLM 类别判定器（条件性/禁令/步骤）**并发跑**（`max_workers=3` = 类别数 = 实测安全并发），墙钟约 **2× 提速**（串行 13+51+37=101s → 并发 ≈51s）。副作用：三类的进度行会**交错**出现（每行 `[类别]` 打头，一眼分清是哪类在跑）；输出格式判定器是确定性子串匹配（无 LLM），不走并发。
+> 三个 LLM 类别判定器（条件性/禁令/步骤）**并发跑**（全局在飞由 AIMD 自适应限制器动态调、适配不同后端容量），墙钟约 **2× 提速**（三类并发取最长、而非串行加总）。副作用：三类的进度行会**交错**出现（每行 `[类别]` 打头，一眼分清是哪类在跑）；输出格式判定器是确定性子串匹配（无 LLM），不走并发。
 
 ```bash
 skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl -o audit-out/
@@ -339,7 +340,7 @@ skill-eval audit path/to/skill/ --transcript opencode-session.json
 skill-eval audit path/to/skill/ --db opencode.db
 ```
 
-> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`(逐行 JSON 记录,含 `Skill`/`Read`/`Write`/`Bash` tool_use);opencode session `.json`(`opencode export <sessionID>` 的产出,顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`)。两者重建成同一 `SessionDigest` 再对账(经同一条 canonical 重建路径:归一到 cc-record 形 → 共享 `_digest_from_records`,三源重建逻辑单处定义,见 handbook §7.14);`--kind` 选锚点(`skill` 按 `Skill` tool_use、`agent` 按 `agent` 归属);opencode 单锚点,按 per-message `agent` 切分(扁平,无 cc 父子作用域,`skill`/`agent` 的区分对它无意义、都按 `agent` 切)。`run --task` 两种执行器都支持(默认 `cc` 产 `.jsonl`,`--executor opencode` 产 `.json`),run 产的 transcript 直接喂 audit 即可。生产导出 opencode 会话喂 audit:`opencode session list` 找 id → `opencode export <id> > session.json`(**导原文**,audit 靠 part.text 判遵循性;`--sanitize` 仅用于对外分享脱敏版,脱敏后别喂 audit)→ `skill-eval audit --transcript session.json`。
+> **`--transcript` 吃两种格式(按后缀自动分派)**：cc 会话 `.jsonl`(逐行 JSON 记录,含 `Skill`/`Read`/`Write`/`Bash` tool_use);opencode session `.json`(`opencode export <sessionID>` 的产出,顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`)。两者重建成同一 `SessionDigest` 再对账(经同一条 canonical 重建路径:归一到 cc-record 形 → 共享 `_digest_from_records`,三源重建逻辑单处定义);`--kind` 选锚点(`skill` 按 `Skill` tool_use、`agent` 按 `agent` 归属);opencode 单锚点,按 per-message `agent` 切分(扁平,无 cc 父子作用域,`skill`/`agent` 的区分对它无意义、都按 `agent` 切)。`run --task` 两种执行器都支持(默认 `cc` 产 `.jsonl`,`--executor opencode` 产 `.json`),run 产的 transcript 直接喂 audit 即可。生产导出 opencode 会话喂 audit:`opencode session list` 找 id → `opencode export <id> > session.json`(**导原文**,audit 靠 part.text 判遵循性;`--sanitize` 仅用于对外分享脱敏版,脱敏后别喂 audit)→ `skill-eval audit --transcript session.json`。
 
 > **拿到一个 opencode `.db` 文件,一行进 audit**(别人/别处拷来的库,不是你本机默认库):直接用 `--db`,skill-eval 内部把 list/export/audit 全包了(隔离 `XDG_DATA_HOME` 指向那个 .db、**不碰本机真库**;需 opencode CLI 在 PATH):
 > ```bash
@@ -368,7 +369,7 @@ skill-eval audit path/to/skill/ --db opencode.db
 | `--kind` | (无) | 不传=**宽松全 session 模式**(整条 transcript 对 body 对账、不切分,**skill/agent/root 三者共同默认**);传 `skill`\|`agent`\|`root`=精确收窄到对应执行段(`skill` 按 `Skill` 调用切;`agent` 按 `agent` 归属切;`root` 切顶层主 agent 作用域——cc `parent_tool_use_id` 为空 / opencode `session.info.agent`,target 名忽略)。**不传但 transcript 含可收窄锚点 → 黄字对称提示可加 `--kind`**(skill/agent/root 一视同仁、非阻断、宽松照跑)。opencode 单锚点按 per-message `agent` 切,见下 |
 | `--refine-instructions` | 开启 | 判定前 LLM 精筛（默认开，`--no-refine-instructions` 关）：砍掉 extractor 误抽的示例/占位伪指令（精度>召回，per-SKILL 缓存，见下） |
 | `--headline` | 开启 | 人话标题（默认开，`--no-headline` 关）：refine 之后、判定前的独立 LLM 步骤，把指令原文 bullet 去噪+补主语压成一句显示标题（判定不读；per-声明缓存 `~/.cache/skill-eval/headline/`；显示回退 headline>source_excerpt>instruction_text，详见下） |
-| `--turn-refs` / `--no-turn-refs` | 关(`--no-turn-refs`) | turn 定位（默认关）：`--turn-refs` 时 judge 输出 turn_refs + digest 加 `[T{idx}]` 前缀，finding 带违规发生的 turn 序号（供能 link 到 turn 内容的下游消费方）；默认 `--no-turn-refs` 回到无前缀的干净判定。加前缀会动 LLM prompt、引入条件分支过严（见 handbook §7.12），故默认关、按需开 |
+| `--turn-refs` / `--no-turn-refs` | 关(`--no-turn-refs`) | turn 定位（默认关）：`--turn-refs` 时 judge 输出 turn_refs + digest 加 `[T{idx}]` 前缀，finding 带违规发生的 turn 序号（供能 link 到 turn 内容的下游消费方）；默认 `--no-turn-refs` 回到无前缀的干净判定。加前缀会动 LLM prompt、引入条件分支过严，故默认关、按需开 |
 | `--output` / `-o` | ./output | 输出目录 |
 | `--model` | 默认 | 语义判定 LLM |
 | `--format` | table | table / json |
@@ -419,7 +420,7 @@ skill-eval audit path/to/skill/ --db opencode.db
 
 > **「X 条由 transcript 反推」是什么**：findings 里 `derived_from_transcript: true` 的不是 SKILL.md 抽出来的，而是从 transcript 实际行为**补**出来的检查（只增不减）。当前只补一类：transcript 里 agent 真实 Read 过的输入/参考文件（`digest.input_files`）→ 各补一条「读取 \<path\>」（REFERENCE_USAGE）。例：SKILL.md 只写"读用户指定的日志文件"不点名，transcript 实际读了 `app.log` → 反推一条「读取 app.log」并确认命中。这类由 Read 行为反推的 read 检查构造上即 PASS（不膨胀 fail），作用是把 agent 真碰过的输入文件记进报告。`required_tools`（Bash 命令分不清业务/通用）、`required_outputs`（历史 trace 产物未必还在盘）不反推。
 
-> **怎么看结果（别只数 fail）**：每条 finding 带 **#N 序号**。① **同文重复已去重**——同句被抽成 `CONSTRAINT` + `ANTI_FABRICATION` 的合并成一条、来源徽章显 `CONSTRAINT + ANTI_FABRICATION`（不再虚增 fail）。② **同行为跨类已关联**——同一行为（如没读某 reference）同时违反 条件性 + 步骤 两条**不同**规则的，仍是两条（确是两条规则），但互标 `↔ 同源 #N`（可点跳）；故 fail 条数仍可能 > 真实问题数，**逐条看 evidence 对照"哪个行为"**，别数条数。③ **没判成（UNRESOLVED）多 ≠ 全过**——LLM 没判成的一律 UNRESOLVED（见上），汇总成警告提示重跑；N/A（不适用）是已解决结论、不进警告。④ **对照预期**：自带 3 个 audit 示例的预期违规已逐条列明（见 [example-skills/README.md](../fixtures/example-skills/README.md)），跑完比对该抓的违规是否都出现在 FAIL、evidence 是否点中。⑤ **verdict 徽章 + method 标签**（每条）：左侧 verdict 五态图标（✓通过 / ✗失败 / ⊘不适用（场景不触发）/ ○没判成（可重跑）/ ?判不准（重跑无益）），右侧 method 标签「程序」（tool_trace 命中 / 子串匹配，不调 LLM）或「LLM」。⑥ **FAIL 噪声判别**（每条 FAIL + by_instruction 失败行）：`noise_label` 徽章（`tool_noise` 疑似工具噪声 / `skill_issue` 疑似声明问题 / `uncertain` 待确认）+ `noise_reasons`（hover 看理由）。fixture 下 FAIL 混着工具噪声（extractor 误提资源描述当步骤、evidence 自相矛盾、LLM 判定不稳）和真声明问题（硬约束程序判定 FAIL），判别帮区分、避免据噪声误改声明。判别法见 handbook §7.11、诚实边界见 §7.13；治本仍 `--refine-instructions` / 结构化声明 / 真实 transcript audit。**source / category 徽章**：单次 audit-report、viewer per-run、整体汇总三处都显 `source`（InstructionSource，如 `CONSTRAINT` / `HEADING_STEP`）+ `category` —— `source` 比 `category` 细（6 vs 4），是判别噪声的关键信号（如 `HEADING_STEP` + 资源链接 → 疑似资源描述被当步骤）。
+> **怎么看结果（别只数 fail）**：每条 finding 带 **#N 序号**。① **同文重复已去重**——同句被抽成 `CONSTRAINT` + `ANTI_FABRICATION` 的合并成一条、来源徽章显 `CONSTRAINT + ANTI_FABRICATION`（不再虚增 fail）。② **同行为跨类已关联**——同一行为（如没读某 reference）同时违反 条件性 + 步骤 两条**不同**规则的，仍是两条（确是两条规则），但互标 `↔ 同源 #N`（可点跳）；故 fail 条数仍可能 > 真实问题数，**逐条看 evidence 对照"哪个行为"**，别数条数。③ **没判成（UNRESOLVED）多 ≠ 全过**——LLM 没判成的一律 UNRESOLVED（见上），汇总成警告提示重跑；N/A（不适用）是已解决结论、不进警告。④ **对照预期**：自带 3 个 audit 示例的预期违规已逐条列明（见 [example-skills/README.md](../fixtures/example-skills/README.md)），跑完比对该抓的违规是否都出现在 FAIL、evidence 是否点中。⑤ **verdict 徽章 + method 标签**（每条）：左侧 verdict 五态图标（✓通过 / ✗失败 / ⊘不适用（场景不触发）/ ○没判成（可重跑）/ ?判不准（重跑无益）），右侧 method 标签「程序」（tool_trace 命中 / 子串匹配，不调 LLM）或「LLM」。⑥ **FAIL 噪声判别**（每条 FAIL + by_instruction 失败行）：`noise_label` 徽章（`tool_noise` 疑似工具噪声 / `skill_issue` 疑似声明问题 / `uncertain` 待确认）+ `noise_reasons`（hover 看理由）。fixture 下 FAIL 混着工具噪声（extractor 误提资源描述当步骤、evidence 自相矛盾、LLM 判定不稳）和真声明问题（硬约束程序判定 FAIL），判别帮区分、避免据噪声误改声明。治本仍 `--refine-instructions` / 结构化声明 / 真实 transcript audit。**source / category 徽章**：单次 audit-report、viewer per-run、整体汇总三处都显 `source`（InstructionSource，如 `CONSTRAINT` / `HEADING_STEP`）+ `category` —— `source` 比 `category` 细（6 vs 4），是判别噪声的关键信号（如 `HEADING_STEP` + 资源链接 → 疑似资源描述被当步骤）。
 
 ### `trigger` — 触发准确度（第 4 维）
 
@@ -453,7 +454,7 @@ skill-eval trigger path/to/skill/ --evals path/to/evals.json --model claude-sonn
 
 **判定**：每条 probe 跨 N runs 算 `trigger_rate = fired 次数 / runs`，阈值 0.5 二值化 → PASS / FAIL；spawn 失败 / 超时 / **cc 非零退出且没触发**（限流 / 后端不可用：cc 实测 exit 1 + 错误打 stdout、stderr 空，`run_trigger` 不 raise 而返正常输出）→ 该 probe = `UNRESOLVED`（**不进率分母**、`trigger_rate` 置 `null`，宁少报不乱报）。聚合**分开报**（各带样本量）：`recall` = should-trigger 方向均值；`false_trigger_rate` = should-not 方向均值——两者是**不同失效模式、不合成一个分**。某方向 0 probe → 对应率 `null`（N/A，不是假 0.0）。
 
-**分层诊断（纯诊断，主指标之外）**：每条 probe 报告期再标两个派生维度（不进 evals.json）——`phrase_type`（`literal` 词面命中 / `paraphrase` 语义改写，由 anti-leakage 子串检查定）+ `length_bucket`（`short` / `medium` / `long`，按 prompt 字符数）。`trigger-report.json` 的 `breakdown` 字段把 `recall` / `false_trigger_rate` 再按这两个维度切：例如「词面命中 recall 90% · 语义改写 recall 40%」→ cc 主要靠字面匹配触发，不是真懂。终端打一行 `分层 recall`，HTML 报告给两维度 × 两方向完整分层（详见 [handbook §9.4.1](docs/skill-eval-handbook.md)）。
+**分层诊断（纯诊断，主指标之外）**：每条 probe 报告期再标两个派生维度（不进 evals.json）——`phrase_type`（`literal` 词面命中 / `paraphrase` 语义改写，由 anti-leakage 子串检查定）+ `length_bucket`（`short` / `medium` / `long`，按 prompt 字符数）。`trigger-report.json` 的 `breakdown` 字段把 `recall` / `false_trigger_rate` 再按这两个维度切：例如「词面命中 recall 90% · 语义改写 recall 40%」→ cc 主要靠字面匹配触发，不是真懂。终端打一行 `分层 recall`，HTML 报告给两维度 × 两方向完整分层（详见 [handbook](docs/skill-eval-handbook.md)）。
 
 > **诊断定位、无门禁**：**无 gate / 不出 exit-code 判决**（纯诊断）。`trigger-report.json` 是独立 artifact，**不并入 `benchmark.json`**。用 [`init --trigger-probes`](#init--初始化评测定义) 生成探题。`description_hash` = sha256(frontmatter `description`)[:16]——锚定触发判定唯一依赖的输入，跨版本对比时判断 recall 变化是否源于 description 改动。成本：每 probe = 1 次 cc spawn（比 `run` 轻——无 with/without 双 spawn、无 grader、无 compliance judge）。
 
@@ -554,7 +555,7 @@ skill-eval critique path/to/agent.md --kind agent        # 审 agent 定义正�
 |------|--------|------|
 | `--model` | 默认 | LLM 模型 |
 | `--timeout` | 120 | LLM 调用超时（秒） |
-| `--runs` | 1 | 多数投票跑 N 次（>1 启用：每维 status 取多数、原文取首个判出多数档的 run、显 `X/N` 可信度；见 handbook §2.3「结果会抖」） |
+| `--runs` | 1 | 多数投票跑 N 次（>1 启用：每维 status 取多数、原文取首个判出多数档的 run、显 `X/N` 可信度；「结果会抖」） |
 | `--kind` | `skill` | 声明对象：`skill`（审 SKILL.md 正文）/ `agent`（审 agent 定义正文，即 system prompt）。4 维 rubric 两边共用，只换 prompt 措辞；description 不进 critique（归行为层 trigger/dispatch-accuracy） |
 | `--output` / `-o` | `<skill>/evals/` | 输出目录（写 `content-quality-report.json` + `content-quality-report.html`） |
 
@@ -766,6 +767,7 @@ skill-eval report output/ --open # 生成并打开
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `id` | 是 | 唯一标识，整数 |
+| `name` | 否 | eval 名（空则显示 `eval-{id}`） |
 | `prompt` | 是 | 发给 claude 的任务描述 |
 | `expected_output` | 否 | 预期输出的文字描述(grader 评分参考,**不喂给被测 cc**;拼进 prompt = 答案泄露致 A/B 失真) |
 | `level` | 否 | 测试层级：`L1`/`L2`，默认 `L1` |
@@ -774,6 +776,7 @@ skill-eval report output/ --open # 生成并打开
 | `assertions` | 否 | 结构化断言列表（Tier 1 程序判 / Tier 3 语义类 LLM 判） |
 | `timeout` | 否 | per-eval 超时覆盖（秒）；不设则用 `--timeout` |
 | `source_dir` | 否 | 从 skill 目录拷进工作区的源目录 |
+| `source_dir_as` | 否 | source_dir 拷贝的目标名（空则用源目录名） |
 | `flags` | 否 | 后处理标记（如 `degraded:no-llm`）；默认空 |
 | `rationale` | 否 | 该 eval 对应 SKILL.md 哪段/哪条（`init` 自报,审阅溯源;空 → `review:no-rationale`） |
 | `confidence` | 否 | `init` 生成器自报 0-1（该题切中规则的把握）;仅 init 审阅分诊,**不入任何 gate**。同名区分:≠ audit-finding 的 confidence,也 ≠ 旧版校准已删的 confidence（grade/agreement 那套）——这是出卷阶段生成器自评 |
@@ -897,6 +900,8 @@ skill-eval report output/ --open # 生成并打开
   }
 }
 ```
+
+`axes` 只列**启用的轴**：示例开了 `programmatic_guard` + `min_win_rate`，故只有 `programmatic` + `comparison`；`--must-pass` / `--baseline` 启用时 `axes` 会多 `must_pass`（candidate 侧指定题全过才 PASS）/ `drift`（题集 id 增删）两轴。`calibration` 的 `HIGH_SCORE_SUSPECT` 进 `warnings` 作 soft warning，不进 `decision` / `exit_code`。
 
 ### trigger-report.json（`trigger` 命令产出）
 

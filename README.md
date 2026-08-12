@@ -2,16 +2,17 @@
 
 [![CI](https://github.com/guixu-labs/skill-eval/actions/workflows/ci.yml/badge.svg)](https://github.com/guixu-labs/skill-eval/actions/workflows/ci.yml)
 
-评测 [Claude Code Skill](https://github.com/anthropics/skills) 并审计 skill / agent / 编排者执行遵循性的 CLI——三层质量保障（评分 / 遵循性 / 校准）+ 盲比较 + post-hoc 门禁，CI 就绪。
+评测 [Claude Code Skill](https://github.com/anthropics/skills) / agent 的能力、并审计 skill / agent / 编排者执行遵循性的 CLI——一个工具的两面：**评测**（能力行不行，入口 `run`）+ **审计**（过程照声明走没走，入口 `audit`）；三层质量保障（评分 / 遵循性 / 校准）+ 盲比较 + post-hoc 门禁，CI 就绪。
 
-脱胎于 [skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator)——交互式 meta-skill，Claude 加载它对话式建/测 skill。两者**共享评测血脉**（A/B 对照、LLM grader、盲比较、benchmark、review UI 都源自那里），**互补而非替代**：skill-creator 适合探索期人盯着迭代，skill-eval 把它延展到成熟期的工程化 CI。skill-eval 独有：
+评测部分脱胎于 [skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator)——交互式 meta-skill，Claude 加载它对话式建/测 skill。两者**共享评测血脉**（A/B 对照、LLM grader、盲比较、benchmark、review UI 都源自那里），**互补而非替代**：skill-creator 适合探索期人盯着迭代，skill-eval 把它延展到成熟期的工程化 CI。skill-eval 独有：
 
 - **确定性 programmatic 断言 + 双率** — 文件存在 / 内容匹配等零 LLM、不可作弊的客观判定，与 LLM 判定分开报，干净信号不被阅卷噪声污染
+- **agent 评测（`--kind agent`）** — 评测对象从 skill 扩到 agent（绝对质量模式，无 A/B 对照）；skill-creator 只评 skill
 - **遵循性 compliance（`audit`）** — 对账执行过程是否真按**声明**走了（不只看输出对不对）。声明可是 skill（SKILL.md）、agent、或编排者：`--kind skill/agent/root` 切对应执行段，cc / opencode transcript 都能审
 - **校准 calibration** — 结果×过程 coherence：输出对了但过程违反硬性规则 → 高分存疑（5 态判决）
 - **post-hoc 门禁 + CI** — `gate` 独立命令出 PASS/FAIL，exit code 驱动 CI；`--format json` 合入 pipeline
 - **多作用域 transcript 审计 audit** — 把生产会话 transcript（cc / opencode 双源）与 SKILL.md 逐条对账；按 **skill / agent / root** 三种作用域切分：审被 `Skill` 调用的 skill 段、被 dispatch 的子 agent（`--kind agent`）、或顶层主 agent / 编排者（`--kind root`，整 workflow 审计的地基）；多 transcript 聚合可反推 skill 设计本身有没有问题
-- **路径1 真任务** — `--task/--cwd` spawn 真任务（cc / opencode 双执行器）
+- **`--task` 真任务模式** — spawn 真任务（`--task/--cwd`，cc / opencode 双执行器），产 trace 喂 audit
 - **基准题集冻结** — `freeze` 不可变签名 + skill_name 校验，跨 run / CI 复用同一份题
 - **触发准确度 trigger（第 4 维）** — 测 cc 仅凭 description 会不会自然触发 skill（前三层都 force-inject body、测不到的触发面）；纯诊断、不出 gate
 - **出题漏测诊断 coverage** — SKILL.md 内容点 × evals 覆盖映射，亮出 `run` 够不到的漏测盲区，`--augment` 复用 init 生成器自动补题；纯诊断、不出 gate
@@ -146,14 +147,14 @@ skill-eval freeze path/to/evals.json --name baseline
 
 ### `run` — A/B 评测
 
-两种模式：默认 with_skill vs without_skill 对照（或 v1/v2 双 skill），或路径 1 真任务模式（`--task` 直接跑真实任务）。`--kind agent` 跑 agent 评测（绝对质量，无 A/B 对照；配合 `init --kind agent` 出题 + `critique --kind agent` 审正文）。产出 benchmark.json（含双率 delta + 盲比较聚合；agent 模式只有绝对 pass_rate）。
+两种模式：默认 with_skill vs without_skill 对照（或 v1/v2 双 skill），或 `--task` 真任务模式（直接跑真实任务，产 trace 喂 audit）。`--kind agent` 跑 agent 评测（绝对质量，无 A/B 对照；配合 `init --kind agent` 出题 + `critique --kind agent` 审正文）。产出 benchmark.json（含双率 delta + 盲比较聚合；agent 模式只有绝对 pass_rate）。
 
 ```bash
 skill-eval run path/to/skill/
 skill-eval run path/to/skill/ --runs 3 --model claude-sonnet-5
 skill-eval run path/to/skill/ --scoring programmatic   # 仅程序化，零 LLM 评分成本
 skill-eval run v2/ --skill-b v1/                        # v1/v2 双 skill 回归对照
-skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo   # 路径 1 真任务模式（默认 cc）
+skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo   # --task 真任务模式（默认 cc）
 skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo --executor opencode   # 同上，改用 opencode 跑
 skill-eval run path/to/skill/ --eval-ids 3,5                  # 只跑指定 id 的题（调试/回归某几道；和 --eval-samples 互斥）
 skill-eval run path/to/skill/ --changed-from v1/              # 改 skill 后只跑受影响的题（给基线目录；回归探针；和 --eval-ids/--eval-samples 互斥）
@@ -167,9 +168,9 @@ skill-eval run path/to/agent.md --kind agent --evals evals.json --runs 2   # age
 | `--runs` | 1 | 每次评测运行次数（推荐 3 抹平答题波动） |
 | `--scoring` | hybrid | hybrid / programmatic / llm |
 | `--skill-b` | — | v1/v2 模式：第二个 skill 路径（两边各注入各自 skill） |
-| `--task` / `--cwd` | — | 路径 1 真任务模式：直接跑真实任务（不读 evals.json） |
-| `--executor` | cc | 路径 1 执行器：`cc`（默认）/ `opencode` / `cc,opencode`（逗号分隔，各跑 `--runs` 次） |
-| `--no-compliance` | auto | 跳过遵循性检查（`--runs<3` 时默认开） |
+| `--task` / `--cwd` | — | `--task` 真任务模式：直接跑真实任务（不读 evals.json） |
+| `--executor` | cc | `--task` 执行器：`cc`（默认）/ `opencode` / `cc,opencode`（逗号分隔，各跑 `--runs` 次） |
+| `--no-compliance` | 开 | 跳过遵循性检查（默认开；单 run 也产，不绑 `--runs`） |
 | `--security-gate` | off | 安全审查返回 BLOCKED/REVIEW_NEEDED 时判失败 |
 | `--model` | — | claude -p 模型（也控制盲比较/赛后分析是否执行） |
 | `--eval-samples` | — | 随机抽样跑 N 道或 pct%（如 `10` 或 `0.25`） |
@@ -188,7 +189,7 @@ skill-eval gate output/benchmark.json                     # 仅客观回归守�
 skill-eval gate output/benchmark.json --min-win-rate 0.5  # 加主观盲评阈值
 ```
 
-两轴：客观侧 programmatic 回归守卫（默认常开）+ 主观侧盲比较胜率（`--min-win-rate` opt-in）。判决写 gate.json，exit `0=PASS / 1=FAIL / 2=N/A`。
+四轴（只有启用的进判决）：客观 programmatic 回归守卫（默认常开）+ 主观盲比较胜率（`--min-win-rate`）/ 必过题（`--must-pass`）/ 题集漂移（`--baseline`）三者 opt-in。判决写 gate.json，exit `0=PASS / 1=FAIL / 2=N/A`。
 
 ### `audit` — 真实 transcript 对账
 
@@ -215,11 +216,11 @@ skill-eval init   path/to/skill/ --trigger-probes    # 先生成探题(should/sh
 skill-eval trigger path/to/skill/ --runs 2 -o /tmp/out
 ```
 
-产出 `trigger-report.json` + `trigger-report.html`（人读，`--open` 浏览器打开）+ 终端摘要，**含「怎么改 description」的操作建议**：规则建议永远给（漏召→补关键词 / 误触→收窄），有失败时还自动跑一次 LLM 起草可抄改的 description 草案（全 PASS 跳过、无 flag）。终端输出 / JSON 字段 / 改法清单见 [handbook §15.7](docs/skill-eval-handbook.md) 与 [reference](docs/skill-eval-reference.md)。
+产出 `trigger-report.json` + `trigger-report.html`（人读，`--open` 浏览器打开）+ 终端摘要，**含「怎么改 description」的操作建议**：规则建议永远给（漏召→补关键词 / 误触→收窄），有失败时还自动跑一次 LLM 起草可抄改的 description 草案（全 PASS 跳过、无 flag）。终端输出 / JSON 字段 / 改法清单见 [handbook](docs/skill-eval-handbook.md) 与 [reference](docs/skill-eval-reference.md)。
 
 ### `coverage` — 出题漏测诊断
 
-诊断 evals.json 对 SKILL.md **内容点**的覆盖——`covered_by` 空的内容点 = **漏测**（0 道题覆盖），是 `run` 够不到的盲区。一次 LLM 映射（喂 SKILL.md + 各 eval 的 prompt / rationale），不 re-run Claude。诊断定位、无门禁、独立 artifact（同 trigger，不并入 benchmark）；`--augment` 可自动补漏测题（带 `review:coverage-augment`、需人审）。详见 [handbook 第 16 章](docs/skill-eval-handbook.md) 与 [reference](docs/skill-eval-reference.md)。
+诊断 evals.json 对 SKILL.md **内容点**的覆盖——`covered_by` 空的内容点 = **漏测**（0 道题覆盖），是 `run` 够不到的盲区。一次 LLM 映射（喂 SKILL.md + 各 eval 的 prompt / rationale），不 re-run Claude。诊断定位、无门禁、独立 artifact（同 trigger，不并入 benchmark）；`--augment` 可自动补漏测题（带 `review:coverage-augment`、需人审）。详见 [handbook](docs/skill-eval-handbook.md) 与 [reference](docs/skill-eval-reference.md)。
 
 ```bash
 skill-eval coverage path/to/skill/              # 诊断漏测,出 JSON + HTML
@@ -279,7 +280,7 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 
 | 层级 | 判定方式 | 示例 |
 |------|---------|------|
-| **Tier 1** | 程序化（确定性） | FILE_EXISTS, FILE_CONTAINS, CONTAINS_PATTERN, NOT_CONTAINS, JSON_HAS_FIELD, LINE_COUNT, TOOL_CALLED, STEP_COUNT, CUSTOM_SCRIPT, CUSTOM_PLUGIN ... |
+| **Tier 1** | 程序化（确定性） | FILE_EXISTS, FILE_CONTAINS, CONTAINS_PATTERN, NOT_CONTAINS, JSON_HAS_FIELD, LINE_COUNT, CROSS_FILE_CONSISTENCY, CODE_COMPILES, TOOL_CALLED, STEP_COUNT, CUSTOM_SCRIPT, CUSTOM_PLUGIN ... |
 | **Tier 3** | LLM 语义判分 | LLM_GRADE, LLM_FACT, LLM_NOT_DELEGATE |
 
 ### 遵循性引擎
@@ -321,7 +322,7 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 output/
 ├── benchmark.json          # 聚合:双率 delta + comparisons + comparison_summary + analysis + llm_token_usage(评测 LLM 成本) + llm_duration_seconds(评测耗时,墙钟 total)(--changed-from 子集跑时另记 selection)
 ├── report.html             # 自包含 HTML 报告(读 gate.json 显门禁徽章;run 末尾自动产)
-├── gate.json               # gate 命令产出(判决 + 两轴明细;非 run 产出)
+├── gate.json               # gate 命令产出(判决 + 四轴明细;非 run 产出)
 ├── previous/               # △ 重跑归档:fresh 重跑时上次 run 树整体移入(单槽),供 report「vs 上次」纵向 delta;仅 fresh 产生,详见 reference「重跑归档」
 ├── with_skill/             # v1/v2 模式下换成各自标签名
 │   └── eval-<id>/run-<n>/
