@@ -257,6 +257,7 @@ class EvalInitGenerator:
                 eval_set = self._parse_llm_response(response, name)
                 if eval_set is not None:
                     self._flag_missing_rationale(eval_set)
+                    eval_set = self._normalize_absolute_paths(eval_set)
                     for case in eval_set.evals:
                         if case.level == "L1":
                             case.assertions = self._auto_generate_assertions(case)
@@ -277,6 +278,39 @@ class EvalInitGenerator:
         eval_set = self.generate_template(skill_path)
         for case in eval_set.evals:
             case.flags = list(case.flags or []) + [f"degraded:{reason}"]
+        return eval_set
+
+    @staticmethod
+    def _normalize_absolute_paths(eval_set: EvalSet) -> EvalSet:
+        """LLM 出题把 fixture/断言路径写成绝对路径(如 ``/tmp/xxx/app.log``)→ 确定性归一为相对。
+
+        执行器 cwd = run 隔离目录:绝对路径会让 fixture 写穿隔离(setup_fixtures 的
+        ``base_dir / f.path`` 遇绝对路径直接落真机该路径)、grading 却在 run 目录里查
+        (``output_dir / filename``)→ 题目全体假 FAIL。取该 eval 全部绝对 fixture 路径的
+        最长公共**父**目录作前缀,把 ``前缀/`` 从 fixture.path / prompt / expectations /
+        断言 params(filename/path)里剥掉;动过刀打 ``review:abs-paths-normalized``
+        flag 留痕(人审可见)。无绝对路径则原样返回。"""
+        for case in eval_set.evals:
+            abs_paths = [f.path for f in case.fixtures if Path(f.path).is_absolute()]
+            if not abs_paths:
+                continue
+            prefix = os.path.commonpath([str(Path(p).parent) for p in abs_paths])
+            needle = prefix.rstrip("/") + "/"
+
+            def _strip(s: str) -> str:
+                return s.replace(needle, "") if needle else s
+
+            case.prompt = _strip(case.prompt)
+            case.expectations = [_strip(x) for x in case.expectations]
+            for f in case.fixtures:
+                if Path(f.path).is_absolute():
+                    f.path = _strip(f.path)
+            for a in case.assertions:
+                for key in ("filename", "path"):
+                    v = a.params.get(key)
+                    if isinstance(v, str):
+                        a.params[key] = _strip(v)
+            case.flags = list(case.flags or []) + ["review:abs-paths-normalized"]
         return eval_set
 
     # ------------------------------------------------------------------
@@ -366,6 +400,7 @@ description: {description}
         if eval_set is None:
             return EvalSet(skill_name=name, evals=[])
         self._flag_missing_rationale(eval_set)
+        eval_set = self._normalize_absolute_paths(eval_set)
         for case in eval_set.evals:                       # agent 两级都派生(L2 也补 FILE_EXISTS)
             case.assertions = self._auto_generate_assertions(case)
         for case in eval_set.evals:                       # 断言偏少 → init 提示审(兜底硬约束下漏写的少数)
@@ -1023,6 +1058,10 @@ Output JSON ONLY:
             "- Total 8-12 evals\n"
             "- L1: test rules/decisions (no fixtures). L2: test actual execution (with fixtures).\n"
             "- L2 fixtures must be REALISTIC minimal test data that Claude can actually process.\n"
+            "- Fixture `path` MUST be a RELATIVE path (e.g. `input.pdf`, `logs/app.log`) and the prompt "
+            "must reference that same relative path. NEVER absolute paths like `/tmp/...` — the executor "
+            "runs in an isolated working directory, absolute paths escape it and assertions check the "
+            "working dir → guaranteed false FAIL.\n"
             "- For text-based fixtures (JSON/code), include the ACTUAL content. "
             "For binary fixtures (PDF/image), write a minimal placeholder.\n"
             "- L2 expectations must mention CONCRETE output: file names, counts, patterns.\n"

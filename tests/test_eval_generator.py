@@ -635,6 +635,52 @@ def test_generate_with_llm_unparseable_response_flags_degraded(monkeypatch, tmp_
         assert any(f.startswith("degraded:llm-fallback") and "解析失败" in f for f in flags), flags
 
 
+def test_generate_with_llm_normalizes_absolute_fixture_paths(monkeypatch, tmp_path):
+    """LLM 把 fixture 路径写成绝对(/tmp/xxx/…)→ 归一为相对:fixture.path/prompt/
+    expectations/断言 params 同步剥前缀,打 review:abs-paths-normalized flag。
+
+    执行器 cwd = run 隔离目录:绝对路径会让 fixture 写穿隔离、grading 却在 run 目录
+    查 → 全体假 FAIL,故必须归一。"""
+    import json
+    sp = tmp_path / "skill"; sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n\n## R\n\nrule one\n", encoding="utf-8")
+    fake = json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "name": "L2-x", "level": "L2",
+         "prompt": "Triage /tmp/eval-a/app.log with /tmp/eval-a/references/codes.md, "
+                   "write /tmp/eval-a/error-report.json",
+         "rationale": "## R",
+         "expectations": ["reads /tmp/eval-a/app.log first"],
+         "assertions": [{"name": "report", "type": "FILE_EXISTS", "params": {"filename": "error-report.json"}}],
+         "fixtures": [{"path": "/tmp/eval-a/app.log", "content": "ERR x"},
+                      {"path": "/tmp/eval-a/references/codes.md", "content": "ERR_DB_001"}]}]})
+    monkeypatch.setattr("sift.evals.generator.call_claude", lambda *a, **k: fake)
+    es = EvalInitGenerator().generate_with_llm(sp)
+    e = es.evals[0]
+    assert [f.path for f in e.fixtures] == ["app.log", "references/codes.md"]
+    assert "/tmp/eval-a" not in e.prompt
+    assert "app.log" in e.prompt and "references/codes.md" in e.prompt
+    assert "/tmp/eval-a" not in e.expectations[0]
+    # 本就相对的断言 filename 不受影响
+    assert e.assertions[0].params["filename"] == "error-report.json"
+    assert "review:abs-paths-normalized" in (e.flags or [])
+
+
+def test_generate_with_llm_relative_paths_untouched(monkeypatch, tmp_path):
+    """fixture 本就是相对路径 → 原样返回,不打 flag。"""
+    import json
+    sp = tmp_path / "skill"; sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n\n## R\n\nrule one\n", encoding="utf-8")
+    fake = json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "name": "L2-x", "level": "L2", "prompt": "Triage app.log",
+         "rationale": "## R", "expectations": ["reads app.log"],
+         "assertions": [], "fixtures": [{"path": "app.log", "content": "ERR x"}]}]})
+    monkeypatch.setattr("sift.evals.generator.call_claude", lambda *a, **k: fake)
+    es = EvalInitGenerator().generate_with_llm(sp)
+    e = es.evals[0]
+    assert e.fixtures[0].path == "app.log"
+    assert "review:abs-paths-normalized" not in (e.flags or [])
+
+
 def test_generate_with_llm_retry_rescues_transient_failure(monkeypatch, tmp_path):
     """前两次失败(调用错/解析错)第三次成功 → 重试救回,不出 degraded flag。"""
     import json

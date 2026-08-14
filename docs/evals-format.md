@@ -108,12 +108,13 @@
 "fixtures": [{"path": "logs/app.log", "content": "2024-01-01 E-AUTH-001 login failed\n..."}]
 ```
 
-`eval` 时把 `content` 写入 claude 工作目录的 `path`,claude 读它干活——**不用外部提供真实文件**。这就是为什么没日志也能 `eval`:日志是考卷内嵌的夹具。
+`eval` 时把 `content` 写入 claude 工作目录的 `path`,claude 读它干活——**不用外部提供真实文件**。这就是为什么没日志也能 `eval`:日志是考卷内嵌的夹具。**`path` 必须是相对路径**(相对 claude 工作目录):绝对路径会让写入落出隔离目录、而断言在工作目录里查 → 假 FAIL。LLM 出题偶尔写绝对路径(如 `/tmp/xxx/app.log`),`init` 会确定性归一为相对(剥公共前缀,prompt/expectations/断言 params 同步替换)并打 `review:abs-paths-normalized` flag 留痕。
 
 ## flags(后处理标记)
 
-- `degraded:no-llm`:`init` 降级 fallback(LLM 失败,未挖到结构化信号,assertions 可能为空);`inspect` 标 ⚠。
+- `degraded:no-llm`:`init` 降级 fallback(LLM 失败,未挖到结构化信号,assertions 可能为空);`inspect` 标 ⚠;`degraded:llm-fallback(…)` 是 skill LLM 出题的降级(重试耗尽后退模板)。
 - `review:no-rationale`:`init` 生成时该题没带 `rationale`(生成器没自报溯源);提示人工补——溯源缺失不影响判分,只影响审阅。
+- `review:abs-paths-normalized`:LLM 出题把 fixture/断言路径写成了绝对路径,`init` 已确定性归一为相对(见上 fixtures 节)。
 - `review:...`:需人工复核(如 `review:dropped-assertions` / `review:fixture-not-in-manifest`)。
 
 ## 完整示例(log-error-analyzer,逐字段注释)
