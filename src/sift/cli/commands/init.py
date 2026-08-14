@@ -109,7 +109,9 @@ def init(
         elif generate_prompts:
             with console.status("正在用 LLM 生成 evals…", spinner="dots"):
                 if kind == "agent":
-                    eval_set = gen.generate_for_agent(skill_path, existing_evals=_existing_evals)
+                    eval_set = gen.generate_for_agent(
+                        skill_path, existing_evals=_existing_evals,
+                        on_heartbeat=lambda m: console.print(m))
                 else:
                     eval_set = gen.generate_with_llm(
                         skill_path, existing_evals=_existing_evals,
@@ -121,6 +123,16 @@ def init(
         if num_evals and num_evals < len(eval_set.evals):
             console.print(f"  Trimming to {num_evals} evals (from {len(eval_set.evals)})")
             eval_set.evals = eval_set.evals[:num_evals]
+
+        # 空集防覆盖:生成 0 题(LLM 失败耗尽重试;agent 路径唯一空集来源)+ 非追加 +
+        # 目标已有考卷 → 不拿空考卷毁掉已有考卷,报错退出(重跑即恢复;覆盖式 init
+        # 语义是"换新考卷",不是"失败时清空")。
+        if not eval_set.evals and not append and output.exists():
+            console.print(
+                f"[red]Error:[/red] 生成 0 题(LLM 失败,重试耗尽),已保留既有 {output} 不覆盖。"
+                "大概率瞬态故障,建议直接重跑。"
+            )
+            raise typer.Exit(code=1)
 
         appended = 0
         new_evals_display: list = []   # append 模式:终端只列这些新增(B);非 append 为空 → 列全量

@@ -52,6 +52,31 @@ def test_init_kind_agent_calls_generate_for_agent(monkeypatch, tmp_path):
     assert called.get("agent") is True and "skill" not in called
 
 
+def test_init_empty_result_does_not_clobber_existing(monkeypatch, tmp_path):
+    """生成 0 题(LLM 失败耗尽重试)+ 非追加 + 已有考卷 → exit 1,既有文件字节不动。
+
+    覆盖式 init 的语义是「换新考卷」,不是「失败时清空」——空考卷覆盖会把
+    agent 既有题毁在瞬时故障手里。"""
+    from sift.models import EvalSet
+    agent_md = tmp_path / "reviewer.md"
+    agent_md.write_text("---\nname: reviewer\ndescription: 审查代码\n---\n# 你是审查者\n只读不改\n",
+                        encoding="utf-8")
+    out = tmp_path / "evals" / "evals.json"
+    out.parent.mkdir(parents=True)
+    prior = EvalSet(skill_name="reviewer", evals=[
+        EvalCase(id=1, name="旧题", level="L1", prompt="旧 prompt")])
+    out.write_text(prior.model_dump_json(indent=2), encoding="utf-8")
+    before = out.read_bytes()
+
+    monkeypatch.setattr(
+        "sift.evals.generator.EvalInitGenerator.generate_for_agent",
+        lambda self, sp, **k: EvalSet(skill_name="reviewer", evals=[]))
+    r = runner.invoke(app, ["init", str(agent_md), "--kind", "agent", "-o", str(out.parent)])
+    assert r.exit_code == 1, r.output
+    assert "保留既有" in r.output
+    assert out.read_bytes() == before, "既有考卷字节必须原样保留"
+
+
 def test_init_kind_root_rejected(tmp_path):
     """--kind root 在 init 不接受(只 skill/agent)→ 非零退出。"""
     sp = _skill_dir(tmp_path)

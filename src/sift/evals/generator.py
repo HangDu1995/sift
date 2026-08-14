@@ -381,35 +381,46 @@ description: {description}
         return prompt
 
     def generate_for_agent(self, agent_path: Path,
-                           existing_evals: list | None = None) -> EvalSet:
+                           existing_evals: list | None = None,
+                           on_heartbeat=None) -> EvalSet:
         """agent 出题:从 description/角色推 role-matching 任务 + 质量线。
 
         跟 skill generate_with_llm 不同:不按正文切段(skill 工作流语义)、不假设产文件。
         断言由 LLM 直接写(对齐 skill _build_llm_prompt);_auto_generate_assertions 作兜底
         (LLM 写够的 assertions 直接用,自然语言 expectations 派生抽不到)。LLM 失败 / 解析失败
-        → 空 EvalSet(agent 无确定性 fallback;generate_template 的切段是 skill 专属,不适用)。
+        先重试(对齐 skill 路径,1+2 次);耗尽 → 空 EvalSet + _init_warnings 警告
+        (agent 无确定性 fallback;generate_template 的切段是 skill 专属,不适用)。
         """
         name, description, content, frontmatter, body = parse_skill_md(agent_path)
         prompt = self._build_agent_prompt(name, description, body, frontmatter,
                                           focus=self.focus, existing_evals=existing_evals)
-        try:
-            response = self._llm_call(prompt)
-        except RuntimeError:
-            return EvalSet(skill_name=name, evals=[])
-        eval_set = self._parse_llm_response(response, name)
-        if eval_set is None:
-            return EvalSet(skill_name=name, evals=[])
-        self._flag_missing_rationale(eval_set)
-        eval_set = self._normalize_absolute_paths(eval_set)
-        for case in eval_set.evals:                       # agent 两级都派生(L2 也补 FILE_EXISTS)
-            case.assertions = self._auto_generate_assertions(case)
-        for case in eval_set.evals:                       # 断言偏少 → init 提示审(兜底硬约束下漏写的少数)
-            if len(case.assertions) < len(case.expectations):
-                self._init_warnings.append(
-                    f"题{case.id} {case.name}: 断言 {len(case.assertions)} < 期望 "
-                    f"{len(case.expectations)},扫一眼该补的可程序化项"
-                    f"(纯主观 expectation 无断言正常)")
-        return eval_set
+        last_reason = ""
+        for attempt in range(1, _INIT_LLM_MAX_ATTEMPTS + 1):
+            try:
+                response = self._llm_call(prompt)
+            except RuntimeError as exc:
+                last_reason = f"LLM 调用失败: {str(exc)[:100]}"
+            else:
+                eval_set = self._parse_llm_response(response, name)
+                if eval_set is not None:
+                    self._flag_missing_rationale(eval_set)
+                    eval_set = self._normalize_absolute_paths(eval_set)
+                    for case in eval_set.evals:               # agent 两级都派生(L2 也补 FILE_EXISTS)
+                        case.assertions = self._auto_generate_assertions(case)
+                    for case in eval_set.evals:               # 断言偏少 → init 提示审
+                        if len(case.assertions) < len(case.expectations):
+                            self._init_warnings.append(
+                                f"题{case.id} {case.name}: 断言 {len(case.assertions)} < 期望 "
+                                f"{len(case.expectations)},扫一眼该补的可程序化项"
+                                f"(纯主观 expectation 无断言正常)")
+                    return eval_set
+                last_reason = f"LLM 响应解析失败: {len(response)} 字符非 JSON"
+            if attempt < _INIT_LLM_MAX_ATTEMPTS and on_heartbeat:
+                on_heartbeat(f"[yellow]init LLM {last_reason},重试 {attempt}/{_INIT_LLM_MAX_ATTEMPTS - 1}…[/yellow]")
+        self._init_warnings.append(
+            f"agent 出题:{last_reason}(重试 {_INIT_LLM_MAX_ATTEMPTS - 1} 次后仍失败)→ 0 题;"
+            "大概率瞬态故障,建议直接重跑")
+        return EvalSet(skill_name=name, evals=[])
 
     # ------------------------------------------------------------------
     # Trigger-accuracy probes — 读 description 生成 should/should-not 探题

@@ -59,23 +59,60 @@ def test_generate_for_agent_feeds_description_and_body(monkeypatch, tmp_path):
 
 
 def test_generate_for_agent_llm_failure_returns_empty(monkeypatch, tmp_path):
-    """LLM 失败(agent 无确定性 fallback)→ 空 EvalSet,不崩。"""
+    """LLM 失败(agent 无确定性 fallback)→ 先重试(1+2 次)再空 EvalSet + 警告。"""
     agent_md = tmp_path / "reviewer.md"
     agent_md.write_text(_AGENT_MD, encoding="utf-8")
-    monkeypatch.setattr(gen_mod, "call_claude",
-                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
-    eset = EvalInitGenerator().generate_for_agent(agent_md)
+    calls = {"n": 0}
+    def boom(*a, **kw):
+        calls["n"] += 1
+        raise RuntimeError("boom")
+    monkeypatch.setattr(gen_mod, "call_claude", boom)
+    gen = EvalInitGenerator()
+    beats: list[str] = []
+    eset = gen.generate_for_agent(agent_md, on_heartbeat=beats.append)
+    assert calls["n"] == 3, "应重试满 1+2 次"
     assert eset.evals == []
     assert eset.skill_name == "reviewer"
+    assert any("重试 2 次后仍失败" in w for w in gen.init_warnings), gen.init_warnings
+    assert len(beats) == 2, "两次失败各报一条重试心跳"
 
 
 def test_generate_for_agent_parse_failure_returns_empty(monkeypatch, tmp_path):
-    """LLM 返回非 JSON(解析失败)→ 空 EvalSet,不崩(不 fallback 到 skill 切段)。"""
+    """LLM 返回非 JSON(解析失败)→ 同样先重试再空 EvalSet(不 fallback 到 skill 切段)。"""
     agent_md = tmp_path / "reviewer.md"
     agent_md.write_text(_AGENT_MD, encoding="utf-8")
-    monkeypatch.setattr(gen_mod, "call_claude", lambda *a, **kw: "not json at all")
-    eset = EvalInitGenerator().generate_for_agent(agent_md)
+    calls = {"n": 0}
+    def garbage(*a, **kw):
+        calls["n"] += 1
+        return "not json at all"
+    monkeypatch.setattr(gen_mod, "call_claude", garbage)
+    gen = EvalInitGenerator()
+    eset = gen.generate_for_agent(agent_md)
+    assert calls["n"] == 3
     assert eset.evals == []
+    assert any("解析失败" in w for w in gen.init_warnings)
+
+
+def test_generate_for_agent_retry_rescues_transient_failure(monkeypatch, tmp_path):
+    """前两次失败(调用错/解析错)第三次成功 → 重试救回,不产空集、不加失败警告。"""
+    import json as _json
+    agent_md = tmp_path / "reviewer.md"
+    agent_md.write_text(_AGENT_MD, encoding="utf-8")
+    good = _json.dumps({"skill_name": "reviewer", "evals": [
+        {"id": 1, "name": "agent-x", "level": "L1", "prompt": "审这个 PR",
+         "rationale": "# 你是审查者",
+         "expectations": ["指出具体行号"], "assertions": [], "fixtures": []}]})
+    seq = iter([RuntimeError("529"), "garbage", good])
+    def flaky(*a, **kw):
+        v = next(seq)
+        if isinstance(v, RuntimeError):
+            raise v
+        return v
+    monkeypatch.setattr(gen_mod, "call_claude", flaky)
+    gen = EvalInitGenerator()
+    eset = gen.generate_for_agent(agent_md)
+    assert len(eset.evals) == 1 and eset.evals[0].prompt == "审这个 PR"
+    assert not any("仍失败" in w for w in gen.init_warnings)
 
 
 def test_agent_prompt_asks_llm_to_write_assertions_with_natural_expectations():
