@@ -467,3 +467,8 @@ def test_analyze_multi_run_aggregates_desc_dims(monkeypatch, tmp_path):
     clarity = [d for d in rep.dimensions if d.key == "desc_purpose_clarity"][0]
     assert clarity.status == "partial"                       # 2/3 多数
     assert clarity.vote_tally == "2/3"
+    # 聚合别丢 group:desc 维必须归 description 组(丢了会全部平铺进「正文内容质量」
+    # 节,终端/HTML 分节消失—— CritiqueDimension.group 默认「正文」吞掉未传的构造点)
+    assert clarity.group == "description"
+    body_dim = [d for d in rep.dimensions if d.key == "failure_mechanism"][0]
+    assert body_dim.group == "正文"

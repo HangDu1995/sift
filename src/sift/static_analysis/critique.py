@@ -289,6 +289,7 @@ def _aggregate_runs(reports: list[ContentQualityReport], skill_name: str) -> Con
         src = next((d for d in per_run if d.status == winner), per_run[0])
         dims.append(CritiqueDimension(
             key=key, name=_NAMES[key], status=winner,
+            group="description" if key in _DESC_KEYS else "正文",
             evidence=src.evidence, feedback=src.feedback, gap=src.gap,
             vote_tally=f"{count}/{len(per_run)}",
         ))
