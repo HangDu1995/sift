@@ -601,6 +601,63 @@ def test_parse_llm_response_populates_rationale_confidence():
     assert abs(es.evals[0].confidence - 0.9) < 1e-9
 
 
+def test_generate_with_llm_llm_failure_flags_degraded(monkeypatch, tmp_path):
+    """LLM 调用 RuntimeError → 先重试(_INIT_LLM_MAX_ATTEMPTS 次)再模板兜底 + degraded flag。"""
+    sp = tmp_path / "skill"; sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n\n## R\n\nrule one\n", encoding="utf-8")
+    calls = {"n": 0}
+    def boom(*a, **k):
+        calls["n"] += 1
+        raise RuntimeError("cc timeout")
+    monkeypatch.setattr("sift.evals.generator.call_claude", boom)
+    es = EvalInitGenerator().generate_with_llm(sp)
+    assert calls["n"] == 3, "应重试满 1+2 次"
+    assert es.evals, "模板兜底应仍有题"
+    for e in es.evals:
+        assert any(f.startswith("degraded:llm-fallback") and "重试 2 次后仍失败" in f
+                   for f in (e.flags or [])), e.flags
+
+
+def test_generate_with_llm_unparseable_response_flags_degraded(monkeypatch, tmp_path):
+    """LLM 响应非 JSON(解析失败)→ 同样先重试再模板兜底 + degraded flag。"""
+    sp = tmp_path / "skill"; sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n\n## R\n\nrule one\n", encoding="utf-8")
+    calls = {"n": 0}
+    def garbage(*a, **k):
+        calls["n"] += 1
+        return "sorry I cannot output json"
+    monkeypatch.setattr("sift.evals.generator.call_claude", garbage)
+    es = EvalInitGenerator().generate_with_llm(sp)
+    assert calls["n"] == 3
+    assert es.evals
+    for e in es.evals:
+        flags = e.flags or []
+        assert any(f.startswith("degraded:llm-fallback") and "解析失败" in f for f in flags), flags
+
+
+def test_generate_with_llm_retry_rescues_transient_failure(monkeypatch, tmp_path):
+    """前两次失败(调用错/解析错)第三次成功 → 重试救回,不出 degraded flag。"""
+    import json
+    sp = tmp_path / "skill"; sp.mkdir()
+    (sp / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n\n## R\n\nrule one\n", encoding="utf-8")
+    good = json.dumps({"skill_name": "s", "evals": [
+        {"id": 1, "name": "n", "level": "L1", "prompt": "p", "rationale": "## R",
+         "expectations": ["e"], "assertions": [], "fixtures": []}]})
+    seq = iter([RuntimeError("529"), "not json", good])
+    def flaky(*a, **k):
+        v = next(seq)
+        if isinstance(v, RuntimeError):
+            raise v
+        return v
+    monkeypatch.setattr("sift.evals.generator.call_claude", flaky)
+    beats: list[str] = []
+    es = EvalInitGenerator().generate_with_llm(sp, on_heartbeat=beats.append)
+    assert es.evals[0].prompt == "p"
+    assert not any(f.startswith("degraded:") for f in (es.evals[0].flags or []))
+    assert len(beats) == 2, "两次失败各报一条重试心跳"
+    assert any("重试 1/2" in b for b in beats)
+
+
 def test_generate_with_llm_flags_missing_rationale(monkeypatch, tmp_path):
     """LLM 没给 rationale → 标 review:no-rationale(不拒;拒会掉确定性 fallback 更差)。"""
     import json

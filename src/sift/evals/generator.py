@@ -19,6 +19,10 @@ from sift.utils import call_claude
 # 模块常量便于测试 monkeypatch 成极小值验心跳触发。
 _HEARTBEAT_INTERVAL = 20
 
+# init LLM 出题最大尝试次数(1 次 + 2 重试,对齐 audit 判官的重试深度):调用失败(超时/
+# 限流/CLI 错)与响应解析失败(畸形/截断)都大概率瞬态,重试常能救回,耗尽才降级模板。
+_INIT_LLM_MAX_ATTEMPTS = 3
+
 # 方向 B:从 SKILL.md 确定性抽【产物】文件名,把 skill 声明的产物并入 mining manifest。
 # 原则性客观断言源自 skill、transcript 无关 —— 违规 transcript 没产出 skill 声明的产物时,
 # 也不该让它的 FILE_EXISTS 被 closed-set manifest drop。
@@ -234,26 +238,46 @@ class EvalInitGenerator:
         return EvalSet(skill_name=name, evals=cases)
 
     def generate_with_llm(self, skill_path: Path,
-                          existing_evals: list[EvalCase] | None = None) -> EvalSet:
+                          existing_evals: list[EvalCase] | None = None,
+                          on_heartbeat=None) -> EvalSet:
         name, description, content, frontmatter, body = parse_skill_md(skill_path)
         is_procedural = self._is_procedural_skill(content, skill_path)
 
         prompt = self._build_llm_prompt(name, description, content, is_procedural,
                                         focus=self.focus, existing_evals=existing_evals)
-        try:
-            response = self._llm_call(prompt)
-        except RuntimeError:
-            return self.generate_template(skill_path)
+        # 两种失败都先重试再降级(对齐 audit 判官 _judge_batch_with_retry):调用失败
+        # (超时/限流/CLI 错)与解析失败(LLM 输出畸形/截断)都大概率瞬态,重试常能救回。
+        last_reason = ""
+        for attempt in range(1, _INIT_LLM_MAX_ATTEMPTS + 1):
+            try:
+                response = self._llm_call(prompt)
+            except RuntimeError as exc:
+                last_reason = f"LLM 调用失败: {str(exc)[:100]}"
+            else:
+                eval_set = self._parse_llm_response(response, name)
+                if eval_set is not None:
+                    self._flag_missing_rationale(eval_set)
+                    for case in eval_set.evals:
+                        if case.level == "L1":
+                            case.assertions = self._auto_generate_assertions(case)
+                    return eval_set
+                last_reason = f"LLM 响应解析失败: {len(response)} 字符非 JSON"
+            if attempt < _INIT_LLM_MAX_ATTEMPTS:
+                if on_heartbeat:
+                    on_heartbeat(f"[yellow]init LLM {last_reason},重试 {attempt}/{_INIT_LLM_MAX_ATTEMPTS - 1}…[/yellow]")
+        return self._template_with_fallback_flag(
+            skill_path, f"llm-fallback({last_reason};重试 {attempt - 1} 次后仍失败)")
 
-        eval_set = self._parse_llm_response(response, name)
-        if eval_set is not None:
-            self._flag_missing_rationale(eval_set)
-            for case in eval_set.evals:
-                if case.level == "L1":
-                    case.assertions = self._auto_generate_assertions(case)
-            return eval_set
+    def _template_with_fallback_flag(self, skill_path: Path, reason: str) -> EvalSet:
+        """LLM 出题失败 → 模板兜底 + 每题打 degraded flag。
 
-        return self.generate_template(skill_path)
+        静默降级是黑洞:token 照花、考卷换成模板句(prompt 占位/0 断言),终端零提示,
+        用户无从分辨 LLM 考卷与兜底考卷。flag 用 mining 同款 ``degraded:`` 前缀 →
+        init 终端 ⚠ 块接住 + evals.json 留痕。"""
+        eval_set = self.generate_template(skill_path)
+        for case in eval_set.evals:
+            case.flags = list(case.flags or []) + [f"degraded:{reason}"]
+        return eval_set
 
     # ------------------------------------------------------------------
     # Agent 出题(D6):从 description/角色推 role-matching 任务。

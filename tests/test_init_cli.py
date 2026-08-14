@@ -422,7 +422,7 @@ def test_init_append_feeds_existing_evals_to_generation(monkeypatch, tmp_path):
         encoding="utf-8")
     captured = {}
 
-    def fake_gen(self, sp, existing_evals=None):
+    def fake_gen(self, sp, existing_evals=None, on_heartbeat=None):
         captured["existing"] = existing_evals
         return EvalSet(skill_name="s", evals=[EvalCase(id=1, prompt="new", level="L1", expectations=["e"])])
     monkeypatch.setattr("sift.evals.generator.EvalInitGenerator.generate_with_llm", fake_gen)
@@ -440,7 +440,7 @@ def test_init_append_no_existing_feeds_none(monkeypatch, tmp_path):
     out = tmp_path / "out"; out.mkdir()
     captured = {}
 
-    def fake_gen(self, sp, existing_evals=None):
+    def fake_gen(self, sp, existing_evals=None, on_heartbeat=None):
         captured["existing"] = existing_evals
         return EvalSet(skill_name="s", evals=[EvalCase(id=1, prompt="only", level="L1", expectations=["e"])])
     monkeypatch.setattr("sift.evals.generator.EvalInitGenerator.generate_with_llm", fake_gen)

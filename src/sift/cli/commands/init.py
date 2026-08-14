@@ -111,7 +111,9 @@ def init(
                 if kind == "agent":
                     eval_set = gen.generate_for_agent(skill_path, existing_evals=_existing_evals)
                 else:
-                    eval_set = gen.generate_with_llm(skill_path, existing_evals=_existing_evals)
+                    eval_set = gen.generate_with_llm(
+                        skill_path, existing_evals=_existing_evals,
+                        on_heartbeat=lambda m: console.print(m))
         else:
             console.print("Generating template evals...")
             eval_set = gen.generate_template(skill_path)
@@ -208,7 +210,7 @@ def init(
             console.print(f"[green]Appended[/green] {appended} new evals to existing {output}(id 接续、原题保留)")
         degraded = [(e, f) for e in display_evals for f in (e.flags or []) if f.startswith("degraded:")]
         if degraded:
-            console.print(f"[yellow]⚠️  {len(degraded)} 个 eval 为 degraded fallback(LLM 失败,未挖到结构化信号,assertions 可能为空):[/yellow]")
+            console.print(f"[yellow]⚠️  {len(degraded)} 个 eval 为 degraded fallback(LLM 失败,已降级模板/兜底挖取——题面为模板句、assertions 可能为空):[/yellow]")
             for e, f in degraded:
                 console.print(f"[yellow]   - {e.name}: {f}[/yellow]")
             console.print("[yellow]建议重跑,或检查 claude CLI 可用性。[/yellow]")
