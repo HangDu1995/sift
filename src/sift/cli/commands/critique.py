@@ -15,7 +15,7 @@ _STATUS_BADGE = {"met": "[green]满足[/green]", "partial": "[yellow]部分[/yel
 _GROUP_LABEL = {"正文": "正文内容质量", "description": "description 质量"}
 
 
-@app.command()
+@app.command(rich_help_panel="静态体检(不跑 cc)")
 def critique(
     skill_path: Path = typer.Argument(..., help="Path to skill 目录或 agent/workflow 声明 .md"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output dir"),

@@ -12,12 +12,12 @@ from sift.evals.inspect import inspect_evals
 from sift.evals.loader import EvalLoader
 
 
-@app.command()
+@app.command(rich_help_panel="出题")
 def inspect(
     evals_path: Path = typer.Argument(..., help="Path to evals.json"),
     json_out: bool = typer.Option(False, "--json", help="Machine-readable JSON output"),
 ):
-    """Inspect an eval set's health: completeness, stability, problems.
+    """题集体检:完整度、稳定性、问题(不下判决)。
 
     Static only (no execution, no LLM). Reports metrics + concern flags;
     does NOT verdict gate-worthiness — the human decides whether to freeze.

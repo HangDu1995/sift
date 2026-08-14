@@ -12,7 +12,7 @@ from sift.cli.main import app, console
 from sift.gating.verdict import evaluate_gate
 
 
-@app.command()
+@app.command(rich_help_panel="判决")
 def gate(
     benchmark_path: Path = typer.Argument(..., help="Path to benchmark.json"),
     min_win_rate: Optional[float] = typer.Option(

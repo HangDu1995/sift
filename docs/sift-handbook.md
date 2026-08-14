@@ -1788,21 +1788,60 @@ audit 不 re-run cc、只对账已有 transcript，所以「transcript 从哪来
 
 ### A. 命令速查
 
+按工作流阶段分组（与 `sift --help` 分区一致）：
+
+**静态体检（不跑 cc）**
+
 | 命令 | 作用 | 成本 |
 |------|------|------|
 | `analyze` | 11 项静态体检（skill） | 零 API，<1s |
 | `vet` | 4 扫描器安全审查（skill） | 零 API（内置） |
 | `critique` | 内容质量诊断（正文 4 + description 2 维，skill + agent） | LLM（两次，http） |
+
+**出题**
+
+| 命令 | 作用 | 成本 |
+|------|------|------|
 | `init` | 生成 evals.json（LLM/transcript/模板；skill + agent） | LLM（除非纯模板） |
 | `add` | 追加单道 eval（skill + agent） | LLM（--idea）或零 |
 | `inspect` | 题集体检，不下判决 | 零 API |
 | `freeze` | 冻结基线快照 | 零 API |
-| `eval` | 评测主流程（A/B skill / 绝对质量 agent） | Claude + LLM |
-| `run` | 真任务产 trace 喂 audit（审计上游） | Claude / opencode |
-| `gate` | 事后门禁判决 | 零 API，毫秒 |
-| `audit` | transcript 对账（skill / agent / 编排者） | LLM |
-| `trigger` | 触发准确度（第 4 维，skill 专属诊断、无门禁） | Claude spawn |
 | `coverage` | 漏测诊断（eval 覆盖声明内容点，skill + agent，诊断、无门禁） | LLM（一次映射） |
+
+**评测**
+
+| 命令 | 作用 | 成本 |
+|------|------|------|
+| `eval` | 评测主流程（A/B skill / 绝对质量 agent） | Claude + LLM |
+
+**真任务**
+
+| 命令 | 作用 | 成本 |
+|------|------|------|
+| `run` | 真任务产 trace 喂 audit（审计上游） | Claude / opencode |
+
+**审计**
+
+| 命令 | 作用 | 成本 |
+|------|------|------|
+| `audit` | transcript 对账（skill / agent / 编排者） | LLM |
+
+**判决**
+
+| 命令 | 作用 | 成本 |
+|------|------|------|
+| `gate` | 事后门禁判决 | 零 API，毫秒 |
+
+**触发**
+
+| 命令 | 作用 | 成本 |
+|------|------|------|
+| `trigger` | 触发准确度（第 4 维，skill 专属诊断、无门禁） | Claude spawn |
+
+**看结果**
+
+| 命令 | 作用 | 成本 |
+|------|------|------|
 | `report` | 生成 HTML 报告 | 零 API |
 
 ### B. exit code 全表

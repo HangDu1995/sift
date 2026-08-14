@@ -11,7 +11,7 @@ from sift.models import EvalSet
 from sift.parser import resolve_skill_dir, parse_skill_md
 
 
-@app.command()
+@app.command(rich_help_panel="出题")
 def coverage(
     skill_path: Path = typer.Argument(..., help="Path to skill directory"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output dir"),

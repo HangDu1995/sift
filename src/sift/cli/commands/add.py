@@ -17,7 +17,7 @@ from sift.parser import parse_skill_md, resolve_skill_dir
 from sift.utils import call_claude
 
 
-@app.command()
+@app.command(rich_help_panel="出题")
 def add(
     skill_path: Path = typer.Argument(..., help="Path to skill directory"),
     idea: Optional[str] = typer.Option(None, "--idea", help="Natural language description of what to test. LLM generates complete eval case."),
@@ -31,7 +31,7 @@ def add(
         help="声明类型:agent=给 agent 出题(skill 默认)。配 --idea 时选 agent 单题 prompt。",
     ),
 ):
-    """Add eval cases to a skill's evals.json.
+    """向已有 evals.json 追加单道 eval。
 
     Two modes:
     - --idea "what to test": LLM generates complete eval case from your description

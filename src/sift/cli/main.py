@@ -5,7 +5,7 @@ from sift import __version__
 
 app = typer.Typer(
     name="sift",
-    help="Automated evaluation tool for Claude Code Skills.",
+    help="评测 skill / agent 的能力 + 审计 skill / agent / 编排者的执行遵循性。",
     no_args_is_help=True,
 )
 console = Console()

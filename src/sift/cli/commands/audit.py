@@ -140,7 +140,7 @@ def _print_scope_hint(transcript: list[Path], name: str) -> None:
     console.print("[yellow](宽松模式是有意选项;加 --kind 走精确档。继续宽松对账…)[/yellow]")
 
 
-@app.command()
+@app.command(rich_help_panel="审计")
 def audit(
     skill_path: Path = typer.Argument(
         ...,
@@ -194,7 +194,7 @@ def audit(
               "也读 env SIFT_MAX_CONCURRENT;env SIFT_ADAPTIVE_CONCURRENCY=0 显式关自适应"),
     ),
 ):
-    """Audit real session transcript(s) against SKILL.md(不 re-run,直接对账真实历史执行)。"""
+    """对账真实 session transcript 与声明(不 re-run,直接审历史执行)。"""
     skill_path = resolve_skill_dir(skill_path)
     export_tmp: Optional[Path] = None  # --db 导出的临时 json,finally 清理
     expanded_tmps: list[Path] = []     # 结构化输入展开出的临时 cc-jsonl,finally 清理

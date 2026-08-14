@@ -162,7 +162,7 @@ def _resolve_skip_compliance(no_compliance: bool | None) -> bool:
     return no_compliance if no_compliance is not None else False
 
 
-@app.command()
+@app.command(rich_help_panel="评测")
 def eval(
     skill_path: Path = typer.Argument(..., help="Path to skill directory"),
     evals: Optional[Path] = typer.Option(None, "--evals", help="Path to evals.json"),
@@ -197,7 +197,7 @@ def eval(
     label_b: Optional[str] = typer.Option(None, "--label-b", help="v1/v2 模式 side B 显示标签(默认 skill 目录 basename)"),
     kind: str = typer.Option("skill", "--kind", help="声明类型:skill(默认,A/B 对照)/ agent(绝对质量,--append-system-prompt 注入 agent 正文;需配 --evals)"),
 ):
-    """Run A/B evaluation of a skill(with/without 或 v1/v2);--kind agent 走绝对质量评测。"""
+    """A/B 评测 skill(with/without 或 v1/v2);--kind agent 走绝对质量评测。"""
     skill_path = resolve_skill_dir(skill_path)
     from sift.evals.loader import EvalLoader
     if kind not in ("skill", "agent"):
@@ -286,7 +286,7 @@ def eval(
     _emit_report(iteration_dir, skip_report=no_report)
 
 
-@app.command()
+@app.command(rich_help_panel="真任务")
 def run(
     skill_path: Path = typer.Argument(..., help="Path to skill directory"),
     task: str = typer.Option(
@@ -308,7 +308,7 @@ def run(
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
     security_gate: bool = typer.Option(False, "--security-gate", help="Fail if security vetting returns BLOCKED or REVIEW_NEEDED"),
 ):
-    """Run a real task against a skill:spawn 执行器跑真任务、dump trace 喂 audit(不读 evals.json)。"""
+    """对 skill 跑真任务:spawn 执行器执行、dump trace 喂 audit(不读 evals.json)。"""
     skill_path = resolve_skill_dir(skill_path)
     # 执行器解析(提前到 cc-check 前,好按需 gate)
     exec_list = [e.strip() for e in (executor or "cc").split(",") if e.strip()]

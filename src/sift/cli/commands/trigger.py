@@ -15,7 +15,7 @@ from sift.execution.trigger_runner import TriggerRunner
 from sift.execution.trigger_suggest import build_llm_suggestion, build_rule_suggestions
 
 
-@app.command()
+@app.command(rich_help_panel="触发")
 def trigger(
     skill_path: Path = typer.Argument(..., help="Path to skill directory"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output dir"),

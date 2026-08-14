@@ -11,14 +11,14 @@ from sift.cli.main import app, console
 from sift.evals.baseline import freeze_baseline
 
 
-@app.command()
+@app.command(rich_help_panel="出题")
 def freeze(
     evals_path: Path = typer.Argument(..., help="Path to source evals.json"),
     name: str = typer.Option("baseline", "--name", help="Baseline name (-> <name>.json + <name>.meta.json)"),
     out: Optional[Path] = typer.Option(None, "--out", help="Output dir (default: beside evals.json)"),
     skill_version: Optional[str] = typer.Option(None, "--skill-version", help="Target skill version (recorded in meta)"),
 ):
-    """Freeze an evals.json into a stable baseline snapshot + provenance meta.
+    """把 evals.json 冻结成命名基线快照 + 出处元数据。
 
     Produces <name>.json (standard evals format, loader-unchanged) + <name>.meta.json
     (provenance sidecar). Where it lives / whether committed is your deployment call

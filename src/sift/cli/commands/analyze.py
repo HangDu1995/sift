@@ -14,13 +14,13 @@ from sift.parser import resolve_skill_dir
 from sift.static_analysis.analyzer import StaticAnalyzer
 
 
-@app.command()
+@app.command(rich_help_panel="静态体检(不跑 cc)")
 def analyze(
     skill_path: Path = typer.Argument(..., help="Path to skill directory containing SKILL.md", exists=True),
     format: str = typer.Option("table", "--format", help="Output format: table or json"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path"),
 ):
-    """Run static analysis on a Skill and output a scorecard."""
+    """11 项静态体检,产 scorecard(skill)。"""
     skill_path = resolve_skill_dir(skill_path)
     try:
         analyzer = StaticAnalyzer()

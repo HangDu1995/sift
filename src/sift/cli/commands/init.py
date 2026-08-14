@@ -12,7 +12,7 @@ from sift.evals.inspect import same_prompt_groups
 from sift.parser import resolve_skill_dir
 
 
-@app.command()
+@app.command(rich_help_panel="出题")
 def init(
     skill_path: Path = typer.Argument(..., help="Path to skill directory"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory for evals.json"),
@@ -46,7 +46,7 @@ def init(
         help="生成 trigger-accuracy 探题(should/should-not 各 N 道)追加到 evals.json 的 trigger_probes 段。",
     ),
 ):
-    """Initialize evals.json for a Skill.
+    """生成 evals.json 考卷(LLM 出题 / transcript 挖题 / 纯模板兜底)。
     
     Generates L1 unit test cases from SKILL.md content.
     """

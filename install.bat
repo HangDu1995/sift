@@ -44,5 +44,5 @@ echo.
 echo Quick start:
 echo   sift vet   path\to\skill\
 echo   sift eval  path\to\skill\
-echo   sift report output\iteration-1\ --open
+echo   sift report output\ --open
 pause

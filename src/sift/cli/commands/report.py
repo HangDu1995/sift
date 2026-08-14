@@ -36,7 +36,7 @@ def generate_report_html(workspace: Path) -> Path | None:
     return output_path
 
 
-@app.command()
+@app.command(rich_help_panel="看结果")
 def report(
     workspace: Path = typer.Argument(..., help="Path to evaluation workspace"),
     benchmark: Optional[Path] = typer.Option(None, "--benchmark", help="Path to benchmark.json"),
@@ -44,7 +44,7 @@ def report(
     scorecard: Optional[Path] = typer.Option(None, "--scorecard", "--static", help="Path to scorecard.json"),
     open_browser: bool = typer.Option(False, "--open", help="Open report in browser after generation"),
 ):
-    """Generate a static HTML report from evaluation results."""
+    """从评测产物生成静态 HTML 报告。"""
     from sift.reporting.viewer import ReportGenerator
 
     bench_data = None

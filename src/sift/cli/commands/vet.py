@@ -44,14 +44,14 @@ def _render_security_report(report, console: Console) -> None:
         console.print(f"\n[green bold]VERDICT: SAFE[/green bold] — {report.summary}")
 
 
-@app.command()
+@app.command(rich_help_panel="静态体检(不跑 cc)")
 def vet(
     skill_path: Path = typer.Argument(..., help="Path to skill directory or GitHub URL", exists=True),
     format: str = typer.Option("table", "--format", help="Output format: table or json"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path"),
     skip_external: bool = typer.Option(False, "--skip-external", help="Skip external scanners (aguara, skill-scanner)"),
 ):
-    """Run security vetting on a Skill."""
+    """4 扫描器安全审查(skill)。"""
     skill_path = resolve_skill_dir(skill_path)
     from sift.security.vetter import SecurityVetter
 
