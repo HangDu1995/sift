@@ -441,7 +441,7 @@
   <div id="app" style="height:100vh; display:flex; flex-direction:column;">
     <div class="header">
       <div>
-        <h1>评测回顾：<span id="skill-name"></span><span id="gate-badge" style="display:none; font-weight:bold; margin-left:12px; padding:2px 10px; border-radius:4px;"></span></h1>
+        <h1>评测回顾：<span id="skill-name"></span><span id="gate-badge" style="display:none; font-weight:bold; margin-left:12px; padding:2px 10px; border-radius:4px;"></span><span id="gen-time" style="display:none; font-weight:normal; font-size:0.6em; opacity:0.65; margin-left:14px;" title="benchmark 聚合时刻(本地时区);旧报告无此字段则不显示"></span></h1>
       </div>
       <div class="header-right">
         <select id="run-jump" class="run-jump" style="display:none;" aria-label="跳转到指定执行"></select>
@@ -524,6 +524,19 @@
     // ---- Init ----
     async function init() {
       document.getElementById("skill-name").textContent = EMBEDDED_DATA.skill_name;
+      // 数据生成时刻(benchmark 聚合时刻,本地时区):output 目录复用时区分新旧报告;
+      // 旧 benchmark 无 timestamp 字段或解析失败 → 不显示。
+      const benchMeta = ((EMBEDDED_DATA.benchmark || {}).metadata) || {};
+      const genEl = document.getElementById("gen-time");
+      if (benchMeta.timestamp) {
+        const d = new Date(benchMeta.timestamp);
+        if (!isNaN(d.getTime())) {
+          const pad = function (n) { return String(n).padStart(2, "0"); };
+          genEl.textContent = "数据生成于 " + d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
+            + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + "(本地时区)";
+          genEl.style.display = "inline";
+        }
+      }
       const gate = EMBEDDED_DATA.gate;
       if (gate && gate.decision) {
           const styles = {PASS: {c:"green", bg:"#163a1f"}, FAIL: {c:"red", bg:"#3a1616"}, "N/A": {c:"yellow", bg:"#3a3a16"}, UNCLEAR: {c:"yellow", bg:"#3a3a16"}};
