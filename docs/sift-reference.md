@@ -1023,7 +1023,7 @@ sift report output/ --open # 生成并打开
 |------|------|
 | `benchmark.json` | 聚合结果（双率 delta + 盲比较 comparison_summary + calibration_summary per-side 高分低遵循 + `llm_token_usage` 评测 LLM 成本 scoring/audit/executor/total；`--changed-from` 子集跑时另记 `selection`） |
 | `report.html` | 自包含 HTML 报告（读 gate.json 显门禁徽章 + previous/benchmark.json 显「vs 上次」纵向 delta 卡）；eval 末尾自动产（也可 `report` 命令重生成 / 带 `--previous` 基线对照） |
-| `previous/` | 重跑归档：fresh 重跑时把上一次完整 run 树整体 MOVE 到此（单槽覆盖）。含旧 `benchmark.json`（聚合纵向 delta 数据源）+ 旧 outputs/（report「上次输出」文件级面板）。仅 fresh 产生；accumulate/resume 不产。见下「重跑归档」 |
+| `previous/` | 重跑归档：fresh 重跑时把上一次完整 run 树整体 MOVE 到此（单槽覆盖）。含旧 `benchmark.json`（聚合纵向 delta 数据源）+ 旧 outputs/（report「上次输出」文件级面板）+ 旧 `report.html`（eval 末尾自动产，随树归档）；别命令产物（`audit-report.*`/`slices/`/`gate.json`/skill 级报告）与未知文件不卷。仅 fresh 产生；accumulate/resume 不产。见下「重跑归档」 |
 | `gate.json` | `gate` 命令产出（非 run 产出）；判决 + 两轴明细 + calibration soft warning（高分低遵循 HIGH_SCORE_SUSPECT，不进 decision） |
 | `scorecard.json` | eval 末尾自动产（静态评分卡；也可 `analyze -o` 单独产） |
 | `vet-report.json` | eval 末尾自动产（原生安全扫描；也可 `vet -o` 单独产） |

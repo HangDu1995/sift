@@ -263,6 +263,10 @@ _RUN_TOPLEVEL_ARTIFACTS = frozenset({
     "vet-report.json",
     "analysis-notes.json",
     "analysis-result.json",
+    # report.html 随 eval 末尾自动产(_emit_report),属 eval 自产产物,随树归档。
+    # audit-report.*/slices//gate.json 是独立命令(audit/gate)的产物、critique/
+    # coverage/trigger 报告是 skill 级产物——eval 重跑一律不动(别命令产物不卷)。
+    "report.html",
 })
 
 _RUN_DIR_RE = re.compile(r"^run-(\d+)(?:-retry-(\d+))?$")
@@ -283,9 +287,11 @@ def _is_run_config_tree(d: Path) -> bool:
 def archive_previous(iteration_dir: Path) -> Path | None:
     """把上次 run 的产物 MOVE 到 previous/(单槽:已存在则先清空再移)。fresh 重跑前调用。
 
-    **只 move run 自己的产物**(config 目录 + benchmark/scorecard/vet-report/analysis-*),
-    不卷走同目录下其他命令的产物(audit-report.json/.html、slices/、gate.json、report.html 等)
-    ——它们与本次 run 无绑定,归档会误伤用户数据。output 顶层只清 run 产物,其余原地不动。
+    **只 move eval 自产的产物**(config 目录 + benchmark/scorecard/vet-report/analysis-* +
+    report.html——eval 末尾自动产),不卷走同目录下别命令的产物(audit-report.json/.html、
+    slices/、gate.json 来自 audit/gate 命令;critique/coverage/trigger 报告是 skill 级产物)
+    和未知文件——它们不随 eval 重跑失效,而 previous/ 单槽会被下次 fresh 清空,卷走等于
+    eventual 删除。
     返回 previous/ 路径;无 run 产物可移(空 / 只剩 previous/ / 只剩别命令产物)→ None。"""
     previous = iteration_dir / "previous"
     to_move = [

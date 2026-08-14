@@ -2157,42 +2157,46 @@ class TestArchivePrevious:
         assert archive_previous(tmp_path) is None
         assert (tmp_path / "previous").exists()
 
-    def test_preserves_non_run_artifacts(self, tmp_path: Path):
-        """fresh 归档只 move run 自己的产物,不卷走同目录其他命令(audit/gate/report)的产物——
-        它们与本次 run 无绑定,误伤会丢用户数据。"""
+    def test_archives_report_html_preserves_other_commands(self, tmp_path: Path):
+        """fresh 归档 = eval 自产(run 五件套 + report.html);别命令产物(audit/gate 的
+        audit-report.*/slices//gate.json、skill 级 critique/coverage/trigger 报告)与
+        未知文件留原位——它们不随 eval 重跑失效,而 previous/ 单槽会被下次 fresh 清空,
+        卷走等于 eventual 删除。"""
         from sift.execution.runner import archive_previous
-        # run 自己的产物
+        # eval 自产的产物
         (tmp_path / "without_skill" / "eval-1" / "run-1").mkdir(parents=True)
         (tmp_path / "without_skill" / "eval-1" / "run-1" / "grading.json").write_text("{}", encoding="utf-8")
         (tmp_path / "benchmark.json").write_text("{}", encoding="utf-8")
         (tmp_path / "scorecard.json").write_text("{}", encoding="utf-8")
         (tmp_path / "vet-report.json").write_text("{}", encoding="utf-8")
-        # 其他命令落在同目录的产物(不该被卷)
+        (tmp_path / "report.html").write_text("<html>old</html>", encoding="utf-8")
+        # 别命令产物(不该被卷)
         (tmp_path / "audit-report.json").write_text("{}", encoding="utf-8")
         (tmp_path / "audit-report.html").write_text("<html></html>", encoding="utf-8")
         (tmp_path / "slices").mkdir()
         (tmp_path / "slices" / "slice-0.jsonl").write_text("{}", encoding="utf-8")
         (tmp_path / "gate.json").write_text("{}", encoding="utf-8")
-        (tmp_path / "report.html").write_text("<html></html>", encoding="utf-8")
+        (tmp_path / "content-quality-report.html").write_text("<html></html>", encoding="utf-8")
+        (tmp_path / "my-notes.md").write_text("handwritten", encoding="utf-8")
 
         archive_previous(tmp_path)
 
         prev = tmp_path / "previous"
-        # run 产物进了 previous/
+        # eval 自产(含 report.html)进了 previous/
         assert (prev / "benchmark.json").exists()
         assert (prev / "scorecard.json").exists()
         assert (prev / "vet-report.json").exists()
         assert (prev / "without_skill" / "eval-1" / "run-1" / "grading.json").exists()
-        # 其他命令产物原地不动(没被卷进 previous/)
+        assert (prev / "report.html").read_text(encoding="utf-8") == "<html>old</html>"
+        # 别命令产物 + 未知文件原地不动
         assert (tmp_path / "audit-report.json").exists()
         assert (tmp_path / "audit-report.html").exists()
         assert (tmp_path / "slices" / "slice-0.jsonl").exists()
         assert (tmp_path / "gate.json").exists()
-        assert (tmp_path / "report.html").exists()
+        assert (tmp_path / "content-quality-report.html").exists()
+        assert (tmp_path / "my-notes.md").read_text(encoding="utf-8") == "handwritten"
         assert not (prev / "audit-report.json").exists()
-        assert not (prev / "slices").exists()
         assert not (prev / "gate.json").exists()
-        assert not (prev / "report.html").exists()
 
     def test_only_non_run_artifacts_returns_none(self, tmp_path: Path):
         """output 里只有别命令产物(无 run 产物)→ 无可归档,返回 None,
@@ -2200,7 +2204,9 @@ class TestArchivePrevious:
         from sift.execution.runner import archive_previous
         (tmp_path / "audit-report.json").write_text("{}", encoding="utf-8")
         (tmp_path / "gate.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "content-quality-report.json").write_text("{}", encoding="utf-8")
         assert archive_previous(tmp_path) is None
         assert (tmp_path / "audit-report.json").exists()
         assert (tmp_path / "gate.json").exists()
+        assert (tmp_path / "content-quality-report.json").exists()
         assert not (tmp_path / "previous").exists()
