@@ -1,5 +1,5 @@
 """gate 判决逻辑纯函数测试(块 C)。"""
-from skill_eval.gating.verdict import evaluate_gate, parse_delta
+from sift.gating.verdict import evaluate_gate, parse_delta
 
 
 def _bench(delta_prog, comparison_summary=None):
@@ -20,7 +20,7 @@ def test_parse_delta():
 
 def test_gate_result_calibration_defaults_none():
     """GateResult.calibration 默认 None(soft warning 容器,无 calibration_summary 时)。"""
-    from skill_eval.gating.models import GateResult
+    from sift.gating.models import GateResult
     gr = GateResult(decision="PASS", exit_code=0, reason="ok")
     assert gr.calibration is None
 

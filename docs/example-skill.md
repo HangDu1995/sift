@@ -1,12 +1,12 @@
 # Example Skill: log-error-analyzer
 
-`fixtures/example-skills/log-error-analyzer/` 是 skill-eval 的**主力示例 skill**(canary:工具改评测逻辑后最先用它复验判定没退化)——结构规整、可被评测与审计两面共用,兼作 audit(transcript 对账)有效性的验证夹具。
+`fixtures/example-skills/log-error-analyzer/` 是 sift 的**主力示例 skill**(canary:工具改评测逻辑后最先用它复验判定没退化)——结构规整、可被评测与审计两面共用,兼作 audit(transcript 对账)有效性的验证夹具。
 
 ## 为什么有它
 
 audit 的有效性需要正面验证:**真 LLM 在干净输入下能不能抓到真实违规**。此前两个 case 都不给力:
 
-- **真实 skill**(dispatching-parallel-agents)是教程型,extractor 把示例文字当指令(49 条伪步骤),源头污染——LLM 再准也 0 真问题。(2026-07-21 起)此类教程型伪指令污染现可经 `audit`/`run` 的 `--refine-instructions` 在判定前 LLM 精筛砍掉(默认开,精度>召回);log-error-analyzer 仍坚持 extractor 友好写法,但别处遇教程型 skill 不必再手改 SKILL。
+- **真实 skill**(dispatching-parallel-agents)是教程型,extractor 把示例文字当指令(49 条伪步骤),源头污染——LLM 再准也 0 真问题。(2026-07-21 起)此类教程型伪指令污染现可经 `audit`/`eval` 的 `--refine-instructions` 在判定前 LLM 精筛砍掉(默认开,精度>召回);log-error-analyzer 仍坚持 extractor 友好写法,但别处遇教程型 skill 不必再手改 SKILL。
 - **mock 集成测试**(`test_audit_integration`)mock 了 LLM,只证管线逻辑(违规→FAIL 检出),不证"真 LLM 判得准"。
 
 log-error-analyzer 量身定做:SKILL.md 写得 extractor 友好(真步骤/禁令/reference,**无代码块**避 OUTPUT_FORMAT 假阳性),合成 transcript 植入**真实感**违规,真 LLM 跑 audit 看抓不抓得到。
@@ -17,11 +17,11 @@ example skill 的 `SKILL.md` 在评测与审计两面(以及 `--task` 真任务�
 
 | 用法 | 怎么跑 | example skill 用什么 | 状态 |
 |---|---|---|---|
-| **评测**(fixture run) | `init` → `run`(evals.json 剧本 spawn;`--from-transcript` 是剧本来自 transcript 的变体) | `SKILL.md` + `evals.json` / transcript | ✅ 已验证 |
+| **评测**(fixture eval) | `init` → `eval`(evals.json 剧本 spawn;`--from-transcript` 是剧本来自 transcript 的变体) | `SKILL.md` + `evals.json` / transcript | ✅ 已验证 |
 | **审计**(transcript 对账) | `audit --transcript`(不 run,审历史 trace) | `SKILL.md` + `transcripts/synthetic-violation.jsonl` | ✅ 已验证(canary) |
 | **`--task` 真任务模式** | `run --task/--cwd` spawn 执行器(默认 cc;`--executor opencode`)在真任务上真跑(--cwd 拷贝隔离),审 re-run 的新 trace | `SKILL.md` + `--task`(真任务)+ `--cwd`(真代码库/真数据,非 fixture) | ✅ 已实现 |
 
-> **`--task` 真任务模式**:`run --task/--cwd` 不读 evals.json,直接 spawn 跑真任务(默认 `cc`;`--executor opencode` 改用 opencode 跑,或 `--executor cc,opencode` 两个都跑;--cwd 真代码库/真数据,拷贝隔离)。example skill 自带的 `evals.json` 仍是 fixture(用它 `run` = 评测);`--task` 用 example skill 的 `SKILL.md` 当被测对象,配 `--task` + `--cwd`——code-review-auditor 即此模式的验证(审 skill-eval 真代码)。审 opencode 跑出的 session 已支持:audit `--transcript` 除 cc `.jsonl` 外也吃 opencode session `.json`。
+> **`--task` 真任务模式**:`run --task/--cwd` 不读 evals.json,直接 spawn 跑真任务(默认 `cc`;`--executor opencode` 改用 opencode 跑,或 `--executor cc,opencode` 两个都跑;--cwd 真代码库/真数据,拷贝隔离)。example skill 自带的 `evals.json` 仍是 fixture(用它 `eval` = 评测);`--task` 用 example skill 的 `SKILL.md` 当被测对象,配 `--task` + `--cwd`——code-review-auditor 即此模式的验证(审 sift 真代码)。审 opencode 跑出的 session 已支持:audit `--transcript` 除 cc `.jsonl` 外也吃 opencode session `.json`。
 >
 > 审计和评测的 `--from-transcript` 变体**共用同一份 transcript**(audit 对账它、init --from-transcript 挖它)。
 
@@ -81,7 +81,7 @@ audit 结果(pass=11/fail=12/na=5):**真违规大多穿透噪音被抓**——�
 
 ```bash
 # audit —— 合成验证(真 LLM,约 1-3 分钟)
-.venv/bin/skill-eval audit fixtures/example-skills/log-error-analyzer/ \
+.venv/bin/sift audit fixtures/example-skills/log-error-analyzer/ \
   --transcript fixtures/example-skills/log-error-analyzer/transcripts/synthetic-violation.jsonl \
   -o /tmp/example-audit
 
@@ -91,7 +91,7 @@ RUN_SLOW=1 .venv/bin/pytest tests/test_example_skill_canary.py -q
 
 ## 真跑结论(真实性)
 
-`run --runs 1`(spawn Claude with_skill 真跑 L2)产生**真实(非植入)transcript**——Claude 做对了:Read×3(读了 `app.log` + `error-codes.md` + `security-policy.md`)+ Write(写了 `error-report.json`),无编造。
+`eval --runs 1`(spawn Claude with_skill 真跑 L2)产生**真实(非植入)transcript**——Claude 做对了:Read×3(读了 `app.log` + `error-codes.md` + `security-policy.md`)+ Write(写了 `error-report.json`),无编造。
 
 audit 这个真实 transcript:**total=10, pass=10, fail=0, na=0**——全 PASS,零假 FAIL。
 
@@ -132,13 +132,13 @@ scoring 层印证:with_skill 83% vs without_skill 54%(盲比较 with_skill 胜)�
 ### 怎么跑(`--task` 真任务模式)
 
 ```bash
-# spawn cc with code-review-auditor,审 skill-eval 真代码(--cwd 拷贝隔离不碰原)
-.venv/bin/skill-eval run fixtures/example-skills/code-review-auditor/ \
+# spawn cc with code-review-auditor,审 sift 真代码(--cwd 拷贝隔离不碰原)
+.venv/bin/sift run fixtures/example-skills/code-review-auditor/ \
   --task "审 audit/aggregate.py 找 bug 写 review-report.json" \
-  --cwd src/skill_eval --runs 2 --max-turns 15 -o /tmp/cra-live
+  --cwd src/sift --runs 2 --max-turns 15 -o /tmp/cra-live
 
 # audit 审真任务产出的 trace(--task 模式 dump 的 run-*/transcript.jsonl)
-.venv/bin/skill-eval audit fixtures/example-skills/code-review-auditor/ \
+.venv/bin/sift audit fixtures/example-skills/code-review-auditor/ \
   --transcript /tmp/cra-live/run-1/transcript.jsonl \
   --transcript /tmp/cra-live/run-2/transcript.jsonl -o /tmp/live-audit
 ```

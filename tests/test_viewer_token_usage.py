@@ -1,5 +1,5 @@
 """Phase 2: viewer 渲染 llm_token_usage(分列 + 总计)。"""
-from skill_eval.reporting.viewer import ReportGenerator
+from sift.reporting.viewer import ReportGenerator
 
 
 def test_viewer_embeds_llm_token_usage(tmp_path):

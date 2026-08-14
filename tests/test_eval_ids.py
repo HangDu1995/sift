@@ -1,4 +1,4 @@
-"""tests/test_eval_ids.py — run --eval-ids:按 id 指定某几道题跑 AB(精确选题)。
+"""tests/test_eval_ids.py — eval --eval-ids:按 id 指定某几道题跑 AB(精确选题)。
 
 补 --eval-samples 的随机抽样——开发迭代常只需验证某几道(调试/回归/重现某道 fail)。
 按 id 选(eval.id,int),逗号分隔;和 --eval-samples 互斥;id 不存在报错(列可用)。
@@ -8,10 +8,10 @@ from __future__ import annotations
 import pytest
 import typer
 
-from skill_eval.cli.helpers import _parse_eval_ids
-from skill_eval.errors import SkillEvalError
-from skill_eval.execution.runner import ABTestRunner
-from skill_eval.models import EvalCase, RunConfig, ScoringConfig
+from sift.cli.helpers import _parse_eval_ids
+from sift.errors import SiftError
+from sift.execution.runner import ABTestRunner
+from sift.models import EvalCase, RunConfig, ScoringConfig
 
 
 def _evals(*ids: int) -> list[EvalCase]:
@@ -54,7 +54,7 @@ class TestSampleEvalsById:
         assert [e.id for e in result] == [3, 1]
 
     def test_missing_id_raises_with_available(self):
-        with pytest.raises(SkillEvalError) as exc:
+        with pytest.raises(SiftError) as exc:
             _runner(eval_ids=[99])._sample_evals(_evals(1, 2))
         msg = str(exc.value)
         assert "99" in msg
@@ -76,11 +76,11 @@ class TestSampleEvalsById:
 
 class TestEvalIdsSamplesMutex:
     def test_pipeline_rejects_both(self, tmp_path):
-        from skill_eval.cli.pipeline import _run_ab_eval
-        from skill_eval.models import EvalSet
+        from sift.cli.pipeline import _run_ab_eval
+        from sift.models import EvalSet
 
         eval_set = EvalSet(skill_name="s", evals=[EvalCase(id=1, prompt="x")])
-        with pytest.raises(SkillEvalError):
+        with pytest.raises(SiftError):
             _run_ab_eval(
                 skill_path=tmp_path / "skill", eval_set=eval_set, runs=1,
                 model=None, workers=1, timeout=10, max_turns=1, scoring="hybrid",

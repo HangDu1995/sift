@@ -1,7 +1,7 @@
 """失败三角化 classify_error 单元测。纯诊断层,不进判决。"""
 from __future__ import annotations
 
-from skill_eval.execution.error_triage import (
+from sift.execution.error_triage import (
     ErrorTriage,
     classify_error,
     UNRESOLVED_CAUSE_INFO,

@@ -7,7 +7,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from skill_eval.models import (
+from sift.models import (
     AuditCategory,
     AuditFinding,
     AuditMethod,

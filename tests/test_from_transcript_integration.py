@@ -1,9 +1,9 @@
 # tests/test_from_transcript_integration.py
 import json
 from pathlib import Path
-from skill_eval.evals.generator import EvalInitGenerator
-from skill_eval.evals.transcript import build_digest
-from skill_eval.scoring.programmatic import ProgrammaticChecker
+from sift.evals.generator import EvalInitGenerator
+from sift.evals.transcript import build_digest
+from sift.scoring.programmatic import ProgrammaticChecker
 
 
 def _rec(role, content):
@@ -44,7 +44,7 @@ def test_closed_loop_pass_on_good_fail_on_sabotaged(tmp_path, monkeypatch):
         ],
         "fixtures": [],
     }]})
-    monkeypatch.setattr("skill_eval.evals.generator.call_claude", lambda *a, **k: fake)
+    monkeypatch.setattr("sift.evals.generator.call_claude", lambda *a, **k: fake)
 
     sp = tmp_path / "skill"; sp.mkdir()
     (sp / "SKILL.md").write_text("---\nname: calc\ndescription: d\n---\n# b\n", encoding="utf-8")

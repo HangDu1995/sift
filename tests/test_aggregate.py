@@ -8,8 +8,8 @@
 """
 from __future__ import annotations
 
-from skill_eval.audit.aggregate import aggregate_by_instruction
-from skill_eval.models.audit_models import (
+from sift.audit.aggregate import aggregate_by_instruction
+from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
     AuditMethod,

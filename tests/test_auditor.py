@@ -1,7 +1,7 @@
-"""tests for skill_eval.audit.auditor.
+"""tests for sift.audit.auditor.
 
 _judge_conditional: 条件性指令(TOOL_REQUIREMENT / REFERENCE_USAGE)的三态对账。
-全程 mock ``skill_eval.audit.auditor.call_claude``——不真跑 LLM。
+全程 mock ``sift.audit.auditor.call_claude``——不真跑 LLM。
 
 覆盖矩阵:
 - 命中 tool_trace → PASS 且**不调** call_claude
@@ -22,20 +22,20 @@ from pathlib import Path
 
 import pytest
 
-from skill_eval.audit import auditor
-from skill_eval.audit.auditor import (
+from sift.audit import auditor
+from sift.audit.auditor import (
     _MAX_LLM_IN_BATCH, _LLM_RETRY_MAX, TranscriptAuditor,
     _judge_batch_with_retry, _RetryExhaustedType, _run_batches_concurrent,
 )
-from skill_eval.models import InstructionCheck
-from skill_eval.models.audit_models import (
+from sift.models import InstructionCheck
+from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
     AuditMethod,
     AuditReport,
     AuditVerdict,
 )
-from skill_eval.models.enums import (
+from sift.models.enums import (
     CheckMethod,
     InstructionPriority,
     InstructionSource,
@@ -45,7 +45,7 @@ from skill_eval.models.enums import (
 @pytest.fixture(autouse=True)
 def _no_llm_retry_sleep(monkeypatch) -> None:
     """重试退避的 time.sleep → no-op,保持测试快(retry 逻辑由专门测试覆盖)。"""
-    monkeypatch.setattr("skill_eval.audit.auditor.time.sleep", lambda *a, **k: None)
+    monkeypatch.setattr("sift.audit.auditor.time.sleep", lambda *a, **k: None)
 
 
 def _tool_inst(text: str = "必须使用 Bash 工具", tool_name: str = "Bash") -> InstructionCheck:
@@ -125,7 +125,7 @@ class TestMatchedNoLlm:
             calls["n"] += 1
             return "[]"
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         auditor = TranscriptAuditor()
         trace = [_tc("Bash", "echo hi")]
 
@@ -146,7 +146,7 @@ class TestMatchedNoLlm:
     def test_script_path_match_pass(self, monkeypatch) -> None:
         """命中 script_path → PASS,evidence "trace 中读取了 {path}"。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude", lambda *a, **k: pytest.fail("不该调 LLM")
+            "sift.audit.auditor.call_claude", lambda *a, **k: pytest.fail("不该调 LLM")
         )
         auditor = TranscriptAuditor()
         trace = [_tc("Read", "cat design.md")]
@@ -164,7 +164,7 @@ class TestUnmatchedLlm:
     def test_applicable_true_is_fail(self, monkeypatch) -> None:
         """未命中 + LLM applicable=true → FAIL(该做没做),method=LLM。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "applicable": true}]',
         )
         auditor = TranscriptAuditor()
@@ -182,7 +182,7 @@ class TestUnmatchedLlm:
     def test_applicable_false_is_na(self, monkeypatch) -> None:
         """未命中 + LLM applicable=false(带 reason)→ N/A,evidence 用 LLM 给的具体理由(非套话)。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "applicable": false, "reason": "本任务只生成 spec,未跑测试"}]',
         )
         auditor = TranscriptAuditor()
@@ -202,7 +202,7 @@ class TestUnmatchedLlm:
         只退兜底 evidence——镜像 step judge 的 ``ev or "场景不涉及该步"``(捕获+用,非惩罚闸)。
         """
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "applicable": false}]',
         )
         auditor = TranscriptAuditor()
@@ -221,7 +221,7 @@ class TestUnmatchedLlm:
             calls["n"] += 1
             raise RuntimeError("claude CLI down")
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", boom)
         auditor = TranscriptAuditor()
 
         findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
@@ -238,7 +238,7 @@ class TestUnmatchedLlm:
     def test_parse_failure_unverifiable_na(self, monkeypatch) -> None:
         """LLM 返回非 JSON → 解析失败 → 标 N/A(宁少报不乱报)。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude", lambda *a, **k: "我觉得都不该触发"
+            "sift.audit.auditor.call_claude", lambda *a, **k: "我觉得都不该触发"
         )
         auditor = TranscriptAuditor()
 
@@ -257,7 +257,7 @@ class TestUnmatchedLlm:
         严格 ``is True/is False`` 判断保留(畸形值不洗成明确 N/A,仍走判不准兜底 N/A)。
         """
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0}]',
         )
         auditor = TranscriptAuditor()
@@ -276,7 +276,7 @@ class TestUnmatchedLlm:
         ``is True/is False`` 判断(畸形非布尔值不当明确结论),落到判不准兜底 → N/A。
         """
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "applicable": "false"}]',
         )
         auditor = TranscriptAuditor()
@@ -306,7 +306,7 @@ class TestRetryRecovery:
                 raise RuntimeError("transient rate limit")
             return '[{"index": 0, "applicable": false}]'  # 第 3 次:N/A resolved
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", flaky)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", flaky)
         auditor = TranscriptAuditor()
 
         findings = auditor._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
@@ -323,7 +323,7 @@ class TestMixed:
     def test_match_and_unmixed_verdicts(self, monkeypatch) -> None:
         """两条指令:一条命中 PASS、一条未命中走 LLM → 各自正确 verdict + 顺序保持。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "applicable": false}]',
         )
         auditor = TranscriptAuditor()
@@ -367,7 +367,7 @@ class TestBatching:
             calls.append(bn)
             return json.dumps([{"index": i, "applicable": False} for i in range(bn)])
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         auditor = TranscriptAuditor()
         insts = [_tool_inst(tool_name=f"Tool{i}") for i in range(32)]
 
@@ -421,7 +421,7 @@ class TestJudgeProhibition:
     def test_violated_true_is_fail(self, monkeypatch) -> None:
         """violated=true → FAIL(违规了),evidence 取 LLM 返回,method=LLM。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "violated": true, "evidence": "执行中编造了测试数据"}]',
         )
         auditor = TranscriptAuditor()
@@ -442,7 +442,7 @@ class TestJudgeProhibition:
     def test_violated_false_is_pass(self, monkeypatch) -> None:
         """violated=false → PASS(没违规)。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "violated": false, "evidence": "未发现编造行为"}]',
         )
         auditor = TranscriptAuditor()
@@ -462,7 +462,7 @@ class TestJudgeProhibition:
         def boom(*a, **k):
             raise RuntimeError("claude CLI down")
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", boom)
         auditor = TranscriptAuditor()
 
         findings = auditor._judge_prohibition(
@@ -478,7 +478,7 @@ class TestJudgeProhibition:
     def test_parse_failure_unverifiable_na(self, monkeypatch) -> None:
         """LLM 返回非 JSON → 解析失败 → 标 N/A(宁少报不乱报)。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude", lambda *a, **k: "看起来没违规"
+            "sift.audit.auditor.call_claude", lambda *a, **k: "看起来没违规"
         )
         auditor = TranscriptAuditor()
 
@@ -494,7 +494,7 @@ class TestJudgeProhibition:
     def test_missing_violated_key_is_unverifiable_na(self, monkeypatch) -> None:
         """条目有 index 但缺 violated 键 → 严格判断,标 N/A(不被误当 PASS,也不报假 FAIL)。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "evidence": "不确定"}]',
         )
         auditor = TranscriptAuditor()
@@ -516,7 +516,7 @@ class TestJudgeProhibition:
         畸形值落判不准兜底 → N/A(宁少报不乱报,不报假 FAIL)。
         """
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "violated": "false"}]',
         )
         auditor = TranscriptAuditor()
@@ -533,7 +533,7 @@ class TestJudgeProhibition:
     def test_anti_fabrication_source(self, monkeypatch) -> None:
         """ANTI_FABRICATION 也走 prohibition 判定。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "violated": false, "evidence": "无编造"}]',
         )
         auditor = TranscriptAuditor()
@@ -561,7 +561,7 @@ class TestJudgeProhibition:
             calls["n"] += 1
             return "[]"
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         auditor = TranscriptAuditor()
 
         findings = auditor._judge_prohibition([], "某执行记录", "empty.jsonl")
@@ -586,7 +586,7 @@ class TestJudgeProhibition:
                 for i in range(bn)
             ])
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         auditor = TranscriptAuditor()
         insts = [_prohibition_inst(text=f"禁令 #{i}") for i in range(35)]
 
@@ -608,7 +608,7 @@ class TestJudgeProhibition:
 class TestJudgeStep:
     def test_verdict_pass(self, monkeypatch) -> None:
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "verdict": "pass", "evidence": "走过该步"}]',
         )
         auditor = TranscriptAuditor()
@@ -624,7 +624,7 @@ class TestJudgeStep:
 
     def test_verdict_fail(self, monkeypatch) -> None:
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "verdict": "fail", "evidence": "该走没走"}]',
         )
         auditor = TranscriptAuditor()
@@ -636,7 +636,7 @@ class TestJudgeStep:
 
     def test_verdict_na(self, monkeypatch) -> None:
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "verdict": "na", "evidence": "场景不涉及"}]',
         )
         auditor = TranscriptAuditor()
@@ -649,7 +649,7 @@ class TestJudgeStep:
     def test_verdict_case_insensitive(self, monkeypatch) -> None:
         """verdict 大小写不敏感:PASS / Fail / NA 都能识别。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "verdict": "PASS"}]',
         )
         auditor = TranscriptAuditor()
@@ -662,7 +662,7 @@ class TestJudgeStep:
         但 transcript_text 只剩 assistant 文字声称 → LLM 看不到实际调用 → 假 FAIL。
         修复:tool_trace 进 step 判定 prompt。
         """
-        from skill_eval.models import ToolCallRecord
+        from sift.models import ToolCallRecord
 
         captured: dict = {}
 
@@ -670,7 +670,7 @@ class TestJudgeStep:
             captured["prompt"] = prompt
             return '[{"index": 0, "verdict": "pass", "evidence": "走过"}]'
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         auditor = TranscriptAuditor()
         trace = [ToolCallRecord(name="Read", input_summary='{"file_path": "/x/logs/app.log"}')]
 
@@ -692,7 +692,7 @@ class TestJudgeStep:
             captured["prompt"] = prompt
             return '[{"index": 0, "verdict": "pass", "evidence": "走过"}]'
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         auditor = TranscriptAuditor()
         auditor._judge_step([_step_inst()], "执行记录", "s.jsonl")
         assert "## 实际工具调用记录" not in captured["prompt"]
@@ -700,7 +700,7 @@ class TestJudgeStep:
     def test_unknown_verdict_unverifiable_na(self, monkeypatch) -> None:
         """未知 verdict(如 'maybe')→ 标 N/A(宁少报不乱报:判不准不报 FAIL)。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "verdict": "maybe"}]',
         )
         auditor = TranscriptAuditor()
@@ -715,7 +715,7 @@ class TestJudgeStep:
         def boom(*a, **k):
             raise RuntimeError("down")
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", boom)
         auditor = TranscriptAuditor()
 
         f = auditor._judge_step([_step_inst()], "某执行记录", "s.jsonl")[0]
@@ -725,7 +725,7 @@ class TestJudgeStep:
 
     def test_missing_verdict_key_unverifiable_na(self, monkeypatch) -> None:
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "evidence": "?"}]',
         )
         auditor = TranscriptAuditor()
@@ -746,7 +746,7 @@ class TestJudgeStep:
             calls["n"] += 1
             return "[]"
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         auditor = TranscriptAuditor()
 
         findings = auditor._judge_step([], "某执行记录", "empty.jsonl")
@@ -775,7 +775,7 @@ class TestJudgeStep:
                 for i in range(bn)
             ])
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         auditor = TranscriptAuditor()
         insts = [_step_inst(text=f"步骤 #{i}") for i in range(62)]
 
@@ -800,7 +800,7 @@ class TestJudgeOutput:
     def test_no_llm_called(self, monkeypatch) -> None:
         """_judge_output 是确定性判定,绝不调 call_claude。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: pytest.fail("_judge_output 不该调 LLM"),
         )
         auditor = TranscriptAuditor()
@@ -894,7 +894,7 @@ class TestIndeterminate:
     def test_conditional_indeterminate_with_reason(self, monkeypatch) -> None:
         """条件性 LLM 返回 indeterminate=true + reason → INDETERMINATE(method=LLM,evidence=reason)。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "indeterminate": true, "reason": "场景是否涉及该工具语焉不详"}]',
         )
         auditor = TranscriptAuditor()
@@ -906,7 +906,7 @@ class TestIndeterminate:
     def test_conditional_indeterminate_without_reason_downgrades(self, monkeypatch) -> None:
         """滥用闸 ①:indeterminate=true 但 reason 空 → 降级 UNRESOLVED(不许空口判不准)。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "indeterminate": true}]',
         )
         auditor = TranscriptAuditor()
@@ -917,7 +917,7 @@ class TestIndeterminate:
     def test_prohibition_indeterminate_with_reason(self, monkeypatch) -> None:
         """禁令 LLM 返回 indeterminate=true + evidence → INDETERMINATE。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "indeterminate": true, "evidence": "执行记录相互矛盾无法判定"}]',
         )
         auditor = TranscriptAuditor()
@@ -929,7 +929,7 @@ class TestIndeterminate:
     def test_step_indeterminate_with_reason(self, monkeypatch) -> None:
         """步骤 LLM 返回 verdict=indeterminate + evidence → INDETERMINATE。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "verdict": "indeterminate", "evidence": "看不出走没走这一步"}]',
         )
         auditor = TranscriptAuditor()
@@ -941,7 +941,7 @@ class TestIndeterminate:
     def test_step_indeterminate_without_evidence_downgrades(self, monkeypatch) -> None:
         """滥用闸 ①:步骤 verdict=indeterminate 但 evidence 空 → 降级 UNRESOLVED。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "verdict": "indeterminate"}]',
         )
         auditor = TranscriptAuditor()
@@ -962,7 +962,7 @@ class TestIndeterminate:
                 {"index": i, "indeterminate": True, "evidence": "证据矛盾"}
                 for i in range(bn)
             ])
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
 
         body = "\n\n".join([
             "NEVER fabricate data",
@@ -984,7 +984,7 @@ class TestIndeterminate:
 
 # ---------------------------------------------------------------------------
 # audit: 聚合主入口(串联 InstructionExtractor + rebuild + derive + 四 _judge_*)
-# 全程 mock skill_eval.audit.auditor.call_claude —— 不真跑 LLM。
+# 全程 mock sift.audit.auditor.call_claude —— 不真跑 LLM。
 # mock 设计:fake 返回一个覆盖 0..59 的 JSON 数组,每条同时给 applicable / violated /
 # verdict + evidence 三个键。三个 LLM 判定方法各只读自己关心的键(_parse_applicable 读
 # applicable、_parse_prohibition 读 violated、_parse_step 读 verdict),互不干扰 ——
@@ -1095,7 +1095,7 @@ class TestAuditAggregate:
           且 transcript 真读了 → 命中 trace → PASS,标 derived_from_transcript=True。
         每 transcript 2 finding → 共 4;summary total/pass/fail/na 精确。
         """
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+        monkeypatch.setattr("sift.audit.auditor.call_claude", _pass_fake())
 
         foo = tmp_path / "foo.md"
         tp1 = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records(str(foo)))
@@ -1146,7 +1146,7 @@ class TestAuditAggregate:
                 ou({"input_tokens": 100, "output_tokens": 50, "total_cost_usd": 0.02})
             return inner(prompt, *a, **k)
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
 
         foo = tmp_path / "foo.md"
         tp = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records(str(foo)))
@@ -1159,13 +1159,13 @@ class TestAuditAggregate:
 
     def test_audit_token_usage_empty_when_no_llm(self, tmp_path, monkeypatch) -> None:
         """空 transcripts → 不跑任何判官 → token_usage 空(无 LLM 调用,report 干净)。"""
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+        monkeypatch.setattr("sift.audit.auditor.call_claude", _pass_fake())
         report = TranscriptAuditor().audit("myskill", "use Bash", [])
         assert report.token_usage == {}
 
     def test_audit_populates_duration_seconds(self, tmp_path, monkeypatch) -> None:
         """audit() 头尾 perf_counter → duration_seconds > 0(audit 跑过即有正墙钟,不依赖判官是否调用)。"""
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+        monkeypatch.setattr("sift.audit.auditor.call_claude", _pass_fake())
         foo = tmp_path / "foo.md"
         tp = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records(str(foo)))
         report = TranscriptAuditor().audit("myskill", "use Bash", [tp])
@@ -1173,7 +1173,7 @@ class TestAuditAggregate:
 
     def test_audit_duration_seconds_nonneg_when_no_llm(self, tmp_path, monkeypatch) -> None:
         """空 transcripts → audit 仍跑过,duration_seconds 非负(墙钟存在,即便无判官)。"""
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+        monkeypatch.setattr("sift.audit.auditor.call_claude", _pass_fake())
         report = TranscriptAuditor().audit("myskill", "use Bash", [])
         assert report.duration_seconds >= 0.0
 
@@ -1190,7 +1190,7 @@ class TestAuditAggregate:
                     "cache_read_input_tokens": 200, "total_cost_usd": 0.02})
             return inner(prompt, *a, **k)
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         foo = tmp_path / "foo.md"
         tp = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records(str(foo)))
         report = TranscriptAuditor().audit("myskill", "use Bash", [tp])
@@ -1227,7 +1227,7 @@ class TestAuditAggregate:
                 ou({"input_tokens": 7, "output_tokens": 3, "total_cost_usd": 0.001})
             return inner(prompt, *a, **k)
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         foo = tmp_path / "foo.md"
         tp = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records(str(foo)))
         report = TranscriptAuditor().audit("myskill", "use Bash", [tp])
@@ -1239,9 +1239,9 @@ class TestAuditAggregate:
     def test_bad_transcript_goes_to_warning_others_processed(
         self, tmp_path, monkeypatch
     ) -> None:
-        """坏 transcript(不存在的路径)→ rebuild 抛 SkillEvalError → 进 warnings、不崩;
+        """坏 transcript(不存在的路径)→ rebuild 抛 SiftError → 进 warnings、不崩;
         好 transcript 照常处理(findings 正常产出)。"""
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+        monkeypatch.setattr("sift.audit.auditor.call_claude", _pass_fake())
 
         foo = tmp_path / "foo.md"
         good = _write_jsonl(tmp_path / "good.jsonl", _read_file_records(str(foo)))
@@ -1261,7 +1261,7 @@ class TestAuditAggregate:
 
     def test_empty_transcripts_returns_empty_report(self, monkeypatch) -> None:
         """空 transcripts 列表 → findings 空、summary 全 0、transcripts 空,不崩。"""
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+        monkeypatch.setattr("sift.audit.auditor.call_claude", _pass_fake())
 
         auditor = TranscriptAuditor()
         report = auditor.audit("s", "use Bash", [])
@@ -1278,7 +1278,7 @@ class TestAuditAggregate:
         TOOL_REQUIREMENT/REFERENCE_USAGE→CONDITIONAL、CONSTRAINT→PROHIBITION、
         HEADING_STEP→STEP、OUTPUT_FORMAT→OUTPUT。
         """
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+        monkeypatch.setattr("sift.audit.auditor.call_claude", _pass_fake())
 
         body = (
             "use Bash\n\n"
@@ -1338,7 +1338,7 @@ class TestAuditNoiseWiring:
         self, tmp_path, monkeypatch
     ) -> None:
         """audit() 产出的 findings / by_instruction 都被 noise 标注。"""
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", self._mixed_fake())
+        monkeypatch.setattr("sift.audit.auditor.call_claude", self._mixed_fake())
 
         body = "NEVER fabricate data\n\n1. Analyze input format"
         tp = _write_jsonl(
@@ -1392,7 +1392,7 @@ class TestProgressCallback:
     def test_conditional_judge_emits_per_batch_progress(self, monkeypatch) -> None:
         """未命中走 LLM → on_progress 收到 [条件性] 批 + 完成耗时行(单批不显 [1/1])。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "applicable": false}]',
         )
         msgs: list[str] = []
@@ -1408,7 +1408,7 @@ class TestProgressCallback:
     def test_conditional_multi_batch_progress_indexed(self, monkeypatch) -> None:
         """>_MAX_LLM_IN_BATCH(12 条)→ 分 2 批,on_progress 标 "批 1/2" 与 "批 2/2"。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: json.dumps(
                 [{"index": i, "applicable": False} for i in range(_MAX_LLM_IN_BATCH)]
             ),
@@ -1425,7 +1425,7 @@ class TestProgressCallback:
     def test_prohibition_judge_emits_progress(self, monkeypatch) -> None:
         """禁令批 → on_progress 含 [禁令] 标签 + ⏱(单批不显 [1/1])。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "violated": false, "evidence": "未违反"}]',
         )
         msgs: list[str] = []
@@ -1441,7 +1441,7 @@ class TestProgressCallback:
     def test_step_judge_emits_progress(self, monkeypatch) -> None:
         """步骤批 → on_progress 含 [步骤] 标签 + ⏱(单批不显 [1/1])。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "verdict": "pass", "evidence": "走过"}]',
         )
         msgs: list[str] = []
@@ -1457,7 +1457,7 @@ class TestProgressCallback:
     def test_empty_bucket_does_not_call_progress(self, monkeypatch) -> None:
         """空禁令桶短路 → 不 spawn LLM → on_progress 不被调(不报假进度)。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: pytest.fail("空桶不应调 LLM"),
         )
         msgs: list[str] = []
@@ -1468,7 +1468,7 @@ class TestProgressCallback:
     def test_audit_emits_transcript_header(self, tmp_path, monkeypatch) -> None:
         """audit() 进每个 transcript 打头:'对账 transcript i/N: <name>'。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "applicable": false}]',
         )
         body = (
@@ -1490,7 +1490,7 @@ class TestProgressCallback:
     def test_progress_none_default_is_noop(self, monkeypatch) -> None:
         """on_progress=None(默认)→ 与旧版完全一致,无 AttributeError。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: '[{"index": 0, "violated": false, "evidence": ""}]',
         )
         auditor = TranscriptAuditor()
@@ -1508,7 +1508,7 @@ class TestProgressCallback:
         def boom(*a, **k):
             raise RuntimeError("claude CLI failed (exit 1): Reached max turns (1)")
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", boom)
         msgs: list[str] = []
         auditor = TranscriptAuditor()
         findings = auditor._judge_prohibition(
@@ -1528,7 +1528,7 @@ class TestProgressCallback:
         不覆盖这种"调用成功但解析为空")。补一条 ⚠ 警告,让静默 N/A 可见。
         """
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude", lambda *a, **k: "[]",  # 空数组 → 0 条解析
+            "sift.audit.auditor.call_claude", lambda *a, **k: "[]",  # 空数组 → 0 条解析
         )
         msgs: list[str] = []
         auditor = TranscriptAuditor()
@@ -1543,7 +1543,7 @@ class TestProgressCallback:
     def test_zero_parsed_batch_emits_warning_conditional(self, monkeypatch) -> None:
         """条件性批(标量 mask 形状)同样:0 条解析成功 → ⚠ 警告。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude", lambda *a, **k: "[]",  # 空数组 → mask 全 None
+            "sift.audit.auditor.call_claude", lambda *a, **k: "[]",  # 空数组 → mask 全 None
         )
         msgs: list[str] = []
         auditor = TranscriptAuditor()
@@ -1568,7 +1568,7 @@ class TestProgressCallback:
                 return "[]"  # 第一次:0 解析
             return '[{"index": 0, "violated": false, "evidence": "重试后解出"}]'  # 重试成功
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", flaky)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", flaky)
         msgs: list[str] = []
         auditor = TranscriptAuditor()
         findings = auditor._judge_prohibition(
@@ -1613,7 +1613,7 @@ class TestRefineInstructions:
     def test_drops_pseudo_keeps_real(self, monkeypatch) -> None:
         """is_real=False 的砍、True 的留;warnings 报滤除数。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: json.dumps([
                 {"index": 0, "is_real": True},
                 {"index": 1, "is_real": False},
@@ -1630,7 +1630,7 @@ class TestRefineInstructions:
     def test_output_format_skipped_not_sent_to_llm(self, monkeypatch) -> None:
         """OUTPUT_FORMAT(PATTERN_MATCH,纯程序判定)不进精筛候选 → 直接保留、不发给 LLM。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: json.dumps([
                 {"index": 0, "is_real": True},
                 {"index": 1, "is_real": False},
@@ -1650,7 +1650,7 @@ class TestRefineInstructions:
         """call_claude 整批失败(重试耗尽)→ 全保留(精度>召回,宁留伪指令判 N/A 也不砍真)。"""
         def boom(*a, **k):
             raise RuntimeError("timeout")
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", boom)
         insts = [_step_inst("a"), _step_inst("b"), _output_inst()]
         refined, warns = TranscriptAuditor()._refine_pseudo_instructions(
             insts, model=None, timeout=600, on_progress=None
@@ -1661,7 +1661,7 @@ class TestRefineInstructions:
     def test_fallback_keeps_all_on_indeterminate(self, monkeypatch) -> None:
         """全 indeterminate(分不清真假)→ 全保留(不砍)。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: json.dumps([
                 {"index": 0, "indeterminate": True, "reason": "模糊"},
                 {"index": 1, "indeterminate": True, "reason": "模糊"},
@@ -1685,9 +1685,9 @@ class TestRefineInstructions:
                 return json.dumps([{"index": 0, "is_real": True}])
             return _pass_fake()(prompt, *a, **k)
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.InstructionExtractor",
+            "sift.audit.auditor.InstructionExtractor",
             lambda: _FakeExtractor([_step_inst("Step 1: 真步骤")]),
         )
         t1 = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records("a.md"))
@@ -1704,9 +1704,9 @@ class TestRefineInstructions:
                 refine_calls["n"] += 1
             return _pass_fake()(prompt, *a, **k)
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.InstructionExtractor",
+            "sift.audit.auditor.InstructionExtractor",
             lambda: _FakeExtractor([_step_inst("Step 1: 真步骤")]),
         )
         t1 = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records("a.md"))
@@ -1732,9 +1732,9 @@ class TestRefineInstructions:
             return original(self_, insts, **kw)
 
         monkeypatch.setattr(TranscriptAuditor, "_refine_pseudo_instructions", counting)
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+        monkeypatch.setattr("sift.audit.auditor.call_claude", _pass_fake())
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.InstructionExtractor",
+            "sift.audit.auditor.InstructionExtractor",
             lambda: _FakeExtractor([_step_inst("Step 1: 真步骤")]),
         )
         t1 = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records("a.md"))
@@ -1746,7 +1746,7 @@ class TestRefineInstructions:
     def test_refine_dropped_count_populated(self, tmp_path, monkeypatch) -> None:
         """``AuditReport.refine_dropped_count`` = 砍掉的条数(len(before) - len(after))。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: json.dumps([
                 {"index": 0, "is_real": True},   # 保留
                 {"index": 1, "is_real": False},  # 砍
@@ -1754,7 +1754,7 @@ class TestRefineInstructions:
             ]),
         )
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.InstructionExtractor",
+            "sift.audit.auditor.InstructionExtractor",
             lambda: _FakeExtractor([
                 _step_inst("真"),
                 _step_inst("伪1"),
@@ -1771,7 +1771,7 @@ class TestRefineInstructions:
     ) -> None:
         """缓存 hit 产出的 findings/instructions 等价于直接 refine(无损序列化)。"""
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude",
+            "sift.audit.auditor.call_claude",
             lambda *a, **k: json.dumps([
                 {"index": 0, "is_real": True},   # 保留(进 candidates 的 index 0)
                 {"index": 1, "is_real": False},  # 砍
@@ -1779,7 +1779,7 @@ class TestRefineInstructions:
         )
         insts = [_step_inst("真"), _step_inst("伪")]
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.InstructionExtractor",
+            "sift.audit.auditor.InstructionExtractor",
             lambda: _FakeExtractor(insts),
         )
         t1 = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records("a.md"))
@@ -1813,7 +1813,7 @@ class TestRefineInstructions:
 
         让 ``get_or_compute`` 一旦被调就 raise —— 验证默认路径完全不触缓存。
         """
-        from skill_eval.audit import refine_cache
+        from sift.audit import refine_cache
 
         def bomb(*a, **k):
             raise AssertionError(
@@ -1821,9 +1821,9 @@ class TestRefineInstructions:
             )
 
         monkeypatch.setattr(refine_cache, "get_or_compute", bomb)
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+        monkeypatch.setattr("sift.audit.auditor.call_claude", _pass_fake())
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.InstructionExtractor",
+            "sift.audit.auditor.InstructionExtractor",
             lambda: _FakeExtractor([_step_inst("Step 1: 真步骤")]),
         )
         t1 = _write_jsonl(tmp_path / "t1.jsonl", _read_file_records("a.md"))
@@ -1842,7 +1842,7 @@ def test_audit_populates_transcript_sources_cc_and_opencode(monkeypatch) -> None
     在 rebuild 循环里无条件累积(不依赖指令抽取/判定结果)。
     """
     monkeypatch.setattr(
-        "skill_eval.audit.auditor.call_claude",
+        "sift.audit.auditor.call_claude",
         lambda *a, **k: '[{"index":0,"violated":false,"evidence":"未违规"}]',
     )
     cc = _FIXTURES / "log-error-analyzer-zh" / "transcripts" / "synthetic-violation.jsonl"
@@ -1883,7 +1883,7 @@ def test_parse_applicable_recovers_trailing_comma() -> None:
 
 def test_load_json_lenient_clean_unchanged_and_garbage_none() -> None:
     """干净 JSON 直通不跑 strip(含合法 ', ]' 的字符串值不被破坏);真垃圾 → None。"""
-    from skill_eval.audit.tool_match import load_json_lenient
+    from sift.audit.tool_match import load_json_lenient
 
     assert load_json_lenient('[1, 2, 3]') == [1, 2, 3]
     # 含 ", ]" 的合法字符串值:直接 parse 成功 → strip 不跑 → 原样保留
@@ -1902,7 +1902,7 @@ def test_load_json_lenient_clean_unchanged_and_garbage_none() -> None:
 
 def test_window_short_text_unchanged() -> None:
     """短文本(<= limit)原样返回;恰好 limit 不截(边界)。"""
-    from skill_eval.audit.auditor import _window, _SCENE_TRUNCATE
+    from sift.audit.auditor import _window, _SCENE_TRUNCATE
 
     assert _window("短文本") == "短文本"
     assert _window("x" * _SCENE_TRUNCATE) == "x" * _SCENE_TRUNCATE
@@ -1910,7 +1910,7 @@ def test_window_short_text_unchanged() -> None:
 
 def test_window_long_text_keeps_head_tail_and_marker() -> None:
     """长文本取头+尾(各 limit/2)+ 中段截断标记;头尾 canary 都在(旧裸 [:limit] 会丢尾)。"""
-    from skill_eval.audit.auditor import _window, _SCENE_TRUNCATE
+    from sift.audit.auditor import _window, _SCENE_TRUNCATE
 
     text = "CANARY_HEAD" + "h" * 9000 + "t" * 9000 + "CANARY_TAIL"
     out = _window(text)
@@ -1931,7 +1931,7 @@ def test_prohibition_long_transcript_uses_head_tail_window(monkeypatch) -> None:
         captured["prompt"] = prompt
         return "[]"
 
-    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+    monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
     auditor = TranscriptAuditor()
     # ~18000 字:尾 canary 在 [:8000] 之外 → 旧裸切会丢
     transcript_text = "CANARY_HEAD_PART" + "h" * 9000 + "t" * 9000 + "CANARY_TAIL_PART"
@@ -1954,7 +1954,7 @@ def test_conditional_scene_fallback_when_no_user_turn(tmp_path, monkeypatch) -> 
         captured["prompt"] = prompt
         return json.dumps([{"index": i, "applicable": False} for i in range(60)])
 
-    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+    monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
     # 无 user turn 的切片:仅 assistant 文字(canary)+ 一个不匹配 "use Bash" 的 Read
     tp = _write_jsonl(
         tmp_path / "slice.jsonl",
@@ -1984,7 +1984,7 @@ def test_source_excerpt_propagates_to_finding(tmp_path, monkeypatch):
     供显示层补全被切的主语。回归:st-verifier「必须存在且非空」无主语(主语在列表项
     首行被切走)→ finding.source_excerpt 带回 design_doc_cases.json。
     """
-    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+    monkeypatch.setattr("sift.audit.auditor.call_claude", _pass_fake())
     body = (
         "## 标准产物存在性\n\n"
         "- **用例生成类**:`design_doc_cases.json` 与 `ttk_design_doc_cases.csv`\n"
@@ -2017,7 +2017,7 @@ def test_generate_headlines_feeds_source_excerpt_and_returns_list(monkeypatch):
         captured["prompt"] = prompt
         return json.dumps([{"index": 0, "headline": "design_doc_cases.json 必须存在且非空"}])
 
-    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+    monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
     auditor = TranscriptAuditor()
     inst = InstructionCheck(
         source=InstructionSource.CONSTRAINT,
@@ -2040,9 +2040,9 @@ def test_headline_propagates_to_finding_when_enabled(tmp_path, monkeypatch):
 
     judge 仍吃 instruction_text;headline 是纯显示字段。headline_cache 指 tmp 不污染 ~/.cache。
     """
-    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _headline_fake())
+    monkeypatch.setattr("sift.audit.auditor.call_claude", _headline_fake())
     monkeypatch.setattr(
-        "skill_eval.audit.auditor.headline_cache._cache_dir", lambda: tmp_path
+        "sift.audit.auditor.headline_cache._cache_dir", lambda: tmp_path
     )
     body = "- **用例生成类**:`design_doc_cases.json` 必须存在且非空 —— 缺 → FAILED。\n"
     tp = _write_jsonl(tmp_path / "s.jsonl", _read_file_records("/tmp/x"))
@@ -2055,9 +2055,9 @@ def test_headline_propagates_to_finding_when_enabled(tmp_path, monkeypatch):
 
 def test_headline_off_by_default(tmp_path, monkeypatch):
     """默认不生成 headline(generate_headline=False)→ finding.headline 恒空。"""
-    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _pass_fake())
+    monkeypatch.setattr("sift.audit.auditor.call_claude", _pass_fake())
     monkeypatch.setattr(
-        "skill_eval.audit.auditor.headline_cache._cache_dir", lambda: tmp_path
+        "sift.audit.auditor.headline_cache._cache_dir", lambda: tmp_path
     )
     body = "- **用例生成类**:`design_doc_cases.json` 必须存在。\n"
     tp = _write_jsonl(tmp_path / "s.jsonl", _read_file_records("/tmp/x"))
@@ -2079,7 +2079,7 @@ def test_refine_passes_http_transport_down_the_chain(monkeypatch):
         # 返 is_real=true(真指令,保留一条)
         return json.dumps([{"index": 0, "is_real": True}])
 
-    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake_call_claude)
+    monkeypatch.setattr("sift.audit.auditor.call_claude", fake_call_claude)
     TranscriptAuditor()._refine_pseudo_instructions(
         [_step_inst("Step 1: 真步骤")], model="glm-5.2[1m]", timeout=10,
     )
@@ -2095,7 +2095,7 @@ def test_headline_passes_http_transport_down_the_chain(monkeypatch):
         seen["transport"] = transport
         return json.dumps([{"index": 0, "headline": "标题"}])
 
-    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake_call_claude)
+    monkeypatch.setattr("sift.audit.auditor.call_claude", fake_call_claude)
     TranscriptAuditor()._generate_headlines(
         [_step_inst("做某事")], model="glm-5.2[1m]", timeout=10,
     )
@@ -2111,7 +2111,7 @@ def test_judge_applicable_passes_http_transport(monkeypatch):
         seen["transport"] = transport
         return json.dumps([{"index": 0, "applicable": False, "reason": "不涉及"}])
 
-    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake_call_claude)
+    monkeypatch.setattr("sift.audit.auditor.call_claude", fake_call_claude)
     TranscriptAuditor()._llm_judge_applicable(
         [_tool_inst()], "某场景", model="glm-5.2[1m]", timeout=10,
     )
@@ -2127,7 +2127,7 @@ def test_judge_prohibition_passes_http_transport(monkeypatch):
         seen["transport"] = transport
         return json.dumps([{"index": 0, "violated": False, "evidence": "未违反"}])
 
-    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake_call_claude)
+    monkeypatch.setattr("sift.audit.auditor.call_claude", fake_call_claude)
     TranscriptAuditor()._llm_judge_prohibition(
         [_prohibition_inst()], "某执行记录", model="glm-5.2[1m]", timeout=10,
     )
@@ -2143,7 +2143,7 @@ def test_judge_step_passes_http_transport(monkeypatch):
         seen["transport"] = transport
         return json.dumps([{"index": 0, "verdict": "pass", "evidence": "做过"}])
 
-    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake_call_claude)
+    monkeypatch.setattr("sift.audit.auditor.call_claude", fake_call_claude)
     TranscriptAuditor()._llm_judge_step(
         [_step_inst()], "某执行记录", model="glm-5.2[1m]", timeout=10,
     )
@@ -2152,7 +2152,7 @@ def test_judge_step_passes_http_transport(monkeypatch):
 
 def test_judge_batch_with_retry_forwards_transport_to_call_claude(monkeypatch):
     """_judge_batch_with_retry 把 transport 参转发给 call_claude(cc 默认 / http 两向)。"""
-    import skill_eval.audit.auditor as A
+    import sift.audit.auditor as A
     seen = {}
 
     def fake_call_claude(prompt, *, model=None, timeout=120, max_turns=None,
@@ -2182,7 +2182,7 @@ class TestRetryExhaustedCause:
     """_judge_batch_with_retry 重试耗尽时,哨兵携带最后失败的原因。"""
 
     def _judge(self, monkeypatch, fake_call):
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake_call)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake_call)
         monkeypatch.setattr(auditor.time, "sleep", lambda *a, **k: None)
         monkeypatch.setattr(auditor.random, "uniform", lambda *a, **k: 0)
         return _judge_batch_with_retry(
@@ -2197,7 +2197,7 @@ class TestRetryExhaustedCause:
         return f
 
     def test_rate_limited_cause(self, monkeypatch):
-        from skill_eval.utils import _HttpRateLimited
+        from sift.utils import _HttpRateLimited
         r = self._judge(monkeypatch, self._raise(_HttpRateLimited("429")))
         assert isinstance(r, _RetryExhaustedType) and r.cause == "rate_limited"
 
@@ -2264,7 +2264,7 @@ class TestUnresolvedCauseThreading:
         """call_claude 持续 RuntimeError(未命中模式)→ UNRESOLVED,cause=unknown。"""
         def boom(*a, **k):
             raise RuntimeError("claude CLI down")
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", boom)
         monkeypatch.setattr(auditor.time, "sleep", lambda *a, **k: None)  # 重试退避免真等(3s×2)
         f = TranscriptAuditor()._judge_conditional([_tool_inst()], [], "场景", "t.jsonl")[0]
         assert f.verdict == AuditVerdict.UNRESOLVED
@@ -2273,17 +2273,17 @@ class TestUnresolvedCauseThreading:
     def test_timeout_cause(self, monkeypatch):
         def boom(*a, **k):
             raise RuntimeError("execution timed out after 600s")
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", boom)
         monkeypatch.setattr(auditor.time, "sleep", lambda *a, **k: None)
         f = TranscriptAuditor()._judge_conditional([_tool_inst()], [], "场景", "t.jsonl")[0]
         assert f.verdict == AuditVerdict.UNRESOLVED
         assert f.unresolved_cause == "timeout"
 
     def test_rate_limited_cause(self, monkeypatch):
-        from skill_eval.utils import _HttpRateLimited
+        from sift.utils import _HttpRateLimited
         def boom(*a, **k):
             raise _HttpRateLimited("429")
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", boom)
         monkeypatch.setattr(auditor.time, "sleep", lambda *a, **k: None)
         monkeypatch.setattr(auditor.random, "uniform", lambda *a, **k: 0)
         f = TranscriptAuditor()._judge_conditional([_tool_inst()], [], "场景", "t.jsonl")[0]
@@ -2291,7 +2291,7 @@ class TestUnresolvedCauseThreading:
         assert f.unresolved_cause == "rate_limited"
 
     def test_parse_failed_cause(self, monkeypatch):
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude",
+        monkeypatch.setattr("sift.audit.auditor.call_claude",
                             lambda *a, **k: "not json at all")
         monkeypatch.setattr(auditor.time, "sleep", lambda *a, **k: None)  # 0-解析重试退避免真等
         f = TranscriptAuditor()._judge_conditional([_tool_inst()], [], "场景", "t.jsonl")[0]
@@ -2300,7 +2300,7 @@ class TestUnresolvedCauseThreading:
 
     def test_cause_only_on_unresolved(self, monkeypatch):
         """红线:FAIL finding 的 unresolved_cause 恒 None。"""
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude",
+        monkeypatch.setattr("sift.audit.auditor.call_claude",
                             lambda *a, **k: '[{"index": 0, "applicable": true}]')
         f = TranscriptAuditor()._judge_conditional([_tool_inst()], [], "场景", "t.jsonl")[0]
         assert f.verdict == AuditVerdict.FAIL
@@ -2313,7 +2313,7 @@ class TestUnresolvedCauseThreading:
         unmentioned 需:多指令同批、LLM 解出部分、漏掉的部分留 None → 批成功(非全 None)
         → 漏的那条 cause_mask 保持默认 unmentioned。
         """
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude",
+        monkeypatch.setattr("sift.audit.auditor.call_claude",
                             lambda *a, **k: '[{"index": 0, "applicable": true}]')  # 只提 index 0
         findings = TranscriptAuditor()._judge_conditional(
             [_tool_inst(), _tool_inst()], [], "场景", "t.jsonl")
@@ -2326,7 +2326,7 @@ class TestUnresolvedBreakdown:
     """_unresolved_breakdown:UNRESOLVED findings 按 cause 聚合计数(诊断,不进判决)。"""
 
     def test_counts_by_cause(self):
-        from skill_eval.audit.auditor import _unresolved_breakdown
+        from sift.audit.auditor import _unresolved_breakdown
         findings = [
             AuditFinding(instruction_text="a", source="X", verdict=AuditVerdict.UNRESOLVED,
                          method=AuditMethod.LLM, category=AuditCategory.PROHIBITION,
@@ -2344,12 +2344,12 @@ class TestUnresolvedBreakdown:
         assert _unresolved_breakdown(findings) == {"timeout": 2, "rate_limited": 1}
 
     def test_none_cause_counts_as_unknown(self):
-        from skill_eval.audit.auditor import _unresolved_breakdown
+        from sift.audit.auditor import _unresolved_breakdown
         findings = [AuditFinding(instruction_text="a", source="X", verdict=AuditVerdict.UNRESOLVED,
                                  method=AuditMethod.LLM, category=AuditCategory.PROHIBITION,
                                  evidence="e", transcript="t", unresolved_cause=None)]
         assert _unresolved_breakdown(findings) == {"unknown": 1}
 
     def test_empty_when_no_unresolved(self):
-        from skill_eval.audit.auditor import _unresolved_breakdown
+        from sift.audit.auditor import _unresolved_breakdown
         assert _unresolved_breakdown([]) == {}

@@ -9,7 +9,7 @@ import urllib.error
 
 import pytest
 
-from skill_eval import utils
+from sift import utils
 
 
 def _http_err(code: int, body: bytes = b'{"error":{"message":"x"}}') -> urllib.error.HTTPError:

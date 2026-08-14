@@ -10,7 +10,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from skill_eval.cli.main import app
+from sift.cli.main import app
 
 runner = CliRunner()
 

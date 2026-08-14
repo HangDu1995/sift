@@ -13,7 +13,7 @@ import urllib.error
 
 import pytest
 
-from skill_eval.utils import TokenUsageAccumulator, call_claude
+from sift.utils import TokenUsageAccumulator, call_claude
 
 
 def _make_fake_claude(tmp_path, body: str) -> None:
@@ -44,7 +44,7 @@ def test_call_claude_runs_backend_in_new_process_group(monkeypatch, tmp_path):
     # 契约:外部 CLI 必须在独立进程组(start_new_session),超时方可 killpg 杀整组。
     # killpg 价值无法行为复现(见上),只能断言此契约在位,防重构丢失。
     from unittest.mock import MagicMock
-    import skill_eval.utils as u
+    import sift.utils as u
     proc = MagicMock()
     proc.communicate.return_value = ("out", "")
     proc.returncode = 0
@@ -76,7 +76,7 @@ def test_call_claude_injects_claude_code_identity_when_absent(monkeypatch):
     # (实测:同 token 同时刻,带这俩 OK、不带 529/超时)。故 call_claude 必须在子进程
     # env 缺这俩时补上。值版本无关(通用 'claude-code' 实测即放行)。
     from unittest.mock import MagicMock
-    import skill_eval.utils as u
+    import sift.utils as u
     monkeypatch.delenv("AI_AGENT", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
     proc = MagicMock()
@@ -95,7 +95,7 @@ def test_call_claude_injects_claude_code_identity_when_absent(monkeypatch):
 def test_call_claude_preserves_existing_identity(monkeypatch):
     # 在 claude-code 上下文内跑(VSCode 扩展/SDK 已注入真值)时,不覆盖、保留原值。
     from unittest.mock import MagicMock
-    import skill_eval.utils as u
+    import sift.utils as u
     monkeypatch.setenv("AI_AGENT", "real-agent-xyz")
     monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "real-entrypoint")
     proc = MagicMock()
@@ -153,7 +153,7 @@ def test_call_claude_with_usage_invokes_callback_and_returns_result(monkeypatch,
 def test_call_claude_without_on_usage_uses_text_format(monkeypatch):
     # 默认 on_usage=None → text 模式(历史行为,字节不变)。
     from unittest.mock import MagicMock
-    import skill_eval.utils as u
+    import sift.utils as u
     proc = MagicMock(); proc.communicate.return_value = ("out", ""); proc.returncode = 0; proc.pid = 99999
     mock_popen = MagicMock(return_value=proc)
     monkeypatch.setattr(u.subprocess, "Popen", mock_popen)
@@ -165,7 +165,7 @@ def test_call_claude_without_on_usage_uses_text_format(monkeypatch):
 def test_call_claude_with_on_usage_uses_json_format(monkeypatch):
     # 给 on_usage → json 模式。
     from unittest.mock import MagicMock
-    import skill_eval.utils as u
+    import sift.utils as u
     proc = MagicMock(); proc.communicate.return_value = ('{"result":"x","usage":{}}', ""); proc.returncode = 0; proc.pid = 99999
     mock_popen = MagicMock(return_value=proc)
     monkeypatch.setattr(u.subprocess, "Popen", mock_popen)
@@ -198,7 +198,7 @@ def test_call_claude_usage_missing_skips_callback(monkeypatch, tmp_path):
 def test_call_claude_schema_adds_json_schema_flag_and_json_format(monkeypatch):
     # schema 给定 → cmd 带 --json-schema(后跟 schema json)且强制 json 模式。
     from unittest.mock import MagicMock
-    import skill_eval.utils as u
+    import sift.utils as u
     proc = MagicMock(); proc.communicate.return_value = ('{"structured_output":{"items":[]},"usage":{}}', ""); proc.returncode = 0; proc.pid = 99999
     mock_popen = MagicMock(return_value=proc)
     monkeypatch.setattr(u.subprocess, "Popen", mock_popen)
@@ -245,7 +245,7 @@ def test_call_claude_schema_raises_max_turns_floor(monkeypatch):
     # 结构化输出需 claude 走 tool_use(实测 num_turns=2);判官常设 max_turns=1 会
     # 截断成 error_max_turns(整批 RuntimeError)。schema 模式保底 max_turns≥2。
     from unittest.mock import MagicMock
-    import skill_eval.utils as u
+    import sift.utils as u
     proc = MagicMock(); proc.communicate.return_value = ('{"structured_output":{"items":[]},"usage":{}}', ""); proc.returncode = 0; proc.pid = 99999
     mock_popen = MagicMock(return_value=proc)
     monkeypatch.setattr(u.subprocess, "Popen", mock_popen)
@@ -387,25 +387,25 @@ def test_token_accumulator_scoped_concurrent_safe():
 
 def test_resolve_http_model_strips_context_alias_suffix():
     """cc CLI 的 [1m] 上下文窗口后缀裸 API 不收(spike code 1211)→ 剥首个 [ 后缀。"""
-    from skill_eval.utils import _resolve_http_model
+    from sift.utils import _resolve_http_model
     assert _resolve_http_model("glm-5.2[1m]") == "glm-5.2"
 
 
 def test_resolve_http_model_passthrough_when_no_bracket():
-    from skill_eval.utils import _resolve_http_model
+    from sift.utils import _resolve_http_model
     assert _resolve_http_model("glm-5.2") == "glm-5.2"
 
 
 def test_resolve_http_model_none_reads_env(monkeypatch):
     """audit 默认不传 --model(model=None)→ 镜像 cc 读 ANTHROPIC_MODEL(本环境=glm-5.2[1m])。"""
-    from skill_eval.utils import _resolve_http_model
+    from sift.utils import _resolve_http_model
     monkeypatch.setenv("ANTHROPIC_MODEL", "glm-5.2[1m]")
     assert _resolve_http_model(None) == "glm-5.2"
 
 
 def test_resolve_http_model_none_and_no_env_raises(monkeypatch):
     """既没传 model、env 与 settings.json 都无 → 裸 HTTP 无默认模型,loud 抛。"""
-    import skill_eval.utils as u
+    import sift.utils as u
     monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
     # 否则回退读真实 ~/.claude/settings.json(本机有 ANTHROPIC_MODEL)→ 不抛、测试假绿
     monkeypatch.setattr(u, "_CLAUDE_SETTINGS_PATH", "/nonexistent/settings.json")
@@ -417,7 +417,7 @@ def test_resolve_http_model_none_and_no_env_raises(monkeypatch):
 def test_resolve_http_model_falls_back_to_settings(monkeypatch, tmp_path):
     """model=None 且 env 无 → 回退 ~/.claude/settings.json 的 ANTHROPIC_MODEL,剥后缀。"""
     import json as _j
-    import skill_eval.utils as u
+    import sift.utils as u
     monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
     p = tmp_path / "settings.json"
     p.write_text(_j.dumps({"env": {"ANTHROPIC_MODEL": "glm-5.2[1m]"}}), encoding="utf-8")
@@ -429,7 +429,7 @@ def test_resolve_http_model_falls_back_to_settings(monkeypatch, tmp_path):
 def test_anthropic_env_env_precedence_over_settings(monkeypatch, tmp_path):
     """os.environ 与 settings.json 都有 → env 优先(显式 export / IDE 注入赢)。"""
     import json as _j
-    import skill_eval.utils as u
+    import sift.utils as u
     p = tmp_path / "settings.json"
     p.write_text(_j.dumps({"env": {"ANTHROPIC_BASE_URL": "https://from-config"}}), encoding="utf-8")
     monkeypatch.setattr(u, "_CLAUDE_SETTINGS_PATH", str(p))
@@ -441,7 +441,7 @@ def test_anthropic_env_env_precedence_over_settings(monkeypatch, tmp_path):
 def test_anthropic_env_falls_back_to_settings(monkeypatch, tmp_path):
     """os.environ 无 → 回退 settings.json env 块(cc 同源;next dev 子进程走这条)。"""
     import json as _j
-    import skill_eval.utils as u
+    import sift.utils as u
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     p = tmp_path / "settings.json"
     p.write_text(_j.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "cfg-token"}}), encoding="utf-8")
@@ -476,7 +476,7 @@ def _http_env(monkeypatch):
 def test_http_call_builds_forced_tooluse_and_parses_items(monkeypatch):
     """请求体含 forced tool_use + auth header + 剥后缀 model;响应 tool_use.input 解包。"""
     import json as _j
-    import skill_eval.utils as u
+    import sift.utils as u
     captured = {}
 
     def fake_urlopen(req, timeout=None):
@@ -503,7 +503,7 @@ def test_http_call_builds_forced_tooluse_and_parses_items(monkeypatch):
 
 def test_http_call_reports_usage_with_cost_zero(monkeypatch):
     """裸 API 不返 cost → payload 补 total_cost_usd=0(对齐 call_claude 形状)。"""
-    import skill_eval.utils as u
+    import sift.utils as u
     seen = {}
     monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
         "content": [{"type": "tool_use", "input": {"items": []}}],
@@ -517,7 +517,7 @@ def test_http_call_reports_usage_with_cost_zero(monkeypatch):
 
 def test_http_call_529_raises_throttled(monkeypatch):
     """529(过载/身份限流)→ _HttpThrottled(交 dispatcher 回退 cc),非 RuntimeError。"""
-    import skill_eval.utils as u
+    import sift.utils as u
 
     def boom(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 529, "overloaded", {}, io.BytesIO(b""))
@@ -530,7 +530,7 @@ def test_http_call_529_raises_throttled(monkeypatch):
 
 def test_http_call_4xx_raises_runtime_loud(monkeypatch):
     """4xx(配置错如模型名)→ RuntimeError(暴露、走重试/兜底),不回退、不 _HttpThrottled。"""
-    import skill_eval.utils as u
+    import sift.utils as u
 
     def boom(req, timeout=None):
         raise urllib.error.HTTPError(
@@ -547,7 +547,7 @@ def test_http_call_4xx_raises_runtime_loud(monkeypatch):
 def test_http_call_missing_tooluse_raises_typed(monkeypatch):
     """forced tool_use 应恒返 tool_use;缺失(GLM 主动不调,thinking 完 end_turn)= 异常
     → _HttpNoToolUse(typed,交 dispatcher 回退 cc;非 RuntimeError,免被通用 except 误吞)。"""
-    import skill_eval.utils as u
+    import sift.utils as u
     monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
         "content": [{"type": "text", "text": "no tool"}],
         "stop_reason": "end_turn",
@@ -564,7 +564,7 @@ def test_http_call_uses_settings_creds_when_env_missing(monkeypatch, tmp_path):
     """os.environ 无凭据(如 cannbot-insight next dev 子进程)→ 回退 ~/.claude/settings.json
     的 token/base,请求 Authorization / 端点用 config 值(与 cc 同源 → cc 能跑它就能跑)。"""
     import json as _j
-    import skill_eval.utils as u
+    import sift.utils as u
     captured = {}
 
     def fake_urlopen(req, timeout=None):
@@ -593,7 +593,7 @@ def test_http_call_uses_settings_creds_when_env_missing(monkeypatch, tmp_path):
 def test_http_call_missing_creds_raises_clear(monkeypatch):
     """os.environ 与 settings.json 都无凭据 → 清晰 RuntimeError(点名缺哪个 + cc 同源提示),
     非 KeyError;裸 HTTP 不该静默到 urlopen 才炸。"""
-    import skill_eval.utils as u
+    import sift.utils as u
     monkeypatch.setattr(u.urllib.request, "urlopen", lambda *a, **k: None)  # 不该被调到
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
@@ -607,7 +607,7 @@ def test_http_call_truncated_warns_and_marks_usage(monkeypatch):
     """stop_reason=max_tokens + 有 tool_use → warn(截断)+ on_usage 带 truncated=True
     + 返回 tool_use(不 cc 回退;下游 parser 判完整性,不完整则 parse_failed 重试)。"""
     import json as _j
-    import skill_eval.utils as u
+    import sift.utils as u
     seen = {}
     monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
         "stop_reason": "max_tokens",
@@ -624,7 +624,7 @@ def test_http_call_truncated_warns_and_marks_usage(monkeypatch):
 
 def test_http_call_truncated_without_usage_callback_still_warns(monkeypatch):
     """on_usage=None + 截断 + 有 tool_use → 仍 warn、返回(on_usage=None 分支安全、不崩)。"""
-    import skill_eval.utils as u
+    import sift.utils as u
     monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
         "stop_reason": "max_tokens",
         "content": [{"type": "tool_use", "input": {"items": []}}],
@@ -638,7 +638,7 @@ def test_http_call_truncated_without_usage_callback_still_warns(monkeypatch):
 def test_http_call_truncated_no_tooluse_raises_typed(monkeypatch):
     """stop_reason=max_tokens + 没 tool_use(thinking 撑满,tool_use 没空间产)
     → raise _HttpNoToolUse(stop_reason=max_tokens,交 dispatcher 回退 cc)。"""
-    import skill_eval.utils as u
+    import sift.utils as u
     monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
         "stop_reason": "max_tokens",
         "content": [{"type": "thinking", "thinking": "..."}],
@@ -654,7 +654,7 @@ def test_http_call_truncated_no_tooluse_raises_typed(monkeypatch):
 def test_http_call_normal_stop_reason_no_truncated(monkeypatch):
     """stop_reason=tool_use(正常)→ 无截断 warning、payload 无 truncated key。"""
     import warnings as _w
-    import skill_eval.utils as u
+    import sift.utils as u
     seen = {}
     monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
         "stop_reason": "tool_use",
@@ -672,7 +672,7 @@ def test_http_call_normal_stop_reason_no_truncated(monkeypatch):
 def test_http_call_missing_stop_reason_no_truncated(monkeypatch):
     """响应无 stop_reason 字段(现有所有 http 测试的形状)→ 无截断 warning、无 truncated(向后兼容)。"""
     import warnings as _w
-    import skill_eval.utils as u
+    import sift.utils as u
     seen = {}
     monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
         "content": [{"type": "tool_use", "input": {"items": [{"i": 1}]}}],
@@ -689,7 +689,7 @@ def test_http_call_missing_stop_reason_no_truncated(monkeypatch):
 def test_token_accumulator_ignores_truncated_field():
     """TokenUsageAccumulator.add 喂含 truncated 的 payload → 不炸、token 正确、truncated 被忽略
     (按 _KEYS 固定字段取)。守 on_usage 带 truncated 不破坏 token 累加。"""
-    import skill_eval.utils as u
+    import sift.utils as u
     acc = u.TokenUsageAccumulator()
     acc.add({"input_tokens": 10, "output_tokens": 5, "truncated": True, "total_cost_usd": 0.0})
     snap = acc.snapshot()
@@ -703,7 +703,7 @@ def test_token_accumulator_ignores_truncated_field():
 
 def test_call_claude_default_transport_is_cc(monkeypatch):
     """不传 transport → 默认 cc → _llm_http_call 绝不被调。"""
-    import skill_eval.utils as u
+    import sift.utils as u
     monkeypatch.setattr(u, "_call_claude_cc", lambda *a, **k: "cc-out")
     monkeypatch.setattr(
         u, "_llm_http_call",
@@ -714,7 +714,7 @@ def test_call_claude_default_transport_is_cc(monkeypatch):
 
 def test_call_claude_transport_http_routes_to_http(monkeypatch):
     """transport='http' → _llm_http_call 被调、_call_claude_cc 不被调。"""
-    import skill_eval.utils as u
+    import sift.utils as u
     monkeypatch.setattr(u, "_llm_http_call", lambda *a, **k: "http-out")
     monkeypatch.setattr(
         u, "_call_claude_cc",
@@ -725,7 +725,7 @@ def test_call_claude_transport_http_routes_to_http(monkeypatch):
 
 def test_call_claude_http_529_falls_back_to_cc(monkeypatch):
     """transport='http' 撞 _HttpThrottled → 回退 _call_claude_cc(=今天速度,最坏不更差)。"""
-    import skill_eval.utils as u
+    import sift.utils as u
     calls = {"http": 0, "cc": 0}
 
     def fake_http(*a, **k):
@@ -744,7 +744,7 @@ def test_call_claude_http_529_falls_back_to_cc(monkeypatch):
 
 def test_call_claude_http_non_throttled_error_does_not_fallback(monkeypatch):
     """transport='http' 抛非 _HttpThrottled(如 4xx→RuntimeError)→ 不回退、直接穿透。"""
-    import skill_eval.utils as u
+    import sift.utils as u
 
     def fake_http(*a, **k):
         raise RuntimeError("裸 HTTP 400: model missing")
@@ -761,7 +761,7 @@ def test_call_claude_http_non_throttled_error_does_not_fallback(monkeypatch):
 def test_call_claude_http_no_tool_use_falls_back_to_cc(monkeypatch):
     """transport='http' forced tool_use 拿不到(GLM 只回 thinking / 撑满 max_tokens)
     → _HttpNoToolUse → 回退 _call_claude_cc(cc 多轮催出 + 降级文本兜底)。"""
-    import skill_eval.utils as u
+    import sift.utils as u
     calls = {"http": 0, "cc": 0}
 
     def fake_http(*a, **k):

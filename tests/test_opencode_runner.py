@@ -7,7 +7,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from skill_eval.execution import opencode_runner as ocr
+from sift.execution import opencode_runner as ocr
 
 
 @contextmanager

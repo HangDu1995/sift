@@ -2,8 +2,8 @@
 # 结构化 records 输入(reader)的单测:友好 JSON → cc 记录形 → 现有 digest/slice。
 import json
 
-from skill_eval.evals.structured import is_structured_records, load_structured_records
-from skill_eval.evals.transcript import _digest_from_records
+from sift.evals.structured import is_structured_records, load_structured_records
+from sift.evals.transcript import _digest_from_records
 
 
 def _write(tmp_path, obj, name="s.json"):
@@ -15,7 +15,7 @@ def _write(tmp_path, obj, name="s.json"):
 # insight 直译形态:per-turn {role, text, agent?, tool_calls:[{name, input, result}]}。
 # skill 用小写 + input.name(opencode/insight 形),read/write 同理小写 —— reader 应归一到 cc 大写。
 FRIENDLY = {
-    "format": "skill-eval-records",
+    "format": "sift-records",
     "records": [
         {"role": "user", "text": "分析 x.py 的崩溃"},
         {
@@ -84,7 +84,7 @@ def test_digest_from_structured_records_without_result(tmp_path):
     # audit 真正消费的字段——skill_used / tool_trace / input_files 的 **path**(Read 的 file_path
     # 输入恢复,非靠 result)。仅文件内容空,audit 不读内容、无碍。
     no_result = {
-        "format": "skill-eval-records",
+        "format": "sift-records",
         "records": [
             {"role": "user", "text": "分析 x.py 的崩溃"},
             {"role": "assistant", "agent": "kernel-developer", "parent_tool_use_id": None,
@@ -103,7 +103,7 @@ def test_digest_from_structured_records_without_result(tmp_path):
 
 
 def test_slice_finds_skill_segment(tmp_path):
-    from skill_eval.audit.slice import slice_transcript
+    from sift.audit.slice import slice_transcript
     recs = load_structured_records(_write(tmp_path, FRIENDLY))
     jsonl = tmp_path / "expanded.jsonl"
     jsonl.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs), encoding="utf-8")
@@ -116,7 +116,7 @@ def test_digest_cleans_opencode_format_read_result(tmp_path):
     # 非 cc 的 "\d+\t"。共享重建器应按 <content> 标记识别并清洗,否则 input_files 内容被
     # XML 包裹 + 行号污染(且后续 Edit 的 old_string 匹配不上 → 假 unreconstructed / 假 FAIL)。
     rec = {
-        "format": "skill-eval-records",
+        "format": "sift-records",
         "records": [
             {"role": "user", "text": "读 x.py"},
             {"role": "assistant", "parent_tool_use_id": None, "tool_calls": [
@@ -138,7 +138,7 @@ def test_cc_format_read_not_overcleaned(tmp_path):
     # 无 <content> 包裹 → 走 cc 清洗(只剥 \d+\t 行号);正文里合法的 "N: ..." 文本不被当
     # opencode 行号误删(format-detection 守住 cc 不回归)。锁"清洗按 <content> 标记触发"。
     rec = {
-        "format": "skill-eval-records",
+        "format": "sift-records",
         "records": [
             {"role": "assistant", "parent_tool_use_id": None, "tool_calls": [
                 {"name": "read", "input": {"file_path": "a.md"},
@@ -158,7 +158,7 @@ def test_structured_passes_agent_through(tmp_path):
     # 默契(commit fdad6bf)正写明:"待需 per-agent 切分的真消费者出现,再读 agent"——
     # agent-audit 即该消费者。
     rec = {
-        "format": "skill-eval-records",
+        "format": "sift-records",
         "records": [
             {"role": "assistant", "agent": "developer", "parent_tool_use_id": "sub-1",
              "text": "干活",
@@ -176,10 +176,10 @@ def test_slice_isolates_subagent_scope_from_main(tmp_path):
     # parent_tool_use_id 归两段独立段——子 agent 段不含主 scope 噪声,反之亦然。这是 insight
     # buildStructuredRecords 给子 agent turn 填 parent_tool_use_id(=subagentSessionId)的目的:
     # 恒 null 时所有 record 同属主 scope,主 scope 噪声混进 skill 段(last-invoked-owns 污染)。
-    # 此测试锁 skill-eval 侧契约:parent_tool_use_id 必须被 structured reader 透传、slice 据此归段。
-    from skill_eval.audit.slice import slice_transcript
+    # 此测试锁 sift 侧契约:parent_tool_use_id 必须被 structured reader 透传、slice 据此归段。
+    from sift.audit.slice import slice_transcript
     rec = {
-        "format": "skill-eval-records",
+        "format": "sift-records",
         "records": [
             # 主 scope:invoke X + 主 scope 噪声 read(不该进子 agent 段)
             {"role": "assistant", "parent_tool_use_id": None, "tool_calls": [
@@ -214,9 +214,9 @@ def test_slice_isolates_subagent_scope_from_main(tmp_path):
 def test_slice_by_agent_attribute_pure_agent(tmp_path):
     # 纯 agent(无 Skill tool_use,如 developer):切片器按 agent 字段归段——agent-audit 核心。
     # 被 dispatch 的 agent 没有 Skill 调用锚点,靠 agent 归属切其执行段。
-    from skill_eval.audit.slice import slice_transcript
+    from sift.audit.slice import slice_transcript
     rec = {
-        "format": "skill-eval-records",
+        "format": "sift-records",
         "records": [
             {"role": "user", "text": "main 起手"},
             {"role": "assistant", "agent": "developer", "parent_tool_use_id": "sub-1",
@@ -239,9 +239,9 @@ def test_slice_dual_nature_kind_picks_anchor(tmp_path):
     # dual-nature:agent X 的 run 内又 invoke 了 Skill(X) → 同名既是 skill(Skill 调用)又是 agent
     # (被 dispatch),两份不同声明。kind 分路、**不并集**:kind=agent 切整个 run(对 agent 声明),
     # kind=skill 只切 Skill 调用起的段(对 skill 声明)。各审各的面,不串味。
-    from skill_eval.audit.slice import slice_transcript
+    from sift.audit.slice import slice_transcript
     rec = {
-        "format": "skill-eval-records",
+        "format": "sift-records",
         "records": [
             {"role": "assistant", "agent": "X", "parent_tool_use_id": "sub-1",
              "tool_calls": [{"name": "read", "input": {"file_path": "pre.py"}}]},

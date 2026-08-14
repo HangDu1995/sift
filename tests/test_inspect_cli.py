@@ -3,8 +3,8 @@ import json
 
 from typer.testing import CliRunner
 
-from skill_eval.cli.main import app
-from skill_eval.models import EvalCase, EvalSet, TriggerProbe
+from sift.cli.main import app
+from sift.models import EvalCase, EvalSet, TriggerProbe
 
 
 def _write(es: EvalSet, path):

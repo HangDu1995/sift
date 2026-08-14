@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from skill_eval.audit import auditor as audmod
-from skill_eval.cli.main import app
-from skill_eval.models.audit_models import (
+from sift.audit import auditor as audmod
+from sift.cli.main import app
+from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
     AuditMethod,
@@ -67,12 +67,12 @@ def _setup(monkeypatch):
     """mock TranscriptAuditor + configure_max_concurrent/configure_adaptive(spy)。
     返回 ``(fake, mc_calls, adapt_calls)``。"""
     fake = _FakeAuditor()
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake)
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
     mc_calls: list[int] = []
     adapt_calls: list[int] = []
-    monkeypatch.setattr("skill_eval.cli.commands.audit.configure_max_concurrent",
+    monkeypatch.setattr("sift.cli.commands.audit.configure_max_concurrent",
                         lambda n: mc_calls.append(n))
-    monkeypatch.setattr("skill_eval.cli.commands.audit.configure_adaptive",
+    monkeypatch.setattr("sift.cli.commands.audit.configure_adaptive",
                         lambda *a, **k: adapt_calls.append(1))
     return fake, mc_calls, adapt_calls
 
@@ -121,9 +121,9 @@ def test_audit_max_concurrent_cli(monkeypatch, tmp_path):
 
 
 def test_audit_max_concurrent_env(monkeypatch, tmp_path):
-    """无 CLI 但 env SKILL_EVAL_MAX_CONCURRENT=4 → configure_max_concurrent(4)。"""
+    """无 CLI 但 env SIFT_MAX_CONCURRENT=4 → configure_max_concurrent(4)。"""
     _, mc, adapt = _setup(monkeypatch)
-    monkeypatch.setenv("SKILL_EVAL_MAX_CONCURRENT", "4")
+    monkeypatch.setenv("SIFT_MAX_CONCURRENT", "4")
     sp = _skill_dir(tmp_path)
     out = tmp_path / "out"
     r = runner.invoke(app, ["audit", str(sp), "--transcript", str(_tp(tmp_path)), "-o", str(out)])
@@ -135,8 +135,8 @@ def test_audit_max_concurrent_env(monkeypatch, tmp_path):
 def test_audit_default_is_adaptive(monkeypatch, tmp_path):
     """无 CLI 无 env → 默认 AIMD 自适应(configure_adaptive 被调、configure_max_concurrent 不调)。"""
     _, mc, adapt = _setup(monkeypatch)
-    monkeypatch.delenv("SKILL_EVAL_MAX_CONCURRENT", raising=False)
-    monkeypatch.delenv("SKILL_EVAL_ADAPTIVE_CONCURRENCY", raising=False)
+    monkeypatch.delenv("SIFT_MAX_CONCURRENT", raising=False)
+    monkeypatch.delenv("SIFT_ADAPTIVE_CONCURRENCY", raising=False)
     sp = _skill_dir(tmp_path)
     out = tmp_path / "out"
     r = runner.invoke(app, ["audit", str(sp), "--transcript", str(_tp(tmp_path)), "-o", str(out)])
@@ -146,10 +146,10 @@ def test_audit_default_is_adaptive(monkeypatch, tmp_path):
 
 
 def test_audit_adaptive_env_zero_falls_back_fixed(monkeypatch, tmp_path):
-    """env SKILL_EVAL_ADAPTIVE_CONCURRENCY=0 → 显式关自适应,configure_max_concurrent(默认) 被调。"""
+    """env SIFT_ADAPTIVE_CONCURRENCY=0 → 显式关自适应,configure_max_concurrent(默认) 被调。"""
     _, mc, adapt = _setup(monkeypatch)
-    monkeypatch.delenv("SKILL_EVAL_MAX_CONCURRENT", raising=False)
-    monkeypatch.setenv("SKILL_EVAL_ADAPTIVE_CONCURRENCY", "0")
+    monkeypatch.delenv("SIFT_MAX_CONCURRENT", raising=False)
+    monkeypatch.setenv("SIFT_ADAPTIVE_CONCURRENCY", "0")
     sp = _skill_dir(tmp_path)
     out = tmp_path / "out"
     r = runner.invoke(app, ["audit", str(sp), "--transcript", str(_tp(tmp_path)), "-o", str(out)])
@@ -161,7 +161,7 @@ def test_audit_adaptive_env_zero_falls_back_fixed(monkeypatch, tmp_path):
 def test_audit_max_concurrent_cli_overrides_env(monkeypatch, tmp_path):
     """CLI --max-concurrent 3 + env=4 → CLI 赢(configure_max_concurrent(3))。"""
     _, mc, adapt = _setup(monkeypatch)
-    monkeypatch.setenv("SKILL_EVAL_MAX_CONCURRENT", "4")
+    monkeypatch.setenv("SIFT_MAX_CONCURRENT", "4")
     sp = _skill_dir(tmp_path)
     out = tmp_path / "out"
     r = runner.invoke(app, ["audit", str(sp), "--transcript", str(_tp(tmp_path)),

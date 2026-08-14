@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from skill_eval.cli.commands.run import _emit_static_and_vet
+from sift.cli.commands.run import _emit_static_and_vet
 
 
 def _skill(tmp_path: Path) -> Path:
@@ -69,7 +69,7 @@ def test_emit_static_failure_nonblocking(tmp_path: Path, monkeypatch):
     it = tmp_path / "iteration-1"
     it.mkdir()
 
-    from skill_eval.static_analysis.analyzer import StaticAnalyzer
+    from sift.static_analysis.analyzer import StaticAnalyzer
 
     def boom(self, skill_path):  # noqa: ARG001
         raise RuntimeError("boom")
@@ -86,7 +86,7 @@ def test_emit_vet_failure_nonblocking(tmp_path: Path, monkeypatch):
     it = tmp_path / "iteration-1"
     it.mkdir()
 
-    from skill_eval.security.vetter import SecurityVetter
+    from sift.security.vetter import SecurityVetter
 
     def boom(self, skill_path):  # noqa: ARG001
         raise RuntimeError("boom")
@@ -104,7 +104,7 @@ def test_emit_vet_failure_nonblocking(tmp_path: Path, monkeypatch):
 
 def test_emit_report_default(tmp_path, monkeypatch):
     """默认(不跳过):调 generate_report_html 产 report.html。"""
-    import skill_eval.cli.commands.report as rep
+    import sift.cli.commands.report as rep
     it = tmp_path / "iteration-1"
     it.mkdir()
 
@@ -114,19 +114,19 @@ def test_emit_report_default(tmp_path, monkeypatch):
         return p
 
     monkeypatch.setattr(rep, "generate_report_html", fake_gen)
-    from skill_eval.cli.commands.run import _emit_report
+    from sift.cli.commands.run import _emit_report
     _emit_report(it)
     assert (it / "report.html").exists(), "默认该产 report.html"
 
 
 def test_emit_report_skips_when_flag(tmp_path, monkeypatch):
     """skip_report=True:不调 generate_report_html,不产 report.html。"""
-    import skill_eval.cli.commands.report as rep
+    import sift.cli.commands.report as rep
     it = tmp_path / "iteration-1"
     it.mkdir()
     called = []
     monkeypatch.setattr(rep, "generate_report_html", lambda ws: called.append(ws))
-    from skill_eval.cli.commands.run import _emit_report
+    from sift.cli.commands.run import _emit_report
     _emit_report(it, skip_report=True)
     assert called == [], "--no-report 不该调 generate_report_html"
     assert not (it / "report.html").exists()
@@ -134,7 +134,7 @@ def test_emit_report_skips_when_flag(tmp_path, monkeypatch):
 
 def test_emit_report_best_effort(tmp_path, monkeypatch):
     """generate_report_html 抛异常:不阻断 run,不产 report.html。"""
-    import skill_eval.cli.commands.report as rep
+    import sift.cli.commands.report as rep
     it = tmp_path / "iteration-1"
     it.mkdir()
 
@@ -142,6 +142,6 @@ def test_emit_report_best_effort(tmp_path, monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(rep, "generate_report_html", boom)
-    from skill_eval.cli.commands.run import _emit_report
+    from sift.cli.commands.run import _emit_report
     _emit_report(it)  # 不该抛
     assert not (it / "report.html").exists(), "失败时不该写残缺 report.html"

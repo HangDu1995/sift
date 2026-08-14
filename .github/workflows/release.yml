@@ -27,11 +27,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            binary: skill-eval-linux
+            binary: sift-linux
           - os: macos-latest
-            binary: skill-eval-macos
+            binary: sift-macos
           - os: windows-latest
-            binary: skill-eval-windows.exe
+            binary: sift-windows.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -44,15 +44,15 @@ jobs:
         run: pip install pyinstaller .
 
       - name: Build binary
-        run: pyinstaller --onefile --name skill-eval --paths src run.py
+        run: pyinstaller --onefile --name sift --paths src run.py
 
       - name: Rename binary
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
-            mv dist/skill-eval.exe dist/${{ matrix.binary }}
+            mv dist/sift.exe dist/${{ matrix.binary }}
           else
-            mv dist/skill-eval dist/${{ matrix.binary }}
+            mv dist/sift dist/${{ matrix.binary }}
           fi
 
       - name: Upload to release

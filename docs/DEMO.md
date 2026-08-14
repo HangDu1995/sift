@@ -1,11 +1,11 @@
-# Skill-Eval 演示指南
+# Sift 演示指南
 
-> 15 分钟演示 skill-eval 的完整能力——从安全审查到 A/B 评测，从正面案例到反面教材。
+> 15 分钟演示 sift 的完整能力——从安全审查到 A/B 评测，从正面案例到反面教材。
 
 ## 前置条件
 
 ```bash
-pip install -e .          # 安装 skill-eval
+pip install -e .          # 安装 sift
 claude --version           # 需要 Claude Code CLI >= 2.1.0, < 2.2.0
 pytest tests/ -q           # 测试验证
 ```
@@ -26,7 +26,7 @@ data-validator 是一个 JSON 数据校验 Skill。它告诉 Claude：校验 id�
 ### 1.1 安全审查（< 1 秒，无需 Claude）
 
 ```bash
-skill-eval vet fixtures/test-skills/data-pipeline/skills/data-validator/
+sift vet fixtures/test-skills/data-pipeline/skills/data-validator/
 ```
 
 **产出解读**：
@@ -47,7 +47,7 @@ VERDICT 三种结果：**SAFE**（exit 0）、**REVIEW_NEEDED**（需人工审�
 ### 1.2 静态分析（< 1 秒，无需 Claude）
 
 ```bash
-skill-eval analyze fixtures/test-skills/data-pipeline/skills/data-validator/
+sift analyze fixtures/test-skills/data-pipeline/skills/data-validator/
 ```
 
 **产出解读**（11/11 满分）：
@@ -61,7 +61,7 @@ Score: 11/11  Category: CAPABILITY_UPLIFT
 ### 1.3 完整 A/B 评测（需要 Claude，2-3 分钟）
 
 ```bash
-skill-eval run fixtures/test-skills/data-pipeline/skills/data-validator/ --runs 1 --output output/
+sift eval fixtures/test-skills/data-pipeline/skills/data-validator/ --runs 1 --output output/
 ```
 
 对 with_skill 和 without_skill 分别运行相同的评测，量化 Skill 的**因果贡献**。每个 eval 独立并发执行。
@@ -194,7 +194,7 @@ Score = StaticAnalysis(0-11)
 **A/B 评测（预期）**：delta 为负（矛盾指令干扰 Claude）。
 
 ```bash
-skill-eval run fixtures/negative-skills/bad-instruction/ --runs 1
+sift eval fixtures/negative-skills/bad-instruction/ --runs 1
 ```
 
 **教训**：静态分析 11/11 ≠ Skill 没问题。compliance.json 会显示指令遵循率低。
@@ -202,7 +202,7 @@ skill-eval run fixtures/negative-skills/bad-instruction/ --runs 1
 ### 2.2 安全风险型：security-risk
 
 ```bash
-skill-eval vet fixtures/negative-skills/security-risk/
+sift vet fixtures/negative-skills/security-risk/
 ```
 
 ```
@@ -239,22 +239,22 @@ FAIL: description_length, description_has_trigger,
 
 ```bash
 # 1. 初始化 evals
-skill-eval init my-skill/
+sift init my-skill/
 
 # 2. 编辑 evals/evals.json，补充 L2 用例 + assertions + fixtures
 
 # 3. 静态检查
-skill-eval analyze my-skill/
-skill-eval vet my-skill/
+sift analyze my-skill/
+sift vet my-skill/
 
 # 4. 快速验证（1 run）
-skill-eval run my-skill/ --runs 1 --eval-samples 5
-skill-eval run my-skill/ --runs 1 --eval-ids 3,5   # 或只跑指定 id（调试/回归某几道）
-skill-eval run my-skill/ --runs 1 --changed-from v1/   # 或改 skill 后只跑受影响的题（给基线目录；回归探针）
+sift eval my-skill/ --runs 1 --eval-samples 5
+sift eval my-skill/ --runs 1 --eval-ids 3,5   # 或只跑指定 id（调试/回归某几道）
+sift eval my-skill/ --runs 1 --changed-from v1/   # 或改 skill 后只跑受影响的题（给基线目录；回归探针）
 
 # 5. 正式评测（3 runs，统计稳定）
-skill-eval run my-skill/ --runs 3 --compliance-gate
+sift eval my-skill/ --runs 3 --security-gate
 
 # 6. 生成报告
-skill-eval report output/ --open
+sift report output/ --open
 ```

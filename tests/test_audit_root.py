@@ -11,8 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typer.testing import CliRunner
-from skill_eval.cli.main import app
-from skill_eval.models.audit_models import (
+from sift.cli.main import app
+from sift.models.audit_models import (
     AuditCategory, AuditFinding, AuditMethod, AuditReport, AuditVerdict,
 )
 
@@ -67,7 +67,7 @@ class _FakeAuditor:
 def test_kind_root_cc_slices_main_scope(monkeypatch, tmp_path):
     """cc:--kind root 把主作用域切给 auditor,排除子 agent 内部;声明名忽略。"""
     fake = _FakeAuditor()
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake)
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
 
     sp = _skill_dir(tmp_path, "wf")      # 声明名 "wf" ≠ 主 agent(root 忽略名)
     a_id = "call_A"
@@ -94,9 +94,9 @@ def test_kind_root_cc_slices_main_scope(monkeypatch, tmp_path):
 
 def test_kind_root_opencode_uses_session_info_agent(monkeypatch, tmp_path):
     """opencode:--kind root 以 session.info.agent 为 target(复用 slice_opencode_by_agent)。"""
-    from skill_eval.evals.opencode import load_opencode_session
+    from sift.evals.opencode import load_opencode_session
     fake = _FakeAuditor()
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake)
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
 
     p = Path("fixtures/example-skills/multi-skill-demo/multi-skill.json")
     main_agent = (load_opencode_session(p).get("info") or {}).get("agent")
@@ -120,16 +120,16 @@ def test_kind_root_structured_records_excludes_subagent(monkeypatch, tmp_path):
 
     belt-and-suspenders:structured reader 已透传 parent_tool_use_id(structured.py L89/L92),
     _slice_root 按 parent_tool_use_id 为空过滤 → 此路径应直接 PASS;若红则 structured 透传断了。
-    照 test_audit_structured.py 的 friendly JSON 构造模式({format:"skill-eval-records", records}),
+    照 test_audit_structured.py 的 friendly JSON 构造模式({format:"sift-records", records}),
     1 root turn(parent_tool_use_id=null)+ 1 子 agent turn(带 parent_tool_use_id)。
     """
     fake = _FakeAuditor()
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake)
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
 
     sp = _skill_dir(tmp_path, "wf")            # 声明名 "wf" ≠ 主 agent(root 忽略名)
     tp = tmp_path / "s.json"
     tp.write_text(
-        json.dumps({"format": "skill-eval-records", "records": [
+        json.dumps({"format": "sift-records", "records": [
             # root turn:主 agent 自己的 read(主作用域)
             {"role": "assistant", "parent_tool_use_id": None, "text": "MAIN_TXT",
              "tool_calls": [{"name": "read", "input": {"file_path": "/tmp/main.md"},
@@ -157,7 +157,7 @@ def test_kind_root_structured_records_excludes_subagent(monkeypatch, tmp_path):
 def test_kind_root_opencode_missing_info_agent_exits_2(monkeypatch, tmp_path):
     """opencode session 缺 info.agent → --kind root exit 2(无法定主 agent,不喂 auditor)。"""
     fake = _FakeAuditor()
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake)
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
 
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps({"info": {}, "messages": []}), encoding="utf-8")

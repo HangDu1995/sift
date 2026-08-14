@@ -1,6 +1,6 @@
 """rebuild 的 locate_turns 开关:[T{idx}] 前缀 + ToolCallRecord.turn 的渲染控制。"""
 from pathlib import Path
-from skill_eval.audit.rebuild import rebuild
+from sift.audit.rebuild import rebuild
 
 
 def _write_cc_jsonl(tmp_path: Path) -> Path:

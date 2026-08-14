@@ -1,4 +1,4 @@
-"""tests for skill_eval.audit.rebuild.
+"""tests for sift.audit.rebuild.
 
 rebuild 是 build_digest 的薄封装:加错误统一 + 三元组解包。
 合成 JSONL,非 mock。
@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from skill_eval.audit.rebuild import rebuild
-from skill_eval.errors import SkillEvalError
-from skill_eval.evals.transcript import SessionDigest
-from skill_eval.models import ToolCallRecord
+from sift.audit.rebuild import rebuild
+from sift.errors import SiftError
+from sift.evals.transcript import SessionDigest
+from sift.models import ToolCallRecord
 
 
 def _assistant_text(text: str) -> dict:
@@ -75,29 +75,29 @@ def test_rebuild_normal_returns_tuple(tmp_path: Path) -> None:
 
 
 def test_rebuild_missing_file_raises(tmp_path: Path) -> None:
-    """文件不存在 → SkillEvalError,消息含路径。"""
+    """文件不存在 → SiftError,消息含路径。"""
     missing = tmp_path / "nope.jsonl"
-    with pytest.raises(SkillEvalError) as exc:
+    with pytest.raises(SiftError) as exc:
         rebuild(missing)
     assert str(missing) in str(exc.value)
 
 
 def test_rebuild_empty_file_raises(tmp_path: Path) -> None:
-    """完全空文件 → digest 全空 → SkillEvalError(消息含"无可对账内容")。"""
+    """完全空文件 → digest 全空 → SiftError(消息含"无可对账内容")。"""
     p = tmp_path / "empty.jsonl"
     p.write_text("", encoding="utf-8")
 
-    with pytest.raises(SkillEvalError) as exc:
+    with pytest.raises(SiftError) as exc:
         rebuild(p)
     assert "无可对账内容" in str(exc.value)
 
 
 def test_rebuild_whitespace_only_file_raises(tmp_path: Path) -> None:
-    """只有空行/空白(digest 全空)→ SkillEvalError。"""
+    """只有空行/空白(digest 全空)→ SiftError。"""
     p = tmp_path / "ws.jsonl"
     p.write_text("   \n\n  \n", encoding="utf-8")
 
-    with pytest.raises(SkillEvalError) as exc:
+    with pytest.raises(SiftError) as exc:
         rebuild(p)
     assert "无可对账内容" in str(exc.value)
 

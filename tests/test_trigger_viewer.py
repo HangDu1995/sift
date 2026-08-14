@@ -4,8 +4,8 @@ import re
 import subprocess
 import tempfile
 
-from skill_eval.models.trigger_report import ProbeResult, Suggestion, TriggerReport
-from skill_eval.reporting.trigger_viewer import TriggerReportGenerator
+from sift.models.trigger_report import ProbeResult, Suggestion, TriggerReport
+from sift.reporting.trigger_viewer import TriggerReportGenerator
 
 
 def _sample_report(with_suggestions=True, with_fail=True):

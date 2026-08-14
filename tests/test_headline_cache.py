@@ -5,8 +5,8 @@
 """
 from __future__ import annotations
 
-from skill_eval.audit import headline_cache
-from skill_eval.models import (
+from sift.audit import headline_cache
+from sift.models import (
     CheckMethod,
     InstructionCheck,
     InstructionPriority,

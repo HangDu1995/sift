@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from skill_eval.models import Assertion, AssertionType, EvalCase, ExpectationResult
-from skill_eval.scoring.programmatic import ProgrammaticChecker
-from skill_eval.scoring.plugins import AssertionPluginRegistry
+from sift.models import Assertion, AssertionType, EvalCase, ExpectationResult
+from sift.scoring.programmatic import ProgrammaticChecker
+from sift.scoring.plugins import AssertionPluginRegistry
 
 
 @pytest.fixture

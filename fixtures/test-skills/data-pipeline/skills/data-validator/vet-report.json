@@ -1,6 +1,6 @@
 {
   "skill_name": "data-validator",
-  "skill_path": "/Users/layne/codes/skill-eval/fixtures/test-skills/data-pipeline/skills/data-validator",
+  "skill_path": "/Users/layne/codes/sift/fixtures/test-skills/data-pipeline/skills/data-validator",
   "verdict": "SAFE",
   "scanners": [
     {

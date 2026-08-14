@@ -13,8 +13,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from skill_eval.cli.main import app
-from skill_eval.models.audit_models import (
+from sift.cli.main import app
+from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
     AuditMethod,
@@ -34,7 +34,7 @@ def _skill_dir(tmp_path: Path, name: str = "skillA") -> Path:
 
 def _structured(path: Path, records: list[dict]) -> Path:
     path.write_text(
-        json.dumps({"format": "skill-eval-records", "records": records}, ensure_ascii=False),
+        json.dumps({"format": "sift-records", "records": records}, ensure_ascii=False),
         encoding="utf-8",
     )
     return path
@@ -89,7 +89,7 @@ def test_structured_input_expanded_to_cc_jsonl(monkeypatch, tmp_path):
     """无 --kind:结构化 JSON → 展开成临时 cc-jsonl 喂 auditor(非原 .json),
     内容是 cc 记录形(skill→Skill / input.skill),不再是 {format:...} 原结构。"""
     fake = _CapturingAuditor()
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake)
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
 
     sp = _skill_dir(tmp_path, "skillA")
     tp = _structured(tmp_path / "s.json", [
@@ -106,11 +106,11 @@ def test_structured_input_expanded_to_cc_jsonl(monkeypatch, tmp_path):
     # 喂的是展开后的 cc-jsonl,不是原结构化 .json
     assert ts[0]["path"].endswith(".jsonl")
     assert ts[0]["path"] != str(tp)
-    # 内容是 cc 记录形:skill 归一成 Skill + input.skill;不再是 skill-eval-records 原结构
+    # 内容是 cc 记录形:skill 归一成 Skill + input.skill;不再是 sift-records 原结构
     c = ts[0]["content"]
     assert '"Skill"' in c
     assert '"skill": "skillA"' in c
-    assert "skill-eval-records" not in c
+    assert "sift-records" not in c
 
 
 def test_structured_input_with_by_skill_slices(monkeypatch, tmp_path):
@@ -119,7 +119,7 @@ def test_structured_input_with_by_skill_slices(monkeypatch, tmp_path):
     输入 skillA(+read A)、skillB(+read B);对 skillA 切:只含 A 的段、不含 B / skillB。
     """
     fake = _CapturingAuditor()
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake)
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
 
     sp = _skill_dir(tmp_path, "skillA")
     tp = _structured(tmp_path / "s.json", [

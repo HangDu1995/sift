@@ -1,6 +1,6 @@
 # example-skills — 主力示例 skill
 
-6 个示例 skill + 1 条多 skill `--kind skill` 切分 demo transcript,演示 skill-eval 的评测 / 静态诊断能力。**每个示例擅长的面不同**(取决于自带 `evals.json` / `transcript` / `trigger_probes` / 是否为 critique 量身做),照下表选,照命令跑。
+6 个示例 skill + 1 条多 skill `--kind skill` 切分 demo transcript,演示 sift 的评测 / 静态诊断能力。**每个示例擅长的面不同**(取决于自带 `evals.json` / `transcript` / `trigger_probes` / 是否为 critique 量身做),照下表选,照命令跑。
 
 ## 能力速查
 
@@ -22,7 +22,7 @@
 >
 > 另两个不带这种 transcript:`code-review-auditor` 走路径1 真任务(自己 run 出来再审),`multi-skill-demo` 靠 `build_multi_skill.py` 脚本生成(验的是切分纯度,不是确定性违规)。
 >
-> **opencode 格式 transcript(`opencode-sessions/`)**:audit `--transcript` 除 cc `.jsonl` 外也吃 **opencode session `.json`** —— 即真实 `opencode export <sessionID>` 的产出(顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`;与 cc fixture 用真 cc jsonl 同理,用真 opencode export 格式,非自造)。两者重建成同一 `SessionDigest`、对账等价。`log-error-analyzer-zh/opencode-sessions/synthetic-violation.json` 是 cc 同名 `.jsonl` 的 opencode 镜像(同 prompt、同 3 植入违规、同样不写报告);多 skill 版见下面 multi-skill-demo 的 `build_multi_skill_opencode.py`。生产导出真会话:`opencode session list` 找 id → `opencode export <id> > session.json` → audit。**拿到一个 .db 文件**(别处拷来的库):直接 `audit --db handed.db`——内部自动 list/export/audit(单 session 自动选,多个列出挑;底层三步见 [reference 的 audit 段](../../docs/skill-eval-reference.md))。
+> **opencode 格式 transcript(`opencode-sessions/`)**:audit `--transcript` 除 cc `.jsonl` 外也吃 **opencode session `.json`** —— 即真实 `opencode export <sessionID>` 的产出(顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`;与 cc fixture 用真 cc jsonl 同理,用真 opencode export 格式,非自造)。两者重建成同一 `SessionDigest`、对账等价。`log-error-analyzer-zh/opencode-sessions/synthetic-violation.json` 是 cc 同名 `.jsonl` 的 opencode 镜像(同 prompt、同 3 植入违规、同样不写报告);多 skill 版见下面 multi-skill-demo 的 `build_multi_skill_opencode.py`。生产导出真会话:`opencode session list` 找 id → `opencode export <id> > session.json` → audit。**拿到一个 .db 文件**(别处拷来的库):直接 `audit --db handed.db`——内部自动 list/export/audit(单 session 自动选,多个列出挑;底层三步见 [reference 的 audit 段](../../docs/sift-reference.md))。
 
 ## 每个怎么跑
 
@@ -33,10 +33,10 @@
 > **这份 `evals.json` 是手写考卷,不是 `init` 自动生成的**:2 题人工金标准——L1 测规则理解(读日志 / 查 `error-codes.md` / 不编造 / 报告三字段),L2 用**和违规 transcript 同一条 `app.log`** 但编码**正确答案**(E-AUTH-001 / E-DB-002 分类、无码第三行归 `unclassified` 而非编造),可作正确基线对照。别的示例(zh / code-review / release)都没自带考卷,得 `init` 自动生成(LLM 出题、需复核);注意跑 `init` 会**覆盖**这份手写版,默认 ship 的是手写。
 
 ```bash
-skill-eval analyze fixtures/example-skills/log-error-analyzer/          # 静态体检(<1s)
-skill-eval vet fixtures/example-skills/log-error-analyzer/              # 安全审查
-skill-eval run fixtures/example-skills/log-error-analyzer/ --runs 3     # 路径3:跑 evals.json
-skill-eval audit fixtures/example-skills/log-error-analyzer/ \
+sift analyze fixtures/example-skills/log-error-analyzer/          # 静态体检(<1s)
+sift vet fixtures/example-skills/log-error-analyzer/              # 安全审查
+sift eval fixtures/example-skills/log-error-analyzer/ --runs 3     # 路径3:跑 evals.json
+sift audit fixtures/example-skills/log-error-analyzer/ \
   --transcript fixtures/example-skills/log-error-analyzer/transcripts/synthetic-violation.jsonl   # 路径2
 ```
 
@@ -51,7 +51,7 @@ skill-eval audit fixtures/example-skills/log-error-analyzer/ \
 
 > **出卷验证:用 clean transcript 挖(`init --from-transcript` 正源)**:挖客观题该用 `synthetic-clean.jsonl`(正确执行、产出了 error-report.json),不是 `synthetic-violation.jsonl`(边缘案例、没产出 → 挖不到客观题)。实测从 synthetic-clean 挖出 `FILE_EXISTS error-report.json` + `JSON_HAS_FIELD(total_errors/errors/unclassified)` + 真实错误码 `CONTAINS_PATTERN` 等客观断言(同任务多条细则合并成 1 题、零降级):
 > ```bash
-> skill-eval init fixtures/example-skills/log-error-analyzer/ \
+> sift init fixtures/example-skills/log-error-analyzer/ \
 >   --from-transcript fixtures/example-skills/log-error-analyzer/transcripts/synthetic-clean.jsonl   # 手构 clean(8 条)
 > #   换 real-clean.jsonl(真跑,25+ 条)同任务同输入,可对照手构 vs 真跑的出题差异
 > ```
@@ -63,16 +63,16 @@ skill-eval audit fixtures/example-skills/log-error-analyzer/ \
 自带 transcript(中文对账)+ evals.json(路径3 也能直接 run):
 
 ```bash
-skill-eval analyze fixtures/example-skills/log-error-analyzer-zh/
-skill-eval run fixtures/example-skills/log-error-analyzer-zh/ --runs 3                               # 路径3:跑自带的 evals.json
-skill-eval audit fixtures/example-skills/log-error-analyzer-zh/ \
+sift analyze fixtures/example-skills/log-error-analyzer-zh/
+sift eval fixtures/example-skills/log-error-analyzer-zh/ --runs 3                               # 路径3:跑自带的 evals.json
+sift audit fixtures/example-skills/log-error-analyzer-zh/ \
   --transcript fixtures/example-skills/log-error-analyzer-zh/transcripts/synthetic-violation.jsonl   # 路径2(cc 格式)
 # 同一份违规场景的 opencode 格式镜像(`opencode export` 产出的真格式,同 prompt/同 3 植入违规):
-skill-eval audit fixtures/example-skills/log-error-analyzer-zh/ \
+sift audit fixtures/example-skills/log-error-analyzer-zh/ \
   --transcript fixtures/example-skills/log-error-analyzer-zh/opencode-sessions/synthetic-violation.json
 # 想重新生成考卷(会覆盖自带版,两种方式):
-skill-eval init fixtures/example-skills/log-error-analyzer-zh/                                       # 方式1:从 SKILL.md 直接生成
-skill-eval init fixtures/example-skills/log-error-analyzer-zh/ \
+sift init fixtures/example-skills/log-error-analyzer-zh/                                       # 方式1:从 SKILL.md 直接生成
+sift init fixtures/example-skills/log-error-analyzer-zh/ \
   --from-transcript fixtures/example-skills/log-error-analyzer-zh/transcripts/synthetic-clean.jsonl  # 方式2:从 clean transcript 挖(自带版即此方式产出)
 ```
 
@@ -85,12 +85,12 @@ skill-eval init fixtures/example-skills/log-error-analyzer-zh/ \
 专为 `--task --cwd` 设计(审 Python 代码,任务对口真代码库),无 evals.json / transcript:
 
 ```bash
-skill-eval analyze fixtures/example-skills/code-review-auditor/
+sift analyze fixtures/example-skills/code-review-auditor/
 # 路径1:在真代码库上跑真任务(--cwd 拷贝隔离,不碰原),产物可喂 audit
-skill-eval run fixtures/example-skills/code-review-auditor/ \
+sift eval fixtures/example-skills/code-review-auditor/ \
   --task "审 audit/aggregate.py 找 bug,写 review-report.json" \
   --cwd <真代码库路径> --runs 2
-skill-eval audit fixtures/example-skills/code-review-auditor/ \
+sift audit fixtures/example-skills/code-review-auditor/ \
   --transcript <上面 run 产的 run-1/transcript.jsonl>
 ```
 
@@ -99,12 +99,12 @@ skill-eval audit fixtures/example-skills/code-review-auditor/ \
 自带 transcript,无 evals.json——走 audit:
 
 ```bash
-skill-eval analyze fixtures/example-skills/release-checklist-zh/
-skill-eval audit fixtures/example-skills/release-checklist-zh/ \
+sift analyze fixtures/example-skills/release-checklist-zh/
+sift audit fixtures/example-skills/release-checklist-zh/ \
   --transcript fixtures/example-skills/release-checklist-zh/transcripts/synthetic-violation.jsonl
 # 想跑路径3 run,先 init 生成考卷(两种方式):
-skill-eval init fixtures/example-skills/release-checklist-zh/           # 方式1:从 SKILL.md 直接生成
-skill-eval init fixtures/example-skills/release-checklist-zh/ \
+sift init fixtures/example-skills/release-checklist-zh/           # 方式1:从 SKILL.md 直接生成
+sift init fixtures/example-skills/release-checklist-zh/ \
   --from-transcript fixtures/example-skills/release-checklist-zh/transcripts/synthetic-clean.jsonl       # 方式2:从 clean transcript 挖(正源;violation 是边缘案例)
 ```
 
@@ -118,12 +118,12 @@ skill-eval init fixtures/example-skills/release-checklist-zh/ \
 
 ### incident-reporter(`trigger` 触发准确度演示)
 
-上面 4 个演示 run / audit / task;这一个专为 [`trigger`](../../docs/skill-eval-reference.md)(第 4 维)演示——**frontmatter description 故意写得不精准**,让真跑容易暴露 description 的触发问题,演示 trigger 报告 + 改进建议怎么读。
+上面 4 个演示 run / audit / task;这一个专为 [`trigger`](../../docs/sift-reference.md)(第 4 维)演示——**frontmatter description 故意写得不精准**,让真跑容易暴露 description 的触发问题,演示 trigger 报告 + 改进建议怎么读。
 
 description = 「处理文本内容,生成结构化报告。」——真实 scope 是**事故报告**(见 body),但 description 没说「事故/incident」,且「文本内容/报告」过宽。自带 5 条 `trigger_probes`(2 条该触发的 incident 任务 + 3 条不该触发的相近文本任务):
 
 ```bash
-skill-eval trigger fixtures/example-skills/incident-reporter/ --runs 2 -o /tmp/trig
+sift trigger fixtures/example-skills/incident-reporter/ --runs 2 -o /tmp/trig
 ```
 
 > **trigger 真跑 cc、结果动态**(每 probe × run = 1 次 cc spawn,凭 description 决定是否触发)——不像 audit example 能列固定预期违规。这个 description **故意不精准**以提高演示 FAIL 的概率:
@@ -134,11 +134,11 @@ skill-eval trigger fixtures/example-skills/incident-reporter/ --runs 2 -o /tmp/t
 
 ### secret-rotator(`critique` 内容质量诊断演示)
 
-上面 5 个演示 run / audit / task / trigger;这一个专为 [`critique`](../../docs/skill-eval-reference.md) 演示——SKILL.md **故意写成内容质量有区分度的混合态**(各维 verdict 不同),让 critique 的 6 维(正文 4 + description 2)各落不同档,跑出来一目了然它查什么、怎么读。
+上面 5 个演示 run / audit / task / trigger;这一个专为 [`critique`](../../docs/sift-reference.md) 演示——SKILL.md **故意写成内容质量有区分度的混合态**(各维 verdict 不同),让 critique 的 6 维(正文 4 + description 2)各落不同档,跑出来一目了然它查什么、怎么读。
 
 ```bash
-skill-eval critique fixtures/example-skills/secret-rotator/            # 6 维内容质量(正文 4 + description 2)
-skill-eval critique fixtures/example-skills/secret-rotator/ --runs 3   # 多数投票(压单次 LLM 方差)
+sift critique fixtures/example-skills/secret-rotator/            # 6 维内容质量(正文 4 + description 2)
+sift critique fixtures/example-skills/secret-rotator/ --runs 3   # 多数投票(压单次 LLM 方差)
 ```
 
 > **设计 verdict(故意植入,跑完对照)**:4 个稳维 + 2 个边界维(实测 `--runs 3` 验过):
@@ -163,27 +163,27 @@ skill-eval critique fixtures/example-skills/secret-rotator/ --runs 3   # 多数�
 
 ```bash
 # 只对账 log-error-analyzer 被调用的段(切出 2 段:主作用域两次调用,不含 src/CHANGELOG):
-skill-eval audit fixtures/example-skills/log-error-analyzer/ \
+sift audit fixtures/example-skills/log-error-analyzer/ \
   --transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --kind skill
 # 换审 code-review-auditor(切出 2 段:主作用域 1 + 子 agent 里 1):
-skill-eval audit fixtures/example-skills/code-review-auditor/ \
+sift audit fixtures/example-skills/code-review-auditor/ \
   --transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --kind skill
 # release-checklist-zh(1 段):
-skill-eval audit fixtures/example-skills/release-checklist-zh/ \
+sift audit fixtures/example-skills/release-checklist-zh/ \
   --transcript fixtures/example-skills/multi-skill-demo/multi-skill.jsonl --kind skill
 ```
 
 **opencode 版同样可审(`multi-skill.json`,切分按 per-message `agent`):**
 
 ```bash
-skill-eval audit fixtures/example-skills/log-error-analyzer/ \
+sift audit fixtures/example-skills/log-error-analyzer/ \
   --transcript fixtures/example-skills/multi-skill-demo/multi-skill.json --kind skill
 ```
 
 **mining 出卷(好版本 `multi-skill-clean.jsonl`)—— 各 skill 挖各的干净考卷:**
 
 ```bash
-skill-eval init fixtures/example-skills/log-error-analyzer/ \
+sift init fixtures/example-skills/log-error-analyzer/ \
   --from-transcript fixtures/example-skills/multi-skill-demo/multi-skill-clean.jsonl --kind skill
 # 换挖 code-review-auditor / release-checklist-zh,同样加 --kind skill
 ```
@@ -192,6 +192,6 @@ skill-eval init fixtures/example-skills/log-error-analyzer/ \
 
 > **跑时的进度行 `对账 transcript i/N`**:N = 切片数 = 该 skill 在 transcript 里被调用的次数(log-error-analyzer / code-review-auditor = 2,release-checklist-zh = 1),i 是第几段;每段切片落盘在 `<输出目录>/slices/`(文件名形如 `multi-skill-log-error-analyzer-1-1.jsonl`),想看每段具体切了啥可直接打开。
 
-> **预期(这个 demo 验的是"切分不串味",不是确定性违规)**:每个 skill 的报告**只反映自己被调用那几段**——log-error-analyzer 的报告不提 `src/*.py` / CHANGELOG;code-review-auditor 的不提 `logs/*.log`;**子 agent 里那次 code-review-auditor 调用切到子 agent 返回,不污染主 agent 的 log-error-analyzer 归属**(scope-aware 切分的关键)。transcript 里各 skill 产物刻意不完美,但能否被抓取决于 auditor 判定层(这几个 skill 的输出要求是散文 / OUTPUT 检查对措辞不对文件,故多为 LLM 辅助判定、非确定性)——本 demo 的核心是**切片纯度**,不是"违规必抓"。归段细节(scope-aware / 子 agent 作用域 / 两限制)见 [reference 的 audit 段](../../docs/skill-eval-reference.md)。
+> **预期(这个 demo 验的是"切分不串味",不是确定性违规)**:每个 skill 的报告**只反映自己被调用那几段**——log-error-analyzer 的报告不提 `src/*.py` / CHANGELOG;code-review-auditor 的不提 `logs/*.log`;**子 agent 里那次 code-review-auditor 调用切到子 agent 返回,不污染主 agent 的 log-error-analyzer 归属**(scope-aware 切分的关键)。transcript 里各 skill 产物刻意不完美,但能否被抓取决于 auditor 判定层(这几个 skill 的输出要求是散文 / OUTPUT 检查对措辞不对文件,故多为 LLM 辅助判定、非确定性)——本 demo 的核心是**切片纯度**,不是"违规必抓"。归段细节(scope-aware / 子 agent 作用域 / 两限制)见 [reference 的 audit 段](../../docs/sift-reference.md)。
 
-> analyze / vet 默认只终端输出(显式 `-o` 才落盘);run 默认产齐 benchmark + scorecard + vet-report 到 `output/iteration-1/`,随后 `skill-eval report output/iteration-1/` 出自包含 HTML 报告。完整命令参考 [skill-eval-guide](../../tools/skills/skill-eval-guide/SKILL.md)。
+> analyze / vet 默认只终端输出(显式 `-o` 才落盘);run 默认产齐 benchmark + scorecard + vet-report 到 `output/iteration-1/`,随后 `sift report output/iteration-1/` 出自包含 HTML 报告。完整命令参考 [sift-guide](../../tools/skills/sift-guide/SKILL.md)。

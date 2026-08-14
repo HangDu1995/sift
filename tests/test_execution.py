@@ -8,12 +8,12 @@ from unittest.mock import patch
 
 import pytest
 
-from skill_eval.evals.loader import EvalLoader
-from skill_eval.errors import EvalValidationError
-from skill_eval.execution.benchmark import BenchmarkAggregator, calculate_stats
-import skill_eval.execution.comparison_suite as comparison_suite
-from skill_eval.execution.comparison_suite import run_comparisons, _compare_with_retry
-from skill_eval.models import ComparisonResult, EvalSet, StatsValue
+from sift.evals.loader import EvalLoader
+from sift.errors import EvalValidationError
+from sift.execution.benchmark import BenchmarkAggregator, calculate_stats
+import sift.execution.comparison_suite as comparison_suite
+from sift.execution.comparison_suite import run_comparisons, _compare_with_retry
+from sift.models import ComparisonResult, EvalSet, StatsValue
 
 
 class TestEvalLoader:
@@ -161,8 +161,8 @@ class TestBenchmarkAggregator:
             }), encoding="utf-8")
 
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+        with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
             benchmark = agg.aggregate(iteration, tmp_path)
 
         assert len(benchmark.runs) == 2
@@ -170,7 +170,7 @@ class TestBenchmarkAggregator:
 
     def test_real_model_from_transcript(self, tmp_path):
         """从 transcript.jsonl 的 result event.modelUsage key 抓真实模型名。"""
-        from skill_eval.execution.benchmark import _real_model_from_transcript
+        from sift.execution.benchmark import _real_model_from_transcript
         rd = tmp_path / "run-1"; rd.mkdir()
         (rd / "transcript.jsonl").write_text(
             '{"type":"assistant","message":{"model":"x"}}\n'
@@ -196,8 +196,8 @@ class TestBenchmarkAggregator:
             '{"type":"result","modelUsage":{"glm-5.2[1m]":{"inputTokens":100}}}',
             encoding="utf-8")
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+        with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
             benchmark = agg.aggregate(iteration, tmp_path)
         assert benchmark.metadata.executor_model == "glm-5.2[1m]"
 
@@ -221,8 +221,8 @@ class TestBenchmarkAggregator:
         (config / "eval-1" / "run-1" / "checkpoints.json").write_text(
             json.dumps([{"eval_id": 1, "step": "x"}]), encoding="utf-8")
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+        with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
             benchmark = agg.aggregate(iteration, tmp_path)
         assert benchmark.metadata.evals_run == [1, 2, 3]
 
@@ -248,8 +248,8 @@ class TestBenchmarkAggregator:
             }), encoding="utf-8")
 
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+        with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
             benchmark = agg.aggregate(iteration, tmp_path)
 
         ws = benchmark.run_summary["with_skill"]
@@ -277,8 +277,8 @@ class TestBenchmarkAggregator:
         }), encoding="utf-8")
 
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+        with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
             benchmark = agg.aggregate(iteration, tmp_path)
 
         r = benchmark.runs[0].result
@@ -305,8 +305,8 @@ class TestBenchmarkAggregator:
         }), encoding="utf-8")
 
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+        with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
             benchmark = agg.aggregate(iteration, tmp_path)
 
         assert benchmark.runs[0].eval_name == "happy_path_basic_categorization"
@@ -326,8 +326,8 @@ class TestBenchmarkAggregator:
         }), encoding="utf-8")
 
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+        with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
             benchmark = agg.aggregate(iteration, tmp_path)
 
         assert benchmark.runs[0].eval_name == ""
@@ -336,8 +336,8 @@ class TestBenchmarkAggregator:
         """run_comparison_analysis 认语义 winner(with/without),不只老 A/B。
         RED:comparator 存语义 winner(position 随机化 + _translate 后),旧代码只判 ==A/==B
         → 恒 None → 深度分析永远不显示。改后 winner='with' 正常往下走到 analyze_comparison。"""
-        from skill_eval.execution.analysis_suite import run_comparison_analysis
-        from skill_eval.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
+        from sift.execution.analysis_suite import run_comparison_analysis
+        from sift.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
 
         skill_dir = tmp_path / "skill"
         skill_dir.mkdir()
@@ -359,8 +359,8 @@ class TestBenchmarkAggregator:
 
     def test_run_comparison_analysis_semantic_winner_mapping(self, tmp_path: Path):
         """语义 winner 正确映射 winner/loser transcript:with→ws 赢、without→wos 赢。"""
-        from skill_eval.execution.analysis_suite import run_comparison_analysis
-        from skill_eval.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
+        from sift.execution.analysis_suite import run_comparison_analysis
+        from sift.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
 
         skill_dir = tmp_path / "skill"
         skill_dir.mkdir()
@@ -392,8 +392,8 @@ class TestBenchmarkAggregator:
         场景:comparisons[0] 是 without 赢(与整体反),但整体 with 多 → winner 应=with,
         代表判词也取 with 侧赢的、不是 comparisons[0] 的 without 判词。
         RED:旧代码 winner=comparisons[0].winner → 'without'(反整体)。"""
-        from skill_eval.execution.analysis_suite import run_comparison_analysis
-        from skill_eval.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
+        from sift.execution.analysis_suite import run_comparison_analysis
+        from sift.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
 
         skill_dir = tmp_path / "skill"; skill_dir.mkdir()
         (skill_dir / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n", encoding="utf-8")
@@ -429,8 +429,8 @@ class TestBenchmarkAggregator:
         """focus_skill 永远 = 被测 skill(skill_content),不随 winner 侧变化:
         winner=with 时被测 skill 在 winner 位,winner=without 时在 loser 位,
         但 focus_skill 两场景都该 = 被测 skill 全文(改进对象恒定)。"""
-        from skill_eval.execution.analysis_suite import run_comparison_analysis
-        from skill_eval.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
+        from sift.execution.analysis_suite import run_comparison_analysis
+        from sift.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
 
         skill_dir = tmp_path / "skill"; skill_dir.mkdir()
         (skill_dir / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# 被测 skill body\n", encoding="utf-8")
@@ -458,8 +458,8 @@ class TestBenchmarkAggregator:
     def test_run_comparison_analysis_tie_returns_none(self, tmp_path: Path):
         """整体平局(with==without)→ 无代表性强弱,返 None 不分析。
         RED:旧代码 winner=comparisons[0].winner='with' → 不 None 继续分析。"""
-        from skill_eval.execution.analysis_suite import run_comparison_analysis
-        from skill_eval.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
+        from sift.execution.analysis_suite import run_comparison_analysis
+        from sift.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
 
         skill_dir = tmp_path / "skill"; skill_dir.mkdir()
         (skill_dir / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n", encoding="utf-8")
@@ -475,8 +475,8 @@ class TestBenchmarkAggregator:
 
     def test_run_comparison_analysis_no_valid_returns_none(self, tmp_path: Path):
         """全 tie/failed → 无有效胜负,返 None(回归保护)。"""
-        from skill_eval.execution.analysis_suite import run_comparison_analysis
-        from skill_eval.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
+        from sift.execution.analysis_suite import run_comparison_analysis
+        from sift.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
 
         skill_dir = tmp_path / "skill"; skill_dir.mkdir()
         (skill_dir / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n", encoding="utf-8")
@@ -495,9 +495,9 @@ class TestBenchmarkAggregator:
         (瞬时:http 抖动/空响应/偶发不产 tool_use)→ 抛 _ComparisonAnalysisTransient
         交 run_analysis 重试循环兜底,而非静默 None 丢深度分析。区别于结构性 None
         (平局/无赢家/无比较,上方 early-return、不进这里、不抛——既有测试覆盖)。"""
-        from skill_eval.execution.analysis_suite import (
+        from sift.execution.analysis_suite import (
             run_comparison_analysis, _ComparisonAnalysisTransient)
-        from skill_eval.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
+        from sift.models import BenchmarkData, BenchmarkMetadata, ComparisonResult
 
         skill_dir = tmp_path / "skill"; skill_dir.mkdir()
         (skill_dir / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n", encoding="utf-8")
@@ -515,11 +515,11 @@ class TestBenchmarkAggregator:
     def test_run_analysis_retries_transient_analysis_failure(self, tmp_path: Path):
         """run_comparison_analysis 第一次抛 _ComparisonAnalysisTransient(瞬时)、第二次
         成功 → run_analysis 重试循环兜底 → 返回非 None analysis(一次抖动不再丢深度分析)。"""
-        from skill_eval.execution.analysis_suite import (
+        from sift.execution.analysis_suite import (
             run_analysis, _ComparisonAnalysisTransient)
-        from skill_eval.models import (
+        from sift.models import (
             AnalysisResult, BenchmarkData, BenchmarkMetadata, ComparisonResult)
-        from skill_eval.models.benchmark_models import RunResultEntry, RunResultMetrics
+        from sift.models.benchmark_models import RunResultEntry, RunResultMetrics
 
         bd = BenchmarkData(
             metadata=BenchmarkMetadata(skill_name="s"),
@@ -529,8 +529,8 @@ class TestBenchmarkAggregator:
         )
         sentinel = AnalysisResult(winner_strengths=["s"])   # 真 AnalysisResult(run_analysis 会 model_dump 落盘)
         agg = BenchmarkAggregator(model=None, timeout=10)
-        with patch("skill_eval.scoring.analyzer.PosthocAnalyzer") as MockAn, \
-             patch("skill_eval.execution.analysis_suite.run_comparison_analysis",
+        with patch("sift.scoring.analyzer.PosthocAnalyzer") as MockAn, \
+             patch("sift.execution.analysis_suite.run_comparison_analysis",
                    side_effect=[_ComparisonAnalysisTransient("flake"), sentinel]):
             MockAn.return_value.analyze_benchmark.return_value = []
             notes, analysis = run_analysis(agg, tmp_path, bd)
@@ -553,8 +553,8 @@ class TestBenchmarkAggregator:
             }), encoding="utf-8")
 
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+        with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
             benchmark = agg.aggregate(iteration, tmp_path)
 
         ws = benchmark.run_summary["with_skill"]
@@ -581,8 +581,8 @@ class TestBenchmarkAggregator:
                 "total_tokens": 100, "duration_ms": 5000, "total_duration_seconds": 5.0,
             }), encoding="utf-8")
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+        with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
             benchmark = agg.aggregate(iteration, tmp_path)
         by_config = {r.configuration: r for r in benchmark.runs}
         assert by_config["with_skill"].error_root_cause == "timeout"
@@ -617,8 +617,8 @@ class TestBenchmarkAggregator:
         make(iteration / "without_skill" / "eval-2" / "run-1", 0.5)
 
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+        with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
             benchmark = agg.aggregate(iteration, tmp_path)
 
         # with 只 2 条最终尝试(eval-1/run-1→retry 0.75 + eval-2/run-1 1.0),非 3 条
@@ -632,8 +632,8 @@ class TestBenchmarkAggregator:
         iteration.mkdir()
 
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+        with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
             benchmark = agg.aggregate(iteration)
 
         assert benchmark.runs == []
@@ -657,7 +657,7 @@ class TestBenchmarkAggregator:
         }))
 
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", side_effect=RuntimeError("LLM timeout")):
+        with patch("sift.execution.benchmark.run_comparisons", side_effect=RuntimeError("LLM timeout")):
             benchmark = agg.aggregate(iteration)
 
         assert len(benchmark.runs) == 2
@@ -684,8 +684,8 @@ class TestBenchmarkAggregator:
         }))
 
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-             patch("skill_eval.execution.benchmark.run_analysis", side_effect=RuntimeError("LLM rate limited")):
+        with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("sift.execution.benchmark.run_analysis", side_effect=RuntimeError("LLM rate limited")):
             benchmark = agg.aggregate(iteration)
 
         assert len(benchmark.runs) == 2
@@ -711,8 +711,8 @@ class TestBenchmarkAggregator:
         }))
 
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", side_effect=RuntimeError("fail1")), \
-             patch("skill_eval.execution.benchmark.run_analysis", side_effect=RuntimeError("fail2")):
+        with patch("sift.execution.benchmark.run_comparisons", side_effect=RuntimeError("fail1")), \
+             patch("sift.execution.benchmark.run_analysis", side_effect=RuntimeError("fail2")):
             benchmark = agg.aggregate(iteration)
 
         assert len(benchmark.runs) == 2
@@ -728,7 +728,7 @@ class TestComparisonSkipWhenProgrammaticOnly:
         (tmp_path / "with_skill" / "run-1").mkdir(parents=True)
         (tmp_path / "without_skill" / "run-1").mkdir(parents=True)
         agg = BenchmarkAggregator(model="m", enable_llm=False)
-        with patch("skill_eval.execution.comparison_suite.BlindComparator") as mock_cmp:
+        with patch("sift.execution.comparison_suite.BlindComparator") as mock_cmp:
             assert run_comparisons(agg, tmp_path) == []
         mock_cmp.assert_not_called()  # 门禁在 BlindComparator 实例化之前
 
@@ -736,7 +736,7 @@ class TestComparisonSkipWhenProgrammaticOnly:
         (tmp_path / "with_skill" / "run-1").mkdir(parents=True)
         (tmp_path / "without_skill" / "run-1").mkdir(parents=True)
         agg = BenchmarkAggregator(model="m", enable_llm=True)
-        with patch("skill_eval.execution.comparison_suite.BlindComparator") as mock_cmp:
+        with patch("sift.execution.comparison_suite.BlindComparator") as mock_cmp:
             mock_cmp.return_value.compare.return_value = ComparisonResult(winner="with", reasoning="t")
             result = run_comparisons(agg, tmp_path)
         assert mock_cmp.called  # 门禁放行,BlindComparator 被实例化
@@ -750,7 +750,7 @@ class TestComparisonSingleArm:
     def test_single_arm_returns_empty_no_crash(self, tmp_path: Path):
         agg = BenchmarkAggregator(model="m", enable_llm=True)
         sides = [("agent", tmp_path / "agent", "agent")]
-        with patch("skill_eval.execution.comparison_suite.BlindComparator") as mock_cmp:
+        with patch("sift.execution.comparison_suite.BlindComparator") as mock_cmp:
             assert run_comparisons(agg, tmp_path, sides=sides) == []
         mock_cmp.assert_not_called()  # agent 评测守卫在 BlindComparator 实例化之前
 
@@ -1028,7 +1028,7 @@ class TestComparisonSummary:
             ComparisonResult(winner="tie", reasoning="等价"),              # genuine tie
             ComparisonResult(winner="tie", reasoning="耗尽", failed=True),  # 失败
         ]
-        from skill_eval.models import ComparisonSummary
+        from sift.models import ComparisonSummary
         s = ComparisonSummary.from_comparisons(comps)
         assert s.total == 4
         assert (s.a_wins, s.b_wins, s.ties, s.failed) == (1, 1, 1, 1)
@@ -1040,14 +1040,14 @@ class TestComparisonSummary:
         # 2 with / 0 without / 3 tie → win_rate 2/5(打平算一场比过)
         comps = [ComparisonResult(winner="with", reasoning="")] * 2 \
             + [ComparisonResult(winner="tie", reasoning="")] * 3
-        from skill_eval.models import ComparisonSummary
+        from sift.models import ComparisonSummary
         s = ComparisonSummary.from_comparisons(comps)
         assert s.win_rate == 2 / 5
         assert s.valid == 5
 
     def test_all_failed_win_rate_none(self):
         comps = [ComparisonResult(winner="tie", reasoning="x", failed=True) for _ in range(3)]
-        from skill_eval.models import ComparisonSummary
+        from sift.models import ComparisonSummary
         s = ComparisonSummary.from_comparisons(comps)
         assert s.valid == 0
         assert s.win_rate is None      # 不报假 0%
@@ -1061,7 +1061,7 @@ class TestComparisonSummary:
             ComparisonResult(winner="v1", reasoning=""),
             ComparisonResult(winner="tie", reasoning="等价"),
         ]
-        from skill_eval.models import ComparisonSummary
+        from sift.models import ComparisonSummary
         s = ComparisonSummary.from_comparisons(comps, label_a="v1", label_b="v2")
         assert (s.a_wins, s.b_wins, s.ties, s.failed) == (2, 1, 1, 0)
         assert s.valid == 4
@@ -1069,7 +1069,7 @@ class TestComparisonSummary:
         assert s.label_a == "v1" and s.label_b == "v2"
 
     def test_empty_returns_none(self):
-        from skill_eval.models import ComparisonSummary
+        from sift.models import ComparisonSummary
         assert ComparisonSummary.from_comparisons([]) is None
 
 
@@ -1085,8 +1085,8 @@ class TestCalibrationAggregatorPlumbing:
     @staticmethod
     def _calibration_json(verdict, hard_violations=None, compliance_rate=1.0) -> str:
         """造一份 calibration.json 内容,匹配 calibrator.py 的输出 schema。"""
-        from skill_eval.models import CalibrationReport
-        from skill_eval.models.enums import CalibrationVerdict, ProcessStatus
+        from sift.models import CalibrationReport
+        from sift.models.enums import CalibrationVerdict, ProcessStatus
         result_pass = verdict in (CalibrationVerdict.TRUSTED, CalibrationVerdict.HIGH_SCORE_SUSPECT)
         process_status = ProcessStatus.OK if verdict == CalibrationVerdict.TRUSTED else ProcessStatus.VIOLATED
         rep = CalibrationReport(
@@ -1107,9 +1107,9 @@ class TestCalibrationAggregatorPlumbing:
         """with_skill: eval-1/run-1 TRUSTED + eval-1/run-2 HIGH_SCORE_SUSPECT(带 hard_violations);
         without_skill: 空目录(无 calibration.json)。
         断言:with_skill.total==2、high_score_suspects 长度 1、without_skill is None。"""
-        from skill_eval.execution.benchmark import _collect_per_side_calibration
-        from skill_eval.models import CalibrationSummary, HardViolation
-        from skill_eval.models.enums import CalibrationVerdict
+        from sift.execution.benchmark import _collect_per_side_calibration
+        from sift.models import CalibrationSummary, HardViolation
+        from sift.models.enums import CalibrationVerdict
 
         hv = HardViolation(
             category="prohibition", instruction_text="禁止编造错误码", evidence="E-FAKE-999",
@@ -1160,8 +1160,8 @@ class TestCalibrationAggregatorPlumbing:
     def test_collect_per_side_takes_final_retry(self, tmp_path: Path):
         """retry-glob bug 类回归:index_runs 取最终 retry 去重,base+retry 只算 retry。
         被 retry 取代的失败 base 不当独立 run 计入(与 aggregate / run_comparisons 同源)。"""
-        from skill_eval.execution.benchmark import _collect_per_side_calibration
-        from skill_eval.models.enums import CalibrationVerdict
+        from sift.execution.benchmark import _collect_per_side_calibration
+        from sift.models.enums import CalibrationVerdict
 
         # eval-1 有 run-1(base TRUSTED)+ run-1-retry-1(最终 HIGH_SCORE_SUSPECT)
         base = tmp_path / "with_skill" / "eval-1" / "run-1"
@@ -1188,12 +1188,12 @@ class TestCalibrationAggregatorPlumbing:
     def test_collect_per_side_skips_corrupt_json(self, tmp_path: Path):
         """calibration.json 损坏(非合法 JSON / schema 不符)→ 静默跳过,不抛。
         与 aggregate 主循环同款防御(grading.json 解析失败也跳过)。"""
-        from skill_eval.execution.benchmark import _collect_per_side_calibration
+        from sift.execution.benchmark import _collect_per_side_calibration
 
         good = tmp_path / "with_skill" / "eval-1" / "run-1"
         good.mkdir(parents=True)
         (good / "calibration.json").write_text(
-            self._calibration_json(__import__("skill_eval.models.enums", fromlist=["CalibrationVerdict"]).CalibrationVerdict.TRUSTED),
+            self._calibration_json(__import__("sift.models.enums", fromlist=["CalibrationVerdict"]).CalibrationVerdict.TRUSTED),
             encoding="utf-8")
         bad = tmp_path / "with_skill" / "eval-1" / "run-2"
         bad.mkdir(parents=True)
@@ -1206,8 +1206,8 @@ class TestCalibrationAggregatorPlumbing:
     def test_aggregate_sets_calibration_summary(self, tmp_path: Path):
         """端到端 sanity:aggregate() 把 calibration_summary 钉到 BenchmarkData。
         与 comparison_summary 对称(顶层 summary 字段)。"""
-        from skill_eval.models import CalibrationSummary
-        from skill_eval.models.enums import CalibrationVerdict
+        from sift.models import CalibrationSummary
+        from sift.models.enums import CalibrationVerdict
 
         # 造最小 run 树(让 aggregate 不崩)+ calibration.json
         ws = tmp_path / "with_skill" / "eval-1" / "run-1"
@@ -1228,8 +1228,8 @@ class TestCalibrationAggregatorPlumbing:
         }), encoding="utf-8")
 
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+        with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
             benchmark = agg.aggregate(tmp_path, tmp_path)
 
         assert benchmark.calibration_summary is not None
@@ -1259,9 +1259,9 @@ class TestCalibrationAggregatorPlumbing:
         }), encoding="utf-8")
 
         agg = BenchmarkAggregator()
-        with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-             patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)), \
-             patch("skill_eval.execution.benchmark._collect_per_side_calibration",
+        with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+             patch("sift.execution.benchmark.run_analysis", return_value=([], None)), \
+             patch("sift.execution.benchmark._collect_per_side_calibration",
                    side_effect=RuntimeError("calibration explode")):
             benchmark = agg.aggregate(tmp_path, tmp_path)
 
@@ -1286,7 +1286,7 @@ class TestCopySkillReferences:
         return skill
 
     def test_copies_references_into_work_dir(self, tmp_path: Path):
-        from skill_eval.execution.runner import _copy_skill_references
+        from sift.execution.runner import _copy_skill_references
         skill = self._make_skill(tmp_path, with_refs=True)
         work = tmp_path / "work"
         work.mkdir()
@@ -1294,7 +1294,7 @@ class TestCopySkillReferences:
         assert (work / "references" / "guide.md").read_text(encoding="utf-8") == "domain knowledge"
 
     def test_no_references_dir_is_noop(self, tmp_path: Path):
-        from skill_eval.execution.runner import _copy_skill_references
+        from sift.execution.runner import _copy_skill_references
         skill = self._make_skill(tmp_path, with_refs=False)
         work = tmp_path / "work"
         work.mkdir()
@@ -1302,7 +1302,7 @@ class TestCopySkillReferences:
         assert not (work / "references").exists()
 
     def test_does_not_overwrite_existing(self, tmp_path: Path):
-        from skill_eval.execution.runner import _copy_skill_references
+        from sift.execution.runner import _copy_skill_references
         skill = self._make_skill(tmp_path, with_refs=True)
         work = tmp_path / "work"
         work.mkdir()
@@ -1313,7 +1313,7 @@ class TestCopySkillReferences:
         assert not (work / "references" / "guide.md").exists()
 
     def test_none_skill_path_is_noop(self, tmp_path: Path):
-        from skill_eval.execution.runner import _copy_skill_references
+        from sift.execution.runner import _copy_skill_references
         work = tmp_path / "work"
         work.mkdir()
         _copy_skill_references(None, work)
@@ -1338,8 +1338,8 @@ class TestABTestRunnerReferencesAutoCopy:
         return skill
 
     def test_with_skill_copies_references_without_does_not(self, tmp_path: Path):
-        from skill_eval.execution.runner import ABTestRunner
-        from skill_eval.models import (
+        from sift.execution.runner import ABTestRunner
+        from sift.models import (
             RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase,
         )
 
@@ -1361,7 +1361,7 @@ class TestABTestRunnerReferencesAutoCopy:
         eval_set = EvalSet(skill_name="myskill", evals=[
             EvalCase(id=1, prompt="do the task"),  # 故意不配 source_dir
         ])
-        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+        with patch("sift.execution.runner.ClaudeRunner.run", fake_run):
             runner.run_ab_test(skill, eval_set)
 
         with_ref = tmp_path / "out" / "with_skill" / "eval-1" / "run-1" / "outputs" / "references" / "guide.md"
@@ -1375,8 +1375,8 @@ class TestAgentKindRunner:
     不调 run(skill body 拼 user prompt 那套)。绝对质量。"""
 
     def test_runner_uses_run_agent_when_kind_agent(self, tmp_path: Path):
-        from skill_eval.execution.runner import ABTestRunner
-        from skill_eval.models import (
+        from sift.execution.runner import ABTestRunner
+        from sift.models import (
             RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase,
         )
         agent = tmp_path / "agent.md"
@@ -1395,8 +1395,8 @@ class TestAgentKindRunner:
                            skip_compliance=True, skip_calibration=True, max_workers=1, kind="agent")
         runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
         eval_set = EvalSet(skill_name="r", evals=[EvalCase(id=1, prompt="do")])
-        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run), \
-             patch("skill_eval.execution.runner.ClaudeRunner.run_agent", fake_run_agent):
+        with patch("sift.execution.runner.ClaudeRunner.run", fake_run), \
+             patch("sift.execution.runner.ClaudeRunner.run_agent", fake_run_agent):
             runner.run_ab_test(agent, eval_set, sides=[("agent", agent, "agent")])
         assert calls["run_agent"] == 1, "kind=agent 应调 run_agent(--append-system-prompt 注入)"
         assert calls["run"] == 0, "kind=agent 不该调 run(skill body 拼 user prompt)"
@@ -1418,8 +1418,8 @@ class TestABTestRunnerComplianceIsAudit:
         return skill
 
     def test_with_skill_compliance_is_audit_report(self, tmp_path: Path):
-        from skill_eval.execution.runner import ABTestRunner
-        from skill_eval.models import (
+        from sift.execution.runner import ABTestRunner
+        from sift.models import (
             AuditReport, RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase,
         )
 
@@ -1448,8 +1448,8 @@ class TestABTestRunnerComplianceIsAudit:
         runner = ABTestRunner(config=config, scoring_config=scoring)
         eval_set = EvalSet(skill_name="myskill", evals=[EvalCase(id=1, prompt="do the task")])
 
-        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run), \
-             patch("skill_eval.audit.auditor.TranscriptAuditor") as MockAuditor:
+        with patch("sift.execution.runner.ClaudeRunner.run", fake_run), \
+             patch("sift.audit.auditor.TranscriptAuditor") as MockAuditor:
             MockAuditor.return_value.audit.return_value = canned
             runner.run_ab_test(skill, eval_set)
 
@@ -1474,20 +1474,20 @@ class TestBuildSides:
     """build_sides:sides spec 单一事实源(块 B v1/v2)。"""
 
     def test_default_with_without(self, tmp_path):
-        from skill_eval.execution.runner import build_sides
+        from sift.execution.runner import build_sides
         sk = tmp_path / "sk"
         sides = build_sides(sk, skill_b=None, label_a=None, label_b=None)
         assert sides == [("with_skill", sk, "with"), ("without_skill", None, "without")]
 
     def test_v1v2_basename_default_label(self, tmp_path):
-        from skill_eval.execution.runner import build_sides
+        from sift.execution.runner import build_sides
         a, b = tmp_path / "sk-a", tmp_path / "sk-b"
         a.mkdir(); b.mkdir()
         sides = build_sides(a, skill_b=b, label_a=None, label_b=None)
         assert sides == [("sk-a", a, "sk-a"), ("sk-b", b, "sk-b")]  # basename 作 label
 
     def test_v1v2_explicit_labels(self, tmp_path):
-        from skill_eval.execution.runner import build_sides
+        from sift.execution.runner import build_sides
         a, b = tmp_path / "sk-a", tmp_path / "sk-b"
         a.mkdir(); b.mkdir()
         sides = build_sides(a, skill_b=b, label_a="v1", label_b="v2")
@@ -1506,8 +1506,8 @@ class TestABTestRunnerV1v2:
         return path
 
     def test_v1v2_injects_both_skills_and_uses_label_dirs(self, tmp_path):
-        from skill_eval.execution.runner import ABTestRunner
-        from skill_eval.models import RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase
+        from sift.execution.runner import ABTestRunner
+        from sift.models import RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase
 
         skill_a = self._make_skill(tmp_path / "v1", "v1")
         skill_b = self._make_skill(tmp_path / "v2", "v2")
@@ -1525,7 +1525,7 @@ class TestABTestRunnerV1v2:
         runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
         eval_set = EvalSet(skill_name="v1", evals=[EvalCase(id=1, prompt="do it")])
         sides = [("v1", skill_a, "v1"), ("v2", skill_b, "v2")]
-        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+        with patch("sift.execution.runner.ClaudeRunner.run", fake_run):
             runner.run_ab_test(skill_a, eval_set, sides=sides)
 
         # 两边都注入了各自的 skill(非 None)
@@ -1537,8 +1537,8 @@ class TestABTestRunnerV1v2:
 
     def test_same_paper_setup_source_pinned_to_primary(self, tmp_path):
         """setup_source 钉主 skill:两边 outputs 里 source fixture 都来自 skill_a(同卷)。"""
-        from skill_eval.execution.runner import ABTestRunner
-        from skill_eval.models import RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase
+        from sift.execution.runner import ABTestRunner
+        from sift.models import RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase
 
         skill_a = self._make_skill(tmp_path / "v1", "v1")
         (skill_a / "data").mkdir()
@@ -1558,7 +1558,7 @@ class TestABTestRunnerV1v2:
         runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
         eval_set = EvalSet(skill_name="v1", evals=[EvalCase(id=1, prompt="analyze", source_dir="data")])
         sides = [("v1", skill_a, "v1"), ("v2", skill_b, "v2")]
-        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+        with patch("sift.execution.runner.ClaudeRunner.run", fake_run):
             runner.run_ab_test(skill_a, eval_set, sides=sides)
 
         a_log = (tmp_path / "out" / "v1" / "eval-1" / "run-1" / "outputs" / "data" / "log.txt")
@@ -1570,8 +1570,8 @@ class TestABTestRunnerV1v2:
 
     def test_default_mode_injects_none_for_without(self, tmp_path):
         """默认 sides(with/without):without 侧注入 None(skill 关),向后兼容。"""
-        from skill_eval.execution.runner import ABTestRunner
-        from skill_eval.models import RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase
+        from sift.execution.runner import ABTestRunner
+        from sift.models import RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase
 
         skill = self._make_skill(tmp_path / "sk", "sk")
         injected: list = []
@@ -1586,7 +1586,7 @@ class TestABTestRunnerV1v2:
         )
         runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
         eval_set = EvalSet(skill_name="sk", evals=[EvalCase(id=1, prompt="do")])
-        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+        with patch("sift.execution.runner.ClaudeRunner.run", fake_run):
             runner.run_ab_test(skill, eval_set)  # 默认 sides=None
 
         assert skill in injected and None in injected, f"默认应注入 skill + None,实得 {injected}"
@@ -1607,8 +1607,8 @@ class TestABTestRunnerPerEvalTimeout:
         return skill
 
     def test_per_eval_timeout_overrides_global(self, tmp_path: Path):
-        from skill_eval.execution.runner import ABTestRunner
-        from skill_eval.models import (
+        from sift.execution.runner import ABTestRunner
+        from sift.models import (
             RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase,
         )
 
@@ -1628,7 +1628,7 @@ class TestABTestRunnerPerEvalTimeout:
             EvalCase(id=1, prompt="simple"),               # 无 timeout → 全局 300
             EvalCase(id=2, prompt="design", timeout=600),  # per-eval → 600
         ])
-        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+        with patch("sift.execution.runner.ClaudeRunner.run", fake_run):
             runner.run_ab_test(skill, eval_set)
 
         # 2 evals × 2 configs = 4 runs;eval1 全 300,eval2 全 600
@@ -1637,8 +1637,8 @@ class TestABTestRunnerPerEvalTimeout:
         assert all(t in (300, 600) for t in captured), f"意外 timeout: {captured}"
 
     def test_no_per_eval_timeout_falls_back_to_global(self, tmp_path: Path):
-        from skill_eval.execution.runner import ABTestRunner
-        from skill_eval.models import (
+        from sift.execution.runner import ABTestRunner
+        from sift.models import (
             RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase,
         )
 
@@ -1655,7 +1655,7 @@ class TestABTestRunnerPerEvalTimeout:
         )
         runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
         eval_set = EvalSet(skill_name="t", evals=[EvalCase(id=1, prompt="x")])  # 都不配 timeout
-        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+        with patch("sift.execution.runner.ClaudeRunner.run", fake_run):
             runner.run_ab_test(skill, eval_set)
 
         assert all(t == 250 for t in captured), f"无 per-eval 应全部走全局 250,实际: {captured}"
@@ -1676,9 +1676,9 @@ class TestABTestRunnerRetry:
 
     def test_zero_retries_no_retry_on_error(self, tmp_path: Path):
         """max_retries=0 → error 不 retry,每 job 只调 1 次 claude。"""
-        from skill_eval.execution.runner import ABTestRunner
-        from skill_eval.models import RunConfig, ScoringConfig, EvalSet, EvalCase
-        from skill_eval.errors import ClaudeRunnerError
+        from sift.execution.runner import ABTestRunner
+        from sift.models import RunConfig, ScoringConfig, EvalSet, EvalCase
+        from sift.errors import ClaudeRunnerError
 
         call_count = [0]
 
@@ -1693,7 +1693,7 @@ class TestABTestRunnerRetry:
         )
         runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
         eval_set = EvalSet(skill_name="t", evals=[EvalCase(id=1, prompt="x")])
-        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+        with patch("sift.execution.runner.ClaudeRunner.run", fake_run):
             runner.run_ab_test(skill, eval_set)
 
         # 1 eval × 2 config × 1 run = 2 jobs;error 不 retry → 共 2 次调用
@@ -1701,9 +1701,9 @@ class TestABTestRunnerRetry:
 
     def test_two_retries_three_calls_per_job_on_error(self, tmp_path: Path):
         """max_retries=2 → error 重试到 3 次/job(original + retry×2)。"""
-        from skill_eval.execution.runner import ABTestRunner
-        from skill_eval.models import RunConfig, ScoringConfig, EvalSet, EvalCase
-        from skill_eval.errors import ClaudeRunnerError
+        from sift.execution.runner import ABTestRunner
+        from sift.models import RunConfig, ScoringConfig, EvalSet, EvalCase
+        from sift.errors import ClaudeRunnerError
 
         call_count = [0]
 
@@ -1718,7 +1718,7 @@ class TestABTestRunnerRetry:
         )
         runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
         eval_set = EvalSet(skill_name="t", evals=[EvalCase(id=1, prompt="x")])
-        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+        with patch("sift.execution.runner.ClaudeRunner.run", fake_run):
             runner.run_ab_test(skill, eval_set)
 
         # 2 job × (1 + 2 retry) = 6 次调用
@@ -1732,7 +1732,7 @@ class TestRunDumpsTranscript:
     input_summary,丢了 tool_use 完整 input + tool_result 配对;而 audit 的 build_digest
     需要完整配对。解法:额外 dump raw stream-json 成 transcript.jsonl。stream-json 的
     assistant/user event 本身带 message 字段 → build_digest 可直接解析(result event
-    无 message,自动跳过)。使 `run`(路径1/3)产物能喂 `audit`(路径2)/`init --from-transcript`。
+    无 message,自动跳过)。使 `run`/`eval` 产物能喂 `audit`/`init --from-transcript`。
     """
 
     @staticmethod
@@ -1745,9 +1745,9 @@ class TestRunDumpsTranscript:
         return skill
 
     def test_dumps_transcript_parsable_by_build_digest(self, tmp_path: Path):
-        from skill_eval.execution.runner import ABTestRunner
-        from skill_eval.models import RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase
-        from skill_eval.evals.transcript import build_digest
+        from sift.execution.runner import ABTestRunner
+        from sift.models import RunConfig, ScoringConfig, RunOutput, EvalSet, EvalCase
+        from sift.evals.transcript import build_digest
 
         # 仿 claude -p --output-format stream-json 的 stdout:assistant(tool_use Read)
         # + user(tool_result) + result(无 message,build_digest 应跳过)
@@ -1767,7 +1767,7 @@ class TestRunDumpsTranscript:
         )
         runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
         eval_set = EvalSet(skill_name="t", evals=[EvalCase(id=1, prompt="x")])
-        with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run):
+        with patch("sift.execution.runner.ClaudeRunner.run", fake_run):
             runner.run_ab_test(skill, eval_set)
 
         tp = tmp_path / "out" / "with_skill" / "eval-1" / "run-1" / "transcript.jsonl"
@@ -1793,19 +1793,19 @@ class TestCacheKey:
 
     @staticmethod
     def _base():
-        from skill_eval.models import EvalCase, RunConfig, ScoringConfig
+        from sift.models import EvalCase, RunConfig, ScoringConfig
         ec = EvalCase(id=1, prompt="do it", expectations=["步骤正确"])
         cfg = RunConfig(model="m1", max_turns=10, timeout_seconds=120)
         sc = ScoringConfig(enable_programmatic=True, enable_llm=True, llm_model="m1")
         return ec, cfg, sc
 
     def test_grading_result_cache_key_default_empty(self):
-        from skill_eval.models import GradingResult, GradingSummary
+        from sift.models import GradingResult, GradingSummary
         g = GradingResult(summary=GradingSummary(pass_rate=0.0, passed=0, failed=0, total=0))
         assert g.cache_key == "", "GradingResult 应有 cache_key 字段,默认空串(老 grading.json 兼容)"
 
     def test_stable(self, tmp_path: Path):
-        from skill_eval.execution.runner import _compute_cache_key
+        from sift.execution.runner import _compute_cache_key
         ec, cfg, sc = self._base()
         skill = self._skill(tmp_path, "s", "# 步骤\n1. 做 A")
         k1 = _compute_cache_key(ec, skill, cfg, sc)
@@ -1813,7 +1813,7 @@ class TestCacheKey:
         assert k1 == k2 and len(k1) == 16, "同输入应得同 key(16 hex)"
 
     def test_skill_body_change_invalidates_with_side(self, tmp_path: Path):
-        from skill_eval.execution.runner import _compute_cache_key
+        from sift.execution.runner import _compute_cache_key
         ec, cfg, sc = self._base()
         sA = self._skill(tmp_path / "a", "s", "# 步骤\n1. 做 A")
         sB = self._skill(tmp_path / "b", "s", "# 步骤\n1. 做 B(改了指令)")
@@ -1824,8 +1824,8 @@ class TestCacheKey:
         """kind 进 cache key:同 eval + 同声明 + 仅 kind 不同(skill/agent)→ key 不等。
         注入模式不同(skill body 拼 user prompt vs agent --append-system-prompt)= 不同实验,
         防一份 .md 既是 skill 又是 agent 时 stale 误命中。"""
-        from skill_eval.execution.runner import _compute_cache_key
-        from skill_eval.models import RunConfig
+        from sift.execution.runner import _compute_cache_key
+        from sift.models import RunConfig
         ec, _cfg, sc = self._base()
         skill = self._skill(tmp_path, "s", "# 步骤\n1. 做 A")
         skill_key = _compute_cache_key(ec, skill, RunConfig(model="m1", kind="skill"), sc)
@@ -1833,7 +1833,7 @@ class TestCacheKey:
         assert skill_key != agent_key
 
     def test_base_ignores_skill_body(self, tmp_path: Path):
-        from skill_eval.execution.runner import _compute_cache_key
+        from sift.execution.runner import _compute_cache_key
         ec, cfg, sc = self._base()
         sA = self._skill(tmp_path / "a", "s", "# 步骤\n1. 做 A")
         sB = self._skill(tmp_path / "b", "s", "# 完全不同的步骤 ZZZ")
@@ -1844,7 +1844,7 @@ class TestCacheKey:
         assert _compute_cache_key(ec, sA, cfg, sc) != _compute_cache_key(ec, sB, cfg, sc)
 
     def test_eval_change_invalidates(self, tmp_path: Path):
-        from skill_eval.execution.runner import _compute_cache_key
+        from sift.execution.runner import _compute_cache_key
         ec, cfg, sc = self._base()
         skill = self._skill(tmp_path, "s", "# 步骤\n1. A")
         ec_prompt = ec.model_copy(update={"prompt": "do it differently"})
@@ -1853,7 +1853,7 @@ class TestCacheKey:
         assert _compute_cache_key(ec, skill, cfg, sc) != _compute_cache_key(ec_expec, skill, cfg, sc)
 
     def test_model_config_change_invalidates(self, tmp_path: Path):
-        from skill_eval.execution.runner import _compute_cache_key
+        from sift.execution.runner import _compute_cache_key
         ec, cfg, sc = self._base()
         skill = self._skill(tmp_path, "s", "# 步骤\n1. A")
         cfg2 = cfg.model_copy(update={"model": "m2"})
@@ -1862,8 +1862,8 @@ class TestCacheKey:
         assert _compute_cache_key(ec, skill, cfg, sc) != _compute_cache_key(ec, skill, cfg, sc2)
 
     def test_code_version_hash_is_stable_nonempty(self):
-        """_code_version_hash 聚合 src/skill_eval 全部 .py,进程内稳定、16 hex、非空。"""
-        from skill_eval.execution.runner import _code_version_hash
+        """_code_version_hash 聚合 src/sift 全部 .py,进程内稳定、16 hex、非空。"""
+        from sift.execution.runner import _code_version_hash
         h1 = _code_version_hash()
         h2 = _code_version_hash()
         assert h1 and len(h1) == 16 and h1 == h2, \
@@ -1873,8 +1873,8 @@ class TestCacheKey:
         """工具自身源码升级(修 runner/grader bug)→ cache_key 必须变。
         否则默认目录重跑命中旧 grading.json、全 skip(2026-07-18 用户撞的 skip:18)。
         进程内代码不变 → _code_version_hash 模块级缓存,monkeypatch 模拟「代码变了」。"""
-        from skill_eval.execution import runner as runner_mod
-        from skill_eval.execution.runner import _compute_cache_key
+        from sift.execution import runner as runner_mod
+        from sift.execution.runner import _compute_cache_key
         ec, cfg, sc = self._base()
         skill = self._skill(tmp_path, "s", "# 步骤\n1. A")
         monkeypatch.setattr(runner_mod, "_CODE_HASH_CACHE", "aaaa1111", raising=False)
@@ -1900,7 +1900,7 @@ class TestResumeCacheKey:
         return output_dir / "with_skill" / "eval-1" / "run-1" / "grading.json"
 
     def _setup(self, tmp_path: Path):
-        from skill_eval.models import RunConfig, ScoringConfig, EvalSet, EvalCase
+        from sift.models import RunConfig, ScoringConfig, EvalSet, EvalCase
         skill = self._skill(tmp_path)
         output_dir = tmp_path / "out"
         ec = EvalCase(id=1, prompt="do it", expectations=["步骤正确"])
@@ -1913,7 +1913,7 @@ class TestResumeCacheKey:
 
     @staticmethod
     def _fake_run_factory(calls: list):
-        from skill_eval.models import RunOutput
+        from sift.models import RunOutput
         def fake_run(self, prompt, skill_path=None, **kwargs):
             calls.append((prompt, skill_path))   # 记 skill_path 区分 with(=skill)/without(=None)
             return RunOutput(exit_code=0, stdout="ok", transcript="done", result_text="done")
@@ -1923,8 +1923,8 @@ class TestResumeCacheKey:
         return any(sp == skill for _, sp in calls)
 
     def test_match_skips(self, tmp_path: Path):
-        from skill_eval.execution.runner import ABTestRunner, _compute_cache_key
-        from skill_eval.models import GradingResult, GradingSummary, ExpectationResult
+        from sift.execution.runner import ABTestRunner, _compute_cache_key
+        from sift.models import GradingResult, GradingSummary, ExpectationResult
         skill, output_dir, ec, config, scoring, eval_set = self._setup(tmp_path)
         key = _compute_cache_key(ec, skill, config, scoring)
         gp = self._slot_grading_path(output_dir)
@@ -1937,7 +1937,7 @@ class TestResumeCacheKey:
 
         calls: list = []
         runner = ABTestRunner(config=config, scoring_config=scoring)
-        with patch("skill_eval.execution.runner.ClaudeRunner.run", self._fake_run_factory(calls)):
+        with patch("sift.execution.runner.ClaudeRunner.run", self._fake_run_factory(calls)):
             runner.run_ab_test(skill, eval_set)
 
         assert not self._with_skill_ran(calls, skill), "cache_key 匹配 + total>0 → with 槽应跳过"
@@ -1945,8 +1945,8 @@ class TestResumeCacheKey:
         assert g.summary.total == 1 and g.cache_key == key, "跳过时 grading.json 不被覆写"
 
     def test_mismatch_reruns(self, tmp_path: Path):
-        from skill_eval.execution.runner import ABTestRunner, _compute_cache_key
-        from skill_eval.models import GradingResult, GradingSummary, ExpectationResult
+        from sift.execution.runner import ABTestRunner, _compute_cache_key
+        from sift.models import GradingResult, GradingSummary, ExpectationResult
         skill, output_dir, ec, config, scoring, eval_set = self._setup(tmp_path)
         gp = self._slot_grading_path(output_dir)
         gp.parent.mkdir(parents=True, exist_ok=True)
@@ -1959,7 +1959,7 @@ class TestResumeCacheKey:
 
         calls: list = []
         runner = ABTestRunner(config=config, scoring_config=scoring)
-        with patch("skill_eval.execution.runner.ClaudeRunner.run", self._fake_run_factory(calls)):
+        with patch("sift.execution.runner.ClaudeRunner.run", self._fake_run_factory(calls)):
             runner.run_ab_test(skill, eval_set)
 
         assert self._with_skill_ran(calls, skill), "cache_key 不匹配 → with 槽应重跑"
@@ -1967,7 +1967,7 @@ class TestResumeCacheKey:
         assert g.cache_key == expected_key, "重跑后 grading.json 应写上正确 cache_key"
 
     def test_legacy_no_key_reruns(self, tmp_path: Path):
-        from skill_eval.execution.runner import ABTestRunner
+        from sift.execution.runner import ABTestRunner
         skill, output_dir, ec, config, scoring, eval_set = self._setup(tmp_path)
         gp = self._slot_grading_path(output_dir)
         gp.parent.mkdir(parents=True, exist_ok=True)
@@ -1979,7 +1979,7 @@ class TestResumeCacheKey:
 
         calls: list = []
         runner = ABTestRunner(config=config, scoring_config=scoring)
-        with patch("skill_eval.execution.runner.ClaudeRunner.run", self._fake_run_factory(calls)):
+        with patch("sift.execution.runner.ClaudeRunner.run", self._fake_run_factory(calls)):
             runner.run_ab_test(skill, eval_set)
 
         assert self._with_skill_ran(calls, skill), "老 grading.json 无 cache_key → 向后兼容失效重跑"
@@ -1994,18 +1994,18 @@ class TestCacheNotice:
         return SimpleNamespace(skipped=skipped, total_runs=total)
 
     def test_no_skip_no_notice(self, tmp_path: Path):
-        from skill_eval.cli.pipeline import _cache_notice_lines
+        from sift.cli.pipeline import _cache_notice_lines
         assert _cache_notice_lines(self._state(0, 18), tmp_path) == []
 
     def test_all_skipped_two_yellow_lines(self, tmp_path: Path):
-        from skill_eval.cli.pipeline import _cache_notice_lines
+        from sift.cli.pipeline import _cache_notice_lines
         lines = _cache_notice_lines(self._state(18, 18), tmp_path)
         assert len(lines) == 2
         assert "全部 18 个槽" in lines[0] and "[yellow]" in lines[0]
         assert str(tmp_path) in lines[1], "提示应指明清哪个目录"
 
     def test_partial_skipped_one_dim_line(self, tmp_path: Path):
-        from skill_eval.cli.pipeline import _cache_notice_lines
+        from sift.cli.pipeline import _cache_notice_lines
         lines = _cache_notice_lines(self._state(6, 18), tmp_path)
         assert len(lines) == 1
         assert "6/18" in lines[0] and "[dim]" in lines[0]
@@ -2016,9 +2016,9 @@ class TestProgressCallbackWiring:
     曾漏传 total_evals 致整体左移:update.grading 收到 run_duration(float)→ completion 渲染崩。"""
 
     def test_forwards_total_evals_and_grading(self):
-        from skill_eval.cli.pipeline import _make_progress_callback
-        from skill_eval.cli.progress import _ProgressState
-        from skill_eval.models import GradingResult, GradingSummary
+        from sift.cli.pipeline import _make_progress_callback
+        from sift.cli.progress import _ProgressState
+        from sift.models import GradingResult, GradingSummary
 
         ps = _ProgressState(2, 1)
         captured = {}
@@ -2062,8 +2062,8 @@ class TestRerunClassification:
     @staticmethod
     def _inputs(tmp_path: Path):
         """BASE 侧(inject_skill=None → cache_key 不含 skill_body,简化测试)。"""
-        from skill_eval.models import EvalCase, RunConfig, ScoringConfig
-        from skill_eval.execution.runner import _compute_cache_key
+        from sift.models import EvalCase, RunConfig, ScoringConfig
+        from sift.execution.runner import _compute_cache_key
         ec = EvalCase(id=1, prompt="do it")
         sides = [("without_skill", None, "without")]
         config = RunConfig(model="m1", max_turns=10, timeout_seconds=120)
@@ -2073,14 +2073,14 @@ class TestRerunClassification:
 
     def test_no_benchmark_means_resume(self, tmp_path: Path):
         """benchmark.json 不在(中断/首次)→ resume,即便有零散 slot 也走续跑。"""
-        from skill_eval.execution.runner import classify_rerun
+        from sift.execution.runner import classify_rerun
         ec, sides, config, scoring, key = self._inputs(tmp_path)
         self._slot(tmp_path, "without_skill", 1, 1, key)  # 有 slot 但无 benchmark = 中断态
         assert classify_rerun(tmp_path, [ec], sides, 1, config, scoring) == "resume"
 
     def test_same_runs_inputs_unchanged_means_fresh(self, tmp_path: Path):
         """啥也没改、同 runs 重跑 → fresh(用户要看方差,MOVE + fresh)。"""
-        from skill_eval.execution.runner import classify_rerun
+        from sift.execution.runner import classify_rerun
         ec, sides, config, scoring, key = self._inputs(tmp_path)
         self._slot(tmp_path, "without_skill", 1, 1, key)
         (tmp_path / "benchmark.json").write_text("{}", encoding="utf-8")
@@ -2088,7 +2088,7 @@ class TestRerunClassification:
 
     def test_more_runs_inputs_unchanged_means_accumulate(self, tmp_path: Path):
         """inputs 没改 + runs 调大 → accumulate(复用旧 slot + 补 run 号,不归档)。"""
-        from skill_eval.execution.runner import classify_rerun
+        from sift.execution.runner import classify_rerun
         ec, sides, config, scoring, key = self._inputs(tmp_path)
         self._slot(tmp_path, "without_skill", 1, 1, key)  # 旧 run-1
         (tmp_path / "benchmark.json").write_text("{}", encoding="utf-8")
@@ -2096,7 +2096,7 @@ class TestRerunClassification:
 
     def test_inputs_changed_means_fresh_even_if_more_runs(self, tmp_path: Path):
         """inputs 改了(cache_key 不匹配)→ 即使 runs 调大也 fresh(旧样本是旧输入产物,不能 accumulate)。"""
-        from skill_eval.execution.runner import classify_rerun
+        from sift.execution.runner import classify_rerun
         ec, sides, config, scoring, _key = self._inputs(tmp_path)
         self._slot(tmp_path, "without_skill", 1, 1, "STALE_KEY_FROM_OLD_INPUT")
         (tmp_path / "benchmark.json").write_text("{}", encoding="utf-8")
@@ -2104,7 +2104,7 @@ class TestRerunClassification:
 
     def test_side_no_longer_present_means_fresh(self, tmp_path: Path):
         """旧 config 名不在当前 sides(v1/v2 换了等)→ 结构变 → fresh。"""
-        from skill_eval.execution.runner import classify_rerun
+        from sift.execution.runner import classify_rerun
         ec, sides, config, scoring, _key = self._inputs(tmp_path)
         # 旧 run 落在 with_skill(当前 sides 只有 without_skill)
         self._slot(tmp_path, "with_skill", 1, 1, "whatever")
@@ -2116,7 +2116,7 @@ class TestArchivePrevious:
     """archive_previous:把当前 run 树整体 MOVE 到 previous/(单槽覆盖)。"""
 
     def test_moves_whole_tree_to_previous(self, tmp_path: Path):
-        from skill_eval.execution.runner import archive_previous
+        from sift.execution.runner import archive_previous
         # 造一棵完整旧树:config 目录 + 顶层 artifacts
         (tmp_path / "without_skill" / "eval-1" / "run-1" / "outputs").mkdir(parents=True)
         (tmp_path / "without_skill" / "eval-1" / "run-1" / "grading.json").write_text("{}", encoding="utf-8")
@@ -2135,7 +2135,7 @@ class TestArchivePrevious:
 
     def test_single_slot_overwrites_old_previous(self, tmp_path: Path):
         """连续两次 fresh 重跑:第二次归档覆盖第一次的 previous/(单槽,不堆积)。"""
-        from skill_eval.execution.runner import archive_previous
+        from sift.execution.runner import archive_previous
         # 第一次归档留下的 previous/
         (tmp_path / "previous" / "without_skill" / "eval-1" / "run-1").mkdir(parents=True)
         (tmp_path / "previous" / "benchmark.json").write_text('{"first": true}', encoding="utf-8")
@@ -2152,7 +2152,7 @@ class TestArchivePrevious:
 
     def test_empty_output_returns_none(self, tmp_path: Path):
         """output 空无可移(或只剩 previous/)→ 返回 None,不动。"""
-        from skill_eval.execution.runner import archive_previous
+        from sift.execution.runner import archive_previous
         (tmp_path / "previous").mkdir()  # 只剩 previous/(无他物)
         assert archive_previous(tmp_path) is None
         assert (tmp_path / "previous").exists()
@@ -2160,7 +2160,7 @@ class TestArchivePrevious:
     def test_preserves_non_run_artifacts(self, tmp_path: Path):
         """fresh 归档只 move run 自己的产物,不卷走同目录其他命令(audit/gate/report)的产物——
         它们与本次 run 无绑定,误伤会丢用户数据。"""
-        from skill_eval.execution.runner import archive_previous
+        from sift.execution.runner import archive_previous
         # run 自己的产物
         (tmp_path / "without_skill" / "eval-1" / "run-1").mkdir(parents=True)
         (tmp_path / "without_skill" / "eval-1" / "run-1" / "grading.json").write_text("{}", encoding="utf-8")
@@ -2197,7 +2197,7 @@ class TestArchivePrevious:
     def test_only_non_run_artifacts_returns_none(self, tmp_path: Path):
         """output 里只有别命令产物(无 run 产物)→ 无可归档,返回 None,
         且不建 previous/、不动那些产物。"""
-        from skill_eval.execution.runner import archive_previous
+        from sift.execution.runner import archive_previous
         (tmp_path / "audit-report.json").write_text("{}", encoding="utf-8")
         (tmp_path / "gate.json").write_text("{}", encoding="utf-8")
         assert archive_previous(tmp_path) is None

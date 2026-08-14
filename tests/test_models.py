@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from skill_eval.models import (
+from sift.models import (
     Assertion,
     AssertionType,
     EvalCase,
@@ -137,7 +137,7 @@ class TestBenchmarkModels:
 
 class TestCalibrationModels:
     def test_calibration_report_new_schema(self):
-        from skill_eval.models import (
+        from sift.models import (
             CalibrationVerdict, HardViolation, ProcessStatus,
         )
         cr = CalibrationReport(
@@ -182,8 +182,8 @@ class TestCalibrationSummary:
     (gate 盲区) 的 hard_violations 明细;None side 保留(无 compliance)。"""
 
     def _rep(self, verdict, **kw):
-        from skill_eval.models.batch_models import CalibrationReport
-        from skill_eval.models.enums import ProcessStatus
+        from sift.models.batch_models import CalibrationReport
+        from sift.models.enums import ProcessStatus
         return CalibrationReport(
             verdict=verdict, result_pass=kw.get("result_pass", True),
             process_status=kw.get("process_status", ProcessStatus.OK),
@@ -196,12 +196,12 @@ class TestCalibrationSummary:
         )
 
     def _hv(self):
-        from skill_eval.models.batch_models import HardViolation
+        from sift.models.batch_models import HardViolation
         return HardViolation(category="prohibition", instruction_text="引用日志原文行", evidence="未引用")
 
     def test_calibration_summary_with_without_mode(self):
-        from skill_eval.models.batch_models import CalibrationSummary
-        from skill_eval.models.enums import CalibrationVerdict
+        from sift.models.batch_models import CalibrationSummary
+        from sift.models.enums import CalibrationVerdict
         per_side = {
             "with_skill": [
                 (1, 1, self._rep(CalibrationVerdict.TRUSTED)),
@@ -220,8 +220,8 @@ class TestCalibrationSummary:
         assert sus["category"] == "prohibition"
 
     def test_calibration_summary_v1v2_both_sides(self):
-        from skill_eval.models.batch_models import CalibrationSummary
-        from skill_eval.models.enums import CalibrationVerdict
+        from sift.models.batch_models import CalibrationSummary
+        from sift.models.enums import CalibrationVerdict
         per_side = {
             "v1": [(1, 1, self._rep(CalibrationVerdict.TRUSTED))],
             "v2": [(1, 1, self._rep(CalibrationVerdict.HIGH_SCORE_SUSPECT, hard_violations=[self._hv()]))],
@@ -231,19 +231,19 @@ class TestCalibrationSummary:
         assert len(s.sides["v2"].high_score_suspects) == 1
 
     def test_calibration_summary_empty_side_is_none(self):
-        from skill_eval.models.batch_models import CalibrationSummary
+        from sift.models.batch_models import CalibrationSummary
         s = CalibrationSummary.from_per_side({"with_skill": None, "without_skill": None})
         assert s.sides["with_skill"] is None
 
 
 def test_benchmark_data_llm_token_usage_defaults_empty():
-    from skill_eval.models import BenchmarkData, BenchmarkMetadata
+    from sift.models import BenchmarkData, BenchmarkMetadata
     d = BenchmarkData(metadata=BenchmarkMetadata(skill_name="s"))
     assert d.llm_token_usage == {}
 
 
 def test_benchmark_data_llm_token_usage_roundtrip():
-    from skill_eval.models import BenchmarkData, BenchmarkMetadata
+    from sift.models import BenchmarkData, BenchmarkMetadata
     tu = {"scoring": {"input_tokens": 100, "output_tokens": 50, "total_cost_usd": 0.01, "calls": 3},
           "total": {"input_tokens": 200, "output_tokens": 80, "total_cost_usd": 0.02}}
     d = BenchmarkData(metadata=BenchmarkMetadata(skill_name="s"), llm_token_usage=tu)
@@ -254,14 +254,14 @@ def test_benchmark_data_llm_token_usage_roundtrip():
 
 def test_legacy_benchmark_json_without_llm_token_usage_loads():
     """旧 benchmark.json 无该字段 → {}(向后兼容)。"""
-    from skill_eval.models import BenchmarkData
+    from sift.models import BenchmarkData
     legacy = '{"metadata":{"skill_name":"s"},"runs":[],"run_summary":{}}'
     d = BenchmarkData.model_validate_json(legacy)
     assert d.llm_token_usage == {}
 
 
 def test_timing_data_grader_token_usage_field():
-    from skill_eval.models.grading_models import TimingData
+    from sift.models.grading_models import TimingData
     t = TimingData()
     assert t.grader_token_usage == {}
     t2 = TimingData(total_tokens=5, grader_token_usage={"input_tokens": 9})
@@ -269,7 +269,7 @@ def test_timing_data_grader_token_usage_field():
 
 
 def test_timing_data_grader_duration_field():
-    from skill_eval.models.grading_models import TimingData
+    from sift.models.grading_models import TimingData
     t = TimingData()
     assert t.grader_duration_seconds == 0.0
     t2 = TimingData(grader_duration_seconds=2.5)
@@ -279,7 +279,7 @@ def test_timing_data_grader_duration_field():
 
 
 def test_audit_report_duration_seconds_field():
-    from skill_eval.models.audit_models import AuditReport
+    from sift.models.audit_models import AuditReport
     r2 = AuditReport(skill_name="s", transcripts=[], summary={}, findings=[], duration_seconds=87.0)
     assert r2.duration_seconds == 87.0
     assert AuditReport.model_validate_json(r2.model_dump_json()).duration_seconds == 87.0
@@ -290,13 +290,13 @@ def test_audit_report_duration_seconds_field():
 
 
 def test_benchmark_data_llm_duration_defaults_empty():
-    from skill_eval.models import BenchmarkData, BenchmarkMetadata
+    from sift.models import BenchmarkData, BenchmarkMetadata
     d = BenchmarkData(metadata=BenchmarkMetadata(skill_name="s"))
     assert d.llm_duration_seconds == {}
 
 
 def test_benchmark_data_llm_duration_roundtrip():
-    from skill_eval.models import BenchmarkData, BenchmarkMetadata
+    from sift.models import BenchmarkData, BenchmarkMetadata
     du = {"scoring": 1.5, "audit": 3.0, "executor": 0.5, "total": 10.0}
     d = BenchmarkData(metadata=BenchmarkMetadata(skill_name="s"), llm_duration_seconds=du)
     d2 = BenchmarkData.model_validate_json(d.model_dump_json())
@@ -331,7 +331,7 @@ def test_legacy_eval_json_without_rationale_loads():
 # ---------------------------------------------------------------------------
 
 def test_trigger_probe_fields():
-    from skill_eval.models.eval_models import TriggerProbe
+    from sift.models.eval_models import TriggerProbe
     p = TriggerProbe(id=1, prompt="分析这份日志", expect_trigger=True, rationale="正中用途")
     assert p.expect_trigger is True
     assert p.rationale == "正中用途"
@@ -351,7 +351,7 @@ def test_evalset_backward_compat_old_json_no_trigger_probes():
 
 
 def test_evalset_roundtrip_with_trigger_probes():
-    from skill_eval.models.eval_models import TriggerProbe
+    from sift.models.eval_models import TriggerProbe
     es = EvalSet(skill_name="x", evals=[],
                  trigger_probes=[TriggerProbe(id=1, prompt="p", expect_trigger=False)])
     js = es.model_dump(mode="json")
@@ -364,7 +364,7 @@ def test_evalset_roundtrip_with_trigger_probes():
 # ---------------------------------------------------------------------------
 
 def test_trigger_report_roundtrip():
-    from skill_eval.models.trigger_report import TriggerReport, ProbeResult
+    from sift.models.trigger_report import TriggerReport, ProbeResult
     r = TriggerReport(skill_name="x", description_hash="abc", runs=1,
                       recall=0.5, false_trigger_rate=0.0, n_should_trigger=2, n_should_not=1,
                       unresolved=0, token_usage={"total_tokens": 100},
@@ -376,7 +376,7 @@ def test_trigger_report_roundtrip():
 
 def test_trigger_report_optional_rates_can_be_none():
     """recall / false_trigger_rate 可为 None(某方向无探题 → N/A)。"""
-    from skill_eval.models.trigger_report import TriggerReport
+    from sift.models.trigger_report import TriggerReport
     r = TriggerReport(skill_name="x", description_hash="h", runs=1,
                       recall=None, false_trigger_rate=None,
                       n_should_trigger=0, n_should_not=0, probes=[])
@@ -386,7 +386,7 @@ def test_trigger_report_optional_rates_can_be_none():
 
 def test_trigger_report_description_prompt_suggestions_roundtrip():
     """description / prompt / suggestions 新字段 roundtrip + 旧报告(无这些字段)兜默认。"""
-    from skill_eval.models.trigger_report import TriggerReport, ProbeResult, Suggestion
+    from sift.models.trigger_report import TriggerReport, ProbeResult, Suggestion
     r = TriggerReport(
         skill_name="x", description="does X for logs", description_hash="abc", runs=2,
         recall=0.5, false_trigger_rate=0.0, n_should_trigger=2, n_should_not=1,
@@ -406,7 +406,7 @@ def test_trigger_report_description_prompt_suggestions_roundtrip():
 
 def test_trigger_report_legacy_json_without_new_fields_loads():
     """旧 trigger-report.json(无 description/prompt/suggestions)→ 兜默认,不炸。"""
-    from skill_eval.models.trigger_report import TriggerReport
+    from sift.models.trigger_report import TriggerReport
     legacy = {
         "skill_name": "x", "description_hash": "abc", "runs": 1,
         "recall": 1.0, "false_trigger_rate": None, "n_should_trigger": 1, "n_should_not": 0,
@@ -420,7 +420,7 @@ def test_trigger_report_legacy_json_without_new_fields_loads():
 
 def test_trigger_report_duration_seconds_roundtrip():
     """duration_seconds(cc spawn 总墙钟)roundtrip + 旧报告(无此字段)兜默认 0.0。"""
-    from skill_eval.models.trigger_report import TriggerReport, ProbeResult
+    from sift.models.trigger_report import TriggerReport, ProbeResult
     r = TriggerReport(skill_name="x", description_hash="h", runs=1,
                       recall=1.0, false_trigger_rate=None, n_should_trigger=1, n_should_not=0,
                       duration_seconds=12.5,
@@ -434,7 +434,7 @@ def test_trigger_report_duration_seconds_roundtrip():
 
 def test_probe_result_tokens_and_duration_roundtrip():
     """ProbeResult per-probe 消耗(tokens + duration_seconds)roundtrip + 旧报告兜默认。"""
-    from skill_eval.models.trigger_report import TriggerReport, ProbeResult
+    from sift.models.trigger_report import TriggerReport, ProbeResult
     r = TriggerReport(
         skill_name="x", description_hash="h", runs=2,
         recall=1.0, false_trigger_rate=None, n_should_trigger=1, n_should_not=0,

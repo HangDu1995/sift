@@ -8,8 +8,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from skill_eval.execution.live_runner import run_live_task
-from skill_eval.models import RunOutput
+from sift.execution.live_runner import run_live_task
+from sift.models import RunOutput
 
 
 def _fake_stream_json() -> str:
@@ -43,7 +43,7 @@ def test_live_task_copies_cwd_to_workspace(tmp_path: Path) -> None:
     _make_skill(skill)
     out = tmp_path / "out"
 
-    with patch("skill_eval.execution.live_runner.ClaudeRunner") as cr:
+    with patch("sift.execution.live_runner.ClaudeRunner") as cr:
         cr.return_value.run.return_value = _make_run_output()
         run_live_task(skill_path=skill, task="review target.py", cwd=cwd, runs=1, output_dir=out)
 
@@ -63,7 +63,7 @@ def test_live_task_copies_skill_references(tmp_path: Path) -> None:
     cwd.mkdir()
     out = tmp_path / "out"
 
-    with patch("skill_eval.execution.live_runner.ClaudeRunner") as cr:
+    with patch("sift.execution.live_runner.ClaudeRunner") as cr:
         cr.return_value.run.return_value = _make_run_output()
         run_live_task(skill_path=skill, task="t", cwd=cwd, runs=1, output_dir=out)
 
@@ -78,7 +78,7 @@ def test_live_task_dumps_transcript_jsonl(tmp_path: Path) -> None:
     cwd.mkdir()
     out = tmp_path / "out"
 
-    with patch("skill_eval.execution.live_runner.ClaudeRunner") as cr:
+    with patch("sift.execution.live_runner.ClaudeRunner") as cr:
         cr.return_value.run.return_value = _make_run_output()
         run_live_task(skill_path=skill, task="t", cwd=cwd, runs=2, output_dir=out)
 
@@ -95,7 +95,7 @@ def test_live_task_runs_n_times(tmp_path: Path) -> None:
     cwd.mkdir()
     out = tmp_path / "out"
 
-    with patch("skill_eval.execution.live_runner.ClaudeRunner") as cr:
+    with patch("sift.execution.live_runner.ClaudeRunner") as cr:
         cr.return_value.run.return_value = _make_run_output()
         run_live_task(skill_path=skill, task="t", cwd=cwd, runs=3, output_dir=out)
 
@@ -108,7 +108,7 @@ def test_live_task_no_cwd_uses_skill_dir(tmp_path: Path) -> None:
     _make_skill(skill)
     out = tmp_path / "out"
 
-    with patch("skill_eval.execution.live_runner.ClaudeRunner") as cr:
+    with patch("sift.execution.live_runner.ClaudeRunner") as cr:
         cr.return_value.run.return_value = _make_run_output()
         run_live_task(skill_path=skill, task="t", cwd=None, runs=1, output_dir=out)
 
@@ -122,7 +122,7 @@ def test_format_run_summary_renders_metrics_and_result_head():
     让 duration/tokens/turns/stop/tool_calls + 结果头部不再静默。纯函数(不 spawn cc)。
     tool_calls 是 dict[str,int](工具名→次数),摘要用 sum(values)=总调用次数。
     """
-    from skill_eval.cli.commands.run import _format_run_summary
+    from sift.cli.commands.run import _format_run_summary
 
     d = {
         "run_num": 2,
@@ -145,7 +145,7 @@ def test_format_run_summary_renders_metrics_and_result_head():
 
 def test_format_run_summary_handles_missing_fields():
     """缺字段不崩,给合理默认(0 / —)。"""
-    from skill_eval.cli.commands.run import _format_run_summary
+    from sift.cli.commands.run import _format_run_summary
 
     s = _format_run_summary({})
     assert "run-?" in s  # run_num 缺省
@@ -170,8 +170,8 @@ def _cwd_dir(tmp_path):
 
 def test_run_live_task_multi_executor_namespaced_dirs(tmp_path, monkeypatch):
     """executors=[cc,opencode] → run-1-cc/transcript.jsonl + run-1-opencode/transcript.json。"""
-    from skill_eval.execution import live_runner as lr
-    from skill_eval.models import RunOutput
+    from sift.execution import live_runner as lr
+    from sift.models import RunOutput
 
     def fake_factory(name):
         class F:
@@ -191,8 +191,8 @@ def test_run_live_task_multi_executor_namespaced_dirs(tmp_path, monkeypatch):
 
 def test_run_live_task_single_executor_no_suffix_backward_compat(tmp_path, monkeypatch):
     """单执行器(任一)→ run-1/(无 -exec 后缀),向后兼容老 audit 提示。"""
-    from skill_eval.execution import live_runner as lr
-    from skill_eval.models import RunOutput
+    from sift.execution import live_runner as lr
+    from sift.models import RunOutput
 
     monkeypatch.setattr(lr, "make_live_runner",
                         lambda name: type("F", (), {"run": lambda self, **kw: RunOutput(exit_code=0, stdout="X")})())
@@ -206,8 +206,8 @@ def test_run_live_task_single_executor_no_suffix_backward_compat(tmp_path, monke
 
 
 def test_make_live_runner_unknown_raises(tmp_path):
-    from skill_eval.execution import live_runner as lr
-    from skill_eval.errors import InputError
+    from sift.execution import live_runner as lr
+    from sift.errors import InputError
     import pytest
     with pytest.raises(InputError, match="未知 executor"):
         lr.make_live_runner("foo")
@@ -235,7 +235,7 @@ def test_real_opencode_executor_end_to_end(tmp_path):
     sp.mkdir()
     (sp / "SKILL.md").write_text("---\nname: sv\ndescription: d\n---\n# b\n", encoding="utf-8")
     out = tmp_path / "out"
-    from skill_eval.execution.live_runner import run_live_task
+    from sift.execution.live_runner import run_live_task
     run_live_task(
         skill_path=sp, task="Reply with exactly one word: PONG",
         runs=1, executors=["opencode"], output_dir=out, timeout=180,

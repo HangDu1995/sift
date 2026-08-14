@@ -32,14 +32,14 @@ from pathlib import Path
 
 import pytest
 
-from skill_eval.audit.auditor import TranscriptAuditor
-from skill_eval.models.audit_models import AuditCategory, AuditMethod, AuditReport, AuditVerdict
+from sift.audit.auditor import TranscriptAuditor
+from sift.models.audit_models import AuditCategory, AuditMethod, AuditReport, AuditVerdict
 
 
 @pytest.fixture(autouse=True)
 def _no_llm_retry_sleep(monkeypatch) -> None:
     """重试退避的 time.sleep → no-op,保持闭环测试快(retry 逻辑由 test_auditor 覆盖)。"""
-    monkeypatch.setattr("skill_eval.audit.auditor.time.sleep", lambda *a, **k: None)
+    monkeypatch.setattr("sift.audit.auditor.time.sleep", lambda *a, **k: None)
 
 
 # ---- 合成 transcript JSONL 辅助(仿 test_transcript.py / test_auditor.py)---------
@@ -128,7 +128,7 @@ class TestAuditEndToEnd:
 
     def test_full_pipeline_four_categories(self, tmp_path, monkeypatch) -> None:
         fake, calls = _make_fake()
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
 
         # 合成 transcript:user turn + 含 EXPECTED_TOKEN 的 assistant text(供 OUTPUT
         # 子串命中)+ Bash 调用(供 "use Bash" 命中)+ Read notes.md(不在 skill_body
@@ -232,7 +232,7 @@ class TestConditionalNaPath:
 
     def test_unmatched_applicable_false_is_na(self, tmp_path, monkeypatch) -> None:
         fake, calls = _make_fake()
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
 
         # skill_body 仅一条 TOOL_REQUIREMENT;transcript 无 Bash 调用 → 未命中 → 走 LLM
         body = "use Bash\n"
@@ -275,7 +275,7 @@ class TestUnverifiableNoFalseFail:
         def boom(*a, **k):
             raise RuntimeError("claude CLI down")
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", boom)
         # 不含 OUTPUT_FORMAT(确定性判定,会真 FAIL,干扰"LLM 挂→0 假 FAIL"的隔离):
         # 只放条件性 + 禁令 + 步骤,三者都走 LLM → 全挂 → 全 N/A。
         body = (

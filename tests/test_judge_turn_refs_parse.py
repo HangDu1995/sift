@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import json
 
-from skill_eval.audit.auditor import TranscriptAuditor
-from skill_eval.models import InstructionCheck
-from skill_eval.models.audit_models import AuditCategory, AuditVerdict
-from skill_eval.models.enums import (
+from sift.audit.auditor import TranscriptAuditor
+from sift.models import InstructionCheck
+from sift.models.audit_models import AuditCategory, AuditVerdict
+from sift.models.enums import (
     CheckMethod,
     InstructionPriority,
     InstructionSource,

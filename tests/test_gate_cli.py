@@ -1,7 +1,7 @@
 """gate 命令 CLI 测试(块 C)。"""
 import json
 from typer.testing import CliRunner
-from skill_eval.cli.main import app
+from sift.cli.main import app
 
 cli = CliRunner()
 

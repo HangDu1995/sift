@@ -40,4 +40,4 @@ data-transform (依赖 data-validator)
 report-generator (依赖 data-transform)
 ```
 
-`eval-config.yaml` 是 [config/loader.py](../src/skill_eval/config/loader.py) 三层加载机制(defaults → project → skill)的配置示例(generator 出题读它);3-skill DAG 是多 skill 声明结构示例(原 batch 评测材料,batch 退役后留作声明 / 配置示例)。
+`eval-config.yaml` 是 [config/loader.py](../src/sift/config/loader.py) 三层加载机制(defaults → project → skill)的配置示例(generator 出题读它);3-skill DAG 是多 skill 声明结构示例(原 batch 评测材料,batch 退役后留作声明 / 配置示例)。

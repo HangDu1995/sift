@@ -1,7 +1,7 @@
 """critique 单测(模型 + prompt + parse + analyze)。"""
 import json
 
-from skill_eval.models.critique_report import ContentQualityReport, CritiqueDimension
+from sift.models.critique_report import ContentQualityReport, CritiqueDimension
 
 
 def test_dimension_defaults():
@@ -43,7 +43,7 @@ def test_report_roundtrip_no_counts_in_json():
     assert rep2.status_counts == {"met": 1, "partial": 0, "missing": 0}
 
 
-from skill_eval.static_analysis.critique import _build_critique_prompt, _build_desc_critique_prompt, _parse_critique_response
+from sift.static_analysis.critique import _build_critique_prompt, _build_desc_critique_prompt, _parse_critique_response
 
 
 def test_build_prompt_contains_four_rubrics_and_body():
@@ -124,8 +124,8 @@ def test_parse_response_strips_json_fence():
     assert rep.dimensions[0].status == "met"
 
 
-import skill_eval.static_analysis.critique as crt
-from skill_eval.static_analysis.critique import analyze_content_quality
+import sift.static_analysis.critique as crt
+from sift.static_analysis.critique import analyze_content_quality
 
 
 def _fake_response_four_dims():
@@ -171,7 +171,7 @@ def test_analyze_call_failure_returns_empty(monkeypatch, tmp_path):
 
 
 # ---- 空 tool_use 重试(http 路径偶发 {} 退化)----
-from skill_eval.utils import _HttpRateLimited
+from sift.utils import _HttpRateLimited
 
 
 def test_analyze_retries_on_empty_tool_use(monkeypatch, tmp_path):
@@ -245,7 +245,7 @@ def test_parse_response_valid_dict_no_dims_yields_four_missing():
 
 
 # ---- 多数投票(--runs N)----
-from skill_eval.static_analysis.critique import _majority_status, _aggregate_runs
+from sift.static_analysis.critique import _majority_status, _aggregate_runs
 
 
 def _resp(fm_status: str, others: str = "met") -> str:

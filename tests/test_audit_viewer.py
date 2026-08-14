@@ -1,7 +1,7 @@
-from skill_eval.models.audit_models import (
+from sift.models.audit_models import (
     AuditReport, AuditFinding, AuditMethod, AuditVerdict, AuditCategory, InstructionAggregate,
 )
-from skill_eval.reporting.audit_viewer import AuditReportGenerator
+from sift.reporting.audit_viewer import AuditReportGenerator
 import json
 import re
 import subprocess
@@ -242,7 +242,7 @@ def _render_by_instruction_via_node(report, tmp_path):
     """抽 audit-report.html 的 <script>,在 node 里 mock document 跑真渲染,返回 ③ 表的列标记。
 
     列裁剪(单 transcript 去 fail%/fail/total/in transcripts)是 JS 运行时字符串变换,
-    render-smoke 只验模板字符串抓不到(记忆 skill-eval-viewer-js-needs-node-check)。
+    render-smoke 只验模板字符串抓不到(记忆 sift-viewer-js-needs-node-check)。
     故 mock DOM 实跑 IIFE,收 root.insertAdjacentHTML 的产物断言。
     """
     html = AuditReportGenerator().generate_html(report)

@@ -3,7 +3,7 @@
 render-smoke 验模板 JS 源字面(两段标签 + phase1_wall 等字段引用都在);JS 语法正确性靠
 test_reporting 的 node --check(viewer.html 整 <script>);运行时分支渲染靠 node --check + 重生成
 肉眼(viewer 渲染器庞大,mock-DOM 不对口;与 viewer 其余面板测试同口径)。"""
-from skill_eval.reporting.viewer import ReportGenerator
+from sift.reporting.viewer import ReportGenerator
 
 
 def _duration_fixture():

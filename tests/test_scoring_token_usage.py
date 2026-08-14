@@ -5,9 +5,9 @@ mock 各类模块内绑定的 call_claude 本地名,回灌 on_usage payload,断�
 """
 from unittest.mock import patch
 
-from skill_eval.scoring.llm_grader import LLMGrader
-from skill_eval.scoring.comparator import BlindComparator
-from skill_eval.scoring.analyzer import PosthocAnalyzer
+from sift.scoring.llm_grader import LLMGrader
+from sift.scoring.comparator import BlindComparator
+from sift.scoring.analyzer import PosthocAnalyzer
 
 
 def _usage_payload():
@@ -31,12 +31,12 @@ def _fake_that_reports_usage(response_text: str):
 
 
 def test_grader_grade_forwards_on_usage(tmp_path):
-    from skill_eval.models import EvalCase
+    from sift.models import EvalCase
     ec = EvalCase(id=1, prompt="do")
     sink = []
     fake, cap = _fake_that_reports_usage(
         '{"expectations":[],"summary":{"passed":0,"failed":0,"total":0,"pass_rate":0.0}}')
-    with patch("skill_eval.scoring.llm_grader.call_llm_with_retry", side_effect=fake):
+    with patch("sift.scoring.llm_grader.call_llm_with_retry", side_effect=fake):
         LLMGrader().grade(ec, "t", tmp_path, on_usage=sink.append)
     assert cap and cap[0] is not None, "grade 没把 on_usage 穿到 call_claude"
     assert sink == [_usage_payload()], "on_usage payload 没回灌"
@@ -45,7 +45,7 @@ def test_grader_grade_forwards_on_usage(tmp_path):
 def test_comparator_compare_forwards_on_usage():
     sink = []
     fake, cap = _fake_that_reports_usage('{"winner":"A","reasoning":"t"}')
-    with patch("skill_eval.scoring.comparator.call_llm_with_retry", side_effect=fake):
+    with patch("sift.scoring.comparator.call_llm_with_retry", side_effect=fake):
         BlindComparator(rng=__import__("random").Random(0)).compare("a", "b", "p", on_usage=sink.append)
     assert cap and cap[0] is not None, "compare 没把 on_usage 穿到 call_claude"
     assert sink == [_usage_payload()]
@@ -54,7 +54,7 @@ def test_comparator_compare_forwards_on_usage():
 def test_analyzer_analyze_benchmark_forwards_on_usage():
     sink = []
     fake, cap = _fake_that_reports_usage('["note"]')
-    with patch("skill_eval.scoring.analyzer.call_llm_with_retry", side_effect=fake):
+    with patch("sift.scoring.analyzer.call_llm_with_retry", side_effect=fake):
         PosthocAnalyzer().analyze_benchmark("{}", "", on_usage=sink.append)
     assert cap and cap[0] is not None, "analyze_benchmark 没把 on_usage 穿到 call_claude"
     assert sink == [_usage_payload()]
@@ -63,8 +63,8 @@ def test_analyzer_analyze_benchmark_forwards_on_usage():
 def test_score_checkpoints_forwards_on_usage_to_grader(tmp_path):
     """_score_checkpoints 接 on_usage 并穿到 grader.grade(非 programmatic 路径)。"""
     from unittest.mock import MagicMock
-    from skill_eval.execution.runner import ABTestRunner
-    from skill_eval.models import EvalCase, GradingResult
+    from sift.execution.runner import ABTestRunner
+    from sift.models import EvalCase, GradingResult
 
     sink = []
     grade_resp = '{"expectations":[],"summary":{"passed":0,"failed":0,"total":0,"pass_rate":0.0}}'
@@ -81,7 +81,7 @@ def test_score_checkpoints_forwards_on_usage_to_grader(tmp_path):
         enable_programmatic=False, enable_llm=True, llm_model=None, llm_timeout=10)
     ec = EvalCase(id=1, prompt="do", expectations=["e1"])  # expectations 非空才调 grade
 
-    with patch("skill_eval.scoring.llm_grader.LLMGrader.grade", fake_grade):
+    with patch("sift.scoring.llm_grader.LLMGrader.grade", fake_grade):
         runner._score_checkpoints([ec], "t", tmp_path, on_usage=lambda p: sink.append(("cb", p)))
 
     # on_usage 穿到 grade(非 None)+ payload 回灌到外层 callback
@@ -93,9 +93,9 @@ def test_score_checkpoints_forwards_on_usage_to_grader(tmp_path):
 def test_compare_with_retry_forwards_on_usage():
     """_compare_with_retry 接 on_usage 并穿到 comparator.compare。"""
     import random
-    from skill_eval.execution.comparison_suite import _compare_with_retry
-    from skill_eval.scoring.comparator import BlindComparator
-    from skill_eval.models import ComparisonResult
+    from sift.execution.comparison_suite import _compare_with_retry
+    from sift.scoring.comparator import BlindComparator
+    from sift.models import ComparisonResult
     captured = []   # 记 on_usage 是否传(非 None)
     sink = []       # 记 payload
 
@@ -107,7 +107,7 @@ def test_compare_with_retry_forwards_on_usage():
         return ComparisonResult(winner="A", reasoning="t")  # not failed → 不重试
 
     comparator = BlindComparator(rng=random.Random(0))  # 真实例,patch 其 compare 类方法才生效
-    with patch("skill_eval.scoring.comparator.BlindComparator.compare", fake_compare):
+    with patch("sift.scoring.comparator.BlindComparator.compare", fake_compare):
         _compare_with_retry(comparator, "a", "b", "p", None, on_usage=sink.append)
     assert any(ou is not None for ou in captured), "on_usage 没穿到 compare"
     assert sink == [{"input_tokens": 5, "output_tokens": 2, "total_cost_usd": 0.001}], "payload 没回灌"
@@ -115,10 +115,10 @@ def test_compare_with_retry_forwards_on_usage():
 
 def test_run_analysis_forwards_on_usage(tmp_path):
     """run_analysis 接 on_usage 并穿到 analyzer.analyze_benchmark。"""
-    from skill_eval.execution.analysis_suite import run_analysis
-    from skill_eval.execution.benchmark import BenchmarkAggregator
-    from skill_eval.models.benchmark_models import RunResultEntry, RunResultMetrics
-    from skill_eval.models import BenchmarkData, BenchmarkMetadata
+    from sift.execution.analysis_suite import run_analysis
+    from sift.execution.benchmark import BenchmarkAggregator
+    from sift.models.benchmark_models import RunResultEntry, RunResultMetrics
+    from sift.models import BenchmarkData, BenchmarkMetadata
     captured = []
     sink = []
 
@@ -134,7 +134,7 @@ def test_run_analysis_forwards_on_usage(tmp_path):
         metadata=BenchmarkMetadata(skill_name="s"),
         runs=[RunResultEntry(eval_id=1, configuration="with_skill", run_number=1,
                              result=RunResultMetrics(pass_rate=1.0, passed=1, failed=0, total=1))])
-    with patch("skill_eval.scoring.analyzer.PosthocAnalyzer.analyze_benchmark", fake_analyze):
+    with patch("sift.scoring.analyzer.PosthocAnalyzer.analyze_benchmark", fake_analyze):
         run_analysis(agg, tmp_path, bench, on_usage=sink.append)
     assert any(ou is not None for ou in captured), "on_usage 没穿到 analyze_benchmark"
     assert sink == [{"input_tokens": 8, "output_tokens": 4, "total_cost_usd": 0.003}], "payload 没回灌"

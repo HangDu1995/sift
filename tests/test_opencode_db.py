@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-import skill_eval.evals.opencode_db as ocdb
-from skill_eval.errors import ExecutionError, OpencodeDbError
+import sift.evals.opencode_db as ocdb
+from sift.errors import ExecutionError, OpencodeDbError
 
 
 # ---- OpencodeDbError 层级 ----

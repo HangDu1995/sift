@@ -13,14 +13,14 @@ from __future__ import annotations
 
 import json
 
-from skill_eval.audit.auditor import TranscriptAuditor
-from skill_eval.audit.dedup import (
+from sift.audit.auditor import TranscriptAuditor
+from sift.audit.dedup import (
     assign_sequence,
     dedup_exact_duplicates,
     link_related,
     post_process_findings,
 )
-from skill_eval.models.audit_models import AuditCategory, AuditFinding, AuditMethod, AuditVerdict
+from sift.models.audit_models import AuditCategory, AuditFinding, AuditMethod, AuditVerdict
 
 
 def _f(
@@ -174,7 +174,7 @@ class TestWiringThroughAuditor:
                  "verdict": "pass", "evidence": "ok"}
                 for i in range(20)
             ])
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         body = (
             "NEVER fabricate error codes or messages that do not appear in the log.\n\n"
             "1. Analyze the input carefully and read references/error-codes.md.\n"

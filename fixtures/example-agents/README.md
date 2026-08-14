@@ -6,10 +6,10 @@
 
 ## 这是什么
 
-四份**域无关**的 agent 声明,演示 skill-eval 对 agent 的两条产品线:
+四份**域无关**的 agent 声明,演示 sift 对 agent 的两条产品线:
 
 - **审计线**(test-runner / lint-reviewer):两份短、规则化的 agent + 一份它们被 dispatch 过的
-  multi-agent session,演示 `audit` 对 agent 的遵循性对账。agent 和 skill 在 skill-eval 里是
+  multi-agent session,演示 `audit` 对 agent 的遵循性对账。agent 和 skill 在 sift 里是
   **同一个抽象**(一份声明的指令 + 一段执行段),审 agent 用同一个 `audit` 命令——区别只在
   切段靠 `agent` 字段(被 dispatch)而非 `Skill` 调用(被 invoke)。
 - **评测线**([pr-reviewer.md](pr-reviewer/pr-reviewer.md)):一份**特意为展示 critique + 出题 + 打分而设计**的
@@ -59,18 +59,18 @@ agent 声明已经物化成 `<name>/SKILL.md`(真实接入时,调用方把 agent
 
 ```bash
 # 审 test-runner(只切 test-runner 的执行段,不含 lint-reviewer 的)
-skill-eval audit fixtures/example-agents/test-runner/ \
+sift audit fixtures/example-agents/test-runner/ \
   --transcript fixtures/example-agents/multi-agent-session.json \
   --kind agent -o /tmp/test-runner-audit
 
 # 审 lint-reviewer
-skill-eval audit fixtures/example-agents/lint-reviewer/ \
+sift audit fixtures/example-agents/lint-reviewer/ \
   --transcript fixtures/example-agents/multi-agent-session.json \
   --kind agent -o /tmp/lint-reviewer-audit
 ```
 
 > 审 agent 用 `--kind agent`(按 `agent` 归属切段,区别于审 skill 的 `--kind skill` 按
-> `Skill` 调用切)。详见 [docs/skill-eval-handbook.md](../../docs/skill-eval-handbook.md) §7.7。
+> `Skill` 调用切)。详见 [docs/sift-handbook.md](../../docs/sift-handbook.md) §7.7。
 
 ### 评测线:pr-reviewer(critique + 出题 + 打分)
 
@@ -78,17 +78,17 @@ pr-reviewer 是原生 `.md`(真实 agent 形态,非物化 SKILL.md),直接喂文
 
 ```bash
 # critique:审 agent 定义正文的内容质量(4 维读者反馈)
-skill-eval critique fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent -o /tmp/pr-reviewer-critique
+sift critique fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent -o /tmp/pr-reviewer-critique
 
 # init:给 agent 出题(从角色造 role-matching 考题)——默认写 pr-reviewer/evals/evals.json(像 skill)
-skill-eval init fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent
+sift init fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent
 
 # init --from-transcript:mining 出题(从 agent 真实使用 session 挖题,另一条出题路)
-skill-eval init fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent \
+sift init fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent \
   --from-transcript fixtures/example-agents/pr-reviewer/transcripts/synthetic-clean.jsonl
 
 # run:用出的题打 agent 绝对质量分(body 经 --append-system-prompt 注入 cc system 层,prompt 原样)
-skill-eval run fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent \
+sift eval fixtures/example-agents/pr-reviewer/pr-reviewer.md --kind agent \
   --evals fixtures/example-agents/pr-reviewer/evals/evals.json --runs 2 -o /tmp/pr-reviewer-run
 ```
 
@@ -112,13 +112,13 @@ pr-reviewer 演示**只读** agent(断言全 `scope:transcript`);[release-notes-
 
 ```bash
 # critique:审 agent 定义正文的内容质量(4 维读者反馈)
-skill-eval critique fixtures/example-agents/release-notes-writer/release-notes-writer.md --kind agent -o /tmp/rn-critique
+sift critique fixtures/example-agents/release-notes-writer/release-notes-writer.md --kind agent -o /tmp/rn-critique
 
 # init:给 agent 出题(L2 产文件,断言 mixed)
-skill-eval init fixtures/example-agents/release-notes-writer/release-notes-writer.md --kind agent
+sift init fixtures/example-agents/release-notes-writer/release-notes-writer.md --kind agent
 
 # run:用出的题打 agent 绝对质量分
-skill-eval run fixtures/example-agents/release-notes-writer/release-notes-writer.md --kind agent \
+sift eval fixtures/example-agents/release-notes-writer/release-notes-writer.md --kind agent \
   --evals fixtures/example-agents/release-notes-writer/evals/evals.json --runs 2 -o /tmp/rn-run
 ```
 

@@ -2,7 +2,7 @@
 """agent-audit 的 example([fixtures/example-agents/](../fixtures/example-agents/))集成守卫。
 
 example 是**可运行示例**(不是测试夹具):两个域无关 agent(test-runner / lint-reviewer,
-以 `<name>/SKILL.md` 放,可直接 `skill-eval audit` 跑)+ 一份 multi-agent session
+以 `<name>/SKILL.md` 放,可直接 `sift audit` 跑)+ 一份 multi-agent session
 ([multi-agent-session.json](../fixtures/example-agents/multi-agent-session.json):main
 dispatch test-runner → lint-reviewer → 再 test-runner,每段种入可抓的违规)。
 
@@ -24,8 +24,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from skill_eval.cli.main import app
-from skill_eval.compliance.extractor import InstructionExtractor
+from sift.cli.main import app
+from sift.compliance.extractor import InstructionExtractor
 
 runner = CliRunner()
 EX = Path(__file__).parent.parent / "fixtures" / "example-agents"
@@ -49,7 +49,7 @@ class _CapturingAuditor:
             except OSError:
                 captured.append("")
         self.calls.append({"skill_name": skill_name, "segments": captured})
-        from skill_eval.models.audit_models import AuditReport
+        from sift.models.audit_models import AuditReport
         return AuditReport(skill_name=skill_name, transcripts=[str(tp) for tp in transcripts],
                            summary={"total": 0, "pass": 0, "fail": 0, "na": 0},
                            findings=[], warnings=[])
@@ -58,7 +58,7 @@ class _CapturingAuditor:
 def _run_capturing(monkeypatch, tmp_path, agent: str) -> _CapturingAuditor:
     """对 example 的 <agent> 跑 audit(mock 掉 auditor 抓切段后内容),返回 capture。"""
     fake = _CapturingAuditor()
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake)
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
     out = tmp_path / f"out-{agent}"
     r = runner.invoke(app, ["audit", str(EX / agent), "--transcript", str(SESSION),
                             "--kind", "agent", "-o", str(out)])
@@ -131,8 +131,8 @@ def test_audit_pipeline_runs_on_agent_example(tmp_path, monkeypatch):
     """example agent + session → 真 ``TranscriptAuditor.audit`` 全流程(mock LLM 边界):
     pytest 工具要求经 ``match_tool_call`` 程序命中 → PASS(不调 LLM)。证明 agent-audit 端到端
     跑通,且程序判定能在 agent 段上确认"该跑的工具跑了"。"""
-    monkeypatch.setattr("skill_eval.audit.auditor.time.sleep", lambda *a, **k: None)
-    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", _fake_call_claude())
+    monkeypatch.setattr("sift.audit.auditor.time.sleep", lambda *a, **k: None)
+    monkeypatch.setattr("sift.audit.auditor.call_claude", _fake_call_claude())
     out = tmp_path / "out"
     r = runner.invoke(app, ["audit", str(EX / "test-runner"), "--transcript", str(SESSION),
                             "--kind", "agent", "-o", str(out)])

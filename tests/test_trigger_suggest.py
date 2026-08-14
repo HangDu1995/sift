@@ -1,6 +1,6 @@
 """trigger 规则建议(build_rule_suggestions)单测。"""
 
-from skill_eval.execution.trigger_suggest import build_rule_suggestions
+from sift.execution.trigger_suggest import build_rule_suggestions
 
 
 def _probe(pid, expect_trigger, verdict, prompt="q"):

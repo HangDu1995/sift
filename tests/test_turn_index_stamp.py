@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import json
 
-from skill_eval.evals.opencode import _records_from_opencode
-from skill_eval.evals.structured import load_structured_records
-from skill_eval.evals.transcript import _records_from_cc, stamp_turn_indices
+from sift.evals.opencode import _records_from_opencode
+from sift.evals.structured import load_structured_records
+from sift.evals.transcript import _records_from_cc, stamp_turn_indices
 
 
 def test_stamp_assigns_1based_global_index():
@@ -34,7 +34,7 @@ def test_cc_jsonl_records_carry_turn_index(tmp_path):
 
 def test_structured_records_carry_turn_index(tmp_path):
     p = tmp_path / "s.json"
-    p.write_text(json.dumps({"format": "skill-eval-records", "records": [
+    p.write_text(json.dumps({"format": "sift-records", "records": [
         {"role": "assistant", "text": "a"}, {"role": "assistant", "text": "b"},
     ]}))
     recs = load_structured_records(p)

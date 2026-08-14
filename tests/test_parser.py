@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 
-from skill_eval.parser import parse_skill_md, resolve_skill_dir
-from skill_eval.errors import SkillParseError
+from sift.parser import parse_skill_md, resolve_skill_dir
+from sift.errors import SkillParseError
 
 
 def test_resolve_skill_dir_directory(tmp_path: Path):

@@ -1,5 +1,5 @@
 """benchmark run_summary.delta:raw pass_rate delta + NormalizedGain(天花板修正)。"""
-from skill_eval.execution.benchmark import BenchmarkAggregator
+from sift.execution.benchmark import BenchmarkAggregator
 
 
 def _entry(pass_rate, **kw):

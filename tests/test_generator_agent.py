@@ -5,8 +5,8 @@ LLM 失败 → 空 EvalSet(agent 无确定性 fallback,generate_template 切段�
 """
 import json
 
-import skill_eval.evals.generator as gen_mod
-from skill_eval.evals.generator import EvalInitGenerator
+import sift.evals.generator as gen_mod
+from sift.evals.generator import EvalInitGenerator
 
 
 _AGENT_MD = ("---\nname: reviewer\ndescription: 审查 PR diff 给可执行修改建议\n"

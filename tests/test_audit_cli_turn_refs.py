@@ -14,8 +14,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from skill_eval.cli.main import app
-from skill_eval.models.audit_models import (
+from sift.cli.main import app
+from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
     AuditMethod,
@@ -73,7 +73,7 @@ class _FakeAuditor:
 
 def _setup(monkeypatch):
     fake = _FakeAuditor()
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake)
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
     return fake
 
 

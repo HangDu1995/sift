@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from skill_eval.evals.baseline import freeze_baseline, read_meta, skill_name_mismatch
-from skill_eval.models import EvalCase, EvalSet
+from sift.evals.baseline import freeze_baseline, read_meta, skill_name_mismatch
+from sift.models import EvalCase, EvalSet
 
 
 def _write_evals(path: Path, skill_name="sk", evals=None):
@@ -22,7 +22,7 @@ def test_freeze_produces_snapshot_and_meta(tmp_path):
     m = json.loads(meta.read_text(encoding="utf-8"))
     assert m["skill_name"] == "log-error-analyzer"
     assert m["target_skill_version"] == "1.2.0"
-    assert m["skill_eval_version"]  # 非空
+    assert m["sift_version"]  # 非空
     assert m["frozen_at"]
     assert m["source_evals"] == "evals.json"
 
@@ -72,7 +72,7 @@ def test_skill_name_mismatch_detected(tmp_path):
 
 def test_freeze_preserves_trigger_probes(tmp_path):
     """freeze 是字节拷贝(copy2)→ trigger_probes 段原样钉进 baseline,不丢。"""
-    from skill_eval.models import TriggerProbe
+    from sift.models import TriggerProbe
     es = EvalSet(skill_name="sk", evals=[EvalCase(id=1, prompt="p", expectations=["e"])],
                  trigger_probes=[TriggerProbe(id=1, prompt="q", expect_trigger=True),
                                  TriggerProbe(id=2, prompt="r", expect_trigger=False)])

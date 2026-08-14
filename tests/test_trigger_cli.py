@@ -2,7 +2,7 @@ import json
 def test_trigger_command_runs_probes_and_writes_report(tmp_path, monkeypatch):
     """trigger 命令:读 trigger_probes → TriggerRunner.run(mock)→ 写 trigger-report.json。"""
     from typer.testing import CliRunner
-    from skill_eval.cli.main import app
+    from sift.cli.main import app
 
     skill = tmp_path / "skill"; skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# My\nbody\n")
@@ -13,7 +13,7 @@ def test_trigger_command_runs_probes_and_writes_report(tmp_path, monkeypatch):
 
     fake = {"probes":[{"id":1,"expect_trigger":True,"prompt":"q1","trigger_rate":1.0,"verdict":"PASS","unresolved":False,"tokens":10,"duration_ms":1234,"transcript_path":"evals/probe-1/run-0/transcript.jsonl"}],
             "recall":1.0,"false_trigger_rate":None,"n_should_trigger":1,"n_should_not":0,"unresolved":0,"duration_ms":1234,"total_tokens":999}
-    monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run", lambda self, probes, base, **kw: fake)
+    monkeypatch.setattr("sift.cli.commands.trigger.TriggerRunner.run", lambda self, probes, base, **kw: fake)
 
     out = tmp_path / "out"
     r = CliRunner().invoke(app, ["trigger", str(skill), "-o", str(out), "--runs", "1"])
@@ -41,7 +41,7 @@ def test_trigger_command_runs_probes_and_writes_report(tmp_path, monkeypatch):
 def test_trigger_command_renders_unresolved_probe_without_crash(tmp_path, monkeypatch):
     """UNRESOLVED probe 的 trigger_rate=None 时,控制台摘要不崩({None:.0%} 会 TypeError)、report 正常写。"""
     from typer.testing import CliRunner
-    from skill_eval.cli.main import app
+    from sift.cli.main import app
 
     skill = tmp_path / "skill"
     skill.mkdir()
@@ -56,7 +56,7 @@ def test_trigger_command_renders_unresolved_probe_without_crash(tmp_path, monkey
                         "transcript_path": "", "prompt": "q"}],
             "recall": None, "false_trigger_rate": None,
             "n_should_trigger": 0, "n_should_not": 0, "unresolved": 1, "duration_ms": 0, "total_tokens": 0}
-    monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run",
+    monkeypatch.setattr("sift.cli.commands.trigger.TriggerRunner.run",
                         lambda self, probes, base, **kw: fake)
 
     out = tmp_path / "out"
@@ -70,7 +70,7 @@ def test_trigger_command_renders_unresolved_probe_without_crash(tmp_path, monkey
 def test_trigger_command_llm_suggestion_on_failure(tmp_path, monkeypatch):
     """有失败 probe → 自动调 LLM 起草建议(call_llm_with_retry mock)→ suggestions 含 llm_rewrite + token_usage.suggest。"""
     from typer.testing import CliRunner
-    from skill_eval.cli.main import app
+    from sift.cli.main import app
 
     skill = tmp_path / "skill"
     skill.mkdir()
@@ -86,7 +86,7 @@ def test_trigger_command_llm_suggestion_on_failure(tmp_path, monkeypatch):
                         "transcript_path": ""}],
             "recall": 0.0, "false_trigger_rate": None,
             "n_should_trigger": 1, "n_should_not": 0, "unresolved": 0, "duration_ms": 500, "total_tokens": 10}
-    monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run",
+    monkeypatch.setattr("sift.cli.commands.trigger.TriggerRunner.run",
                         lambda self, probes, base, **kw: fake)
 
     def fake_call_llm_with_retry(prompt, *a, **k):
@@ -94,7 +94,7 @@ def test_trigger_command_llm_suggestion_on_failure(tmp_path, monkeypatch):
             k["on_usage"]({"input_tokens": 200, "output_tokens": 80, "total_cost_usd": 0.02})
         return json.dumps({"suggestion": "修订 description:做 X\n理由:补了关键词"})
 
-    monkeypatch.setattr("skill_eval.execution.trigger_suggest.call_llm_with_retry",
+    monkeypatch.setattr("sift.execution.trigger_suggest.call_llm_with_retry",
                         fake_call_llm_with_retry)
 
     out = tmp_path / "out"
@@ -114,7 +114,7 @@ def test_trigger_command_prints_breakdown_and_stores_labels(tmp_path, monkeypatc
     """分层:run() 返 by_phrase/by_length + per-probe phrase_type/length_bucket
     → 终端打分层行 + report 存 breakdown/标签(纯诊断)。"""
     from typer.testing import CliRunner
-    from skill_eval.cli.main import app
+    from sift.cli.main import app
 
     skill = tmp_path / "skill"; skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
@@ -134,7 +134,7 @@ def test_trigger_command_prints_breakdown_and_stores_labels(tmp_path, monkeypatc
                           "false_trigger": {"literal": None, "paraphrase": None}},
             "by_length": {"recall": {"short": 1.0, "medium": None, "long": None},
                           "false_trigger": {"short": None, "medium": None, "long": None}}}
-    monkeypatch.setattr("skill_eval.cli.commands.trigger.TriggerRunner.run",
+    monkeypatch.setattr("sift.cli.commands.trigger.TriggerRunner.run",
                         lambda self, probes, base, **kw: fake)
 
     out = tmp_path / "out"

@@ -8,10 +8,10 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from skill_eval.config.loader import EvalConfig
-from skill_eval.evals.generator import EvalInitGenerator
-from skill_eval.evals.transcript import SessionDigest, FileContent
-from skill_eval.models import Assertion, AssertionType, EvalCase, EvalSet, FixtureFile
+from sift.config.loader import EvalConfig
+from sift.evals.generator import EvalInitGenerator
+from sift.evals.transcript import SessionDigest, FileContent
+from sift.models import Assertion, AssertionType, EvalCase, EvalSet, FixtureFile
 
 
 def _make_skill(tmp_path: Path, name: str = "test-skill", domain: str = "general",
@@ -191,7 +191,7 @@ def test_generate_from_transcript_pipeline(monkeypatch, tmp_path):
         "prompt": "p", "expected_output": "", "expectations": [],
         "assertions": [{"name": "cli", "type": "FILE_EXISTS", "params": {"filename": "cli.py"}}],
         "fixtures": []}]})
-    monkeypatch.setattr("skill_eval.evals.generator.call_claude", lambda *a, **k: fake)
+    monkeypatch.setattr("sift.evals.generator.call_claude", lambda *a, **k: fake)
     sp = tmp_path / "skill"; sp.mkdir()
     (sp / "SKILL.md").write_text("---\nname: calc\ndescription: d\n---\n# body\n", encoding="utf-8")
     es = gen.generate_from_transcript(sp, tp)
@@ -216,8 +216,8 @@ def test_generate_from_transcript_heartbeat_during_slow_call(monkeypatch, tmp_pa
         "prompt": "p", "expected_output": "", "expectations": [],
         "assertions": [{"name": "cli", "type": "FILE_EXISTS", "params": {"filename": "cli.py"}}],
         "fixtures": []}]})
-    monkeypatch.setattr("skill_eval.evals.generator._HEARTBEAT_INTERVAL", 0.05)
-    monkeypatch.setattr("skill_eval.evals.generator.call_claude",
+    monkeypatch.setattr("sift.evals.generator._HEARTBEAT_INTERVAL", 0.05)
+    monkeypatch.setattr("sift.evals.generator.call_claude",
                         lambda *a, **k: (time.sleep(0.2), fake)[1])
     sp = tmp_path / "skill"; sp.mkdir()
     (sp / "SKILL.md").write_text("---\nname: calc\ndescription: d\n---\n# body\n", encoding="utf-8")
@@ -230,7 +230,7 @@ def test_generate_from_transcript_heartbeat_during_slow_call(monkeypatch, tmp_pa
 def test_merge_same_task_evals_collapses_identical_prompt():
     """单 transcript 挖出多个同 prompt eval(同任务多细则)→ 合并成一题多断言,
     省 spawn、去冗余(避免同一任务 spawn 6 次)。不同 prompt 不合并。"""
-    from skill_eval.models import EvalSet, EvalCase, Assertion, AssertionType, FixtureFile
+    from sift.models import EvalSet, EvalCase, Assertion, AssertionType, FixtureFile
     evals = [
         EvalCase(id=1, prompt="分析 app.log 写 report", level="L1",
                  expected_output="含 total_errors", expectations=["要 total_errors"],
@@ -260,7 +260,7 @@ def test_merge_same_task_evals_collapses_identical_prompt():
 
 def test_merge_no_op_when_all_prompts_distinct():
     """所有 eval prompt 各不同 → 无合并,原样返回(仅重排 id)。"""
-    from skill_eval.models import EvalSet, EvalCase
+    from sift.models import EvalSet, EvalCase
     es = EvalSet(skill_name="s", evals=[
         EvalCase(id=1, prompt="任务A"), EvalCase(id=2, prompt="任务B")])
     out = EvalInitGenerator._merge_same_task_evals(es)
@@ -402,10 +402,10 @@ def test_enforce_drops_custom_script_resolves_but_no_fixture():
 
 def test_generate_from_transcript_missing_file_raises(tmp_path):
     import pytest
-    from skill_eval.errors import SkillEvalError
+    from sift.errors import SiftError
     sp = tmp_path / "skill"; sp.mkdir()
     (sp / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\n# b\n", encoding="utf-8")
-    with pytest.raises(SkillEvalError):
+    with pytest.raises(SiftError):
         EvalInitGenerator().generate_from_transcript(sp, tmp_path / "nope.jsonl")
 
 
@@ -476,7 +476,7 @@ def test_from_transcript_keeps_skill_output_assertion_on_violation_transcript(mo
         "assertions": [{"name": "report exists", "type": "FILE_EXISTS",
                         "params": {"filename": "error-report.json"}}],
         "fixtures": []}]})
-    monkeypatch.setattr("skill_eval.evals.generator.call_claude", lambda *a, **k: fake)
+    monkeypatch.setattr("sift.evals.generator.call_claude", lambda *a, **k: fake)
     es = gen.generate_from_transcript(sp, tp)
     fns = [a.params.get("filename") for a in es.evals[0].assertions
            if a.type == AssertionType.FILE_EXISTS]
@@ -508,7 +508,7 @@ def _multi_skill_transcript(tmp_path: Path, target: str = "skillA", other: str =
 
 
 def test_invoked_skills_lists_all_in_order(tmp_path: Path):
-    from skill_eval.audit.slice import invoked_skills
+    from sift.audit.slice import invoked_skills
     tp = _multi_skill_transcript(tmp_path)
     assert invoked_skills(tp) == ["skillA", "skillB"]
 
@@ -516,7 +516,7 @@ def test_invoked_skills_lists_all_in_order(tmp_path: Path):
 def test_invoked_agents_lists_all_in_order(tmp_path: Path):
     """invoked_agents:record.agent 去重 + 按首次出现顺序;无 agent 字段的 record 跳过。"""
     import json
-    from skill_eval.audit.slice import invoked_agents
+    from sift.audit.slice import invoked_agents
     tp = tmp_path / "multi-agent.jsonl"
     tp.write_text("\n".join(json.dumps(r) for r in [
         {"agent": "orchestrator", "message": {"role": "assistant",
@@ -543,7 +543,7 @@ def test_from_transcript_kind_isolates_target_segment(monkeypatch, tmp_path: Pat
         "assertions": [{"name": "A", "type": "FILE_EXISTS", "params": {"filename": "skillA.json"}},
                        {"name": "B", "type": "FILE_EXISTS", "params": {"filename": "skillB.json"}}],
         "fixtures": []}]})
-    monkeypatch.setattr("skill_eval.evals.generator.call_claude", lambda *a, **k: fake)
+    monkeypatch.setattr("sift.evals.generator.call_claude", lambda *a, **k: fake)
     # kind="skill":只切 skillA 段 → skillA.json 留、skillB.json drop
     es = gen.generate_from_transcript(sp, tp, kind="skill")
     fns = [a.params.get("filename") for a in es.evals[0].assertions if a.type == AssertionType.FILE_EXISTS]
@@ -556,12 +556,12 @@ def test_from_transcript_kind_isolates_target_segment(monkeypatch, tmp_path: Pat
 
 def test_from_transcript_kind_target_never_invoked_raises(tmp_path: Path):
     """--kind skill 但本 skill 从未在 transcript 被调用 → 明确报错(别静默挖空)。"""
-    from skill_eval.errors import SkillEvalError
+    from sift.errors import SiftError
     gen = EvalInitGenerator()
     sp = tmp_path / "skill"; sp.mkdir()
     (sp / "SKILL.md").write_text("---\nname: skillC\ndescription: d\n---\n# b\n", encoding="utf-8")
     tp = _multi_skill_transcript(tmp_path)  # 含 skillA + skillB,无 skillC
-    with pytest.raises(SkillEvalError):
+    with pytest.raises(SiftError):
         gen.generate_from_transcript(sp, tp, kind="skill")
 
 
@@ -609,7 +609,7 @@ def test_generate_with_llm_flags_missing_rationale(monkeypatch, tmp_path):
     fake = json.dumps({"skill_name": "s", "evals": [
         {"id": 1, "name": "n", "level": "L1", "prompt": "p",
          "expectations": ["e"], "assertions": [], "fixtures": []}]})  # 无 rationale
-    monkeypatch.setattr("skill_eval.evals.generator.call_claude", lambda *a, **k: fake)
+    monkeypatch.setattr("sift.evals.generator.call_claude", lambda *a, **k: fake)
     es = EvalInitGenerator().generate_with_llm(sp)
     assert "review:no-rationale" in (es.evals[0].flags or [])
 
@@ -621,7 +621,7 @@ def test_generate_with_llm_no_flag_when_rationale_present(monkeypatch, tmp_path)
     fake = json.dumps({"skill_name": "s", "evals": [
         {"id": 1, "name": "n", "level": "L1", "prompt": "p", "rationale": "## 规则",
          "expectations": ["e"], "assertions": [], "fixtures": []}]})
-    monkeypatch.setattr("skill_eval.evals.generator.call_claude", lambda *a, **k: fake)
+    monkeypatch.setattr("sift.evals.generator.call_claude", lambda *a, **k: fake)
     es = EvalInitGenerator().generate_with_llm(sp)
     assert "review:no-rationale" not in (es.evals[0].flags or [])
 
@@ -757,7 +757,7 @@ def test_generate_trigger_probes_parses_llm_json(tmp_path):
             '{"id":1,"prompt":"做这个 skill 该做的事","expect_trigger":true,"rationale":"正中用途"},'
             '{"id":2,"prompt":"看着像但不该管的事","expect_trigger":false,"rationale":"无关"}]}')
     gen = EvalInitGenerator()
-    with patch("skill_eval.evals.generator.call_claude", return_value=fake):
+    with patch("sift.evals.generator.call_claude", return_value=fake):
         probes = gen.generate_trigger_probes(_skill(tmp_path))
     assert len(probes) == 2
     assert probes[0].expect_trigger is True and probes[1].expect_trigger is False
@@ -767,7 +767,7 @@ def test_generate_trigger_probes_parses_llm_json(tmp_path):
 def test_trigger_probe_prompt_is_neutral_and_does_not_name_skill(tmp_path):
     """生成 prompt 必须强制 neutral wording、不命名 skill(否则不是测触发)。"""
     gen = EvalInitGenerator()
-    with patch("skill_eval.evals.generator.call_claude") as mc:
+    with patch("sift.evals.generator.call_claude") as mc:
         mc.return_value = '{"skill_name":"my","trigger_probes":[]}'
         gen.generate_trigger_probes(_skill(tmp_path))
         sent = mc.call_args.args[0]
@@ -781,7 +781,7 @@ def test_generate_trigger_probes_extracts_json_embedded_in_prose(tmp_path):
     fake = ('Here you go:\n{"skill_name":"my","trigger_probes":'
             '[{"id":1,"prompt":"q","expect_trigger":true,"rationale":"r"}]}\nDone.')
     gen = EvalInitGenerator()
-    with patch("skill_eval.evals.generator.call_claude", return_value=fake):
+    with patch("sift.evals.generator.call_claude", return_value=fake):
         probes = gen.generate_trigger_probes(_skill(tmp_path))
     assert len(probes) == 1 and probes[0].expect_trigger is True
 
@@ -791,7 +791,7 @@ def test_generate_trigger_probes_empty_on_llm_failure(tmp_path):
     gen = EvalInitGenerator()
     def boom(*a, **k):
         raise RuntimeError("llm down")
-    with patch("skill_eval.evals.generator.call_claude", side_effect=boom):
+    with patch("sift.evals.generator.call_claude", side_effect=boom):
         probes = gen.generate_trigger_probes(_skill(tmp_path))
     assert probes == []
 
@@ -888,7 +888,7 @@ def test_generate_with_llm_passes_existing_into_prompt(monkeypatch, tmp_path):
         return json.dumps({"skill_name": "s", "evals": [
             {"id": 1, "name": "n", "level": "L1", "prompt": "p", "rationale": "## r",
              "expectations": [], "assertions": [], "fixtures": []}]})
-    monkeypatch.setattr("skill_eval.evals.generator.call_claude", fake)
+    monkeypatch.setattr("sift.evals.generator.call_claude", fake)
     EvalInitGenerator(focus="read-log-file").generate_with_llm(
         sp, existing_evals=[EvalCase(id=7, name="SENTRY", prompt="old-prompt")])
     assert "SENTRY" in captured["prompt"]

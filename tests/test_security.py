@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from skill_eval.models import ScannerStatus, SecurityVerdict
-from skill_eval.security.vetter import SecurityVetter
+from sift.models import ScannerStatus, SecurityVerdict
+from sift.security.vetter import SecurityVetter
 
 
 @pytest.fixture

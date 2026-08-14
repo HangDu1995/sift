@@ -6,7 +6,7 @@ run_trigger 是 trigger-accuracy 评测用的 spawn 路径:不灌 skill body、�
 
 from unittest.mock import patch
 
-from skill_eval.execution.cli_runner import ClaudeRunner
+from sift.execution.cli_runner import ClaudeRunner
 
 
 def _make(stream_json_with_skill: bool):
@@ -46,27 +46,27 @@ def test_run_trigger_returns_runoutput_with_skill_in_tool_calls():
 # ---------------------------------------------------------------------------
 
 def test_should_trigger_fired_passes():
-    from skill_eval.execution.trigger_runner import probe_verdict
+    from sift.execution.trigger_runner import probe_verdict
     assert probe_verdict(expect_trigger=True, fired=True) == "PASS"
 
 
 def test_should_trigger_not_fired_fails():
-    from skill_eval.execution.trigger_runner import probe_verdict
+    from sift.execution.trigger_runner import probe_verdict
     assert probe_verdict(expect_trigger=True, fired=False) == "FAIL"
 
 
 def test_should_not_fired_passes():
-    from skill_eval.execution.trigger_runner import probe_verdict
+    from sift.execution.trigger_runner import probe_verdict
     assert probe_verdict(expect_trigger=False, fired=False) == "PASS"
 
 
 def test_should_not_triggered_fails():
-    from skill_eval.execution.trigger_runner import probe_verdict
+    from sift.execution.trigger_runner import probe_verdict
     assert probe_verdict(expect_trigger=False, fired=True) == "FAIL"  # 误触发
 
 
 def test_aggregate_recall_and_false_trigger():
-    from skill_eval.execution.trigger_runner import aggregate_rates
+    from sift.execution.trigger_runner import aggregate_rates
     probes = [
         {"expect_trigger": True, "trigger_rate": 1.0},
         {"expect_trigger": True, "trigger_rate": 0.0},
@@ -81,7 +81,7 @@ def test_aggregate_recall_and_false_trigger():
 
 
 def test_aggregate_zero_direction_is_na():
-    from skill_eval.execution.trigger_runner import aggregate_rates
+    from sift.execution.trigger_runner import aggregate_rates
     rates = aggregate_rates([{"expect_trigger": True, "trigger_rate": 1.0}])  # 无 should-not
     assert rates["false_trigger_rate"] is None
     assert rates["recall"] == 1.0
@@ -92,34 +92,34 @@ def test_aggregate_zero_direction_is_na():
 # ---------------------------------------------------------------------------
 
 def test_classify_phrase_literal_copies_description_substring():
-    from skill_eval.execution.trigger_runner import classify_phrase
+    from sift.execution.trigger_runner import classify_phrase
     desc = "generates structured incident reports from raw text"
     prompt = "please generates structured incident reports from raw text for me"  # 逐字抄片段
     assert classify_phrase(prompt, desc) == "literal"
 
 
 def test_classify_phrase_paraphrase_no_substring():
-    from skill_eval.execution.trigger_runner import classify_phrase
+    from sift.execution.trigger_runner import classify_phrase
     desc = "generates structured incident reports from raw text"
     prompt = "we had an outage last night, write up a postmortem"  # 语义对、无字面子串
     assert classify_phrase(prompt, desc) == "paraphrase"
 
 
 def test_classify_phrase_description_too_short_is_paraphrase():
-    from skill_eval.execution.trigger_runner import classify_phrase
+    from sift.execution.trigger_runner import classify_phrase
     # description 短于阈值 → 无法判定词面命中,不误报
     assert classify_phrase("does X quickly", "does X") == "paraphrase"
 
 
 def test_classify_phrase_normalizes_case_and_punctuation():
-    from skill_eval.execution.trigger_runner import classify_phrase
+    from sift.execution.trigger_runner import classify_phrase
     desc = "Generate structured incident reports from raw text"
     prompt = "Please, GENERATE structured incident reports from raw text!!"  # 大小写 + 标点差异
     assert classify_phrase(prompt, desc) == "literal"
 
 
 def test_classify_phrase_custom_min_chars_threshold():
-    from skill_eval.execution.trigger_runner import classify_phrase
+    from sift.execution.trigger_runner import classify_phrase
     desc = "abcdefghijklmnopqrstuvwxyz"  # 26 字符
     prompt = "middle bit: " + desc[3:15] + " end"  # 含 12 字符连续子串 desc[3:15]
     assert classify_phrase(prompt, desc, min_chars=10) == "literal"     # 12 ≥ 10 → 命中
@@ -127,7 +127,7 @@ def test_classify_phrase_custom_min_chars_threshold():
 
 
 def test_length_bucket_thresholds():
-    from skill_eval.execution.trigger_runner import length_bucket
+    from sift.execution.trigger_runner import length_bucket
     assert length_bucket("x" * 29) == "short"
     assert length_bucket("x" * 30) == "medium"   # 边界:30 = medium
     assert length_bucket("x" * 80) == "medium"   # 边界:80 = medium
@@ -136,7 +136,7 @@ def test_length_bucket_thresholds():
 
 def test_aggregate_by_phrase_and_length():
     """带 phrase_type/length_bucket 的 probe → recall/ftr 主指标照算 + 分层 rollup。"""
-    from skill_eval.execution.trigger_runner import aggregate_rates
+    from sift.execution.trigger_runner import aggregate_rates
     probes = [
         {"expect_trigger": True, "trigger_rate": 1.0, "phrase_type": "literal", "length_bucket": "short"},
         {"expect_trigger": True, "trigger_rate": 0.0, "phrase_type": "paraphrase", "length_bucket": "long"},
@@ -153,7 +153,7 @@ def test_aggregate_by_phrase_and_length():
 
 def test_aggregate_backward_compat_no_labels():
     """旧入参(无 phrase_type/length_bucket)→ 主指标不变,分层全 None(不炸)。"""
-    from skill_eval.execution.trigger_runner import aggregate_rates
+    from sift.execution.trigger_runner import aggregate_rates
     probes = [
         {"expect_trigger": True, "trigger_rate": 1.0},
         {"expect_trigger": True, "trigger_rate": 0.5},
@@ -166,14 +166,14 @@ def test_aggregate_backward_compat_no_labels():
 
 def test_probe_result_backward_compat_missing_labels():
     """旧 probe 结果(无 phrase_type/length_bucket)→ 默认空串,不炸。"""
-    from skill_eval.models.trigger_report import ProbeResult
+    from sift.models.trigger_report import ProbeResult
     p = ProbeResult.model_validate({"id": 1, "expect_trigger": True, "trigger_rate": 1.0, "verdict": "PASS"})
     assert p.phrase_type == "" and p.length_bucket == ""
 
 
 def test_trigger_report_backward_compat_missing_breakdown():
     """旧 trigger-report.json(无 breakdown)→ 默认 {},不炸。"""
-    from skill_eval.models.trigger_report import TriggerReport
+    from sift.models.trigger_report import TriggerReport
     r = TriggerReport.model_validate({
         "skill_name": "x", "description_hash": "abc", "runs": 1,
         "recall": 1.0, "false_trigger_rate": None,
@@ -188,9 +188,9 @@ def test_trigger_report_backward_compat_missing_breakdown():
 
 def test_trigger_runner_detects_invocation_end_to_end(monkeypatch, tmp_path):
     """mock run_trigger 返带 Skill tool_use 的 stdout → harness 写 transcript → invoked_skills 检出 fired。"""
-    from skill_eval.execution.trigger_runner import TriggerRunner
-    from skill_eval.models.eval_models import TriggerProbe
-    from skill_eval.models.execution_models import RunOutput
+    from sift.execution.trigger_runner import TriggerRunner
+    from sift.models.eval_models import TriggerProbe
+    from sift.models.execution_models import RunOutput
 
     skill_stdout = (
         '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"my-skill"}}]}}\n'
@@ -206,7 +206,7 @@ def test_trigger_runner_detects_invocation_end_to_end(monkeypatch, tmp_path):
     skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
 
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    monkeypatch.setattr("sift.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
     tr = TriggerRunner(skill, runs=1)
     res = tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=True)], out_base=tmp_path / "out")
     p1 = res["probes"][0]
@@ -218,9 +218,9 @@ def test_trigger_runner_detects_invocation_end_to_end(monkeypatch, tmp_path):
 
 def test_trigger_runner_should_not_triggered_is_fail(monkeypatch, tmp_path):
     """should-not 探题却触发了 → FAIL + 计入 false_trigger_rate。"""
-    from skill_eval.execution.trigger_runner import TriggerRunner
-    from skill_eval.models.eval_models import TriggerProbe
-    from skill_eval.models.execution_models import RunOutput
+    from sift.execution.trigger_runner import TriggerRunner
+    from sift.models.eval_models import TriggerProbe
+    from sift.models.execution_models import RunOutput
 
     skill_stdout = (
         '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"my-skill"}}]}}\n'
@@ -234,7 +234,7 @@ def test_trigger_runner_should_not_triggered_is_fail(monkeypatch, tmp_path):
     skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
 
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    monkeypatch.setattr("sift.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
     tr = TriggerRunner(skill, runs=1)
     res = tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=False)], out_base=tmp_path / "out")
     assert res["probes"][0]["verdict"] == "FAIL"
@@ -243,9 +243,9 @@ def test_trigger_runner_should_not_triggered_is_fail(monkeypatch, tmp_path):
 
 def test_trigger_runner_spawn_failure_is_unresolved_excluded_from_rates(monkeypatch, tmp_path):
     """run_trigger 抛异常 → probe UNRESOLVED,不进 recall/false_trigger 分母。"""
-    from skill_eval.execution.cli_runner import ClaudeRunnerError
-    from skill_eval.execution.trigger_runner import TriggerRunner
-    from skill_eval.models.eval_models import TriggerProbe
+    from sift.execution.cli_runner import ClaudeRunnerError
+    from sift.execution.trigger_runner import TriggerRunner
+    from sift.models.eval_models import TriggerProbe
 
     def fake_run_trigger(self, prompt, cwd, env, **kw):
         raise ClaudeRunnerError("boom")
@@ -254,7 +254,7 @@ def test_trigger_runner_spawn_failure_is_unresolved_excluded_from_rates(monkeypa
     skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
 
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    monkeypatch.setattr("sift.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
     tr = TriggerRunner(skill, runs=1)
     res = tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=True)], out_base=tmp_path / "out")
     assert res["probes"][0]["verdict"] == "UNRESOLVED"
@@ -272,9 +272,9 @@ def test_trigger_runner_nonzero_exit_without_fire_is_unresolved(monkeypatch, tmp
     不 raise 而返正常 RunOutput;若 _run_probe_once 不看 exit_code,会被当「正常没触发」
     → should-trigger 假 FAIL / should-not 假 PASS,静默污染双率。
     """
-    from skill_eval.execution.trigger_runner import TriggerRunner
-    from skill_eval.models.eval_models import TriggerProbe
-    from skill_eval.models.execution_models import RunOutput
+    from sift.execution.trigger_runner import TriggerRunner
+    from sift.models.eval_models import TriggerProbe
+    from sift.models.execution_models import RunOutput
 
     def fake_run_trigger(self, prompt, cwd, env, **kw):
         # cc 撞限流:exit 1、stdout 是错误文本(无 Skill tool_use)
@@ -282,7 +282,7 @@ def test_trigger_runner_nonzero_exit_without_fire_is_unresolved(monkeypatch, tmp
 
     skill = tmp_path / "my-skill"; skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    monkeypatch.setattr("sift.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
     tr = TriggerRunner(skill, runs=1)
     res = tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=True)], out_base=tmp_path / "out")
     assert res["probes"][0]["verdict"] == "UNRESOLVED"
@@ -293,9 +293,9 @@ def test_trigger_runner_nonzero_exit_without_fire_is_unresolved(monkeypatch, tmp
 
 def test_trigger_runner_fired_then_nonzero_exit_still_counts(monkeypatch, tmp_path):
     """skill 先触发后 cc 非零退出(fired=True)→ 不计 UNRESOLVED,保住这次 fire(I1 修法的边界)。"""
-    from skill_eval.execution.trigger_runner import TriggerRunner
-    from skill_eval.models.eval_models import TriggerProbe
-    from skill_eval.models.execution_models import RunOutput
+    from sift.execution.trigger_runner import TriggerRunner
+    from sift.models.eval_models import TriggerProbe
+    from sift.models.execution_models import RunOutput
 
     skill_stdout = ('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"my-skill"}}]}}\n'
                     '{"type":"result","result":"x"}\n')
@@ -305,7 +305,7 @@ def test_trigger_runner_fired_then_nonzero_exit_still_counts(monkeypatch, tmp_pa
 
     skill = tmp_path / "my-skill"; skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    monkeypatch.setattr("sift.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
     tr = TriggerRunner(skill, runs=1)
     res = tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=True)], out_base=tmp_path / "out")
     assert res["probes"][0]["verdict"] == "PASS"   # fired → 不因 exit!=0 丢
@@ -318,9 +318,9 @@ def test_trigger_runner_multi_run_aggregation(monkeypatch, tmp_path):
 
     补多 run 聚合接线(fired_count/runs → _binary_verdict)的集成覆盖(单 run 测里聚合是平凡的)。
     """
-    from skill_eval.execution.trigger_runner import TriggerRunner
-    from skill_eval.models.eval_models import TriggerProbe
-    from skill_eval.models.execution_models import RunOutput
+    from sift.execution.trigger_runner import TriggerRunner
+    from sift.models.eval_models import TriggerProbe
+    from sift.models.execution_models import RunOutput
 
     fire_seq = iter([True, False, True])
     skill_stdout_fire = ('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"my-skill"}}]}}\n'
@@ -333,7 +333,7 @@ def test_trigger_runner_multi_run_aggregation(monkeypatch, tmp_path):
 
     skill = tmp_path / "my-skill"; skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    monkeypatch.setattr("sift.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
     tr = TriggerRunner(skill, runs=3)
     res = tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=True)], out_base=tmp_path / "out")
     p1 = res["probes"][0]
@@ -345,9 +345,9 @@ def test_trigger_runner_multi_run_aggregation(monkeypatch, tmp_path):
 def test_trigger_runner_aggregates_duration_and_tokens(monkeypatch, tmp_path):
     """run() 顶层聚合:duration_ms + total_tokens 都是各 probe 各 run 的 RunOutput 之和(对称)。
     汇总行 / 报告消耗都从这两个顶层聚合取,不在 CLI 层重复 sum。"""
-    from skill_eval.execution.trigger_runner import TriggerRunner
-    from skill_eval.models.eval_models import TriggerProbe
-    from skill_eval.models.execution_models import RunOutput
+    from sift.execution.trigger_runner import TriggerRunner
+    from sift.models.eval_models import TriggerProbe
+    from sift.models.execution_models import RunOutput
 
     dur_seq = iter([100, 200, 300])
 
@@ -357,7 +357,7 @@ def test_trigger_runner_aggregates_duration_and_tokens(monkeypatch, tmp_path):
 
     skill = tmp_path / "my-skill"; skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    monkeypatch.setattr("sift.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
     tr = TriggerRunner(skill, runs=1)
     res = tr.run([
         TriggerProbe(id=1, prompt="q", expect_trigger=True),
@@ -373,16 +373,16 @@ def test_trigger_runner_aggregates_duration_and_tokens(monkeypatch, tmp_path):
 
 def test_trigger_runner_duration_sums_across_runs(monkeypatch, tmp_path):
     """runs=2:同 probe 多 run 的 duration_ms 累加进该 probe(per-probe = runs × 每次)。"""
-    from skill_eval.execution.trigger_runner import TriggerRunner
-    from skill_eval.models.eval_models import TriggerProbe
-    from skill_eval.models.execution_models import RunOutput
+    from sift.execution.trigger_runner import TriggerRunner
+    from sift.models.eval_models import TriggerProbe
+    from sift.models.execution_models import RunOutput
 
     def fake_run_trigger(self, prompt, cwd, env, **kw):
         return RunOutput(exit_code=0, stdout='{"type":"result","result":"x"}\n', duration_ms=150)
 
     skill = tmp_path / "my-skill"; skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    monkeypatch.setattr("sift.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
     tr = TriggerRunner(skill, runs=2)
     res = tr.run([TriggerProbe(id=1, prompt="q", expect_trigger=True)], out_base=tmp_path / "out")
     assert res["probes"][0]["duration_ms"] == 300   # 150 × 2
@@ -391,9 +391,9 @@ def test_trigger_runner_duration_sums_across_runs(monkeypatch, tmp_path):
 
 def test_trigger_runner_progress_callback(monkeypatch, tmp_path):
     """run(on_progress=...) 每个 probe 开头报位置(probe i/N + 方向)+ 透传 cc 动作给回调。"""
-    from skill_eval.execution.trigger_runner import TriggerRunner
-    from skill_eval.models.eval_models import TriggerProbe
-    from skill_eval.models.execution_models import RunOutput
+    from sift.execution.trigger_runner import TriggerRunner
+    from sift.models.eval_models import TriggerProbe
+    from sift.models.execution_models import RunOutput
 
     received = []
 
@@ -404,7 +404,7 @@ def test_trigger_runner_progress_callback(monkeypatch, tmp_path):
 
     skill = tmp_path / "my-skill"; skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    monkeypatch.setattr("sift.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
     tr = TriggerRunner(skill, runs=1)
     tr.run([
         TriggerProbe(id=1, prompt="q", expect_trigger=True),
@@ -417,9 +417,9 @@ def test_trigger_runner_progress_callback(monkeypatch, tmp_path):
 
 def test_run_emits_phrase_type_length_and_breakdown(monkeypatch, tmp_path):
     """run() 每 probe dict 带 phrase_type/length_bucket(报告期推断),顶层带 by_phrase/by_length。"""
-    from skill_eval.execution.trigger_runner import TriggerRunner
-    from skill_eval.models.eval_models import TriggerProbe
-    from skill_eval.models.execution_models import RunOutput
+    from sift.execution.trigger_runner import TriggerRunner
+    from sift.models.eval_models import TriggerProbe
+    from sift.models.execution_models import RunOutput
 
     skill_stdout = ('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"my-skill"}}]}}\n'
                     '{"type":"result","result":"x"}\n')
@@ -430,7 +430,7 @@ def test_run_emits_phrase_type_length_and_breakdown(monkeypatch, tmp_path):
     skill = tmp_path / "my-skill"; skill.mkdir()
     (skill / "SKILL.md").write_text(
         "---\nname: my-skill\ndescription: generates structured incident reports\n---\n# body\n")
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    monkeypatch.setattr("sift.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
     tr = TriggerRunner(skill, runs=1)
     res = tr.run([
         # 照抄 description 措辞 → literal;语义改写 → paraphrase
@@ -462,9 +462,9 @@ def test_run_probe_once_uses_real_home_for_auth(monkeypatch, tmp_path):
     trigger 对齐之。fired 只看被测 skill 名(invoked_skills),全局 skill 参与不影响判定。
     """
     import os
-    from skill_eval.execution.trigger_runner import TriggerRunner
-    from skill_eval.models.eval_models import TriggerProbe
-    from skill_eval.models.execution_models import RunOutput
+    from sift.execution.trigger_runner import TriggerRunner
+    from sift.models.eval_models import TriggerProbe
+    from sift.models.execution_models import RunOutput
 
     captured = {}
 
@@ -472,7 +472,7 @@ def test_run_probe_once_uses_real_home_for_auth(monkeypatch, tmp_path):
         captured["env"] = env
         return RunOutput(exit_code=0, stdout='{"type":"result","result":"x"}\n')
 
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    monkeypatch.setattr("sift.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
 
     skill = tmp_path / "my-skill"
     skill.mkdir()
@@ -489,9 +489,9 @@ def test_run_clears_stale_probe_sandboxes(monkeypatch, tmp_path):
     回归:trigger 不清理输出目录 → 改小 runs / 删 probe 后,上次的 run-N / probe-N 残留,
     人审翻目录看到过期 transcript。run() 开头清 out_base/probe-*;report 由 CLI 覆盖。
     """
-    from skill_eval.execution.trigger_runner import TriggerRunner
-    from skill_eval.models.eval_models import TriggerProbe
-    from skill_eval.models.execution_models import RunOutput
+    from sift.execution.trigger_runner import TriggerRunner
+    from sift.models.eval_models import TriggerProbe
+    from sift.models.execution_models import RunOutput
 
     out_base = tmp_path / "out"
     out_base.mkdir()
@@ -509,7 +509,7 @@ def test_run_clears_stale_probe_sandboxes(monkeypatch, tmp_path):
     def fake_run_trigger(self, prompt, cwd, env, **kw):
         return RunOutput(exit_code=0, stdout='{"type":"result","result":"x"}\n')
 
-    monkeypatch.setattr("skill_eval.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
+    monkeypatch.setattr("sift.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
     skill = tmp_path / "my-skill"; skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: X\n---\n# body\n")
     tr = TriggerRunner(skill, runs=1)

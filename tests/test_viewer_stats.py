@@ -2,7 +2,7 @@
 
 运行时 JS 正确性由 node -e 验(flakyOf / sig 变换);此处验模板嵌入字段 + 含逻辑字面量。
 """
-from skill_eval.reporting.viewer import ReportGenerator
+from sift.reporting.viewer import ReportGenerator
 
 
 def test_viewer_embeds_win_rate_ci(tmp_path):

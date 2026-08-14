@@ -4,11 +4,11 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-import skill_eval.evals.coverage as cov
-from skill_eval.cli.commands import coverage as cov_cmd
-from skill_eval.evals.coverage import analyze_coverage, _parse_coverage_response
-from skill_eval.models import EvalSet, EvalCase
-from skill_eval.models.coverage_report import CoveragePoint, CoverageReport
+import sift.evals.coverage as cov
+from sift.cli.commands import coverage as cov_cmd
+from sift.evals.coverage import analyze_coverage, _parse_coverage_response
+from sift.models import EvalSet, EvalCase
+from sift.models.coverage_report import CoveragePoint, CoverageReport
 
 
 def test_coverage_point_defaults():
@@ -132,7 +132,7 @@ def test_coverage_agent_md_default_path(monkeypatch, tmp_path):
 
 def test_coverage_augment_agent_routes_generate_for_agent(monkeypatch, tmp_path):
     """--kind agent --augment 路由到 generate_for_agent(非 skill 的 generate_with_llm)。"""
-    from skill_eval.evals.generator import EvalInitGenerator
+    from sift.evals.generator import EvalInitGenerator
     runner = CliRunner()
     adir = tmp_path / "pr-reviewer"; adir.mkdir()
     agent = adir / "pr-reviewer.md"
@@ -244,8 +244,8 @@ def test_coverage_missing_evals_json_warns(tmp_path):
 
 
 def test_coverage_augment_appends_flagged_dedup_evals(monkeypatch, tmp_path):
-    from skill_eval.cli.commands import coverage as cov_cmd
-    from skill_eval.evals.generator import EvalInitGenerator
+    from sift.cli.commands import coverage as cov_cmd
+    from sift.evals.generator import EvalInitGenerator
     runner = CliRunner()
 
     skill = tmp_path / "sk"; edir = skill / "evals"; edir.mkdir(parents=True)
@@ -257,14 +257,14 @@ def test_coverage_augment_appends_flagged_dedup_evals(monkeypatch, tmp_path):
     }, ensure_ascii=False), encoding="utf-8")
 
     def fake_analyze(skill_path, eval_set, *, model=None, timeout=120, kind=None):
-        from skill_eval.models.coverage_report import CoveragePoint, CoverageReport
+        from sift.models.coverage_report import CoveragePoint, CoverageReport
         return CoverageReport(skill_name="sk", points=[
             CoveragePoint(label="安全事件升级", source_quote="q", covered_by=[])])  # 1 个漏测点
     monkeypatch.setattr(cov_cmd, "analyze_coverage", fake_analyze)
 
     # fake generate_with_llm:返回 2 道新题,其中一道 prompt 与已有重复(应被去重)
     def fake_gen(self, skill_path, existing_evals=None):
-        from skill_eval.models import EvalSet, EvalCase
+        from sift.models import EvalSet, EvalCase
         return EvalSet(skill_name="sk", evals=[
             EvalCase(id=0, name="new1", prompt="测安全事件", rationale="auto"),
             EvalCase(id=0, name="dup", prompt="已存在 prompt", rationale="auto"),  # 重复→跳过
@@ -287,8 +287,8 @@ def test_coverage_augment_appends_flagged_dedup_evals(monkeypatch, tmp_path):
 
 def test_coverage_augment_feeds_existing_evals(monkeypatch, tmp_path):
     """--augment 调 generate_with_llm 时喂现有 evals(共享内核定向补题 + 去重),不盲生成。"""
-    from skill_eval.cli.commands import coverage as cov_cmd
-    from skill_eval.evals.generator import EvalInitGenerator
+    from sift.cli.commands import coverage as cov_cmd
+    from sift.evals.generator import EvalInitGenerator
     runner = CliRunner()
 
     skill = tmp_path / "sk"; edir = skill / "evals"; edir.mkdir(parents=True)
@@ -299,7 +299,7 @@ def test_coverage_augment_feeds_existing_evals(monkeypatch, tmp_path):
     }, ensure_ascii=False), encoding="utf-8")
 
     def fake_analyze(skill_path, eval_set, *, model=None, timeout=120, kind=None):
-        from skill_eval.models.coverage_report import CoveragePoint, CoverageReport
+        from sift.models.coverage_report import CoveragePoint, CoverageReport
         return CoverageReport(skill_name="sk", points=[
             CoveragePoint(label="漏测点A", source_quote="q", covered_by=[])])
     monkeypatch.setattr(cov_cmd, "analyze_coverage", fake_analyze)
@@ -308,7 +308,7 @@ def test_coverage_augment_feeds_existing_evals(monkeypatch, tmp_path):
 
     def fake_gen(self, skill_path, existing_evals=None):
         captured["existing"] = existing_evals
-        from skill_eval.models import EvalSet, EvalCase
+        from sift.models import EvalSet, EvalCase
         return EvalSet(skill_name="sk", evals=[EvalCase(id=0, name="new", prompt="补题", rationale="r")])
     monkeypatch.setattr(EvalInitGenerator, "generate_with_llm", fake_gen)
 

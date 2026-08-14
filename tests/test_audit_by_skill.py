@@ -14,8 +14,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from skill_eval.cli.main import app
-from skill_eval.models.audit_models import (
+from sift.cli.main import app
+from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
     AuditMethod,
@@ -113,7 +113,7 @@ def test_by_skill_slices_and_feeds_auditor(monkeypatch, tmp_path):
     """
     fake = _FakeAuditor()
     monkeypatch.setattr(
-        "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
+        "sift.cli.commands.audit.TranscriptAuditor", lambda: fake
     )
 
     sp = _skill_dir(tmp_path, "skillA")
@@ -164,7 +164,7 @@ def test_by_skill_never_invoked_exits_2(monkeypatch, tmp_path):
     """--kind skill 但 target skill 从未被调用 → exit 2 + 友好错误(不喂 auditor)。"""
     fake = _FakeAuditor()
     monkeypatch.setattr(
-        "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
+        "sift.cli.commands.audit.TranscriptAuditor", lambda: fake
     )
 
     sp = _skill_dir(tmp_path, "skillA")
@@ -192,7 +192,7 @@ def test_by_skill_off_by_default(monkeypatch, tmp_path):
     """不带 --kind:auditor 直接收到原始 transcript 路径(不切片)。"""
     fake = _FakeAuditor()
     monkeypatch.setattr(
-        "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
+        "sift.cli.commands.audit.TranscriptAuditor", lambda: fake
     )
 
     sp = _skill_dir(tmp_path, "skillA")
@@ -225,7 +225,7 @@ def test_by_skill_multi_transcript_same_stem_no_collision(monkeypatch, tmp_path)
     """
     fake = _FakeAuditor()
     monkeypatch.setattr(
-        "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
+        "sift.cli.commands.audit.TranscriptAuditor", lambda: fake
     )
 
     sp = _skill_dir(tmp_path, "skillA")
@@ -278,7 +278,7 @@ def test_by_instruction_split_into_fail_and_na_tables(monkeypatch, tmp_path):
     造 2-transcript 报告:I-FAIL(t1 FAIL/t2 PASS)、I-NA(两段都 N/A)、I-PASS(全 PASS)。
     断言:I-FAIL 在违规表带 1/2;I-NA 在 N/A 表带 2/2 + 两段;I-PASS 不出现。
     """
-    from skill_eval.audit.aggregate import aggregate_by_instruction
+    from sift.audit.aggregate import aggregate_by_instruction
 
     findings = [
         AuditFinding(instruction_text="I-FAIL", source="HEADING_STEP",
@@ -313,7 +313,7 @@ def test_by_instruction_split_into_fail_and_na_tables(monkeypatch, tmp_path):
         def audit(self, *a, **k):
             return report
 
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _Fake())
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _Fake())
 
     sp = _skill_dir(tmp_path, "skillA")
     tp1 = _write_jsonl(tmp_path / "t1.jsonl", [_skill("s1", "skillA")])

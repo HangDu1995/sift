@@ -10,9 +10,9 @@ import threading
 
 import pytest
 
-from skill_eval.audit import auditor
-from skill_eval.concurrency import AdaptiveConcurrencyLimiter
-from skill_eval.utils import _HttpRateLimited
+from sift.audit import auditor
+from sift.concurrency import AdaptiveConcurrencyLimiter
+from sift.utils import _HttpRateLimited
 
 
 # ── 基础门控(Semaphore 语义)─────────────────────────────────────────────
@@ -288,8 +288,8 @@ def test_judge_batch_emits_throttle_progress(monkeypatch):
 
 def test_limiter_singleton_shared_across_modules():
     """_LLM_LIMITER 模块级单例:auditor(上提后 from-import)与 concurrency 必须同一对象。
-    否则 audit 与 run 侧各用一个 → 共享容量失效(B2 防回归)。"""
-    from skill_eval.concurrency import _LLM_LIMITER as cc_limiter
+    否则 audit 与 eval 侧各用一个 → 共享容量失效(B2 防回归)。"""
+    from sift.concurrency import _LLM_LIMITER as cc_limiter
     assert auditor._LLM_LIMITER is cc_limiter
     assert auditor._LLM_SEMAPHORE is cc_limiter  # 别名也指向同一单例
 
@@ -298,7 +298,7 @@ def test_limiter_singleton_shared_across_modules():
 
 
 def _reset_limiter_and_time(monkeypatch):
-    import skill_eval.concurrency as cc
+    import sift.concurrency as cc
     cc._LLM_LIMITER.reset(cc._MAX_BATCH_CONCURRENT)
     monkeypatch.setattr(cc.time, "sleep", lambda *a: None)
     monkeypatch.setattr(cc.random, "uniform", lambda *a: 0.0)
@@ -308,7 +308,7 @@ def _reset_limiter_and_time(monkeypatch):
 def test_llm_retry_exhausted_not_runtime_error():
     """_LLMRetryExhausted 非 RuntimeError 子类(镜像 _HttpRateLimited,防被通用 except 误吞,
     调用方须显式 catch 才降级)。"""
-    import skill_eval.concurrency as cc
+    import sift.concurrency as cc
     assert not issubclass(cc._LLMRetryExhausted, RuntimeError)
 
 

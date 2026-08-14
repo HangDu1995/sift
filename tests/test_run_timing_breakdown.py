@@ -27,7 +27,7 @@ def _make_iteration_dir(tmp_path: Path) -> Path:
 def test_total_equals_phase1_plus_phase2_and_includes_tail(tmp_path, monkeypatch):
     """total 严格 = phase1_wall + phase2_wall;phase2 含 aggregate 内耗时(尾巴进 total)。"""
     import time as _time
-    from skill_eval.execution import benchmark as bm
+    from sift.execution import benchmark as bm
 
     it = _make_iteration_dir(tmp_path)
     agg = bm.BenchmarkAggregator(enable_llm=False)
@@ -52,7 +52,7 @@ def test_total_equals_phase1_plus_phase2_and_includes_tail(tmp_path, monkeypatch
 def test_phase2_subwalls_measured(tmp_path, monkeypatch):
     """phase2 子墙钟:comparator_wall 给整段计时(非累计和);read_runs_wall 非负;子项 ≤ phase2。"""
     import time as _time
-    from skill_eval.execution import benchmark as bm
+    from sift.execution import benchmark as bm
 
     it = _make_iteration_dir(tmp_path)
     agg = bm.BenchmarkAggregator(enable_llm=True)

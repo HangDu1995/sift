@@ -5,11 +5,11 @@ import re
 from pathlib import Path
 import pytest
 
-from skill_eval.evals.opencode import (
+from sift.evals.opencode import (
     is_opencode_session, load_opencode_session, build_digest_from_opencode,
     _records_from_opencode,
 )
-from skill_eval.evals.transcript import build_digest
+from sift.evals.transcript import build_digest
 
 _FIX = Path(__file__).parent.parent / "fixtures" / "example-skills"
 _LEA_OC = _FIX / "log-error-analyzer-zh" / "opencode-sessions" / "synthetic-violation.json"
@@ -67,7 +67,7 @@ def test_cc_and_opencode_digests_equivalent():
 
 
 def test_rebuild_dispatches_opencode():
-    from skill_eval.audit.rebuild import rebuild
+    from sift.audit.rebuild import rebuild
     tool_trace, text, digest = rebuild(_LEA_OC)
     assert digest.skill_used == "log-error-analyzer"  # 走了 opencode 分支
     assert any(tc.name.lower() == "read" for tc in tool_trace)
@@ -75,7 +75,7 @@ def test_rebuild_dispatches_opencode():
 
 
 def test_rebuild_still_handles_cc_jsonl():
-    from skill_eval.audit.rebuild import rebuild
+    from sift.audit.rebuild import rebuild
     tool_trace, text, digest = rebuild(_LEA_CC)  # cc 路径不被破坏
     assert any(tc.name.lower() == "read" for tc in tool_trace)
 
@@ -84,8 +84,8 @@ def test_tool_match_handles_opencode_lowercase_names():
     """tool_match 对工具名大小写不敏感:trace 里小写 read,SKILL 指令工具名 Read → 应命中。
     (历史上 opencode tool_trace 是小写;现 opencode 经 _norm_tool 已归一为大写,但 tool_match
     仍按大小写不敏感设计,小写 trace 依旧命中——测的是 tool_match 鲁棒性,不改 tool_match.py。)"""
-    from skill_eval.audit.tool_match import match_tool_call
-    from skill_eval.models import ToolCallRecord
+    from sift.audit.tool_match import match_tool_call
+    from sift.models import ToolCallRecord
     trace = [ToolCallRecord(name="read", input_summary='{"filePath": "logs/app.log"}')]
     # 条件1:工具名大小写不敏感命中(Read vs read)
     assert match_tool_call("Read", "", trace) is True
@@ -99,7 +99,7 @@ _MULTI_OC = _FIX / "multi-skill-demo" / "multi-skill.json"
 
 
 def test_slice_opencode_by_agent_segments():
-    from skill_eval.evals.opencode import slice_opencode_by_agent
+    from sift.evals.opencode import slice_opencode_by_agent
     lea = slice_opencode_by_agent(_MULTI_OC, "log-error-analyzer")
     cra = slice_opencode_by_agent(_MULTI_OC, "code-review-auditor")
     rcz = slice_opencode_by_agent(_MULTI_OC, "release-checklist-zh")
@@ -120,7 +120,7 @@ def test_slice_opencode_purity_and_skill_used():
     """
     import json
     import tempfile
-    from skill_eval.evals.opencode import slice_opencode_by_agent, build_digest_from_opencode
+    from sift.evals.opencode import slice_opencode_by_agent, build_digest_from_opencode
 
     def _skill_used_of(seg: dict) -> str:
         with tempfile.TemporaryDirectory() as td:
@@ -158,7 +158,7 @@ def test_root_target_is_session_info_agent():
     slice_opencode_by_agent 以 info.agent 为 target 返回非空、每段 info.agent 回填
     主 agent、且段内不含别的 agent 的 message。
     """
-    from skill_eval.evals.opencode import slice_opencode_by_agent
+    from sift.evals.opencode import slice_opencode_by_agent
 
     sess = load_opencode_session(_MULTI_OC)
     main_agent = (sess.get("info") or {}).get("agent")
@@ -211,7 +211,7 @@ def test_real_opencode_db_export_consumed():
         pytest.skip(f"无真 .db fixture:({_REAL_DB};生成见上注释)")
     if not shutil.which("opencode"):
         pytest.skip("opencode CLI 未装")
-    from skill_eval.evals.opencode_db import (
+    from sift.evals.opencode_db import (
         export_session, list_sessions, resolve_session,
     )
 
@@ -323,8 +323,8 @@ def test_opencode_edit_missing_old_demotes(tmp_path):
 def test_cc_opencode_digest_symmetric(tmp_path):
     """同一组工具调用(read /p/a.py → write /p/b.py),cc-record 形与 opencode 形
     经同一重建器 _digest_from_records → 重建相关字段等价(canonical 路径一致性)。"""
-    from skill_eval.evals.transcript import _digest_from_records
-    from skill_eval.evals.opencode import build_digest_from_opencode
+    from sift.evals.transcript import _digest_from_records
+    from sift.evals.opencode import build_digest_from_opencode
 
     # —— cc-record 形:直接构造 records 喂重建器 ——
     cc_records = [
@@ -367,7 +367,7 @@ def test_opencode_real_format_read_cleaned_and_edit_reconstructs(tmp_path):
     """真 opencode read 格式(<content> 包裹 + N: 冒号空格行号)→ (1) 只读文件入 input_files
     内容干净(无包裹、无 N:);(2) 多行 edit 命中(reviewer M1:修复前行号未剥,'alpha\\nbeta'
     在 '1: alpha\\n2: beta' 里找不到 → edit demote)。"""
-    from skill_eval.evals.opencode import build_digest_from_opencode
+    from sift.evals.opencode import build_digest_from_opencode
     def _read_out(body_lines):
         return ("<path>/p/f</path>\n<type>file</type>\n<content>\n"
                 + "\n".join(f"{i}: {ln}" for i, ln in enumerate(body_lines, 1)) + "\n</content>")

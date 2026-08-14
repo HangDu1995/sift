@@ -3,7 +3,7 @@ import json
 
 from typer.testing import CliRunner
 
-from skill_eval.cli.main import app
+from sift.cli.main import app
 
 runner = CliRunner()
 
@@ -23,9 +23,9 @@ def _skill_with_evals(tmp_path):
 def test_add_idea_prints_token_and_duration(monkeypatch, tmp_path):
     """add --idea 走 LLM → 显示 token/耗时(和 init 一致;add 之前漏了)。"""
     printed = []
-    monkeypatch.setattr("skill_eval.cli.commands.add.console.print",
+    monkeypatch.setattr("sift.cli.commands.add.console.print",
                         lambda *a, **k: printed.append(str(a)))
-    monkeypatch.setattr("skill_eval.cli.commands.add._check_claude_or_exit", lambda: None)
+    monkeypatch.setattr("sift.cli.commands.add._check_claude_or_exit", lambda: None)
     fake = json.dumps({"name": "n", "prompt": "new q", "expectations": ["e"],
                        "assertions": [{"name": "a", "type": "CONTAINS_PATTERN", "params": {"pattern": "k"}}]})
 
@@ -35,7 +35,7 @@ def test_add_idea_prints_token_and_duration(monkeypatch, tmp_path):
             on_usage({"input_tokens": 150, "output_tokens": 50})
         return fake
 
-    monkeypatch.setattr("skill_eval.cli.commands.add.call_claude", fake_call)
+    monkeypatch.setattr("sift.cli.commands.add.call_claude", fake_call)
     sp = _skill_with_evals(tmp_path)
     r = runner.invoke(app, ["add", str(sp), "--idea", "test something"], input="y\n")
     assert r.exit_code == 0, r.output
@@ -60,7 +60,7 @@ def _agent_with_evals(tmp_path):
 
 def test_add_kind_agent_routes_agent_prompt(monkeypatch, tmp_path):
     """add --kind agent --idea 走 agent 单题 prompt(agent 措辞 + scope:transcript + fixtures),非 skill 措辞。"""
-    monkeypatch.setattr("skill_eval.cli.commands.add._check_claude_or_exit", lambda: None)
+    monkeypatch.setattr("sift.cli.commands.add._check_claude_or_exit", lambda: None)
     captured = {}
 
     def fake_call(prompt, *a, **k):
@@ -69,7 +69,7 @@ def test_add_kind_agent_routes_agent_prompt(monkeypatch, tmp_path):
                            "assertions": [{"name": "a", "type": "CONTAINS_PATTERN",
                                             "params": {"pattern": "k", "scope": "transcript"}}]})
 
-    monkeypatch.setattr("skill_eval.cli.commands.add.call_claude", fake_call)
+    monkeypatch.setattr("sift.cli.commands.add.call_claude", fake_call)
     agent = _agent_with_evals(tmp_path)
     r = runner.invoke(app, ["add", str(agent), "--kind", "agent", "--idea", "审 pickle 反序列化"], input="y\n")
     assert r.exit_code == 0, r.output
@@ -86,8 +86,8 @@ def test_add_kind_agent_routes_agent_prompt(monkeypatch, tmp_path):
 
 def test_add_agent_md_finds_parent_evals(monkeypatch, tmp_path):
     """agent .md(无 --evals)→ 默认找 parent/evals/evals.json,不报 no evals.json。"""
-    monkeypatch.setattr("skill_eval.cli.commands.add._check_claude_or_exit", lambda: None)
-    monkeypatch.setattr("skill_eval.cli.commands.add.call_claude",
+    monkeypatch.setattr("sift.cli.commands.add._check_claude_or_exit", lambda: None)
+    monkeypatch.setattr("sift.cli.commands.add.call_claude",
                         lambda *a, **k: json.dumps({"name": "x", "prompt": "p", "expectations": ["e"], "assertions": []}))
     agent = _agent_with_evals(tmp_path)
     r = runner.invoke(app, ["add", str(agent), "--kind", "agent", "--idea", "x"], input="y\n")

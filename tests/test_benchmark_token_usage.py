@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from skill_eval.execution.benchmark import BenchmarkAggregator
+from sift.execution.benchmark import BenchmarkAggregator
 
 
 def _make_run(run_dir: Path, total_tokens=100, grader_usage=None, compliance_usage=None):
@@ -28,8 +28,8 @@ def test_aggregate_populates_llm_token_usage(tmp_path):
               grader_usage={"input_tokens": 30, "output_tokens": 10, "total_cost_usd": 0.01, "calls": 1},
               compliance_usage={"input_tokens": 40, "output_tokens": 5, "total_cost_usd": 0.02, "calls": 1})
     agg = BenchmarkAggregator(model=None)
-    with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-         patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+    with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+         patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
         bench = agg.aggregate(tmp_path)
     tu = bench.llm_token_usage
     assert "scoring" in tu and "audit" in tu and "executor" in tu and "total" in tu
@@ -46,8 +46,8 @@ def test_aggregate_llm_token_usage_empty_when_no_llm(tmp_path):
     cfg = tmp_path / "with_skill"
     _make_run(cfg / "eval-1" / "run-1", total_tokens=50)  # 无 grader/compliance
     agg = BenchmarkAggregator(model=None)
-    with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-         patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+    with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+         patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
         bench = agg.aggregate(tmp_path)
     tu = bench.llm_token_usage
     assert tu.get("scoring", {}) == {}
@@ -65,8 +65,8 @@ def test_aggregate_calls_reflect_child_call_counts(tmp_path):
               grader_usage={"input_tokens": 30, "output_tokens": 10, "total_cost_usd": 0.01, "calls": 3},
               compliance_usage={"input_tokens": 40, "output_tokens": 5, "total_cost_usd": 0.02, "calls": 5})
     agg = BenchmarkAggregator(model=None)
-    with patch("skill_eval.execution.benchmark.run_comparisons", return_value=[]), \
-         patch("skill_eval.execution.benchmark.run_analysis", return_value=([], None)):
+    with patch("sift.execution.benchmark.run_comparisons", return_value=[]), \
+         patch("sift.execution.benchmark.run_analysis", return_value=([], None)):
         bench = agg.aggregate(tmp_path)
     tu = bench.llm_token_usage
     assert tu["scoring"]["calls"] == 3   # grader 子快照 3 次(非 add 1 次)

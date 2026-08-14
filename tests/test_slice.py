@@ -1,7 +1,7 @@
 # tests/test_slice.py
 import json
 from pathlib import Path
-from skill_eval.audit.slice import slice_transcript, scope_signals
+from sift.audit.slice import slice_transcript, scope_signals
 
 # kind='skill'(按 Skill 调用切)与 kind='agent'(按 agent 归属切)各一组薄封装,省得每处传 kind。
 def _slice_skill(path, name):

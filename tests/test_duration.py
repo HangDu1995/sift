@@ -1,6 +1,6 @@
 """时间统计(Phase 2.5):DurationAccumulator 线程安全累加秒数 + scoring 计时。"""
 import threading
-from skill_eval.utils import DurationAccumulator
+from sift.utils import DurationAccumulator
 
 
 def test_duration_accumulator_adds_and_sums():
@@ -35,8 +35,8 @@ def test_duration_accumulator_concurrent_thread_safe():
 def test_score_checkpoints_forwards_on_duration(tmp_path):
     """_score_checkpoints 在 grade 调用前后 perf_counter,经 on_duration 回灌时长。"""
     from unittest.mock import MagicMock, patch
-    from skill_eval.execution.runner import ABTestRunner
-    from skill_eval.models import EvalCase, GradingResult
+    from sift.execution.runner import ABTestRunner
+    from sift.models import EvalCase, GradingResult
 
     sink = []
     grade_resp = '{"expectations":[],"summary":{"passed":0,"failed":0,"total":0,"pass_rate":0.0}}'
@@ -49,7 +49,7 @@ def test_score_checkpoints_forwards_on_duration(tmp_path):
         enable_programmatic=False, enable_llm=True, llm_model=None, llm_timeout=10)
     ec = EvalCase(id=1, prompt="do", expectations=["e1"])  # expectations 非空才调 grade
 
-    with patch("skill_eval.scoring.llm_grader.LLMGrader.grade", fake_grade):
+    with patch("sift.scoring.llm_grader.LLMGrader.grade", fake_grade):
         runner._score_checkpoints([ec], "t", tmp_path, on_duration=sink.append)
 
     assert sink and all(isinstance(s, float) and s >= 0.0 for s in sink), \
@@ -60,9 +60,9 @@ def test_compare_with_retry_emits_duration():
     """_compare_with_retry 在 compare 调用前后 perf_counter,经 on_duration 回灌时长。"""
     import random
     from unittest.mock import patch
-    from skill_eval.execution.comparison_suite import _compare_with_retry
-    from skill_eval.scoring.comparator import BlindComparator
-    from skill_eval.models import ComparisonResult
+    from sift.execution.comparison_suite import _compare_with_retry
+    from sift.scoring.comparator import BlindComparator
+    from sift.models import ComparisonResult
 
     sink = []
 
@@ -70,7 +70,7 @@ def test_compare_with_retry_emits_duration():
         return ComparisonResult(winner="A", reasoning="t")  # not failed → 不重试
 
     comparator = BlindComparator(rng=random.Random(0))  # 真实例,patch compare 类方法才生效
-    with patch("skill_eval.scoring.comparator.BlindComparator.compare", fake_compare):
+    with patch("sift.scoring.comparator.BlindComparator.compare", fake_compare):
         _compare_with_retry(comparator, "a", "b", "p", None, on_duration=sink.append)
     assert sink and all(isinstance(s, float) and s >= 0.0 for s in sink), \
         "on_duration 没回灌 compare 调用时长"

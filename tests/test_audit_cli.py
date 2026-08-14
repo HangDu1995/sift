@@ -5,7 +5,7 @@ mock TranscriptAuditor.audit(不真跑 LLM/判定),验证:
 - 命令接线(parse_skill_md → TranscriptAuditor.audit → audit-report.json + console summary)
 - --transcript 可重复(多条 transcript)
 - 命令注册成功 + 现有命令非侵入仍在
-- skill_path 不存在 → SkillEvalError 友好错误(照 init/run 模式)
+- skill_path 不存在 → SiftError 友好错误(照 init/run 模式)
 """
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from skill_eval.cli.main import app
-from skill_eval.models.audit_models import (
+from sift.cli.main import app
+from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
     AuditMethod,
@@ -98,16 +98,16 @@ class _FakeAuditor:
         return _fake_report()
 
 
-def test_audit_skill_eval_error_prints_triage(monkeypatch, tmp_path):
-    """audit 撞 SkillEvalError(命令级)→ except 里 classify 打印根因+建议。"""
-    from skill_eval.errors import SkillEvalError
+def test_audit_sift_error_prints_triage(monkeypatch, tmp_path):
+    """audit 撞 SiftError(命令级)→ except 里 classify 打印根因+建议。"""
+    from sift.errors import SiftError
 
     class _BoomAuditor:
         def audit(self, *a, **kw):
-            raise SkillEvalError("opencode session export 超时(timeout 60s)")
+            raise SiftError("opencode session export 超时(timeout 60s)")
 
     monkeypatch.setattr(
-        "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _BoomAuditor()
+        "sift.cli.commands.audit.TranscriptAuditor", lambda: _BoomAuditor()
     )
 
     sp = _skill_dir(tmp_path)
@@ -118,7 +118,7 @@ def test_audit_skill_eval_error_prints_triage(monkeypatch, tmp_path):
         app,
         ["audit", str(sp), "--transcript", str(tp), "-o", str(out)],
     )
-    assert r.exit_code != 0  # SkillEvalError → 非零退出
+    assert r.exit_code != 0  # SiftError → 非零退出
     assert "超时" in r.output or "timeout" in r.output  # 原始消息保留
     # triage 建议(timeout 类 → --timeout/--max-turns)
     assert "--timeout" in r.output or "--max-turns" in r.output
@@ -127,7 +127,7 @@ def test_audit_skill_eval_error_prints_triage(monkeypatch, tmp_path):
 def test_audit_writes_report_and_prints_summary(monkeypatch, tmp_path):
     fake = _FakeAuditor()
     monkeypatch.setattr(
-        "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
+        "sift.cli.commands.audit.TranscriptAuditor", lambda: fake
     )
 
     sp = _skill_dir(tmp_path)
@@ -176,7 +176,7 @@ def test_audit_console_summary_includes_token_usage(monkeypatch, tmp_path):
             super().audit(*a, **k)  # 记录入参
             return report
 
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _TokFake())
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _TokFake())
     sp = _skill_dir(tmp_path)
     tp = _transcript(tmp_path)
     out = tmp_path / "out"
@@ -191,7 +191,7 @@ def test_audit_console_summary_includes_token_usage(monkeypatch, tmp_path):
 
 def test_audit_console_summary_omits_token_usage_when_empty(monkeypatch, tmp_path):
     # token_usage 空(默认)→ 不打 token 行(别出 tokens=0 噪声)。
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
     sp = _skill_dir(tmp_path)
     tp = _transcript(tmp_path)
     out = tmp_path / "out"
@@ -205,7 +205,7 @@ def test_audit_console_summary_omits_token_usage_when_empty(monkeypatch, tmp_pat
 def test_audit_multiple_transcripts_repeatable(monkeypatch, tmp_path):
     fake = _FakeAuditor()
     monkeypatch.setattr(
-        "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
+        "sift.cli.commands.audit.TranscriptAuditor", lambda: fake
     )
 
     sp = _skill_dir(tmp_path)
@@ -250,7 +250,7 @@ def test_audit_writes_html_alongside_json(monkeypatch, tmp_path):
     """
     fake = _FakeAuditor()
     monkeypatch.setattr(
-        "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
+        "sift.cli.commands.audit.TranscriptAuditor", lambda: fake
     )
 
     sp = _skill_dir(tmp_path)
@@ -291,7 +291,7 @@ def test_audit_skill_path_missing_friendly_error(tmp_path):
         app,
         ["audit", str(missing), "--transcript", str(tp), "-o", str(out)],
     )
-    # SkillParseError 是 InputError 子类(exit_code=2)→ 被 except SkillEvalError 捕获
+    # SkillParseError 是 InputError 子类(exit_code=2)→ 被 except SiftError 捕获
     assert r.exit_code == 2
     # console.print 过错误信息(证明走了友好错误路径,而非裸异常)
     assert "SKILL.md" in r.output
@@ -350,7 +350,7 @@ def _report_with_source(src: str = "opencode") -> AuditReport:
 def test_audit_summary_and_findings_annotate_transcript_source(monkeypatch, tmp_path):
     """report.transcript_sources 非空 → 摘要行显 sources、findings 表 transcript 列标来源。"""
     monkeypatch.setattr(
-        "skill_eval.cli.commands.audit.TranscriptAuditor",
+        "sift.cli.commands.audit.TranscriptAuditor",
         lambda: _OneReportAuditor(_report_with_source("opencode")),
     )
     sp = _skill_dir(tmp_path)
@@ -369,7 +369,7 @@ def test_audit_summary_and_findings_annotate_transcript_source(monkeypatch, tmp_
 def test_audit_json_output_includes_transcript_sources(monkeypatch, tmp_path):
     """--format json 输出含 transcript_sources 字段(JSON 消费者据此知道每条 transcript 来自哪侧)。"""
     monkeypatch.setattr(
-        "skill_eval.cli.commands.audit.TranscriptAuditor",
+        "sift.cli.commands.audit.TranscriptAuditor",
         lambda: _OneReportAuditor(_report_with_source("cc")),
     )
     sp = _skill_dir(tmp_path)
@@ -400,7 +400,7 @@ def _agent_rec(agent: str) -> str:
 
 def test_audit_no_kind_hints_scope_when_skill_invoked(monkeypatch, tmp_path):
     """--kind 未指定 + transcript 调了本 skill → 黄字提示可加 --kind skill(对称收窄,非阻断)。"""
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
     sp = _skill_dir(tmp_path)  # name=myskill
     tp = tmp_path / "t.jsonl"
     tp.write_text(_skill_use_rec("myskill"), encoding="utf-8")
@@ -415,7 +415,7 @@ def test_audit_no_kind_hints_scope_when_skill_invoked(monkeypatch, tmp_path):
 
 def test_audit_no_kind_hints_scope_when_agent_present(monkeypatch, tmp_path):
     """--kind 未指定 + transcript 有 agent==name 段 → 提示 --kind agent。"""
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
     sp = _skill_dir(tmp_path)  # name=myskill
     tp = tmp_path / "t.jsonl"
     tp.write_text(_agent_rec("myskill"), encoding="utf-8")  # agent 字段 == 声明名
@@ -428,7 +428,7 @@ def test_audit_no_kind_hints_scope_when_agent_present(monkeypatch, tmp_path):
 
 def test_audit_no_kind_hints_scope_when_subagent_dispatched(monkeypatch, tmp_path):
     """--kind 未指定 + transcript 有子 agent 作用域 → 提示 --kind root。"""
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
     sp = _skill_dir(tmp_path)
     tp = tmp_path / "t.jsonl"
     a_id = "call_A"
@@ -450,7 +450,7 @@ def test_audit_no_kind_hints_scope_when_subagent_dispatched(monkeypatch, tmp_pat
 def test_audit_no_kind_no_hint_when_no_anchors(monkeypatch, tmp_path):
     """--kind 未指定 + transcript 无任何收窄锚点(没调本 skill / 没 name agent / 没子 agent)
     → 不提示(宽松是唯一选项)。"""
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
     sp = _skill_dir(tmp_path)
     tp = tmp_path / "t.jsonl"
     tp.write_text(json.dumps({"message": {"role": "assistant", "content": [
@@ -465,7 +465,7 @@ def test_audit_no_kind_no_hint_when_no_anchors(monkeypatch, tmp_path):
 
 def test_audit_with_kind_no_scope_hint(monkeypatch, tmp_path):
     """指定了 --kind(任一)→ 不打收窄提示(用户已选精确档,哪怕 transcript 含锚点)。"""
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
     sp = _skill_dir(tmp_path)
     tp = tmp_path / "t.jsonl"
     tp.write_text(_skill_use_rec("myskill"), encoding="utf-8")  # 含 skill 锚点
@@ -476,7 +476,7 @@ def test_audit_with_kind_no_scope_hint(monkeypatch, tmp_path):
     assert "收窄" not in r.output  # 带 --kind → 不提示
 
 
-from skill_eval.cli.commands.audit import format_unresolved_breakdown
+from sift.cli.commands.audit import format_unresolved_breakdown
 
 
 class TestFormatUnresolvedBreakdown:

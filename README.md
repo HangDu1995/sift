@@ -1,10 +1,10 @@
-# Skill-Eval
+# Sift
 
-[![CI](https://github.com/guixu-labs/skill-eval/actions/workflows/ci.yml/badge.svg)](https://github.com/guixu-labs/skill-eval/actions/workflows/ci.yml)
+[![CI](https://github.com/guixu-labs/sift/actions/workflows/ci.yml/badge.svg)](https://github.com/guixu-labs/sift/actions/workflows/ci.yml)
 
-评测 [Claude Code Skill](https://github.com/anthropics/skills) / agent 的能力、并审计 skill / agent / 编排者执行遵循性的 CLI——一个工具的两面：**评测**（能力行不行，入口 `run`）+ **审计**（过程照声明走没走，入口 `audit`）；三层质量保障（评分 / 遵循性 / 校准）+ 盲比较 + post-hoc 门禁，CI 就绪。
+评测 [Claude Code Skill](https://github.com/anthropics/skills) / agent 的能力、并审计 skill / agent / 编排者执行遵循性的 CLI——一个工具的两面：**评测**（能力行不行，入口 `eval`）+ **审计**（过程照声明走没走，入口 `audit`）；三层质量保障（评分 / 遵循性 / 校准）+ 盲比较 + post-hoc 门禁，CI 就绪。
 
-评测部分脱胎于 [skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator)——交互式 meta-skill，Claude 加载它对话式建/测 skill。两者**共享评测血脉**（A/B 对照、LLM grader、盲比较、benchmark、review UI 都源自那里），**互补而非替代**：skill-creator 适合探索期人盯着迭代，skill-eval 把它延展到成熟期的工程化 CI。skill-eval 独有：
+评测部分脱胎于 [skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator)——交互式 meta-skill，Claude 加载它对话式建/测 skill。两者**共享评测血脉**（A/B 对照、LLM grader、盲比较、benchmark、review UI 都源自那里），**互补而非替代**：skill-creator 适合探索期人盯着迭代，sift 把它延展到成熟期的工程化 CI。sift 独有：
 
 - **确定性 programmatic 断言 + 双率** — 文件存在 / 内容匹配等零 LLM、不可作弊的客观判定，与 LLM 判定分开报，干净信号不被阅卷噪声污染
 - **agent 评测（`--kind agent`）** — 评测对象从 skill 扩到 agent（绝对质量模式，无 A/B 对照）；skill-creator 只评 skill
@@ -15,10 +15,10 @@
 - **`--task` 真任务模式** — spawn 真任务（`--task/--cwd`，cc / opencode 双执行器），产 trace 喂 audit
 - **基准题集冻结** — `freeze` 不可变签名 + skill_name 校验，跨 run / CI 复用同一份题
 - **触发准确度 trigger（第 4 维）** — 测 cc 仅凭 description 会不会自然触发 skill（前三层都 force-inject body、测不到的触发面）；纯诊断、不出 gate
-- **出题漏测诊断 coverage** — SKILL.md 内容点 × evals 覆盖映射，亮出 `run` 够不到的漏测盲区，`--augment` 复用 init 生成器自动补题；纯诊断、不出 gate
+- **出题漏测诊断 coverage** — SKILL.md 内容点 × evals 覆盖映射，亮出 `eval` 够不到的漏测盲区，`--augment` 复用 init 生成器自动补题；纯诊断、不出 gate
 - **正文内容质量诊断 critique** — LLM 按 4 维 rubric（失败机制编码 / 可执行具体性 / 高风险黑名单 / 示例驱动）给 SKILL.md 正文读者反馈（met/partial/missing + evidence），补 `analyze` 只查格式、不查内容质量的空白；纯诊断、不出 gate。rubric ①②③ 来自 SkillLens（有数据验证）/ ④ 经验自加
 
-> 第一次接触想系统了解每个功能的设计与用法，读 [使用手册](docs/skill-eval-handbook.md)（深入浅出，概念优先）；完整命令参数、字段定义、JSON schema 查 [参考手册](docs/skill-eval-reference.md)；方法论依据见 [方法论溯源](docs/skill-eval-principles.md)。
+> 第一次接触想系统了解每个功能的设计与用法，读 [使用手册](docs/sift-handbook.md)（深入浅出，概念优先）；完整命令参数、字段定义、JSON schema 查 [参考手册](docs/sift-reference.md)；方法论依据见 [方法论溯源](docs/sift-principles.md)。
 
 ---
 
@@ -27,35 +27,35 @@
 ### 一键安装
 
 ```bash
-git clone https://github.com/guixu-labs/skill-eval.git
-cd skill-eval
+git clone https://github.com/guixu-labs/sift.git
+cd sift
 bash install.sh     # macOS / Linux
 # install.bat       # Windows
 ```
 
 这会完成三件事：
-1. 安装 skill-eval CLI(系统 Python 受 PEP 668 限制时——Debian/Ubuntu/WSL2——自动建隔离 `.venv`,并把 `skill-eval` 软链到 `~/.local/bin`)
-2. 将 skill-eval-guide skill 安装到 Claude Code (`~/.claude/skills/`) 和 opencode (`~/.config/opencode/skills/`)
+1. 安装 sift CLI(系统 Python 受 PEP 668 限制时——Debian/Ubuntu/WSL2——自动建隔离 `.venv`,并把 `sift` 软链到 `~/.local/bin`)
+2. 将 sift-guide skill 安装到 Claude Code (`~/.claude/skills/`) 和 opencode (`~/.config/opencode/skills/`)
 3. 验证环境
 
 ### 手动安装
 
 ```bash
 # 安装 CLI
-git clone https://github.com/guixu-labs/skill-eval.git
-cd skill-eval
+git clone https://github.com/guixu-labs/sift.git
+cd sift
 pip install -e .
 # Debian/Ubuntu/WSL2(PEP 668)报 externally-managed 时,改用 venv:
-#   python3 -m venv .venv && .venv/bin/pip install -e . && ln -sf "$PWD/.venv/bin/skill-eval" ~/.local/bin/skill-eval
+#   python3 -m venv .venv && .venv/bin/pip install -e . && ln -sf "$PWD/.venv/bin/sift" ~/.local/bin/sift
 
-# 安装 skill-eval-guide（可选，让 Claude 自动选择评测命令）
+# 安装 sift-guide（可选，让 Claude 自动选择评测命令）
 # macOS / Linux:
-cp tools/skills/skill-eval-guide/SKILL.md ~/.claude/skills/skill-eval-guide/SKILL.md
-cp tools/skills/skill-eval-guide/SKILL.md ~/.config/opencode/skills/skill-eval-guide/SKILL.md
+cp tools/skills/sift-guide/SKILL.md ~/.claude/skills/sift-guide/SKILL.md
+cp tools/skills/sift-guide/SKILL.md ~/.config/opencode/skills/sift-guide/SKILL.md
 
 # Windows:
-copy tools\skills\skill-eval-guide\SKILL.md %USERPROFILE%\.claude\skills\skill-eval-guide\SKILL.md
-copy tools\skills\skill-eval-guide\SKILL.md %USERPROFILE%\.config\opencode\skills\skill-eval-guide\SKILL.md
+copy tools\skills\sift-guide\SKILL.md %USERPROFILE%\.claude\skills\sift-guide\SKILL.md
+copy tools\skills\sift-guide\SKILL.md %USERPROFILE%\.config\opencode\skills\sift-guide\SKILL.md
 ```
 
 前置条件：Python 3.10+，Claude Code CLI >= 2.1.0（仅动态评测需要）。
@@ -66,21 +66,21 @@ copy tools\skills\skill-eval-guide\SKILL.md %USERPROFILE%\.config\opencode\skill
 
 ```bash
 # 1. 静态体检 + 安全审查（零 API 成本）
-skill-eval analyze path/to/skill/
-skill-eval vet    path/to/skill/
+sift analyze path/to/skill/
+sift vet    path/to/skill/
 
 # 2. 生成 evals.json（LLM 自动出题 + 推导程序化断言）
-skill-eval init path/to/skill/
+sift init path/to/skill/
 
 # 3. A/B 评测（with/without 对照，或 v1/v2 双 skill）
-skill-eval run path/to/skill/ --runs 3
-skill-eval run v2/ --skill-b v1/ --evals baseline.json   # 回归对照：候选 v2 vs 基线 v1
+sift eval path/to/skill/ --runs 3
+sift eval v2/ --skill-b v1/ --evals baseline.json   # 回归对照：候选 v2 vs 基线 v1
 
 # 4. 看报告
-skill-eval report output/ --open
+sift report output/ --open
 
 # 5. （CI）对结果出门禁判决
-skill-eval gate output/benchmark.json --min-win-rate 0.5
+sift gate output/benchmark.json --min-win-rate 0.5
 echo $?    # 0=PASS / 1=FAIL / 2=N/A
 ```
 
@@ -93,8 +93,8 @@ echo $?    # 0=PASS / 1=FAIL / 2=N/A
 4 扫描器（2 内置 + 2 可选外部），检测密钥泄露、prompt 注入、危险命令。判定 SAFE / REVIEW_NEEDED / BLOCKED。
 
 ```bash
-skill-eval vet path/to/skill/
-skill-eval vet path/to/skill/ --format json --skip-external
+sift vet path/to/skill/
+sift vet path/to/skill/ --format json --skip-external
 ```
 
 ### `analyze` — 静态分析
@@ -102,7 +102,7 @@ skill-eval vet path/to/skill/ --format json --skip-external
 11 项检查：描述质量、命名规范、文件行数、示例覆盖、反捏造等。零 API 成本。
 
 ```bash
-skill-eval analyze path/to/skill/
+sift analyze path/to/skill/
 ```
 
 ### `init` — 生成评测用例
@@ -110,11 +110,11 @@ skill-eval analyze path/to/skill/
 LLM 自动生成 L1/L2 测试用例，自动推导程序化断言。也可从真实会话 transcript 挖 eval（`--from-transcript`）；`--focus` 定向补盲区（反面/边界）、`--append` 增量追加不覆盖旧题。
 
 ```bash
-skill-eval init path/to/skill/
-skill-eval init path/to/skill/ --from-transcript session.jsonl   # 从真实会话挖题
-skill-eval init path/to/skill/ --focus negative-cases --append   # 定向补反面场景,追加到已有考卷
-skill-eval init path/to/skill/ --trigger-probes                  # 生成触发准确度探题(should/should-not)
-skill-eval init path/to/agent.md --kind agent                    # 给 agent 出题(凭角色造 role-matching 题)
+sift init path/to/skill/
+sift init path/to/skill/ --from-transcript session.jsonl   # 从真实会话挖题
+sift init path/to/skill/ --focus negative-cases --append   # 定向补反面场景,追加到已有考卷
+sift init path/to/skill/ --trigger-probes                  # 生成触发准确度探题(should/should-not)
+sift init path/to/agent.md --kind agent                    # 给 agent 出题(凭角色造 role-matching 题)
 ```
 
 ### `add` — 追加评测用例
@@ -123,10 +123,10 @@ LLM 辅助或手动添加 eval 到已有的 evals.json。
 
 ```bash
 # LLM 模式：一句话想法 → 完整 eval
-skill-eval add pdf/ --idea "test encrypted PDF decryption" --level L2
+sift add pdf/ --idea "test encrypted PDF decryption" --level L2
 
 # 手动模式
-skill-eval add pdf/ --prompt "Decrypt file.pdf..." --expectation "produces output.pdf" --level L2
+sift add pdf/ --prompt "Decrypt file.pdf..." --expectation "produces output.pdf" --level L2
 ```
 
 ### `inspect` — 题集体检
@@ -134,7 +134,7 @@ skill-eval add pdf/ --prompt "Decrypt file.pdf..." --expectation "produces outpu
 对已有 evals.json 做静态体检（完整性 / 稳定性 / 问题 flag），不执行、不下判决——帮人决定是否冻结成基线。
 
 ```bash
-skill-eval inspect path/to/evals.json --json
+sift inspect path/to/evals.json --json
 ```
 
 ### `freeze` — 冻结基线
@@ -142,23 +142,21 @@ skill-eval inspect path/to/evals.json --json
 把 evals.json 冻结成命名基线快照 + 溯源 sidecar，跨 run / CI 复用同一份题。
 
 ```bash
-skill-eval freeze path/to/evals.json --name baseline
+sift freeze path/to/evals.json --name baseline
 ```
 
-### `run` — A/B 评测
+### `eval` — A/B 评测
 
-两种模式：默认 with_skill vs without_skill 对照（或 v1/v2 双 skill），或 `--task` 真任务模式（直接跑真实任务，产 trace 喂 audit）。`--kind agent` 跑 agent 评测（绝对质量，无 A/B 对照；配合 `init --kind agent` 出题 + `critique --kind agent` 审正文）。产出 benchmark.json（含双率 delta + 盲比较聚合；agent 模式只有绝对 pass_rate）。
+默认 with_skill vs without_skill 对照（或 v1/v2 双 skill）。`--kind agent` 跑 agent 评测（绝对质量，无 A/B 对照；配合 `init --kind agent` 出题 + `critique --kind agent` 审正文）。产出 benchmark.json（含双率 delta + 盲比较聚合；agent 模式只有绝对 pass_rate）。
 
 ```bash
-skill-eval run path/to/skill/
-skill-eval run path/to/skill/ --runs 3 --model claude-sonnet-5
-skill-eval run path/to/skill/ --scoring programmatic   # 仅程序化，零 LLM 评分成本
-skill-eval run v2/ --skill-b v1/                        # v1/v2 双 skill 回归对照
-skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo   # --task 真任务模式（默认 cc）
-skill-eval run path/to/skill/ --task "重构 X 模块" --cwd ./repo --executor opencode   # 同上，改用 opencode 跑
-skill-eval run path/to/skill/ --eval-ids 3,5                  # 只跑指定 id 的题（调试/回归某几道；和 --eval-samples 互斥）
-skill-eval run path/to/skill/ --changed-from v1/              # 改 skill 后只跑受影响的题（给基线目录；回归探针；和 --eval-ids/--eval-samples 互斥）
-skill-eval run path/to/agent.md --kind agent --evals evals.json --runs 2   # agent 评测（绝对质量；--append-system-prompt 注入；需 --evals）
+sift eval path/to/skill/
+sift eval path/to/skill/ --runs 3 --model claude-sonnet-5
+sift eval path/to/skill/ --scoring programmatic   # 仅程序化，零 LLM 评分成本
+sift eval v2/ --skill-b v1/                        # v1/v2 双 skill 回归对照
+sift eval path/to/skill/ --eval-ids 3,5                  # 只跑指定 id 的题（调试/回归某几道；和 --eval-samples 互斥）
+sift eval path/to/skill/ --changed-from v1/              # 改 skill 后只跑受影响的题（给基线目录；回归探针；和 --eval-ids/--eval-samples 互斥）
+sift eval path/to/agent.md --kind agent --evals evals.json --runs 2   # agent 评测（绝对质量；--append-system-prompt 注入；需 --evals）
 ```
 
 关键参数：
@@ -168,25 +166,34 @@ skill-eval run path/to/agent.md --kind agent --evals evals.json --runs 2   # age
 | `--runs` | 1 | 每次评测运行次数（推荐 3 抹平答题波动） |
 | `--scoring` | hybrid | hybrid / programmatic / llm |
 | `--skill-b` | — | v1/v2 模式：第二个 skill 路径（两边各注入各自 skill） |
-| `--task` / `--cwd` | — | `--task` 真任务模式：直接跑真实任务（不读 evals.json） |
-| `--executor` | cc | `--task` 执行器：`cc`（默认）/ `opencode` / `cc,opencode`（逗号分隔，各跑 `--runs` 次） |
 | `--no-compliance` | 开 | 跳过遵循性检查（默认开；单 run 也产，不绑 `--runs`） |
 | `--security-gate` | off | 安全审查返回 BLOCKED/REVIEW_NEEDED 时判失败 |
 | `--model` | — | claude -p 模型（也控制盲比较/赛后分析是否执行） |
 | `--eval-samples` | — | 随机抽样跑 N 道或 pct%（如 `10` 或 `0.25`） |
 | `--eval-ids` | — | 只跑指定 id 的题（逗号分隔，如 `3,5,7`）；和 `--eval-samples`/`--changed-from` 三选一互斥 |
 | `--changed-from` | — | 改 skill 后给基线目录，自动 diff + LLM 判受影响 eval，只跑子集（回归探针；和 --eval-ids/--eval-samples 互斥） |
-| `--kind` | skill | skill（默认 A/B 对照）/ agent（绝对质量，`--append-system-prompt` 注入 agent 正文；与 `--task`/`--skill-b` 互斥；需 `--evals`） |
+| `--kind` | skill | skill（默认 A/B 对照）/ agent（绝对质量，`--append-system-prompt` 注入 agent 正文；与 `--skill-b` 互斥；需 `--evals`） |
 
-> `run` 是纯数据生产者——exit 0 只代表产数据成功，**通过/失败判决由 `gate` 出**。
+> `eval` 是纯数据生产者——exit 0 只代表产数据成功，**通过/失败判决由 `gate` 出**。
+
+### `run` — 真任务
+
+跑真实任务、产 trace 喂 audit（不读 evals.json；审计的上游小功能）。`--task` 必填，`--cwd` 拷贝隔离（cc 不碰原目录）。
+
+```bash
+sift run path/to/skill/ --task "重构 X 模块" --cwd ./repo   # 默认 cc 执行器
+sift run path/to/skill/ --task "重构 X 模块" --cwd ./repo --executor opencode   # 改用 opencode 跑（产 transcript.json）
+```
+
+关键参数：`--task`（必填，真任务文本）、`--cwd`（工作目录，拷贝隔离）、`--executor`（`cc`（默认）/ `opencode` / `cc,opencode`，逗号分隔各跑 `--runs` 次）、`--runs`（每任务次数）、`--model`、`--timeout`、`--max-turns`、`-o`、`--security-gate`。
 
 ### `gate` — 通过/失败判决
 
 对已有 benchmark.json 出 PASS/FAIL/N/A 判决。post-hoc 纯函数（毫秒级，改阈值不重跑 claude）。
 
 ```bash
-skill-eval gate output/benchmark.json                     # 仅客观回归守卫
-skill-eval gate output/benchmark.json --min-win-rate 0.5  # 加主观盲评阈值
+sift gate output/benchmark.json                     # 仅客观回归守卫
+sift gate output/benchmark.json --min-win-rate 0.5  # 加主观盲评阈值
 ```
 
 四轴（只有启用的进判决）：客观 programmatic 回归守卫（默认常开）+ 主观盲比较胜率（`--min-win-rate`）/ 必过题（`--must-pass`）/ 题集漂移（`--baseline`）三者 opt-in。判决写 gate.json，exit `0=PASS / 1=FAIL / 2=N/A`。
@@ -196,35 +203,35 @@ skill-eval gate output/benchmark.json --min-win-rate 0.5  # 加主观盲评阈�
 把真实会话 transcript 与 SKILL.md 对账，判指令遵循性。不 re-run，直接对账历史执行（支持多 transcript 聚合）。对账对象默认是整条 transcript（不带 `--kind` 的宽松全 session 模式，skill/agent/root 声明共同默认）；带 `--kind` 精确收窄到三类作用域之一：**skill**（被 `Skill` 调用）/ **agent**（被 dispatch 的子 agent）/ **root**（顶层主 agent / 编排者）。不传但 transcript 含可收窄锚点时黄字对称提示可加 `--kind`（非阻断）。`--transcript` 吃 cc 会话 `.jsonl` 或 **opencode session `.json`**（`opencode export <sessionID>` 导出；按格式自动分派);或直接给 opencode **`.db` 文件**(`--db`,内部自动 list/export/audit,单 session 自动选、多个列出让你挑)。
 
 ```bash
-skill-eval audit path/to/skill/ --transcript run-1/transcript.jsonl
-skill-eval audit path/to/skill/ --transcript t.jsonl --refine-instructions  # 教程型 skill：砍 extractor 误抽的示例/占位伪指令
-skill-eval audit path/to/skill/ --transcript big-multi.jsonl --kind skill   # 多 skill 会话：只对账本 skill 被调用段
-skill-eval audit path/to/test-runner/ --transcript session.json --kind agent # 审被 dispatch 的 subagent（给 agent 定义目录）
-skill-eval audit path/to/orchestrator/ --transcript session.json --kind root # 审顶层主 agent / 编排者（workflow 级 SKILL.md）
-skill-eval audit path/to/skill/ --transcript opencode-session.json          # opencode 跑出的 session
-skill-eval audit path/to/skill/ --db opencode.db                            # 直接给 opencode .db(自动 list/export/audit)
+sift audit path/to/skill/ --transcript run-1/transcript.jsonl
+sift audit path/to/skill/ --transcript t.jsonl --refine-instructions  # 教程型 skill：砍 extractor 误抽的示例/占位伪指令
+sift audit path/to/skill/ --transcript big-multi.jsonl --kind skill   # 多 skill 会话：只对账本 skill 被调用段
+sift audit path/to/test-runner/ --transcript session.json --kind agent # 审被 dispatch 的 subagent（给 agent 定义目录）
+sift audit path/to/orchestrator/ --transcript session.json --kind root # 审顶层主 agent / 编排者（workflow 级 SKILL.md）
+sift audit path/to/skill/ --transcript opencode-session.json          # opencode 跑出的 session
+sift audit path/to/skill/ --db opencode.db                            # 直接给 opencode .db(自动 list/export/audit)
 ```
 
-> `--max-concurrent N`（或 env `SKILL_EVAL_MAX_CONCURRENT`）：**固定** LLM 判定并发上限（关自适应）；不设则默认 **AIMD 自适应**（动态探后端容量边界，适配不同模型/服务商）。env `SKILL_EVAL_ADAPTIVE_CONCURRENCY=0` 显式关自适应。大声明 / 低内存时用 `--max-concurrent` 调小。
+> `--max-concurrent N`（或 env `SIFT_MAX_CONCURRENT`）：**固定** LLM 判定并发上限（关自适应）；不设则默认 **AIMD 自适应**（动态探后端容量边界，适配不同模型/服务商）。env `SIFT_ADAPTIVE_CONCURRENCY=0` 显式关自适应。大声明 / 低内存时用 `--max-concurrent` 调小。
 
 ### `trigger` — 触发准确度（第 4 维）
 
 测 cc 会不会**仅凭 skill 的 `description` 自然触发**（不评输出对错）。前三层都假设 skill 已"上场"——scoring 强制注入 body，触发能力从不被测；trigger 补这个上游缺口：中性 prompt，看 cc 仅凭描述自动发现（用真实 HOME、不隔离——对齐 run/audit）。诊断定位、无门禁、独立 artifact（不并入 benchmark）。**生成时做 anti-leakage 校验**（探题不应照抄 description 措辞，防词面匹配虚高 recall），报告还按**措辞（词面 / 语义）+ 长度（短 / 中 / 长）分层**诊断——看 cc 是真懂还是靠字面命中触发。
 
 ```bash
-skill-eval init   path/to/skill/ --trigger-probes    # 先生成探题(should/should-not 各 5)
-skill-eval trigger path/to/skill/ --runs 2 -o /tmp/out
+sift init   path/to/skill/ --trigger-probes    # 先生成探题(should/should-not 各 5)
+sift trigger path/to/skill/ --runs 2 -o /tmp/out
 ```
 
-产出 `trigger-report.json` + `trigger-report.html`（人读，`--open` 浏览器打开）+ 终端摘要，**含「怎么改 description」的操作建议**：规则建议永远给（漏召→补关键词 / 误触→收窄），有失败时还自动跑一次 LLM 起草可抄改的 description 草案（全 PASS 跳过、无 flag）。终端输出 / JSON 字段 / 改法清单见 [handbook](docs/skill-eval-handbook.md) 与 [reference](docs/skill-eval-reference.md)。
+产出 `trigger-report.json` + `trigger-report.html`（人读，`--open` 浏览器打开）+ 终端摘要，**含「怎么改 description」的操作建议**：规则建议永远给（漏召→补关键词 / 误触→收窄），有失败时还自动跑一次 LLM 起草可抄改的 description 草案（全 PASS 跳过、无 flag）。终端输出 / JSON 字段 / 改法清单见 [handbook](docs/sift-handbook.md) 与 [reference](docs/sift-reference.md)。
 
 ### `coverage` — 出题漏测诊断
 
-诊断 evals.json 对 SKILL.md **内容点**的覆盖——`covered_by` 空的内容点 = **漏测**（0 道题覆盖），是 `run` 够不到的盲区。一次 LLM 映射（喂 SKILL.md + 各 eval 的 prompt / rationale），不 re-run Claude。诊断定位、无门禁、独立 artifact（同 trigger，不并入 benchmark）；`--augment` 可自动补漏测题（带 `review:coverage-augment`、需人审）。详见 [handbook](docs/skill-eval-handbook.md) 与 [reference](docs/skill-eval-reference.md)。
+诊断 evals.json 对 SKILL.md **内容点**的覆盖——`covered_by` 空的内容点 = **漏测**（0 道题覆盖），是 `eval` 够不到的盲区。一次 LLM 映射（喂 SKILL.md + 各 eval 的 prompt / rationale），不 re-run Claude。诊断定位、无门禁、独立 artifact（同 trigger，不并入 benchmark）；`--augment` 可自动补漏测题（带 `review:coverage-augment`、需人审）。详见 [handbook](docs/sift-handbook.md) 与 [reference](docs/sift-reference.md)。
 
 ```bash
-skill-eval coverage path/to/skill/              # 诊断漏测,出 JSON + HTML
-skill-eval coverage path/to/skill/ --augment    # 漏测点自动补题(写回 evals.json,需人审)
+sift coverage path/to/skill/              # 诊断漏测,出 JSON + HTML
+sift coverage path/to/skill/ --augment    # 漏测点自动补题(写回 evals.json,需人审)
 ```
 
 ### `critique` — 正文内容质量诊断
@@ -234,17 +241,17 @@ skill-eval coverage path/to/skill/ --augment    # 漏测点自动补题(写回 e
 > **linter 降姿态**：给的是「读者反馈」不是「打分」——LLM 是外行评内行领域，rubric 判定会漂（同一份正文跑几次，界限分明的维度稳、边界维度只在相邻档抖），故只标 met/partial/missing 提示哪里薄弱、不进任何 gate。当 linter 提示读，别当权威判决。想稳就 `--runs N` 多数投票（每维显 `X/N` 可信度）。
 
 ```bash
-skill-eval critique path/to/skill/              # 诊断正文质量,出 JSON + HTML(单次,默认)
-skill-eval critique path/to/skill/ --runs 3     # 多数投票跑 3 次,稳边界维度(显 X/N)
-skill-eval critique path/to/agent.md --kind agent   # 审 agent 定义正文(system prompt),4 维共用
+sift critique path/to/skill/              # 诊断正文质量,出 JSON + HTML(单次,默认)
+sift critique path/to/skill/ --runs 3     # 多数投票跑 3 次,稳边界维度(显 X/N)
+sift critique path/to/agent.md --kind agent   # 审 agent 定义正文(system prompt),4 维共用
 ```
 
-产 `content-quality-report.json` + `content-quality-report.html`（always 写，同 coverage）。详见 [reference](docs/skill-eval-reference.md)。
+产 `content-quality-report.json` + `content-quality-report.html`（always 写，同 coverage）。详见 [reference](docs/sift-reference.md)。
 
 ### `report` — HTML 报告
 
 ```bash
-skill-eval report output/ --open
+sift report output/ --open
 ```
 
 读 `gate.json`（若存在）在标题旁渲染门禁徽章。
@@ -298,7 +305,7 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 
 五态：`PASS` / `FAIL` / `N/A`（不适用，场景不触发）/ `UNRESOLVED`（没判成，LLM 失败/解析失败/未提及，可重跑）/ `INDETERMINATE`（判不准，证据真模糊，重跑无益）。遵循度 = `pass/(pass+fail)`，排除 N/A + UNRESOLVED + INDETERMINATE（遵循性不分双率，双率是评分侧概念）。
 
-> extractor 纯正则静态全抽；教程型 skill 的示例文字/模板占位会被误抽成指令（→ 多 N/A）。`audit` / `run` 的 `--refine-instructions`（默认开，`--no-refine-instructions` 关）在判定前 LLM 精筛砍掉这类伪指令（精度 > 召回，详见 [参考手册](docs/skill-eval-reference.md) `audit` 段）。
+> extractor 纯正则静态全抽；教程型 skill 的示例文字/模板占位会被误抽成指令（→ 多 N/A）。`audit` / `eval` 的 `--refine-instructions`（默认开，`--no-refine-instructions` 关）在判定前 LLM 精筛砍掉这类伪指令（精度 > 召回，详见 [参考手册](docs/sift-reference.md) `audit` 段）。
 
 ### 校准引擎
 
@@ -321,8 +328,8 @@ fixture-eval 下的双主位分工：**客观信 `delta.pass_rate_programmatic`*
 ```
 output/
 ├── benchmark.json          # 聚合:双率 delta + comparisons + comparison_summary + analysis + llm_token_usage(评测 LLM 成本) + llm_duration_seconds(评测耗时,墙钟 total)(--changed-from 子集跑时另记 selection)
-├── report.html             # 自包含 HTML 报告(读 gate.json 显门禁徽章;run 末尾自动产)
-├── gate.json               # gate 命令产出(判决 + 四轴明细;非 run 产出)
+├── report.html             # 自包含 HTML 报告(读 gate.json 显门禁徽章;eval 末尾自动产)
+├── gate.json               # gate 命令产出(判决 + 四轴明细;非 eval 产出)
 ├── previous/               # △ 重跑归档:fresh 重跑时上次 run 树整体移入(单槽),供 report「vs 上次」纵向 delta;仅 fresh 产生,详见 reference「重跑归档」
 ├── with_skill/             # v1/v2 模式下换成各自标签名
 │   └── eval-<id>/run-<n>/
@@ -340,17 +347,17 @@ output/
 
 ```bash
 # 1. 静态体检 + 安全审查
-skill-eval analyze path/to/skill/ --format json -o scorecard.json
-skill-eval vet    path/to/skill/ --format json
+sift analyze path/to/skill/ --format json -o scorecard.json
+sift vet    path/to/skill/ --format json
 
 # 2. 冻结基线题集(commit 它,保证跨 run 同卷)
-skill-eval freeze path/to/evals.json --name baseline
+sift freeze path/to/evals.json --name baseline
 
 # 3. A/B 跑(候选 v2 vs 基线 v1)
-skill-eval run v2/ --skill-b v1/ --evals baseline.json --runs 3 -o out/
+sift eval v2/ --skill-b v1/ --evals baseline.json --runs 3 -o out/
 
 # 4. 出判决 → exit code 驱动 CI check
-skill-eval gate out/benchmark.json --min-win-rate 0.5
+sift gate out/benchmark.json --min-win-rate 0.5
 ```
 
 Exit code（各命令语义不同）：
@@ -358,11 +365,11 @@ Exit code（各命令语义不同）：
 | 命令 | 0 | 1 | 2 | 3 |
 |------|---|---|---|---|
 | `gate` | PASS | FAIL | N/A 或 输入错误 | — |
-| `run` | 产数据成功 | （`--security-gate` 触发） | 输入错误 | 执行错误 |
+| `eval` / `run` | 产数据成功 | （`--security-gate` 触发） | 输入错误 | 执行错误 |
 | `vet` | SAFE/REVIEW | BLOCKED | 输入错误 | — |
 | `analyze` | score 满 | score 未满 | 输入错误 | — |
 
-门禁阈值与 CI 落点（分支保护、check 名、N/A 是否阻塞）归消费方配置——skill-eval 只提供机制（三态 exit + gate.json）。
+门禁阈值与 CI 落点（分支保护、check 名、N/A 是否阻塞）归消费方配置——sift 只提供机制（三态 exit + gate.json）。
 
 ---
 

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from skill_eval.compliance.extractor import InstructionExtractor
-from skill_eval.audit.tool_match import extract_first_balanced, match_tool_call, _extract_first_balanced
-from skill_eval.calibration.calibrator import CalibrationChecker
-from skill_eval.models import (
+from sift.compliance.extractor import InstructionExtractor
+from sift.audit.tool_match import extract_first_balanced, match_tool_call, _extract_first_balanced
+from sift.calibration.calibrator import CalibrationChecker
+from sift.models import (
     AuditCategory,
     AuditFinding,
     AuditMethod,
@@ -413,7 +413,7 @@ class TestInstructionExtractorChinese:
 
     def test_extract_required_params_unit(self):
         """_extract_required_params:留 ASCII 参数 token,滤中文/虚词/标点,遇连接词停。"""
-        from skill_eval.compliance.extractor import _extract_required_params
+        from sift.compliance.extractor import _extract_required_params
         assert _extract_required_params(" --tb=short -x") == ["--tb=short", "-x"]
         assert _extract_required_params(" tests/") == ["tests/"]
         assert _extract_required_params(" 来跑测试") == []               # 全中文 → 空
@@ -465,7 +465,7 @@ class TestInstructionExtractorChinese:
         match 是假 TOOL_REQUIREMENT。回归:agent/skill 定义高频「使用 JSON 格式」「使用 API 获取」
         (cannbot-skills 实测活体命中),被 _TOOL_VERBS_CN(使用)抽成 tool_name=JSON/API,
         下游 match_tool_call 条件3 `\\bJSON\\b` 非确定性命中(读过 config.json → 假 PASS;没读 →
-        假 FAIL「该用工具 JSON 但没用」)→ verdict 噪声。这些词在 skill-eval 工具世界
+        假 FAIL「该用工具 JSON 但没用」)→ verdict 噪声。这些词在 sift 工具世界
         (Read/Write/Bash…)没一个是真工具,裸用一律停用。"""
         ext = InstructionExtractor()
         body = (

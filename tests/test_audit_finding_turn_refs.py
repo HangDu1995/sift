@@ -5,7 +5,7 @@ Task 4 会把 LLM 引用的 turn 填进来;PASS / N/A 或 segment 级别缺席�
 本文件只验字段存在 + 默认空 + 往返序列化(填值由 Task 4 接)。
 """
 
-from skill_eval.models.audit_models import (
+from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
     AuditMethod,

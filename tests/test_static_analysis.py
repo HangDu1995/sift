@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from skill_eval.static_analysis.analyzer import StaticAnalyzer
-from skill_eval.static_analysis.checks import (
+from sift.static_analysis.analyzer import StaticAnalyzer
+from sift.static_analysis.checks import (
     check_description_length,
     check_description_has_trigger,
     check_description_third_person,
@@ -21,8 +21,8 @@ from skill_eval.static_analysis.checks import (
     check_source_documented,
     ALL_CHECKS,
 )
-from skill_eval.static_analysis.classifier import classify_skill
-from skill_eval.models import SkillCategory
+from sift.static_analysis.classifier import classify_skill
+from sift.models import SkillCategory
 
 
 class TestIndividualChecks:

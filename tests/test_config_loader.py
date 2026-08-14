@@ -7,12 +7,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from skill_eval.config.loader import EvalConfig, load_config
+from sift.config.loader import EvalConfig, load_config
 
 
 @pytest.fixture
 def framework_yaml(tmp_path: Path) -> Path:
-    pkg_defaults = Path(__file__).parent.parent / "src" / "skill_eval" / "config" / "defaults.yaml"
+    pkg_defaults = Path(__file__).parent.parent / "src" / "sift" / "config" / "defaults.yaml"
     if pkg_defaults.exists():
         return pkg_defaults
     return tmp_path / "defaults.yaml"
@@ -93,7 +93,7 @@ class TestThreeLayerMerge:
                 "api": {"assertions": [{"type": "CONTAINS_PATTERN", "pattern": "v1"}]},
             },
         }))
-        skill_cfg = tmp_path / "skill-eval.yaml"
+        skill_cfg = tmp_path / "sift.yaml"
         skill_cfg.write_text(yaml.dump({
             "prompt_templates": ["custom prompt 1"],
         }))

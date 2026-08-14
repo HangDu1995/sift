@@ -25,8 +25,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from skill_eval.cli.main import app
-from skill_eval.models.audit_models import AuditReport
+from sift.cli.main import app
+from sift.models.audit_models import AuditReport
 
 runner = CliRunner()
 
@@ -52,7 +52,7 @@ EXPECTED_SLICES = {LEA: 2, CRA: 2, RCZ: 1}
 @pytest.fixture(autouse=True)
 def _no_llm_retry_sleep(monkeypatch) -> None:
     """重试退避的 time.sleep → no-op(照 test_audit_integration.py,保持闭环测试快)。"""
-    monkeypatch.setattr("skill_eval.audit.auditor.time.sleep", lambda *a, **k: None)
+    monkeypatch.setattr("sift.audit.auditor.time.sleep", lambda *a, **k: None)
 
 
 def _make_fake() -> tuple:
@@ -101,7 +101,7 @@ def test_by_skill_e2e_plumbing(skill_name, monkeypatch, tmp_path) -> None:
       5. 切片文件确在盘上。
     """
     fake, _calls = _make_fake()
-    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+    monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
 
     skill_dir = FIXTURE_SKILLS / skill_name
     out = tmp_path / skill_name
@@ -182,7 +182,7 @@ def test_lea_slices_no_cra_file_contamination(monkeypatch, tmp_path) -> None:
     不出现(CRA 主作用域的 Read,与 LEA 段完全隔离)。
     """
     fake, _calls = _make_fake()
-    monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+    monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
 
     skill_dir = FIXTURE_SKILLS / LEA
     out = tmp_path / "lea-purity"

@@ -1,6 +1,6 @@
 {
   "skill_name": "security-risk",
-  "skill_path": "/Users/layne/codes/skill-eval/fixtures/negative-skills/security-risk",
+  "skill_path": "/Users/layne/codes/sift/fixtures/negative-skills/security-risk",
   "verdict": "BLOCKED",
   "scanners": [
     {

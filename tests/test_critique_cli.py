@@ -2,8 +2,8 @@
 import json
 from typer.testing import CliRunner
 
-from skill_eval.cli.commands import critique as crt_cmd
-from skill_eval.models.critique_report import ContentQualityReport, CritiqueDimension
+from sift.cli.commands import critique as crt_cmd
+from sift.models.critique_report import ContentQualityReport, CritiqueDimension
 
 
 def _fake_report():

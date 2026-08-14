@@ -1,6 +1,6 @@
 """ComparisonSummary.from_comparisons:win-rate 聚合 + Wilson CI + failed 排除分母。"""
-from skill_eval.models import ComparisonResult
-from skill_eval.models.batch_models import ComparisonSummary
+from sift.models import ComparisonResult
+from sift.models.batch_models import ComparisonSummary
 
 
 def _comps(*winners, failed_set=()):

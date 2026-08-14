@@ -3,8 +3,8 @@ import re
 import subprocess
 import tempfile
 
-from skill_eval.models.coverage_report import CoveragePoint, CoverageReport
-from skill_eval.reporting.coverage_viewer import CoverageReportGenerator
+from sift.models.coverage_report import CoveragePoint, CoverageReport
+from sift.reporting.coverage_viewer import CoverageReportGenerator
 
 
 def _sample_report():

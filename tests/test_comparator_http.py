@@ -5,8 +5,8 @@ retry-exhaustion 降级)+ L1(call_llm_with_retry)↔ L2(_compare_with_retry)分�
 """
 from unittest.mock import patch
 
-from skill_eval.concurrency import _LLMRetryExhausted
-from skill_eval.scoring.comparator import BlindComparator, COMPARATOR_SCHEMA
+from sift.concurrency import _LLMRetryExhausted
+from sift.scoring.comparator import BlindComparator, COMPARATOR_SCHEMA
 
 
 class TestComparatorSchema:
@@ -26,7 +26,7 @@ class TestComparatorSchema:
 
     def test_schema_conformant_json_validates(self):
         import json
-        from skill_eval.models import ComparisonResult
+        from sift.models import ComparisonResult
         sample = json.dumps({"winner": "A", "reasoning": "x", "rubric": {}, "output_quality": {}})
         r = ComparisonResult.model_validate(json.loads(sample))
         assert r.winner == "A"
@@ -45,30 +45,30 @@ class TestComparatorCallHttp:
 
     def test_call_uses_http_transport_and_comparator_schema(self):
         fake, cap = self._fake('{"winner":"A","reasoning":"t"}')
-        with patch("skill_eval.scoring.comparator.call_llm_with_retry", side_effect=fake):
+        with patch("sift.scoring.comparator.call_llm_with_retry", side_effect=fake):
             BlindComparator()._call("prompt")
         assert cap[0]["transport"] == "http"
         assert cap[0]["schema"] is COMPARATOR_SCHEMA
 
     def test_call_returns_empty_on_retry_exhausted(self):
-        with patch("skill_eval.scoring.comparator.call_llm_with_retry",
+        with patch("sift.scoring.comparator.call_llm_with_retry",
                    side_effect=_LLMRetryExhausted("exhausted")):
             assert BlindComparator()._call("prompt") == ""
 
     def test_call_forwards_on_usage(self):
         fake, cap = self._fake('{"winner":"A","reasoning":"t"}')
-        with patch("skill_eval.scoring.comparator.call_llm_with_retry", side_effect=fake):
+        with patch("sift.scoring.comparator.call_llm_with_retry", side_effect=fake):
             BlindComparator()._call("prompt", on_usage=lambda u: None)
         assert cap[0]["on_usage"] is not None
 
     def test_L1_exhaustion_flows_to_L2_pair_retry(self):
         import random
-        from skill_eval.execution.comparison_suite import _compare_with_retry
+        from sift.execution.comparison_suite import _compare_with_retry
         valid = '{"winner":"A","reasoning":"ok","rubric":{},"output_quality":{}}'
         comparator = BlindComparator(rng=random.Random(0))
-        with patch("skill_eval.scoring.comparator.call_llm_with_retry",
+        with patch("sift.scoring.comparator.call_llm_with_retry",
                    side_effect=[_LLMRetryExhausted("boom"), valid]), \
-                patch("skill_eval.execution.comparison_suite.time"):
+                patch("sift.execution.comparison_suite.time"):
             result = _compare_with_retry(comparator, "a", "b", "p", None, max_retries=3)
         assert result is not None
         assert result.winner in ("with", "without")

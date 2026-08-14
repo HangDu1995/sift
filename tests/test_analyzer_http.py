@@ -1,8 +1,8 @@
 """P3:analyzer 切 http(forced tool_use + schema)的专项测试。"""
 from unittest.mock import patch
 
-from skill_eval.concurrency import _LLMRetryExhausted
-from skill_eval.scoring.analyzer import ANALYSIS_SCHEMA, PosthocAnalyzer
+from sift.concurrency import _LLMRetryExhausted
+from sift.scoring.analyzer import ANALYSIS_SCHEMA, PosthocAnalyzer
 
 
 class TestAnalysisSchema:
@@ -36,18 +36,18 @@ class TestAnalyzerCallHttp:
 
     def test_call_uses_http_transport(self):
         fake, cap = self._fake('["note"]')
-        with patch("skill_eval.scoring.analyzer.call_llm_with_retry", side_effect=fake):
+        with patch("sift.scoring.analyzer.call_llm_with_retry", side_effect=fake):
             PosthocAnalyzer()._call("prompt", schema=ANALYSIS_SCHEMA)
         assert cap[0]["transport"] == "http"
 
     def test_call_returns_empty_on_retry_exhausted(self):
-        with patch("skill_eval.scoring.analyzer.call_llm_with_retry",
+        with patch("sift.scoring.analyzer.call_llm_with_retry",
                    side_effect=_LLMRetryExhausted("exhausted")):
             assert PosthocAnalyzer()._call("prompt") == ""
 
     def test_analyze_comparison_passes_analysis_schema(self):
         fake, cap = self._fake('{}')
-        with patch("skill_eval.scoring.analyzer.call_llm_with_retry", side_effect=fake):
+        with patch("sift.scoring.analyzer.call_llm_with_retry", side_effect=fake):
             PosthocAnalyzer().analyze_comparison(
                 "A", "winner", "loser", "reasoning", "wt", "lt", focus_skill="f")
         assert cap[0]["schema"] is ANALYSIS_SCHEMA

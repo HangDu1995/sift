@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from skill_eval.audit.slice import slice_transcript
-from skill_eval.evals.transcript import build_digest
+from sift.audit.slice import slice_transcript
+from sift.evals.transcript import build_digest
 
 FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "example-skills" / "multi-skill-demo" / "multi-skill.jsonl"
 BUILDER = FIXTURE.parent / "build_multi_skill.py"

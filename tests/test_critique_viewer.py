@@ -4,8 +4,8 @@ import re
 import subprocess
 from pathlib import Path
 
-from skill_eval.models.critique_report import ContentQualityReport, CritiqueDimension
-from skill_eval.reporting.critique_viewer import CritiqueReportGenerator
+from sift.models.critique_report import ContentQualityReport, CritiqueDimension
+from sift.reporting.critique_viewer import CritiqueReportGenerator
 
 
 def _sample_report():
@@ -36,7 +36,7 @@ def test_generate_html_embeds_data_and_skill_name():
 
 def test_template_script_passes_node_check():
     """抽 <script> 段跑 node --check 验语法(项目硬规矩)。"""
-    tpl = (Path(__file__).resolve().parents[1] / "src" / "skill_eval" / "reporting"
+    tpl = (Path(__file__).resolve().parents[1] / "src" / "sift" / "reporting"
            / "templates" / "critique-report.html").read_text(encoding="utf-8")
     m = re.search(r"<script>(.*?)</script>", tpl, re.S)
     assert m, "模板缺 <script> 段"
@@ -48,7 +48,7 @@ def test_template_script_passes_node_check():
 def test_render_real_data_has_dims_and_badges():
     """抽 <script> 注入真实数据跑 node,实际执行 JS 字符串变换——验证渲染输出含
     维度名 / status badge / 每处 evidence 分行 / 计数标签(读取路径,非静态模板串)。"""
-    tpl = (Path(__file__).resolve().parents[1] / "src" / "skill_eval" / "reporting"
+    tpl = (Path(__file__).resolve().parents[1] / "src" / "sift" / "reporting"
            / "templates" / "critique-report.html").read_text(encoding="utf-8")
     m = re.search(r"<script>(.*?)</script>", tpl, re.S)
     js = m.group(1)

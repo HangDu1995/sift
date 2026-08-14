@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "skill-eval"
+name = "sift"
 version = "2.0.0"
 description = "Automated evaluation tool for Claude Code Skills"
 requires-python = ">=3.10"
@@ -21,7 +21,7 @@ dev = [
 ]
 
 [project.scripts]
-skill-eval = "skill_eval.cli:app"
+sift = "sift.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]

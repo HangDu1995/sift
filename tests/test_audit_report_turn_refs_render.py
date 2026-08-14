@@ -11,14 +11,14 @@ Task 5:报告渲染 turn_refs。
 """
 import json
 
-from skill_eval.models.audit_models import (
+from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
     AuditMethod,
     AuditReport,
     AuditVerdict,
 )
-from skill_eval.reporting.audit_viewer import AuditReportGenerator
+from sift.reporting.audit_viewer import AuditReportGenerator
 
 
 def _report_with_fail(turn_refs):

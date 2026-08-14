@@ -1,6 +1,6 @@
-from skill_eval.evals.inspect import inspect_evals, PROGRAMMATIC_TYPES
-from skill_eval.models import Assertion, EvalCase, EvalSet
-from skill_eval.models.enums import AssertionType
+from sift.evals.inspect import inspect_evals, PROGRAMMATIC_TYPES
+from sift.models import Assertion, EvalCase, EvalSet
+from sift.models.enums import AssertionType
 
 
 def _set(evals):

@@ -1,8 +1,8 @@
 """format_failure_triage 纯函数测:从 runs 聚合失败根因为打印行。"""
 from __future__ import annotations
 
-from skill_eval.cli.pipeline import format_failure_triage
-from skill_eval.models.benchmark_models import RunResultEntry, RunResultMetrics
+from sift.cli.pipeline import format_failure_triage
+from sift.models.benchmark_models import RunResultEntry, RunResultMetrics
 
 
 def _entry(cause, suggestion):

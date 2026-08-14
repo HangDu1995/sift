@@ -1,7 +1,7 @@
 """rebuild 后 transcript_text/tool_trace 带 [T{idx}] 标识;切片后保留全局 seq(不重编号)。"""
 import json
-from skill_eval.audit.rebuild import rebuild
-from skill_eval.audit.slice import slice_transcript
+from sift.audit.rebuild import rebuild
+from sift.audit.slice import slice_transcript
 
 
 def _write_jsonl(p, recs):

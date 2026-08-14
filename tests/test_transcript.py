@@ -1,9 +1,9 @@
 # tests/test_transcript.py
 import json
 from pathlib import Path
-from skill_eval.evals.transcript import build_digest, SessionDigest, _strip_line_numbers, _clean_read_result, FileContent, Command, _NAME_MAP, _norm_tool
-from skill_eval.evals.transcript import _digest_from_records
-from skill_eval.models import ToolCallRecord
+from sift.evals.transcript import build_digest, SessionDigest, _strip_line_numbers, _clean_read_result, FileContent, Command, _NAME_MAP, _norm_tool
+from sift.evals.transcript import _digest_from_records
+from sift.models import ToolCallRecord
 
 def _write_jsonl(tmp_path: Path, records: list) -> Path:
     p = tmp_path / "t.jsonl"

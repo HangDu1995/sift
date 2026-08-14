@@ -9,8 +9,8 @@ FAIL 标 noise_label(tool_noise / skill_issue / uncertain)+ noise_reasons,帮用
 """
 from __future__ import annotations
 
-from skill_eval.audit.noise import annotate_aggregate_noise, annotate_noise
-from skill_eval.models.audit_models import (
+from sift.audit.noise import annotate_aggregate_noise, annotate_noise
+from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
     AuditMethod,

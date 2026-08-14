@@ -2,7 +2,7 @@
 分列(scoring/grader/.../executor)是并发叠加的调用时长加总,与墙钟是两个维度(可 > total)。"""
 import json
 from pathlib import Path
-from skill_eval.execution.benchmark import BenchmarkAggregator
+from sift.execution.benchmark import BenchmarkAggregator
 
 
 def _make_run(run_dir, total_tokens=100, grader_dur=None, compliance_dur=None):
@@ -37,8 +37,8 @@ def test_aggregate_populates_llm_duration(tmp_path):
             on_duration(4.0)  # analyzer 时长
         return [], None
 
-    with patch("skill_eval.execution.benchmark.run_comparisons", side_effect=fake_run_comparisons), \
-         patch("skill_eval.execution.benchmark.run_analysis", side_effect=fake_run_analysis):
+    with patch("sift.execution.benchmark.run_comparisons", side_effect=fake_run_comparisons), \
+         patch("sift.execution.benchmark.run_analysis", side_effect=fake_run_analysis):
         bench = agg.aggregate(tmp_path, phase1_wall=15.0)
     du = bench.llm_duration_seconds
     # 分列(并发叠加,调用时长加总)
@@ -58,8 +58,8 @@ def test_aggregate_duration_total_not_sum_of_segments(tmp_path):
     cfg = tmp_path / "with_skill"
     _make_run(cfg / "eval-1" / "run-1", total_tokens=100, grader_dur=10.0, compliance_dur=10.0)
     agg = BenchmarkAggregator(model=None)
-    with patch("skill_eval.execution.benchmark.run_comparisons"), \
-         patch("skill_eval.execution.benchmark.run_analysis"):
+    with patch("sift.execution.benchmark.run_comparisons"), \
+         patch("sift.execution.benchmark.run_analysis"):
         bench = agg.aggregate(tmp_path, phase1_wall=5.0)
     du = bench.llm_duration_seconds
     assert du["total"] == du["phase1_wall"] + du["phase2_wall"]              # 墙钟加总

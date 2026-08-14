@@ -1,4 +1,4 @@
-"""tests for skill_eval.audit.declare.
+"""tests for sift.audit.declare.
 
 derive_declarations: 从 transcript digest 反推"真实使用里确实需要的"指令,
 补充进指令源。只增不减——返回纯新增(去重 vs existing),不含 existing 本身。
@@ -6,10 +6,10 @@ derive_declarations: 从 transcript digest 反推"真实使用里确实需要的
 """
 from __future__ import annotations
 
-from skill_eval.audit.declare import derive_declarations
-from skill_eval.evals.transcript import Command, FileContent, SessionDigest
-from skill_eval.models import InstructionCheck
-from skill_eval.models.enums import (
+from sift.audit.declare import derive_declarations
+from sift.evals.transcript import Command, FileContent, SessionDigest
+from sift.models import InstructionCheck
+from sift.models.enums import (
     CheckMethod,
     InstructionPriority,
     InstructionSource,

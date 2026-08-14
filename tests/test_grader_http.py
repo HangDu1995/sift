@@ -5,8 +5,8 @@ schema 形状(GRADING_SCHEMA 派生:剔 internal、留 $defs)+ _call_claude http
 """
 from unittest.mock import patch
 
-from skill_eval.concurrency import _LLMRetryExhausted
-from skill_eval.scoring.llm_grader import GRADING_SCHEMA, LLMGrader
+from sift.concurrency import _LLMRetryExhausted
+from sift.scoring.llm_grader import GRADING_SCHEMA, LLMGrader
 
 
 class TestGradingSchema:
@@ -27,7 +27,7 @@ class TestGradingSchema:
 
     def test_schema_validates_minimal_grading(self):
         import json
-        from skill_eval.models import GradingResult
+        from sift.models import GradingResult
         sample = json.dumps({"expectations": [],
                              "summary": {"passed": 0, "failed": 0, "total": 0, "pass_rate": 0.0}})
         r = GradingResult.model_validate(json.loads(sample))
@@ -49,21 +49,21 @@ class TestGraderCallHttp:
 
     def test_call_claude_uses_http_transport_and_grading_schema(self):
         fake, cap = self._fake(self._EMPTY)
-        with patch("skill_eval.scoring.llm_grader.call_llm_with_retry", side_effect=fake):
+        with patch("sift.scoring.llm_grader.call_llm_with_retry", side_effect=fake):
             LLMGrader()._call_claude("prompt", schema=GRADING_SCHEMA)
         assert cap[0]["transport"] == "http"
         assert cap[0]["schema"] is GRADING_SCHEMA
 
     def test_call_claude_returns_empty_on_retry_exhausted(self):
-        with patch("skill_eval.scoring.llm_grader.call_llm_with_retry",
+        with patch("sift.scoring.llm_grader.call_llm_with_retry",
                    side_effect=_LLMRetryExhausted("exhausted")):
             assert LLMGrader()._call_claude("prompt") == ""
 
     def test_grade_passes_grading_schema(self, tmp_path):
         """grade() 把 GRADING_SCHEMA 经 _call_claude 穿到 call_llm_with_retry。"""
-        from skill_eval.models import EvalCase
+        from sift.models import EvalCase
         fake, cap = self._fake(self._EMPTY)
         ec = EvalCase(id=1, prompt="do", expectations=["e1"])
-        with patch("skill_eval.scoring.llm_grader.call_llm_with_retry", side_effect=fake):
+        with patch("sift.scoring.llm_grader.call_llm_with_retry", side_effect=fake):
             LLMGrader().grade(ec, "t", tmp_path)
         assert cap[0]["schema"] is GRADING_SCHEMA

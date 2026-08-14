@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from skill_eval.reporting.viewer import (
+from sift.reporting.viewer import (
     ReportGenerator,
     _build_run,
     _load_vet_report,
@@ -222,8 +222,8 @@ class TestReportGeneratorStatic:
 
         viewer 是 JS 渲染:文案字面量 + 趋零判断函数入模板由本测断言;
         条件逻辑(趋零显 / 显著不显 / 缺值 None 不显)由 node -e 验变换
-        (记忆 [[skill-eval-viewer-js-needs-node-check]]:render-smoke 抓不到条件盲区)。
-        客观为主(稳),主观不单独触发(漂,记忆 [[skill-eval-p2-5-multisample-ineffective]])。
+        (记忆 [[sift-viewer-js-needs-node-check]]:render-smoke 抓不到条件盲区)。
+        客观为主(稳),主观不单独触发(漂,记忆 [[sift-p2-5-multisample-ineffective]])。
         """
         benchmark = {
             "metadata": {"skill_name": "s"},
@@ -711,7 +711,7 @@ class TestReportGeneratorStatic:
         """败者(without 基线)遵循度 score=null 时显「N/A(无 skill 基线)」,不显假 ?/10 或 0/10。
         回归:无 skill 侧不该有遵循度数字(遵循性引擎只跑 with_skill)。"""
         import json as _json, re as _re
-        from skill_eval.reporting.viewer import ReportGenerator
+        from sift.reporting.viewer import ReportGenerator
         workspace = tmp_path / "iteration-1"; workspace.mkdir()
         benchmark = {
             "metadata": {"skill_name": "x"}, "runs": [], "run_summary": {},
@@ -900,7 +900,7 @@ class TestReportGeneratorStatic:
         """回归 previous_delta 路径错配(29e5fa44 引入,2026-07-21 修):
 
         previous_delta 是 viewer 层衍生的顶层 EMBEDDED_DATA 字段(viewer.py _compute_previous_delta
-        产出,非 run 时 benchmark.json 的子键)。renderBenchmark 的 data=EMBEDDED_DATA.benchmark,
+        产出,非 eval 时 benchmark.json 的子键)。renderBenchmark 的 data=EMBEDDED_DATA.benchmark,
         故读 data.previous_delta 恒 undefined → 卡从不渲染。本测 parse 真生成的 EMBEDDED_DATA,
         锁死路径:顶层有值、benchmark 里无此键、模板读 EMBEDDED_DATA.previous_delta。
 
@@ -976,7 +976,7 @@ class TestReportGeneratorStatic:
     def test_generate_html_viewer_script_passes_node_check(self, tmp_path):
         """viewer.html 的 <script> JS 抽出来跑 node --check 验语法(硬门槛)。
 
-        memory `skill-eval-viewer-js-needs-node-check`:pytest render-smoke 只验模板字符串,
+        memory `sift-viewer-js-needs-node-check`:pytest render-smoke 只验模板字符串,
         不执行 JS,抓不到括号失衡等语法错(曾 fmtVerdict 漏 `)` 这么漏过、被 node --check 抓到)。
         与 test_audit_cli.test_audit_writes_html_alongside_json 同款保护,扩到 viewer.html。
         无 node 的环境(CI 缺 node)→ skip,不强失败(本地开发环境都有)。
@@ -1189,11 +1189,11 @@ class TestLoadAuxData:
 
 
 class TestGenerateReportHtml:
-    """generate_report_html:workspace → report.html 核心(run 末尾 + report 命令共用)。
+    """generate_report_html:workspace → report.html 核心(eval 末尾 + report 命令共用)。
     monkeypatch ReportGenerator.write_static 隔离渲染,只验 benchmark/scorecard 加载逻辑。"""
 
     def test_loads_benchmark_and_scorecard(self, tmp_path: Path):
-        from skill_eval.cli.commands.report import generate_report_html
+        from sift.cli.commands.report import generate_report_html
 
         (tmp_path / "benchmark.json").write_text(
             json.dumps({"skill_name": "s", "runs": []}), encoding="utf-8")
@@ -1217,14 +1217,14 @@ class TestGenerateReportHtml:
         assert captured["output_path"] == tmp_path / "report.html"
 
     def test_no_benchmark_returns_none(self, tmp_path: Path):
-        from skill_eval.cli.commands.report import generate_report_html
+        from sift.cli.commands.report import generate_report_html
 
         with patch.object(ReportGenerator, "write_static") as m:
             assert generate_report_html(tmp_path) is None
         m.assert_not_called()
 
     def test_missing_scorecard_ok(self, tmp_path: Path):
-        from skill_eval.cli.commands.report import generate_report_html
+        from sift.cli.commands.report import generate_report_html
 
         (tmp_path / "benchmark.json").write_text(
             json.dumps({"skill_name": "s"}), encoding="utf-8")
@@ -1249,7 +1249,7 @@ class TestComplianceAggregate:
                 "category": "prohibition", "evidence": "e", "method": "LLM", "transcript": transcript}
 
     def test_groups_by_side_same_instruction_across_runs(self):
-        from skill_eval.reporting.viewer import _aggregate_compliance
+        from sift.reporting.viewer import _aggregate_compliance
         runs = [
             {"config": "with_skill", "compliance": {"findings": [self._finding("禁止编造", "PASS", "run-1.jsonl")]}},
             {"config": "with_skill", "compliance": {"findings": [self._finding("禁止编造", "FAIL", "run-2.jsonl")]}},
@@ -1267,13 +1267,13 @@ class TestComplianceAggregate:
         assert agg[0]["runs_contributed"] == 2
 
     def test_skips_all_empty_side(self):
-        from skill_eval.reporting.viewer import _aggregate_compliance
+        from sift.reporting.viewer import _aggregate_compliance
         # 一个 side 全空 digest(L1 理解题,findings=[])→ 不产空聚合
         runs = [{"config": "with_skill", "compliance": {"summary": {"total": 0}, "findings": []}}]
         assert _aggregate_compliance(runs) == []
 
     def test_mixed_empty_and_real_only_counts_real(self):
-        from skill_eval.reporting.viewer import _aggregate_compliance
+        from sift.reporting.viewer import _aggregate_compliance
         # eval-1/2 空 digest + eval-3 真判定,同 side → 聚合只反映真判定的 run
         runs = [
             {"config": "with_skill", "compliance": {"findings": []}},  # L1 空
@@ -1292,7 +1292,7 @@ class TestComplianceAggregate:
     def test_annotates_aggregate_noise_tool_noise(self):
         """Task 5 接线:_aggregate_compliance 跑 annotate_aggregate_noise——
         HEADING_STEP + NA 多 FAIL 少 → aggregate noise_label=="tool_noise"。"""
-        from skill_eval.reporting.viewer import _aggregate_compliance
+        from sift.reporting.viewer import _aggregate_compliance
         runs = [
             {"config": "with_skill", "compliance": {"findings": [
                 self._heading_f("[设计](design.md)", "FAIL", "run-1.jsonl"),
@@ -1312,7 +1312,7 @@ class TestComplianceAggregate:
 
     def test_annotates_aggregate_noise_runs_per_side(self):
         """Task 5 接线:per-side 都跑(不是只跑一次)——两个 side 各自的 aggregate 都标。"""
-        from skill_eval.reporting.viewer import _aggregate_compliance
+        from sift.reporting.viewer import _aggregate_compliance
         runs = [
             {"config": "with_skill", "compliance": {"findings": [
                 self._heading_f("[a](a.md)", "FAIL", "r1"),
@@ -1371,16 +1371,16 @@ class TestPreviousDelta:
         return bench
 
     def test_none_when_no_previous(self):
-        from skill_eval.reporting.viewer import _compute_previous_delta
+        from sift.reporting.viewer import _compute_previous_delta
         assert _compute_previous_delta(self._bench(0.8, 0.7), None) is None
 
     def test_none_when_previous_has_no_run_summary(self):
-        from skill_eval.reporting.viewer import _compute_previous_delta
+        from sift.reporting.viewer import _compute_previous_delta
         assert _compute_previous_delta(self._bench(0.8, 0.7), {"metadata": {}}) is None
 
     def test_dual_rate_delta_per_side(self):
         """两侧双率都算出 cur/prev/d(百分点);d = (cur - prev)*100 四舍五入。"""
-        from skill_eval.reporting.viewer import _compute_previous_delta
+        from sift.reporting.viewer import _compute_previous_delta
         cur = self._bench(0.78, 0.80, 0.40, 0.50, win=0.65, runs=6)
         prev = self._bench(0.72, 0.85, 0.40, 0.50, win=0.70, runs=3)
         d = _compute_previous_delta(cur, prev)
@@ -1393,7 +1393,7 @@ class TestPreviousDelta:
 
     def test_missing_rate_yields_none_delta(self):
         """某率缺失(纯主观题 programmatic=None)→ cur/prev/d 该率为 None,不报假 0。"""
-        from skill_eval.reporting.viewer import _compute_previous_delta
+        from sift.reporting.viewer import _compute_previous_delta
         cur = self._bench(None, 0.80)   # with 侧纯主观
         prev = self._bench(None, 0.75)
         d = _compute_previous_delta(cur, prev)
@@ -1403,7 +1403,7 @@ class TestPreviousDelta:
 
     def test_side_missing_in_previous(self):
         """current 有该 side、previous 没有(v1/v2 换 label 等)→ prev 率 None、d None。"""
-        from skill_eval.reporting.viewer import _compute_previous_delta
+        from sift.reporting.viewer import _compute_previous_delta
         cur = self._bench(0.78, 0.80)
         prev_bench = {"run_summary": {"other_side": {"pass_rate_programmatic": {"mean": 0.5}}}, "metadata": {}}
         d = _compute_previous_delta(cur, prev_bench)
@@ -1414,7 +1414,7 @@ class TestPreviousDelta:
 
     def test_no_win_rate_yields_none(self):
         """无比评(comparison_summary 缺)→ 盲评 delta 全 None。"""
-        from skill_eval.reporting.viewer import _compute_previous_delta
+        from sift.reporting.viewer import _compute_previous_delta
         cur = self._bench(0.8, 0.7)
         prev = self._bench(0.7, 0.7)
         d = _compute_previous_delta(cur, prev)

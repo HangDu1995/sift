@@ -1,0 +1,2022 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>评测回顾</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600&family=Lora:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous"></script>
+  <style>
+    :root {
+      --bg: #faf9f5;
+      --surface: #ffffff;
+      --border: #e8e6dc;
+      --text: #141413;
+      --text-muted: #b0aea5;
+      --accent: #d97757;
+      --accent-hover: #c4613f;
+      --green: #788c5d;
+      --green-bg: #eef2e8;
+      --red: #c44;
+      --red-bg: #fceaea;
+      --header-bg: #141413;
+      --header-text: #faf9f5;
+      --radius: 6px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Lora', Georgia, serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ---- Header ---- */
+    .header {
+      background: var(--header-bg);
+      color: var(--header-text);
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .header h1 {
+      font-family: 'Poppins', sans-serif;
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+    .header .progress {
+      font-size: 0.875rem;
+      opacity: 0.8;
+      text-align: right;
+    }
+    .header-right { display: flex; align-items: center; gap: 0.75rem; }
+    .header .run-jump {
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.8rem;
+      padding: 0.3rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      max-width: 16rem;
+    }
+
+    /* ---- Main content ---- */
+    .main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    /* ---- Sections ---- */
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      flex-shrink: 0;
+    }
+    .section-header {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.75rem 1rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .section-body {
+      padding: 1rem;
+    }
+
+    /* ---- Config badge ---- */
+    .config-badge {
+      display: inline-block;
+      padding: 0.2rem 0.625rem;
+      border-radius: 9999px;
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      margin-left: 0.75rem;
+      vertical-align: middle;
+    }
+    .config-badge.config-primary {
+      background: rgba(33, 150, 243, 0.12);
+      color: #1976d2;
+    }
+    .config-badge.config-baseline {
+      background: rgba(255, 193, 7, 0.15);
+      color: #f57f17;
+    }
+
+    /* ---- Prompt ---- */
+    .prompt-text {
+      white-space: pre-wrap;
+      font-size: 0.9375rem;
+      line-height: 1.6;
+    }
+
+    /* ---- Outputs ---- */
+    .output-file {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .output-file + .output-file {
+      margin-top: 1rem;
+    }
+    .output-file-header {
+      padding: 0.5rem 0.75rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .output-file-header .dl-btn {
+      font-size: 0.7rem;
+      color: var(--accent);
+      text-decoration: none;
+      cursor: pointer;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-weight: 500;
+      opacity: 0.8;
+    }
+    .output-file-header .dl-btn:hover {
+      opacity: 1;
+      text-decoration: underline;
+    }
+    .output-file-content {
+      padding: 0.75rem;
+      overflow-x: auto;
+    }
+    .output-file-content pre {
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+    .output-file-content img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 4px;
+    }
+    .output-file-content iframe {
+      width: 100%;
+      height: 600px;
+      border: none;
+    }
+    .output-file-content table {
+      border-collapse: collapse;
+      font-size: 0.8125rem;
+      width: 100%;
+    }
+    .output-file-content table td,
+    .output-file-content table th {
+      border: 1px solid var(--border);
+      padding: 0.375rem 0.5rem;
+      text-align: left;
+    }
+    .output-file-content table th {
+      background: var(--bg);
+      font-weight: 600;
+    }
+    .output-file-content .download-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+    .output-file-content .download-link:hover {
+      background: var(--border);
+    }
+    .empty-state {
+      color: var(--text-muted);
+      font-style: italic;
+      padding: 2rem;
+      text-align: center;
+    }
+
+    /* ---- Grades (collapsible) ---- */
+    .grades-toggle {
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+    }
+    .grades-toggle:hover {
+      color: var(--accent);
+    }
+    .grades-toggle .arrow {
+      margin-right: 0.5rem;
+      transition: transform 0.15s;
+      font-size: 0.75rem;
+    }
+    .grades-toggle .arrow.open {
+      transform: rotate(90deg);
+    }
+    .grades-content {
+      display: none;
+      margin-top: 0.75rem;
+    }
+    .grades-content.open {
+      display: block;
+    }
+    .grades-summary {
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .grade-badge {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .grade-pass { background: var(--green-bg); color: var(--green); }
+    .grade-fail { background: var(--red-bg); color: var(--red); }
+    .assertion-list {
+      list-style: none;
+    }
+    .assertion-item {
+      padding: 0.625rem 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8125rem;
+    }
+    .assertion-item:last-child { border-bottom: none; }
+    .assertion-status {
+      font-weight: 600;
+      margin-right: 0.5rem;
+    }
+    .assertion-status.pass { color: var(--green); }
+    .assertion-status.fail { color: var(--red); }
+    .assertion-status.na { color: var(--text-muted); }           /* N/A 不适用(场景不触发) */
+    .assertion-status.unresolved { color: var(--text-muted); }   /* UNRESOLVED 没判成(可重跑) */
+    .assertion-status.indeterminate { color: var(--red); }       /* INDETERMINATE 判不准(重跑无益) */
+    .assertion-evidence {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      margin-top: 0.25rem;
+      padding-left: 1.5rem;
+    }
+
+    /* ---- View tabs ---- */
+    .view-tabs {
+      display: flex;
+      gap: 0;
+      padding: 0 2rem;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .view-tab {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.625rem 1.25rem;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      background: none;
+      color: var(--text-muted);
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    .view-tab:hover { color: var(--text); }
+    .view-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .view-panel { display: none; }
+    .view-panel.active { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+
+    /* ---- Benchmark view ---- */
+    .benchmark-view {
+      padding: 1.5rem 2rem;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .benchmark-table {
+      border-collapse: collapse;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 0.8125rem;
+      width: 100%;
+      margin-bottom: 1.5rem;
+    }
+    .benchmark-table th, .benchmark-table td {
+      padding: 0.625rem 0.75rem;
+      text-align: left;
+      border: 1px solid var(--border);
+    }
+    .benchmark-table th {
+      font-family: 'Poppins', sans-serif;
+      background: var(--header-bg);
+      color: var(--header-text);
+      font-weight: 500;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .benchmark-table tr:hover { background: var(--bg); }
+    .benchmark-table tr.benchmark-row-with { background: rgba(33, 150, 243, 0.06); }
+    .benchmark-table tr.benchmark-row-without { background: rgba(255, 193, 7, 0.06); }
+    .benchmark-table tr.benchmark-row-with:hover { background: rgba(33, 150, 243, 0.12); }
+    .benchmark-table tr.benchmark-row-without:hover { background: rgba(255, 193, 7, 0.12); }
+    .benchmark-table tr.benchmark-row-avg { font-weight: 600; border-top: 2px solid var(--border); }
+    .benchmark-table tr.benchmark-row-avg.benchmark-row-with { background: rgba(33, 150, 243, 0.12); }
+    .benchmark-table tr.benchmark-row-avg.benchmark-row-without { background: rgba(255, 193, 7, 0.12); }
+    .benchmark-delta-positive { color: var(--green); font-weight: 600; }
+    .benchmark-delta-negative { color: var(--red); font-weight: 600; }
+    .benchmark-notes {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+    }
+    .benchmark-notes h3 {
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+    }
+    .benchmark-notes ul {
+      list-style: disc;
+      padding-left: 1.25rem;
+    }
+    .benchmark-notes li {
+      font-size: 0.8125rem;
+      line-height: 1.6;
+      margin-bottom: 0.375rem;
+    }
+    .benchmark-empty {
+      color: var(--text-muted);
+      font-style: italic;
+      text-align: center;
+      padding: 3rem;
+    }
+
+    /* ---- Navigation ---- */
+    .nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 2rem;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .nav-btn {
+      font-family: 'Poppins', sans-serif;
+      padding: 0.5rem 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text);
+      transition: all 0.15s;
+    }
+    .nav-btn:hover:not(:disabled) {
+      background: var(--bg);
+      border-color: var(--text-muted);
+    }
+    .nav-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    /* ---- Toast ---- */
+    .toast {
+      position: fixed;
+      bottom: 5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--header-bg);
+      color: var(--header-text);
+      padding: 0.625rem 1.25rem;
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+      z-index: 200;
+    }
+    .toast.visible {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div id="app" style="height:100vh; display:flex; flex-direction:column;">
+    <div class="header">
+      <div>
+        <h1>评测回顾：<span id="skill-name"></span><span id="gate-badge" style="display:none; font-weight:bold; margin-left:12px; padding:2px 10px; border-radius:4px;"></span></h1>
+      </div>
+      <div class="header-right">
+        <select id="run-jump" class="run-jump" style="display:none;" aria-label="跳转到指定执行"></select>
+        <div class="progress" id="progress"></div>
+      </div>
+    </div>
+
+    <!-- View tabs (only shown when benchmark data exists) -->
+    <div class="view-tabs" id="view-tabs" style="display:none;">
+      <button class="view-tab active" onclick="switchView('outputs')">单次执行</button>
+      <button class="view-tab" onclick="switchView('benchmark')">整体汇总</button>
+    </div>
+
+    <!-- Outputs panel (qualitative review) -->
+    <div class="view-panel active" id="panel-outputs">
+    <div class="main">
+      <!-- Prompt -->
+      <div class="section">
+        <div class="section-header">提示词 <span class="config-badge" id="config-badge" style="display:none;"></span></div>
+        <div class="section-body">
+          <div class="prompt-text" id="prompt-text"></div>
+        </div>
+      </div>
+
+      <!-- Outputs -->
+      <div class="section">
+        <div class="section-header">输出</div>
+        <div class="section-body" id="outputs-body">
+          <div class="empty-state">未找到输出文件</div>
+        </div>
+      </div>
+
+      <!-- Previous Output (collapsible) -->
+      <div class="section" id="prev-outputs-section" style="display:none;">
+        <div class="section-header">
+          <div class="grades-toggle" onclick="togglePrevOutputs()">
+            <span class="arrow" id="prev-outputs-arrow">&#9654;</span>
+            上次输出
+          </div>
+        </div>
+        <div class="grades-content" id="prev-outputs-content"></div>
+      </div>
+
+      <!-- Grades (collapsible) -->
+      <div class="section" id="grades-section" style="display:none;">
+        <div class="section-header">
+          <div class="grades-toggle" onclick="toggleGrades()">
+            <span class="arrow" id="grades-arrow">&#9654;</span>
+            评估详情
+          </div>
+        </div>
+        <div class="grades-content" id="grades-content"></div>
+      </div>
+    </div>
+
+    <div class="nav" id="outputs-nav">
+      <button class="nav-btn" id="prev-btn" onclick="navigate(-1)">&#8592; 上一个</button>
+      <button class="nav-btn" id="next-btn" onclick="navigate(1)">下一个 &#8594;</button>
+    </div>
+    </div><!-- end panel-outputs -->
+
+    <!-- Benchmark panel (quantitative stats) -->
+    <div class="view-panel" id="panel-benchmark">
+      <div class="benchmark-view" id="benchmark-content">
+        <div class="benchmark-empty">暂无基准测试数据。请先运行基准测试以查看量化结果。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // ---- Embedded data (injected by generate_review.py) ----
+    /*__EMBEDDED_DATA__*/
+
+    // ---- State ----
+    let currentIndex = 0;
+
+    // ---- Init ----
+    async function init() {
+      document.getElementById("skill-name").textContent = EMBEDDED_DATA.skill_name;
+      const gate = EMBEDDED_DATA.gate;
+      if (gate && gate.decision) {
+          const styles = {PASS: {c:"green", bg:"#163a1f"}, FAIL: {c:"red", bg:"#3a1616"}, "N/A": {c:"yellow", bg:"#3a3a16"}, UNCLEAR: {c:"yellow", bg:"#3a3a16"}};
+          const s = styles[gate.decision] || {c:"var(--text)", bg:"transparent"};
+          const el = document.getElementById("gate-badge");
+          el.textContent = "门禁 " + gate.decision;
+          el.style.color = s.c; el.style.background = s.bg;
+          el.title = gate.reason || "";
+          el.style.display = "inline-block";
+      }
+      buildRunSelect();
+      showRun(0);
+    }
+
+    // ---- Navigation ----
+    function navigate(delta) {
+      const newIndex = currentIndex + delta;
+      if (newIndex >= 0 && newIndex < EMBEDDED_DATA.runs.length) {
+        showRun(newIndex);
+      }
+    }
+
+    function updateNavButtons() {
+      document.getElementById("prev-btn").disabled = currentIndex === 0;
+      document.getElementById("next-btn").disabled =
+        currentIndex === EMBEDDED_DATA.runs.length - 1;
+    }
+
+    // ---- Run jump selector (跳转到指定 run,不必逐个翻 上一个/下一个) ----
+    function buildRunSelect() {
+      const sel = document.getElementById("run-jump");
+      const runs = EMBEDDED_DATA.runs;
+      if (!sel || runs.length <= 1) { if (sel) sel.style.display = "none"; return; }
+      const configs = new Set(runs.map(r => r.config));
+      const multiConfig = configs.size > 1;
+      // runs 已按 (eval_id, id) 排序;按 eval 分组方便直接跳到「eval 3 的 run」
+      const groups = new Map();
+      runs.forEach((r, i) => {
+        const eid = (r.eval_id != null ? r.eval_id : 0);
+        if (!groups.has(eid)) groups.set(eid, []);
+        groups.get(eid).push([i, r]);
+      });
+      const evalIds = [...groups.keys()].sort((a, b) => a - b);
+      const useGroups = evalIds.length > 1;
+      const makeOpt = (i, r) => {
+        const opt = document.createElement("option");
+        opt.value = String(i);
+        let label = "run " + (r.run_number != null ? r.run_number : (i + 1));
+        if (multiConfig && r.config && r.config !== "unknown") {
+          label += " · " + r.config.replace(/_/g, " ");
+        }
+        opt.textContent = label;
+        return opt;
+      };
+      for (const eid of evalIds) {
+        const items = groups.get(eid);
+        if (useGroups) {
+          const og = document.createElement("optgroup");
+          og.label = "eval " + eid;
+          for (const [i, r] of items) og.appendChild(makeOpt(i, r));
+          sel.appendChild(og);
+        } else {
+          for (const [i, r] of items) sel.appendChild(makeOpt(i, r));
+        }
+      }
+      sel.style.display = "inline-block";
+      sel.addEventListener("change", () => {
+        const idx = parseInt(sel.value, 10);
+        if (!isNaN(idx) && idx >= 0 && idx < runs.length) {
+          showRun(idx);
+        }
+      });
+    }
+
+    // ---- Show a run ----
+    function showRun(index) {
+      currentIndex = index;
+      const run = EMBEDDED_DATA.runs[index];
+
+      // Progress
+      document.getElementById("progress").textContent =
+        `${index + 1} of ${EMBEDDED_DATA.runs.length}`;
+
+      // Keep the jump selector in sync with the current run
+      const jumpSel = document.getElementById("run-jump");
+      if (jumpSel) jumpSel.value = String(index);
+
+      // Prompt
+      document.getElementById("prompt-text").textContent = run.prompt;
+
+      // Config badge(用 run.config 字段,覆盖 with_skill/without_skill 与 v1/v2 等任意 side label)
+      const badge = document.getElementById("config-badge");
+      const config = run.config;
+      if (config && config !== "unknown") {
+        const isBaseline = config === "without_skill" || config === "old_skill";
+        badge.textContent = config.replace(/_/g, " ");
+        badge.className = "config-badge " + (isBaseline ? "config-baseline" : "config-primary");
+        badge.style.display = "inline-block";
+      } else {
+        badge.style.display = "none";
+      }
+
+      // Outputs
+      renderOutputs(run);
+
+      // Previous outputs
+      renderPrevOutputs(run);
+
+      // Grades
+      renderGrades(run);
+
+      updateNavButtons();
+
+      // Scroll main content to top
+      document.querySelector(".main").scrollTop = 0;
+    }
+
+    // ---- Render outputs ----
+    function renderOutputs(run) {
+      const container = document.getElementById("outputs-body");
+      container.innerHTML = "";
+
+      const outputs = run.outputs || [];
+      if (outputs.length === 0) {
+        container.innerHTML = '<div class="empty-state">无输出文件</div>';
+        return;
+      }
+
+      for (const file of outputs) {
+        const fileDiv = document.createElement("div");
+        fileDiv.className = "output-file";
+
+        // Always show file header with download link
+        const header = document.createElement("div");
+        header.className = "output-file-header";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = file.name;
+        header.appendChild(nameSpan);
+        const dlBtn = document.createElement("a");
+        dlBtn.className = "dl-btn";
+        dlBtn.textContent = "下载";
+        dlBtn.download = file.name;
+        dlBtn.href = getDownloadUri(file);
+        header.appendChild(dlBtn);
+        fileDiv.appendChild(header);
+
+        const content = document.createElement("div");
+        content.className = "output-file-content";
+
+        if (file.type === "text") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          content.appendChild(pre);
+        } else if (file.type === "image") {
+          const img = document.createElement("img");
+          img.src = file.data_uri;
+          img.alt = file.name;
+          content.appendChild(img);
+        } else if (file.type === "pdf") {
+          const iframe = document.createElement("iframe");
+          iframe.src = file.data_uri;
+          content.appendChild(iframe);
+        } else if (file.type === "xlsx") {
+          renderXlsx(content, file.data_b64);
+        } else if (file.type === "binary") {
+          const a = document.createElement("a");
+          a.className = "download-link";
+          a.href = file.data_uri;
+          a.download = file.name;
+          a.textContent = "下载 " + file.name;
+          content.appendChild(a);
+        } else if (file.type === "error") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          pre.style.color = "var(--red)";
+          content.appendChild(pre);
+        }
+
+        fileDiv.appendChild(content);
+        container.appendChild(fileDiv);
+      }
+    }
+
+    // ---- XLSX rendering via SheetJS ----
+    function renderXlsx(container, b64Data) {
+      try {
+        const raw = Uint8Array.from(atob(b64Data), c => c.charCodeAt(0));
+        const wb = XLSX.read(raw, { type: "array" });
+
+        for (let i = 0; i < wb.SheetNames.length; i++) {
+          const sheetName = wb.SheetNames[i];
+          const ws = wb.Sheets[sheetName];
+
+          if (wb.SheetNames.length > 1) {
+            const sheetLabel = document.createElement("div");
+            sheetLabel.style.cssText =
+              "font-weight:600; font-size:0.8rem; color:#b0aea5; margin-top:0.5rem; margin-bottom:0.25rem;";
+            sheetLabel.textContent = "工作表：" + sheetName;
+            container.appendChild(sheetLabel);
+          }
+
+          const htmlStr = XLSX.utils.sheet_to_html(ws, { editable: false });
+          const wrapper = document.createElement("div");
+          wrapper.innerHTML = htmlStr;
+          container.appendChild(wrapper);
+        }
+      } catch (err) {
+        container.textContent = "渲染表格出错：" + err.message;
+      }
+    }
+
+    // ---- Grades ----
+    function renderGrades(run) {
+      const section = document.getElementById("grades-section");
+      const content = document.getElementById("grades-content");
+
+      if (!run.grading && !run.compliance && !run.calibration) {
+        section.style.display = "none";
+        return;
+      }
+
+      section.style.display = "block";
+      content.classList.remove("open");
+      document.getElementById("grades-arrow").classList.remove("open");
+
+      let html = '<div style="padding: 1rem;">';
+
+      // 评估详情含三层,顺序:打分(grading)→ 遵循性(compliance)→ 校准(calibration)。
+      // substance 在前、阅卷可信度(meta)垫底,不冒充结论。遵循性 per-run 显本 run 的指令
+      // 判定;整个考试聚合另见整体汇总 tab(renderComplianceAggregate),两者并存非冲突。
+
+      // ── 打分(Grading)──
+      if (run.grading) {
+        const grading = run.grading;
+        const summary = grading.summary || {};
+        const expectations = grading.expectations || [];
+
+        // Summary line
+        const passRate = summary.pass_rate != null
+          ? Math.round(summary.pass_rate * 100) + "%"
+          : "?";
+        const badgeClass = summary.pass_rate >= 0.8 ? "grade-pass" : summary.pass_rate >= 0.5 ? "" : "grade-fail";
+        html += '<div class="grades-summary">';
+        html += '<span class="grade-badge ' + badgeClass + '">' + passRate + '</span>';
+        html += '<span>' + (summary.passed || 0) + ' 通过，' + (summary.failed || 0) + ' 失败，共 ' + (summary.total || 0) + ' 项</span>';
+        // per-source 计数(programmatic 客观/稳 vs llm 主观/漂):数据早有(ab5ae58),此前 viewer 只显合并率
+        const srcParts = [];
+        if (summary.total_programmatic != null) srcParts.push('程序化 ' + (summary.passed_programmatic || 0) + '/' + summary.total_programmatic);
+        if (summary.total_llm != null) srcParts.push('LLM ' + (summary.passed_llm || 0) + '/' + summary.total_llm);
+        if (srcParts.length) html += '<span style="font-size:0.75rem;color:var(--text-muted);margin-left:0.5rem;">（' + srcParts.join(' · ') + '）</span>';
+        html += '</div>';
+
+        html += '<ul class="assertion-list">';
+        for (const exp of expectations) {
+          // verdict \u611f\u77e5(\u4e0e checkpoints \u5757 e./a. \u540c\u6b3e icon/title):UNEVAL/TIMEOUT/ERROR \u4e0d\u6df7\u6210\u7ea2 \u2717
+          let statusClass, statusIcon, styleAttr = "", titleAttr = "";
+          if (exp.verdict === "UNEVAL") {
+            statusClass = ""; statusIcon = "?";
+            styleAttr = ' style="color:var(--accent);"'; titleAttr = ' title="\u65e0\u6cd5\u8bc4\u4f30"';
+          } else if (exp.verdict === "TIMEOUT") {
+            statusClass = ""; statusIcon = "\u23f1";
+            styleAttr = ' style="color:var(--accent);"'; titleAttr = ' title="\u8d85\u65f6"';
+          } else if (exp.verdict === "ERROR") {
+            statusClass = ""; statusIcon = "!";
+            styleAttr = ' style="color:var(--red);"'; titleAttr = ' title="\u9519\u8bef"';
+          } else {
+            statusClass = exp.passed ? "pass" : "fail";
+            statusIcon = exp.passed ? "\u2713" : "\u2717";
+          }
+          // source \u5c0f\u6807\u7b7e(\u540c compliance \u5757 L910 \u6837\u5f0f):programmatic\u2192\u7a0b\u5e8f\u5316\u3001llm\u2192LLM
+          const srcTag = exp.source === "programmatic"
+            ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">\u7a0b\u5e8f\u5316</span>'
+            : (exp.source === "llm" ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">LLM</span>' : '');
+          html += '<li class="assertion-item">';
+          html += '<span class="assertion-status ' + statusClass + '"' + styleAttr + titleAttr + '>' + statusIcon + '</span>';
+          html += '<span>' + escapeHtml(exp.text) + srcTag + '</span>';
+          if (exp.evidence) {
+            html += '<div class="assertion-evidence">' + escapeHtml(exp.evidence) + '</div>';
+          }
+          html += '</li>';
+        }
+        html += '</ul>';
+      }
+
+      // ── 遵循性(Compliance = audit 对账,AuditReport 形;per-run:本 run 的指令判定)──
+      if (run.compliance) {
+        const cr = run.compliance;
+        const s = cr.summary || {};
+        const totalInstr = s.total || 0;
+        html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
+        if (totalInstr === 0) {
+          // 空 digest(常见 L1 理解类题):cc 纯推理作答、无工具调用/文件产出 → 无流程可审。
+          // 明示 N/A、非失败,不显"遵循度:— + 目标≥80%"框架(那读着像遵循性挂了)。
+          html += '<strong>遵循性：</strong> <span style="color:var(--text-muted);font-weight:600;">无可对账内容</span>';
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">此 run 无工具调用 / 文件产出(cc 纯推理作答,常见于理解类题)。遵循性审的是流程执行 —— 无流程可审,非失败。</div>';
+        } else {
+          const passN = s.pass || 0, failN = s.fail || 0, naN = s.na || 0,
+                unresolvedN = s.unresolved || 0, indeterminateN = s.indeterminate || 0;
+          // 遵循度 = pass/(pass+fail),排除 na(不适用)/ unresolved(没判成)/ indeterminate(判不准);全无可判定 → null
+          const judged = passN + failN;
+          const rate = judged > 0 ? passN / judged : null;
+          const target = 0.8;
+          const hasRate = rate != null;
+          const met = hasRate && rate >= target;
+          const rateColor = !hasRate ? "var(--text-muted)" : met ? "var(--green)" : rate >= 0.5 ? "var(--accent)" : "var(--red)";
+          const fmtPct = v => (v != null ? (v * 100).toFixed(0) + '%' : '—');
+          html += '<strong>遵循度：</strong> <span style="color:' + rateColor + ';font-weight:600;">' + fmtPct(rate) + '</span>';
+          html += ' <span style="font-size:0.75rem;color:var(--text-muted);">（目标 ≥ ' + (target * 100).toFixed(0) + '%' + (met ? ' ✓' : '') + '）</span>';
+          html += ' <span style="font-size:0.75rem;color:var(--text-muted);">PASS ' + passN + ' / FAIL ' + failN
+            + (naN ? ' / 不适用 ' + naN : '')
+            + (unresolvedN ? ' / 没判成 ' + unresolvedN : '')
+            + (indeterminateN ? ' / 判不准 ' + indeterminateN : '') + '</span>';
+          if (cr.refine_dropped_count) {
+            html += ' <span style="font-size:0.75rem;color:var(--accent);" title="LLM 精筛砍掉 extractor 误抽的示例/占位伪指令(本 run 前置过滤,默认开)">↺ refine 砍 ' + cr.refine_dropped_count + ' 条伪指令</span>';
+          }
+          // per-instruction 明细(audit findings,五态 PASS/FAIL/N/A/UNRESOLVED/INDETERMINATE)
+          const VERDICT_META = {
+            PASS: 'pass', FAIL: 'fail', 'N/A': 'na',
+            UNRESOLVED: 'unresolved', INDETERMINATE: 'indeterminate',
+            UNCLEAR: 'unresolved',  // legacy 旧数据 → 没判成
+          };
+          const VERDICT_ICON = { PASS: '✓', FAIL: '✗', 'N/A': '—', UNRESOLVED: '○', INDETERMINATE: '?', UNCLEAR: '○' };
+          const findings = cr.findings || [];
+          if (findings.length) {
+            html += '<ul class="assertion-list" style="margin-top:0.5rem;">';
+            for (const f of findings) {
+              const verdict = f.verdict || "UNRESOLVED";
+              const statusClass = VERDICT_META[verdict] || 'unresolved';
+              const statusIcon = VERDICT_ICON[verdict] != null ? VERDICT_ICON[verdict] : '○';
+              const instrText = f.instruction_text || '(未命名)';
+              const catTag = f.category ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;">' + escapeHtml(f.category) + '</span>' : '';
+              // source 徽章(指令来源:CONSTRAINT / HEADING_STEP …)。sources 是同文去重合并的
+              // 多来源;单条=[source]。旧数据无 source → srcs 空 → 不显(防御向后兼容)。
+              const srcs = (f.sources && f.sources.length) ? f.sources : (f.source ? [f.source] : []);
+              const srcTag = srcs.length
+                ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;text-transform:uppercase;" title="指令来源">' + escapeHtml(srcs.join(' + ')) + '</span>'
+                : '';
+              const derivTag = f.derived_from_transcript ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:0.25rem;">反推</span>' : '';
+              // method(判定方法)→ 程序 / LLM 标签(口径同 audit-report.html)。旧数据无 method
+              // 字段时,据旧 confidence 推导(>=1.0 程序,否则 LLM);无 confidence 则不显。
+              const methodTag = (() => {
+                let m = f.method;
+                if (!m && typeof f.confidence === 'number') m = f.confidence >= 1.0 ? 'PROGRAMMATIC' : 'LLM';
+                if (m === 'PROGRAMMATIC') return '<span style="font-size:0.7rem;color:var(--green);margin-left:0.25rem;" title="程序对账(tool_trace 命中 / 子串匹配),不调 LLM">程序</span>';
+                if (m === 'LLM') return '<span style="font-size:0.7rem;color:var(--text-muted);margin-left:0.25rem;" title="LLM 给出结论">LLM</span>';
+                return '';
+              })();
+              // FAIL 噪声判别徽章(仅 FAIL 有 noise_label 才显;非 FAIL / 旧数据无 label → 空串)
+              const noiseTag = (verdict === 'FAIL' && f.noise_label) ? noiseBadge(f.noise_label, f.noise_reasons) : '';
+              html += '<li class="assertion-item">';
+              html += '<span class="assertion-status ' + statusClass + '">' + statusIcon + '</span>';
+              html += '<span>' + escapeHtml(instrText) + catTag + srcTag + derivTag + methodTag + noiseTag + '</span>';
+              if (f.evidence) {
+                html += '<div class="assertion-evidence">' + escapeHtml(f.evidence) + '</div>';
+              }
+              html += '</li>';
+            }
+            html += '</ul>';
+          }
+          if (cr.warnings && cr.warnings.length) {
+            html += '<ul style="font-size:0.75rem;color:var(--accent);margin:0.25rem 0 0 1.25rem;">';
+            for (const w of cr.warnings) html += '<li>' + escapeHtml(w) + '</li>';
+            html += '</ul>';
+          }
+        }
+        html += '</div>';
+      }
+
+      // ── 校准(Calibration:阅卷可信度,meta,垫底)──
+      if (run.calibration) {
+        const cal = run.calibration;
+        // 旧 schema(无 verdict)→ 降级提示,不崩
+        if (!cal.verdict) {
+          html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);font-size:0.75rem;color:var(--text-muted);">校准数据为旧格式,重跑 eval 生成新判决。</div>';
+        } else {
+          const V = {
+            TRUSTED:            {icon: "✅", color: "var(--green)",   label: "可信"},
+            HIGH_SCORE_SUSPECT: {icon: "⚠️", color: "var(--accent)",  label: "高分存疑"},
+            FIXABLE:            {icon: "🔧", color: "var(--accent)",  label: "可修复"},
+            SKILL_FAILED:       {icon: "❌", color: "var(--red)",     label: "技能失效"},
+            PROCESS_UNKNOWN:    {icon: "—",  color: "var(--text-muted)", label: "过程未知"},
+          };
+          const v = V[cal.verdict] || V.PROCESS_UNKNOWN;
+          const sr = (cal.scoring_rate != null) ? (cal.scoring_rate * 100).toFixed(0) + '%' : '—';
+          const cr = (cal.compliance_rate != null) ? (cal.compliance_rate * 100).toFixed(0) + '%' : '—';
+          const hardN = (cal.hard_violations && cal.hard_violations.length) ? cal.hard_violations.length : 0;
+          const srl = (cal.scoring_rate_llm != null) ? (cal.scoring_rate_llm * 100).toFixed(0) + '%' : null;
+          // 结果轴:押客观优先(basis=programmatic),无客观锚回退主观(mixed)。
+          // 有客观锚 → 显「客观 X% · 主观 Y% 参考」;纯主观 → 显「主观 X%(基于主观判分,该题无客观断言)」。
+          const head = (cal.result_pass === true)
+            ? '<span style="color:var(--green);font-weight:600;">✓ 达标</span>'
+            : '<span style="color:var(--red);font-weight:600;">✗ 未达标</span>(未达 80% 阈值)';
+          const resultLine = (cal.scoring_rate_basis === "programmatic")
+            ? head + '　客观 ' + sr + (srl ? ' · 主观 ' + srl + ' 参考' : '')
+            : head + '　主观 ' + sr + '(基于主观判分,该题无客观断言)';
+          // 过程轴:violated 有硬性违规 / ok 无明显违规 / unknown 无可对账
+          let procLine;
+          if (cal.process_status === "violated") {
+            procLine = '<span style="color:var(--red);font-weight:600;">✗ 有硬性违规</span>　遵循性 ' + cr + ' · 硬类违规 ' + hardN;
+          } else if (cal.process_status === "ok") {
+            procLine = '<span style="color:var(--green);font-weight:600;">✓ 无明显违规</span>　遵循性 ' + cr + ' · 硬类违规 0';
+          } else {
+            procLine = '<span style="color:var(--text-muted);font-weight:600;">— 无可对账</span>　遵循性 ' + cr + '(compliance 缺失或无可判定项)';
+          }
+          html += '<div style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border);">';
+          html += '<strong>校准：</strong> <span style="color:' + v.color + ';font-weight:600;">' + v.icon + ' ' + escapeHtml(v.label) + '</span>';
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.3rem;">'
+                + '<div style="margin:0.1rem 0;">结果 ' + resultLine + '</div>'
+                + '<div style="margin:0.1rem 0;">过程 ' + procLine + '</div>'
+                + '</div>';
+          // 硬违规明细(仅 HIGH_SCORE_SUSPECT / SKILL_FAILED 有数据时)
+          if (hardN) {
+            html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
+            for (const hv of cal.hard_violations) {
+              html += '<li><strong>[' + escapeHtml(hv.category || '') + ']</strong> ' + escapeHtml(hv.instruction_text || '')
+                    + (hv.evidence ? '<div style="color:var(--text-muted);margin-top:0.15rem;">' + escapeHtml(hv.evidence) + '</div>' : '') + '</li>';
+            }
+            html += '</ul>';
+          }
+          // 软注(step/conditional FAIL 计数,未翻判决)
+          const soft = cal.soft_notes || {};
+          const softParts = Object.keys(soft).map(k => k + ' ' + soft[k]);
+          if (softParts.length) {
+            html += '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;">软注(未翻判决):' + escapeHtml(softParts.join(' · ')) + '</div>';
+          }
+          html += '</div>';
+        }
+      }
+
+      html += '</div>';
+      content.innerHTML = html;
+    }
+
+    function toggleGrades() {
+      const content = document.getElementById("grades-content");
+      const arrow = document.getElementById("grades-arrow");
+      content.classList.toggle("open");
+      arrow.classList.toggle("open");
+    }
+
+    // ---- Previous outputs (collapsible) ----
+    function renderPrevOutputs(run) {
+      const section = document.getElementById("prev-outputs-section");
+      const content = document.getElementById("prev-outputs-content");
+      const prevOutputs = (EMBEDDED_DATA.previous_outputs || {})[run.id];
+
+      if (!prevOutputs || prevOutputs.length === 0) {
+        section.style.display = "none";
+        return;
+      }
+
+      section.style.display = "block";
+      // Reset to collapsed
+      content.classList.remove("open");
+      document.getElementById("prev-outputs-arrow").classList.remove("open");
+
+      // Render the files into the content area
+      content.innerHTML = "";
+      const wrapper = document.createElement("div");
+      wrapper.style.padding = "1rem";
+
+      for (const file of prevOutputs) {
+        const fileDiv = document.createElement("div");
+        fileDiv.className = "output-file";
+
+        const header = document.createElement("div");
+        header.className = "output-file-header";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = file.name;
+        header.appendChild(nameSpan);
+        const dlBtn = document.createElement("a");
+        dlBtn.className = "dl-btn";
+        dlBtn.textContent = "下载";
+        dlBtn.download = file.name;
+        dlBtn.href = getDownloadUri(file);
+        header.appendChild(dlBtn);
+        fileDiv.appendChild(header);
+
+        const fc = document.createElement("div");
+        fc.className = "output-file-content";
+
+        if (file.type === "text") {
+          const pre = document.createElement("pre");
+          pre.textContent = file.content;
+          fc.appendChild(pre);
+        } else if (file.type === "image") {
+          const img = document.createElement("img");
+          img.src = file.data_uri;
+          img.alt = file.name;
+          fc.appendChild(img);
+        } else if (file.type === "pdf") {
+          const iframe = document.createElement("iframe");
+          iframe.src = file.data_uri;
+          fc.appendChild(iframe);
+        } else if (file.type === "xlsx") {
+          renderXlsx(fc, file.data_b64);
+        } else if (file.type === "binary") {
+          const a = document.createElement("a");
+          a.className = "download-link";
+          a.href = file.data_uri;
+          a.download = file.name;
+          a.textContent = "下载 " + file.name;
+          fc.appendChild(a);
+        }
+
+        fileDiv.appendChild(fc);
+        wrapper.appendChild(fileDiv);
+      }
+
+      content.appendChild(wrapper);
+    }
+
+    function togglePrevOutputs() {
+      const content = document.getElementById("prev-outputs-content");
+      const arrow = document.getElementById("prev-outputs-arrow");
+      content.classList.toggle("open");
+      arrow.classList.toggle("open");
+    }
+
+    // ---- Toast ----
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.add("visible");
+      setTimeout(() => toast.classList.remove("visible"), 2000);
+    }
+
+    // ---- Keyboard nav ----
+    document.addEventListener("keydown", (e) => {
+      // Don't capture when typing in textarea, or focused on the jump select
+      // (arrows there should change the select, not also fire navigate)
+      if (e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+
+      if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault();
+        navigate(-1);
+      } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        e.preventDefault();
+        navigate(1);
+      }
+    });
+
+    // ---- Util ----
+    function getDownloadUri(file) {
+      if (file.data_uri) return file.data_uri;
+      if (file.data_b64) return "data:application/octet-stream;base64," + file.data_b64;
+      if (file.type === "text") return "data:text/plain;charset=utf-8," + encodeURIComponent(file.content);
+      return "#";
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // FAIL 噪声判别徽章(tool_noise 疑似工具噪声 / skill_issue 疑似 skill 问题 / uncertain 待确认)。
+    // reasons 进 title hover 显。非 FAIL / 无 label → 空串。per-run findings 与 aggregate 共用。
+    const NOISE_LABELS = {
+      tool_noise: { text: '疑似工具噪声', color: 'var(--text-muted)' },
+      skill_issue: { text: '疑似 skill 问题', color: 'var(--red)' },
+      uncertain: { text: '待确认', color: 'var(--accent)' },
+    };
+    function noiseBadge(label, reasons) {
+      const nl = NOISE_LABELS[label];
+      if (!nl) return '';
+      const title = escapeHtml((reasons || []).join('; '));
+      return '<span style="font-size:0.7rem;margin-left:0.25rem;border:1px solid ' + nl.color
+        + ';color:' + nl.color + ';padding:0 0.25rem;border-radius:3px;" title="' + title + '">'
+        + nl.text + '</span>';
+    }
+
+    // ---- View switching ----
+    function switchView(view) {
+      document.querySelectorAll(".view-tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
+      document.querySelector(`[onclick="switchView('${view}')"]`).classList.add("active");
+      document.getElementById("panel-" + view).classList.add("active");
+    }
+
+    // ---- Compliance aggregate(整个考试聚合,非 per-run)----
+    // 遵循性按 SKILL 出题,跨所有 with run 聚合(= 把 N 个 transcript 一次性喂 audit 多会话审计)。
+    // 理解类题(L1 无工具活动)不产判定,自然不计入,不再刷"无可对账内容"噪音。
+    function renderComplianceAggregate() {
+      const aggs = (EMBEDDED_DATA.compliance_aggregate) || [];
+      if (!aggs.length) return "";
+      const fmtPct = v => (v != null ? (v * 100).toFixed(0) + '%' : '—');
+      let html = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+      html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">遵循性 · 指令对账(整个考试聚合)</div>';
+      html += '<div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.75rem;">遵循性以 SKILL 为出题依据,跨所有注入侧 run 聚合(等同把 N 个 transcript 一次性喂给 audit 多会话审计)。理解类题(无工具/文件活动)不产判定,不计入。</div>';
+      for (const agg of aggs) {
+        const s = agg.summary || {};
+        const passN = s.pass || 0, failN = s.fail || 0, naN = s.na || 0,
+              unresolvedN = s.unresolved || 0, indeterminateN = s.indeterminate || 0;
+        const judged = passN + failN;
+        const rate = judged > 0 ? passN / judged : null;
+        const rateColor = rate == null ? "var(--text-muted)" : rate >= 0.8 ? "var(--green)" : rate >= 0.5 ? "var(--accent)" : "var(--red)";
+        html += '<div style="margin-bottom:0.75rem;padding-bottom:0.75rem;border-bottom:1px solid var(--border);">';
+        html += '<div style="font-weight:600;margin-bottom:0.25rem;">' + escapeHtml(agg.side || '') + ' 侧 · 遵循度 <span style="color:' + rateColor + ';font-weight:600;">' + fmtPct(rate) + '</span></div>';
+        html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">PASS ' + passN + ' / FAIL ' + failN
+          + (naN ? ' / 不适用 ' + naN : '')
+          + (unresolvedN ? ' / 没判成 ' + unresolvedN : '')
+          + (indeterminateN ? ' / 判不准 ' + indeterminateN : '')
+          + ' · 聚合自 ' + (agg.runs_contributed || 0) + ' 个有判定的 run</div>';
+        const bi = agg.by_instruction || [];
+        if (bi.length) {
+          html += '<table class="benchmark-table"><thead><tr>'
+            + '<th style="text-align:left;">指令</th><th>通过</th><th>失败</th><th>不适用</th>'
+            + '<th title="LLM 调用/解析失败/未提及,可重跑">没判成</th>'
+            + '<th title="LLM 看了证据但真模糊,重跑无益">判不准</th>'
+            + '<th style="text-align:left;">失败出现在</th>'
+            + '</tr></thead><tbody>';
+          for (const inst of bi) {
+            const failIn = (inst.fail_in_transcripts || []).join(', ') || '—';
+            const failCell = inst.fail_count ? '<span style="color:var(--red);font-weight:600;">' + inst.fail_count + '</span>' : String(inst.fail_count || 0);
+            // 指令列内嵌 类别 + 来源 徽章(都是指令的固有属性,贴在指令文本旁比独立列更紧凑清晰)。
+            // 聚合级 InstructionAggregate 只有 source(单 str,非 sources 列表)。
+            const catBadge = inst.category
+              ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;" title="指令类别">' + escapeHtml(inst.category) + '</span>'
+              : '';
+            const srcBadge = inst.source
+              ? '<span style="font-size:0.7rem;color:var(--text-muted);border:1px solid var(--border);padding:0 0.25rem;border-radius:3px;margin-left:0.25rem;text-transform:uppercase;" title="指令来源">' + escapeHtml(inst.source) + '</span>'
+              : '';
+            // FAIL 行的噪声判别徽章(仅 fail_count>0 且 noise_label 才显)
+            const noiseTag = (inst.fail_count > 0 && inst.noise_label) ? noiseBadge(inst.noise_label, inst.noise_reasons) : '';
+            html += '<tr>'
+              + '<td style="text-align:left;">' + escapeHtml(inst.instruction_text || '(未命名)') + catBadge + srcBadge + noiseTag + '</td>'
+              + '<td>' + (inst.pass_count || 0) + '</td><td>' + failCell + '</td><td>' + (inst.na_count || 0) + '</td>'
+              + '<td>' + (inst.unresolved_count || 0) + '</td><td>' + (inst.indeterminate_count || 0) + '</td>'
+              + '<td style="text-align:left;font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(failIn) + '</td>'
+              + '</tr>';
+          }
+          html += '</tbody></table>';
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+      return html;
+    }
+
+    // ---- Calibration summary(per-side HIGH_SCORE_SUSPECT 聚合,gate 客观侧盲区警告)----
+    // benchmark.calibration_summary 对称 comparison_summary:per-side 聚合。with/without 模式
+    // without 侧 None(无 compliance);v1/v2 两侧都有。HIGH_SCORE_SUSPECT = 结果达标(≥80%)但
+    // 过程有硬类违规(prohibition/output)—— gate 客观侧(pass_rate)盲区,viewer 显警告补盲。
+    // candidate 侧(compSummary.label_a,与 verdict.py _resolve_sides 同口径)排前;
+    // 触发 count>0 显 ⚠️;全 TRUSTED 弱化显示(灰字、无 ⚠️)。
+    function renderCalibrationSummary() {
+      const bench = EMBEDDED_DATA.benchmark || {};
+      const cs = bench.calibration_summary;
+      if (!cs || !cs.sides) return "";
+      const compSummary = bench.comparison_summary || {};
+      const candidate = compSummary.label_a || "";
+      // candidate 侧排前(与 gating/verdict.py _eval_calibration 同口径)
+      const sideItems = Object.entries(cs.sides)
+        .filter(([_side, per]) => per != null)
+        .sort((a, b) => {
+          if (a[0] === candidate && b[0] !== candidate) return -1;
+          if (b[0] === candidate && a[0] !== candidate) return 1;
+          return 0;
+        });
+      if (!sideItems.length) return "";
+
+      const fmtPct = v => (v != null ? (v * 100).toFixed(0) + '%' : '—');
+
+      let html = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+      html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">校准摘要 · 高分低遵循警告(HIGH_SCORE_SUSPECT)</div>';
+      html += '<div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.75rem;">结果达标(≥80%)但过程有硬类违规(prohibition/output)的 run。gate 客观侧只看通过率,此为盲区补警告。</div>';
+
+      for (const [side, per] of sideItems) {
+        const total = per.total || 0;
+        const vc = per.verdict_counts || {};
+        const suspects = per.high_score_suspects || [];
+        const suspectN = suspects.length;
+        const tag = side === candidate
+          ? ' <span style="font-size:0.7rem;color:var(--text-muted);">(候选侧)</span>' : '';
+
+        html += '<div style="margin-bottom:0.75rem;padding-bottom:0.75rem;border-bottom:1px solid var(--border);">';
+
+        if (suspectN > 0) {
+          // 触发:醒目 ⚠️ + evidence 列表
+          html += '<div style="font-weight:600;margin-bottom:0.3rem;color:var(--accent);">⚠️ '
+                + escapeHtml(side) + tag + ' · ' + suspectN + '/' + total + ' 个高分低遵循</div>';
+          html += '<ul style="font-size:0.75rem;margin:0.25rem 0 0 1.25rem;">';
+          for (const s of suspects) {
+            const catTag = s.category ? '<strong>[' + escapeHtml(s.category) + ']</strong> ' : '';
+            const instr = escapeHtml(s.instruction_text || '(未命名)');
+            const runLoc = 'eval ' + (s.eval != null ? s.eval : '?')
+                         + ' / run ' + (s.run != null ? s.run : '?');
+            const rate = '遵循 ' + fmtPct(s.compliance_rate);
+            html += '<li>' + catTag + instr
+                  + ' <span style="color:var(--text-muted);">(' + runLoc + ', ' + rate + ')</span></li>';
+          }
+          html += '</ul>';
+        } else {
+          // 弱化:全 TRUSTED 或无 HIGH_SCORE_SUSPECT(灰字、不显 ⚠️)
+          const trustedN = vc.TRUSTED || 0;
+          const note = trustedN
+            ? '(TRUSTED ' + trustedN + '/' + total + ',无高分低遵循)'
+            : '(无高分低遵循)';
+          html += '<div style="font-weight:600;color:var(--text-muted);">'
+                + escapeHtml(side) + tag + ' ' + note + '</div>';
+        }
+
+        // verdict_counts 小字明细(>1 种 verdict 才显,单值时 header 已含避免冗余)
+        const vcEntries = Object.entries(vc);
+        if (vcEntries.length > 1) {
+          const parts = vcEntries.map(([k, v]) => k + ' ' + v);
+          html += '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;">'
+                + escapeHtml(parts.join(' · ')) + '</div>';
+        }
+
+        html += '</div>';
+      }
+
+      html += '</div>';
+      return html;
+    }
+
+    // ---- Benchmark rendering ----
+    function renderBenchmark() {
+      const data = EMBEDDED_DATA.benchmark;
+      if (!data) return;
+
+      document.getElementById("view-tabs").style.display = "flex";
+
+      const container = document.getElementById("benchmark-content");
+      const summary = data.run_summary || {};
+      const metadata = data.metadata || {};
+      const notes = data.notes || [];
+      const comparisons = data.comparisons || [];
+      const compSummary = data.comparison_summary || null;
+      const analysis = data.analysis || null;
+
+      let html = "";
+
+      // 3-dim 通过率格式化(程序/LLM/混合 共用):None → —(诚实缺值,不伪造 0)
+      const fmtDim = v => (v == null ? "—" : (v * 100).toFixed(0) + "%");
+      const dimCls = v => (v == null ? "" : v >= 0.8 ? "benchmark-delta-positive" : v < 0.5 ? "benchmark-delta-negative" : "");
+      // 某字段跨 runs 取均值(忽略 null/缺值);全 null → null
+      const meanField = (runsArr, field) => {
+        const vals = runsArr.map(r => (r.result || {})[field]).filter(v => v != null);
+        return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+      };
+      // flaky:某 config 下该 eval 跨 run 的 programmatic pass_rate 不全等 = 忽过忽挂(P2-5:程序判定
+      // 无方差是预期,有方差=异常=flaky)。返回 {min,max} 供红旗 tooltip;全等/样本<2 → null(稳定)。
+      const flakyOf = (runsArr) => {
+        const vals = runsArr.map(r => (r.result || {}).pass_rate_programmatic).filter(v => v != null);
+        if (vals.length < 2) return null;
+        const mn = Math.min(...vals), mx = Math.max(...vals);
+        return mn !== mx ? { min: mn, max: mx } : null;
+      };
+
+      // ── Dashboard header ──
+      html += "<div style='display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.5rem;'>";
+      const configs = Object.keys(summary).filter(k => k !== "delta");
+      const configA = configs[0] || "";
+      const configB = configs[1] || "";
+      const delta = summary.delta || {};
+      const a = summary[configA] || {};
+      const b = summary[configB] || {};
+      const isSingleArm = configs.length < 2;  // agent 评测(绝对质量,无 A/B 对照):不显 Δ / 对照列
+
+      function mkCard(title, value, sub, color) {
+        return '<div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;text-align:center;">'
+          + '<div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem;">' + title + '</div>'
+          + '<div style="font-size:1.8rem;font-family:Poppins,sans-serif;font-weight:600;color:' + color + ';">' + value + '</div>'
+          + (sub ? '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">' + sub + '</div>' : '')
+          + '</div>';
+      }
+
+      // 通过率变化:双率(客观稳 / 主观漂),不再用混合 pass_rate(与 gate 客观侧、校准结果轴同源)
+      const fmtD = v => { const n = parseFloat(v); return isNaN(n) ? "—" : (n > 0 ? "+" : "") + v; };
+      const dClr = v => { const n = parseFloat(v); if (isNaN(n)) return "var(--text-muted)"; if (n > 0.05) return "var(--green)"; if (n < -0.05) return "var(--red)"; return "var(--text-muted)"; };
+      // D6 趋零解读:客观 Δ |≤0.05 = with/without 无显著差异 = skill 相对 base 无增益
+      // (可能已被模型原生能力覆盖,dead weight)。客观为主(稳);主观不单独触发(漂,噪声大)。
+      // NaN/None 不触发(诚实缺值,不报假趋零)。条件逻辑由 node -e 验变换。
+      const isFlatDelta = v => { const n = parseFloat(v); return !isNaN(n) && Math.abs(n) <= 0.05; };
+      if (isSingleArm) {
+        // agent 评测(绝对质量,无 A/B 对照):无 Δ,只报绝对三率(对齐控制台 _format_pass_rate_line 绝对质量行为)
+        html += '<div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;text-align:center;">'
+          + '<div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem;">绝对通过率</div>'
+          + '<div style="font-size:1.4rem;font-family:Poppins,sans-serif;font-weight:600;color:var(--text);">混合 ' + fmtDim(a.pass_rate && a.pass_rate.mean) + '</div>'
+          + '<div style="font-size:1.1rem;font-family:Poppins,sans-serif;font-weight:600;color:var(--text-muted);">客观 ' + fmtDim(a.pass_rate_programmatic && a.pass_rate_programmatic.mean) + ' · 主观 ' + fmtDim(a.pass_rate_llm && a.pass_rate_llm.mean) + '</div>'
+          + '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;">绝对质量</div>'
+          + '</div>';
+      } else {
+        html += '<div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;text-align:center;">'
+          + '<div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem;">通过率变化 (Δ)</div>'
+          + '<div style="font-size:1.4rem;font-family:Poppins,sans-serif;font-weight:600;color:' + dClr(delta.pass_rate_programmatic) + ';">客观 ' + fmtD(delta.pass_rate_programmatic) + '</div>'
+          + '<div style="font-size:1.1rem;font-family:Poppins,sans-serif;font-weight:600;color:' + dClr(delta.pass_rate_llm) + ';">主观 ' + fmtD(delta.pass_rate_llm) + '</div>'
+          + '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;">客观稳 · 主观看方向</div>'
+          + (isFlatDelta(delta.pass_rate_programmatic)
+              ? '<div style="font-size:0.68rem;color:var(--accent);margin-top:0.4rem;border-top:1px dashed var(--border);padding-top:0.35rem;line-height:1.4;">⚠️ 客观 Δ≈0 · skill 未带来增益——先查依赖目录是否进工作区(常见假无增益);排除后可能 skill 已被模型原生能力覆盖,建议核查 scope</div>'
+              : '')
+          + '</div>';
+      }
+
+      // 盲评胜率(主观主指标,§45 与客观 delta_programmatic 并列报出;紧挨 Δ 卡 = 两主指标并列)
+      if (compSummary) {
+        const wr = compSummary.win_rate;
+        const wrPct = wr != null ? (wr * 100).toFixed(0) + "%" : "—";
+        const wrClr = wr == null ? "var(--text-muted)"
+          : wr >= 0.6 ? "var(--green)" : wr >= 0.4 ? "var(--accent)" : "var(--red)";
+        const wrFail = compSummary.failed > 0 ? " · " + compSummary.failed + "失败" : "";
+        // Wilson CI + 显著性:lo>0.5 = A 显著更优;hi<0.5 = B 显著;含 0.5 = 不显著(样本可能不足)
+        const wrCiLo = compSummary.win_rate_ci_lo, wrCiHi = compSummary.win_rate_ci_hi;
+        let wrSig = "";
+        if (wrCiLo != null && wrCiHi != null) {
+          const ciStr = " · CI [" + (wrCiLo * 100).toFixed(0) + "%," + (wrCiHi * 100).toFixed(0) + "%]";
+          wrSig = wrCiLo > 0.5 ? ciStr + " · " + (compSummary.label_a || "A") + "显著更优"
+            : wrCiHi < 0.5 ? ciStr + " · " + (compSummary.label_b || "B") + "显著更优"
+            : ciStr + " · 不显著(样本可能不足,建议加 run)";
+        }
+        html += mkCard("盲评胜率", wrPct, (compSummary.label_a || "with") + " · " + compSummary.a_wins + "胜/" + compSummary.b_wins + "负/" + compSummary.ties + "平" + wrFail + wrSig, wrClr);
+      }
+
+      // vs 上次(纵向 delta,Task 3):仅当 previous/benchmark.json 存在(run 端 fresh 重跑 MOVE 进去)
+      // 才显示。与上面 A/B Δ 卡区分:那是同次 run 两 side 之差(横向),这是同 side 上次 vs 本次(纵向)。
+      // 客观稳 / 主观漂同款哲学;样本数不同时显式标出(3 vs 6 runs)提醒可比性。
+      // ⚠ previous_delta 是 viewer 层衍生的顶层 EMBEDDED_DATA 字段(viewer.py _compute_previous_delta
+      //   产出,非 eval 时 benchmark.json 的子键)。必须读 EMBEDDED_DATA.previous_delta,不是 data
+      //   (data=EMBEDDED_DATA.benchmark,其 .previous_delta 恒 undefined)。29e5fa44 起误读 data → 卡从不渲染。
+      if (EMBEDDED_DATA.previous_delta) {
+        const pd = EMBEDDED_DATA.previous_delta;
+        const dClr = d => d == null ? "var(--text-muted)" : d > 0 ? "var(--green)" : d < 0 ? "var(--red)" : "var(--text-muted)";
+        const line = (cur, prev, d) => {
+          if (cur == null && prev == null) return null;
+          let out = cur == null ? "—" : cur + "%";
+          if (prev != null || d != null) {
+            out += " <span style='color:var(--text-muted);font-size:0.85em'>(上次 " + (prev == null ? "—" : prev + "%");
+            if (d != null) out += "<span style='color:" + dClr(d) + ";'> " + (d > 0 ? "+" : "") + d + "pp</span>";
+            out += ")</span>";
+          }
+          return out;
+        };
+        const rows = [];
+        for (const s of pd.sides) {
+          const prog = line(s.cur_prog, s.prev_prog, s.d_prog);
+          const llm = line(s.cur_llm, s.prev_llm, s.d_llm);
+          if (prog || llm) rows.push("<strong>" + escapeHtml(s.label) + "</strong> · 客观 " + (prog || "—") + " · 主观 " + (llm || "—"));
+        }
+        const win = line(pd.cur_win, pd.prev_win, pd.d_win);
+        if (win) rows.push("盲评 " + win);
+        const countNote = (pd.cur_runs != null && pd.prev_runs != null && pd.cur_runs !== pd.prev_runs)
+          ? pd.cur_runs + " vs 上次 " + pd.prev_runs + " runs" : "";
+        html += '<div style="flex:1;min-width:200px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;">'
+          + '<div style="font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.5rem;">vs 上次</div>'
+          + '<div style="font-size:0.8rem;line-height:1.7;">' + rows.join("<br>") + '</div>'
+          + (countNote ? '<div style="font-size:0.7rem;color:var(--accent);margin-top:0.4rem;">⚠ ' + countNote + ' · 均值可比但样本数不同</div>' : '')
+          + '</div>';
+      }
+
+      // 执行规模:总数 = 实际聚合的 run 条数(data.runs.length,A/B 两侧已计入,免疫
+      // evals_run 计数 bug);副标题分解 侧 × 题 × runs/题 解释结构。
+      {
+        const bRuns = data.runs || [];
+        const total = bRuns.length;
+        const sides = configs.length;
+        const evals = new Set(bRuns.map(r => r.eval_id)).size;
+        const rpg = metadata.runs_per_configuration || 0;
+        if (total) {
+          const parts = [];
+          if (sides) parts.push(sides + " 侧");
+          if (evals) parts.push(evals + " 题");
+          if (rpg) parts.push(rpg + " runs/题");
+          html += mkCard("执行规模", total + " 次", parts.join(" × "), "var(--text)");
+        } else if (rpg) {
+          html += mkCard("每组运行次数", rpg, configs.join(" / "), "var(--text)");
+        }
+      }
+      if (metadata.skill_name) {
+        html += mkCard(isSingleArm && configA === "agent" ? "Agent" : "Skill", metadata.skill_name, "", "var(--accent)");
+      }
+      // 模型:三角色(executor/comparator/analyzer)当前锁死同一 --model,值同 → 合一张卡标"同源"
+      // (明示同源,别假装能独立配置误导);三值不同(将来 --comparator-model 等独立 flag)才按角色展开。
+      const modelVals = [metadata.executor_model, metadata.comparator_model, metadata.analyzer_model].filter(Boolean);
+      const uniqModels = [...new Set(modelVals)];
+      if (uniqModels.length === 1) {
+        html += mkCard("模型", uniqModels[0], "执行 / 对比 / 分析 同源", "var(--text)");
+      } else if (uniqModels.length > 1) {
+        const modelParts = [];
+        if (metadata.executor_model) modelParts.push("执行 " + metadata.executor_model);
+        if (metadata.comparator_model) modelParts.push("对比 " + metadata.comparator_model);
+        if (metadata.analyzer_model) modelParts.push("分析 " + metadata.analyzer_model);
+        html += mkCard("模型", modelParts.join(" / "), "", "var(--text)");
+      }
+      html += "</div>";
+
+      // ── Anomaly Report ──
+      const anomalyReport = data.anomaly_report;
+      if (anomalyReport && anomalyReport.anomalies && anomalyReport.anomalies.length > 0) {
+        html += '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
+        html += '<div style="font-family:Poppins,sans-serif;font-size:0.8rem;font-weight:600;color:#856404;margin-bottom:0.5rem;">⚠ 异常检测 (' + anomalyReport.anomaly_count + ' 个异常' + (anomalyReport.total_runs ? ' / 共 ' + anomalyReport.total_runs + ' 次' : '') + ')</div>';
+        for (const a of anomalyReport.anomalies) {
+          html += '<div style="font-size:0.75rem;color:#856404;margin-bottom:0.25rem;">';
+          html += '<strong>' + escapeHtml(a.anomaly_type || "?") + '</strong>: Eval ' + a.eval_id + ' ' + escapeHtml(a.eval_name || "") + ' / ' + escapeHtml(a.configuration || "") + ' run-' + a.run_number;
+          if (a.detail) html += '<br/><span style="color:#926d00;">' + escapeHtml(a.detail) + '</span>';
+          html += '</div>';
+        }
+        if (anomalyReport.retried_count) {
+          html += '<div style="font-size:0.75rem;color:#856404;margin-top:0.5rem;">重试次数: ' + anomalyReport.retried_count + '</div>';
+        }
+        html += '</div>';
+      }
+
+      // ── 失败根因:从 runs 聚合 error_root_cause,无则不显 ──
+      const triageRuns = (EMBEDDED_DATA.runs || []).filter(r => r.error_root_cause);
+      if (triageRuns.length) {
+        const causeCounts = {};
+        const causeSug = {};
+        triageRuns.forEach(r => {
+          causeCounts[r.error_root_cause] = (causeCounts[r.error_root_cause] || 0) + 1;
+          causeSug[r.error_root_cause] = r.error_suggestion || "";
+        });
+        html += '<div style="background:#fdecea;border:1px solid #e57373;border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
+        html += '<div style="font-family:Poppins,sans-serif;font-size:0.8rem;font-weight:600;color:#b71c1c;margin-bottom:0.5rem;">⚠ 失败根因 (' + triageRuns.length + ' 个失败 run)</div>';
+        Object.keys(causeCounts).sort((a, b) => causeCounts[b] - causeCounts[a]).forEach(c => {
+          html += '<div style="font-size:0.75rem;color:#b71c1c;margin-bottom:0.25rem;"><strong>' + causeCounts[c] + '× ' + escapeHtml(c) + '</strong> — ' + escapeHtml(causeSug[c]) + '</div>';
+        });
+        html += '</div>';
+      }
+
+      // ── Scorecard (static analysis) ──
+      const scorecard = EMBEDDED_DATA.scorecard;
+      if (scorecard && (scorecard.checks || scorecard.score !== undefined)) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">静态分析记分卡</div>';
+        const scoreColor = scorecard.score >= 8 ? "var(--green)" : scorecard.score >= 5 ? "var(--accent)" : "var(--red)";
+        html += '<div style="text-align:center;margin-bottom:0.75rem;"><span style="font-size:2rem;font-family:Poppins,sans-serif;font-weight:600;color:' + scoreColor + ';">' + (scorecard.score || 0) + '/' + (scorecard.max_score || 11) + '</span>';
+        html += ' <span style="color:var(--text-muted);">' + (scorecard.category || "") + '</span></div>';
+        if (scorecard.checks) {
+          html += '<table class="benchmark-table"><thead><tr><th>检查项</th><th>状态</th><th>详情</th></tr></thead><tbody>';
+          for (const ck of scorecard.checks) {
+            const statusIcon = ck.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
+            html += '<tr><td>' + escapeHtml(ck.name || "") + '</td><td>' + statusIcon + '</td><td style="font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(ck.message || "") + '</td></tr>';
+          }
+          html += '</tbody></table>';
+        }
+        html += '</div>';
+      }
+
+      // ── Security vet report ──
+      const vetReport = EMBEDDED_DATA.vet_report;
+      if (vetReport) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">安全审查</div>';
+
+        const verdictColor = vetReport.verdict === "SAFE" ? "var(--green)" : vetReport.verdict === "BLOCKED" ? "var(--red)" : "var(--accent)";
+        html += '<div style="text-align:center;margin-bottom:1rem;">';
+        html += '<span style="font-size:1.5rem;font-family:Poppins,sans-serif;font-weight:600;color:' + verdictColor + ';">' + escapeHtml(vetReport.verdict || "—") + '</span>';
+        if (vetReport.summary) {
+          html += '<div style="font-size:0.8125rem;color:var(--text-muted);margin-top:0.25rem;">' + escapeHtml(vetReport.summary) + '</div>';
+        }
+        html += '</div>';
+
+        if (vetReport.scanners && vetReport.scanners.length > 0) {
+          html += '<table style="width:100%;border-collapse:collapse;font-size:0.8125rem;">';
+          html += '<thead><tr style="border-bottom:1px solid var(--border);"><th style="text-align:left;padding:0.5rem;">扫描器</th><th style="text-align:center;padding:0.5rem;">状态</th><th style="text-align:left;padding:0.5rem;">详情</th></tr></thead><tbody>';
+          for (const s of vetReport.scanners) {
+            const statusIcon = s.status === "PASS" ? "✓" : s.status === "FAIL" ? "✗" : "—";
+            const statusColor = s.status === "PASS" ? "var(--green)" : s.status === "FAIL" ? "var(--red)" : s.status === "WARN" ? "var(--accent)" : "var(--text-muted)";
+            html += '<tr style="border-bottom:1px solid var(--border);">';
+            html += '<td style="padding:0.5rem;font-weight:500;">' + escapeHtml(s.name || "") + '</td>';
+            html += '<td style="text-align:center;padding:0.5rem;color:' + statusColor + ';font-weight:600;">' + statusIcon + ' ' + escapeHtml(s.status || "") + '</td>';
+            html += '<td style="padding:0.5rem;color:var(--text-muted);">' + escapeHtml(s.message || "") + '</td>';
+            html += '</tr>';
+          }
+          html += '</tbody></table>';
+        }
+
+        if (vetReport.findings && vetReport.findings.length > 0) {
+          html += '<div style="margin-top:0.75rem;font-size:0.8125rem;">';
+          html += '<div style="font-weight:600;margin-bottom:0.25rem;">发现的问题：</div>';
+          for (const f of vetReport.findings) {
+            const sevColor = (f.severity === "CRITICAL" || f.severity === "HIGH") ? "var(--red)" : f.severity === "MEDIUM" ? "var(--accent)" : "var(--text-muted)";
+            html += '<div style="padding:0.25rem 0.5rem;margin:0.25rem 0;background:var(--bg);border-radius:var(--radius);">';
+            html += '<span style="color:' + sevColor + ';font-weight:500;">[' + escapeHtml(f.severity || "") + ']</span> ';
+            html += escapeHtml(f.description || "");
+            if (f.file_path) html += ' <span style="color:var(--text-muted);">(' + escapeHtml(f.file_path) + (f.line ? ':' + f.line : '') + ')</span>';
+            html += '</div>';
+          }
+          html += '</div>';
+        }
+
+        html += '</div>';
+      }
+
+      // ── Pass rate bar chart ──
+      if (configA && configB) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">通过率对比</div>';
+        html += '<div style="max-width:500px;margin:0 auto;"><canvas id="passRateChart" style="max-height:200px;"></canvas></div>';
+        html += '</div>';
+      }
+
+      // ── Delta table(双臂:指标 × 两 config + 变化;agent 评测:指标 × 单 config,无对照/变化列)──
+      html += '<table class="benchmark-table">';
+      html += "<thead><tr><th>指标</th><th>" + escapeHtml(configA.replace(/_/g, ' ')) + "</th>" + (isSingleArm ? "" : "<th>" + escapeHtml(configB.replace(/_/g, ' ')) + "</th><th>变化</th>") + "</tr></thead><tbody>";
+
+      function fmtStat(stat, pct) {
+        if (!stat) return "—";
+        const suffix = pct ? "%" : "";
+        const m = pct ? (stat.mean * 100).toFixed(0) : stat.mean.toFixed(1);
+        const s = pct ? (stat.stddev * 100).toFixed(0) : stat.stddev.toFixed(1);
+        return m + suffix + " ± " + s + suffix;
+      }
+      function deltaClass(val) {
+        if (!val) return "";
+        const n = parseFloat(val);
+        if (n > 0) return "benchmark-delta-positive";
+        if (n < 0) return "benchmark-delta-negative";
+        return "";
+      }
+
+      html += "<tr><td><strong>通过率</strong></td>";
+      html += "<td>" + fmtStat(a.pass_rate, true) + "</td>";
+      if (!isSingleArm) {
+        html += "<td>" + fmtStat(b.pass_rate, true) + "</td>";
+        html += '<td class="' + deltaClass(delta.pass_rate) + '">' + (delta.pass_rate || "—") + "</td>";
+      }
+      html += "</tr>";
+      // 双率(与 compliance 双率同构):programmatic(客观,稳)/ llm(主观,漂)。只在任一 config 有该类时显
+      if (a.pass_rate_programmatic || b.pass_rate_programmatic) {
+        html += "<tr><td>　程序化通过率 <span style=\"font-size:0.7rem;color:var(--text-muted);\">(稳)</span></td>";
+        html += "<td>" + fmtStat(a.pass_rate_programmatic, true) + "</td>";
+        if (!isSingleArm) {
+          html += "<td>" + fmtStat(b.pass_rate_programmatic, true) + "</td>";
+          html += '<td class="' + deltaClass(delta.pass_rate_programmatic) + '">' + (delta.pass_rate_programmatic || "—") + "</td>";
+        }
+        html += "</tr>";
+      }
+      if (a.pass_rate_llm || b.pass_rate_llm) {
+        html += "<tr><td>　LLM 通过率 <span style=\"font-size:0.7rem;color:var(--text-muted);\">(漂,看方向)</span></td>";
+        html += "<td>" + fmtStat(a.pass_rate_llm, true) + "</td>";
+        if (!isSingleArm) {
+          html += "<td>" + fmtStat(b.pass_rate_llm, true) + "</td>";
+          html += '<td class="' + deltaClass(delta.pass_rate_llm) + '">' + (delta.pass_rate_llm || "—") + "</td>";
+        }
+        html += "</tr>";
+      }
+
+      if (a.time_seconds || b.time_seconds) {
+        html += "<tr><td><strong>耗时 (秒)</strong></td><td>" + fmtStat(a.time_seconds, false) + "</td>";
+        if (!isSingleArm) {
+          html += "<td>" + fmtStat(b.time_seconds, false) + "</td>";
+          html += '<td class="' + deltaClass(delta.time_seconds) + '">' + (delta.time_seconds ? delta.time_seconds + "秒" : "—") + "</td>";
+        }
+        html += "</tr>";
+      }
+      if (a.tokens || b.tokens) {
+        html += "<tr><td><strong>令牌数</strong></td><td>" + fmtStat(a.tokens, false) + "</td>";
+        if (!isSingleArm) {
+          html += "<td>" + fmtStat(b.tokens, false) + "</td>";
+          html += '<td class="' + deltaClass(delta.tokens) + '">' + (delta.tokens || "—") + "</td>";
+        }
+        html += "</tr>";
+      }
+      html += "</tbody></table>";
+
+      // ── LLM token 用量(评测系统成本:scoring+audit;executor 被测效率无 cost)──
+      // benchmark 级汇总(非 per-config delta),单列分四行。executor=被测 token 效率(无 cost);
+      // scoring+audit=评测系统付出的 LLM 成本;总计 cost 只含 scoring+audit。
+      var tu = data.llm_token_usage || {};
+      if (tu.total && (tu.total.input_tokens || tu.total.output_tokens || tu.total.total_cost_usd)) {
+        function _tokSeg(seg, showCost) {
+          var inn = (seg.input_tokens || 0), out = (seg.output_tokens || 0);
+          var s = "in " + inn.toLocaleString() + " / out " + out.toLocaleString();
+          // cost 暂隐藏:http 路径不记 total_cost_usd,显了是 cc 真值 + http $0 混杂误导;数据仍记,要显恢复下行
+          // if (showCost && seg.total_cost_usd) s += " · $" + Number(seg.total_cost_usd).toFixed(4);
+          if (seg.calls) s += " · " + seg.calls + " calls";
+          return s;
+        }
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">LLM token 用量</div>';
+        html += '<table class="benchmark-table"><tbody>';
+        var sc = tu.scoring || {}, au = tu.audit || {}, ex = tu.executor || {};
+        var gr = tu.grader || {}, comp = tu.comparator || {}, ana = tu.analyzer || {};
+        if (gr.input_tokens || gr.output_tokens) html += "<tr><td><strong>⚙ grader</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(单评)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(gr, true) + "</td></tr>";
+        if (comp.input_tokens || comp.output_tokens) html += "<tr><td><strong>⚙ comparator</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(盲比较)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(comp, true) + "</td></tr>";
+        if (ana.input_tokens || ana.output_tokens) html += "<tr><td><strong>⚙ analyzer</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(深度分析)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(ana, true) + "</td></tr>";
+        if (au.input_tokens || au.output_tokens) html += "<tr><td><strong>⚙ 遵循性 LLM</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(audit)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(au, true) + "</td></tr>";
+        if (ex.input_tokens || ex.output_tokens) html += "<tr><td><strong>令牌数 (executor)</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(被测效率,无 cost)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(ex, false) + "</td></tr>";
+        html += "<tr><td><strong>总计 LLM</strong></td><td colspan='3' style='color:var(--text-muted);'>" + _tokSeg(tu.total, true) + "</td></tr>";
+        html += "</tbody></table></div>";
+      }
+
+      // ── 耗时:两段——墙钟分解(加总=总计)+ LLM 累计(并发叠加,非墙钟)──
+      var du = data.llm_duration_seconds || {};
+      if (du.total || du.scoring || du.audit || du.executor || du.phase1_wall != null) {
+        function _dur(s) { return (typeof s === 'number' && s > 0) ? s.toFixed(1) + 's' : '—'; }
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">耗时</div>';
+        // 子块1:墙钟分解(加总 = 总计;total 严格 = phase1+phase2,不含写后的报告生成)
+        if (du.phase1_wall != null || du.phase2_wall != null) {
+          html += '<table class="benchmark-table"><tbody>';
+          html += "<tr><td colspan='4' style='font-size:0.7rem;color:var(--text-muted);'>墙钟分解(加总 = 总计)</td></tr>";
+          if (du.phase1_wall != null) {
+            // 阶段1 子阶段按真实 pipeline 拼(据 runs 的 compliance/calibration 信号,不硬编码全套)
+            var hasCompliance = (data.runs || []).some(function(r) { return r.compliance; });
+            var hasCalibration = (data.runs || []).some(function(r) { return r.calibration; });
+            var p1Parts = ["准备", "执行 executor", "grader 评分"];
+            if (hasCompliance) p1Parts.push("遵循性 audit");
+            if (hasCalibration) p1Parts.push("calibration");
+            html += "<tr><td><strong>阶段1 runs</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(" + p1Parts.join(" · ") + ";并发交叠不再拆,各项 LLM 时长见下「LLM 累计」)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.phase1_wall) + "</td></tr>";
+          }
+          if (du.phase2_wall != null) html += "<tr><td><strong>阶段2 aggregate</strong></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.phase2_wall) + "</td></tr>";
+          if (du.read_runs_wall) html += "<tr><td style='padding-left:1.5rem;'>· 读产物</td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.read_runs_wall) + "</td></tr>";
+          if (du.comparator_wall) html += "<tr><td style='padding-left:1.5rem;'>· 盲比较</td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.comparator_wall) + "</td></tr>";
+          if (du.analyzer_wall) html += "<tr><td style='padding-left:1.5rem;'>· 深度分析</td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.analyzer_wall) + "</td></tr>";
+          if (du.total) html += "<tr><td><strong>总计</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(墙钟·真实等待,不含报告生成)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.total) + "</td></tr>";
+          html += "</tbody></table>";
+        }
+        // 子块2:LLM 累计(各类调用时长加总;并发叠加,可 ≥ 墙钟,与墙钟分解是两个维度)
+        if (du.grader || du.comparator || du.analyzer || du.audit || du.executor) {
+          html += '<table class="benchmark-table" style="margin-top:0.75rem;"><tbody>';
+          html += "<tr><td colspan='4' style='font-size:0.7rem;color:var(--text-muted);'>LLM 累计(并发叠加,非墙钟)</td></tr>";
+          if (du.grader) html += "<tr><td><strong>⏱ grader</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(单评累计)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.grader) + "</td></tr>";
+          if (du.comparator) html += "<tr><td><strong>⏱ comparator</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(盲比较)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.comparator) + "</td></tr>";
+          if (du.analyzer) html += "<tr><td><strong>⏱ analyzer</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(深度分析)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.analyzer) + "</td></tr>";
+          if (du.audit) html += "<tr><td><strong>⏱ 遵循性</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(audit)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.audit) + "</td></tr>";
+          if (du.executor) html += "<tr><td><strong>执行</strong> <span style='font-size:0.7rem;color:var(--text-muted);'>(executor 累计)</span></td><td colspan='3' style='color:var(--text-muted);'>" + _dur(du.executor) + "</td></tr>";
+          html += "</tbody></table>";
+        }
+        html += '</div>';
+      }
+
+      // ── Compliance aggregate(过程层,插盲评前:客观结果 → 过程 → 主观结果)──
+      html += renderComplianceAggregate();
+
+      // ── Calibration summary(过程层补盲:per-side HIGH_SCORE_SUSPECT 聚合,gate 客观侧盲区)──
+      html += renderCalibrationSummary();
+
+      // ── Blind Comparison section ──
+      if (comparisons.length > 0) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">盲评对比</div>';
+
+        // 主观侧主位头条:win-rate 有效分母含 genuine tie、failed 排除(失败≠打平)
+        if (compSummary) {
+          const wr = compSummary.win_rate;
+          const wrPct = wr != null ? (wr * 100).toFixed(0) + "%" : "—";
+          const wrColor = wr == null ? "var(--text-muted)"
+            : wr >= 0.6 ? "var(--green)" : wr >= 0.4 ? "var(--accent)" : "var(--red)";
+          const failNote = compSummary.failed > 0
+            ? ' · <span style="color:var(--red);font-weight:600;">' + compSummary.failed + '失败</span>' : "";
+          // Wilson CI + 显著性(与上方盲评胜率卡一致,避免同一报告两处胜率一处带 CI 一处不带)
+          let wrSigHd = "";
+          if (compSummary.win_rate_ci_lo != null && compSummary.win_rate_ci_hi != null) {
+            const loH = compSummary.win_rate_ci_lo, hiH = compSummary.win_rate_ci_hi;
+            const ciStrH = " · CI [" + (loH * 100).toFixed(0) + "%," + (hiH * 100).toFixed(0) + "%]";
+            wrSigHd = loH > 0.5 ? ciStrH + " · " + (compSummary.label_a || "A") + "显著更优"
+              : hiH < 0.5 ? ciStrH + " · " + (compSummary.label_b || "B") + "显著更优"
+              : ciStrH + " · 不显著(样本可能不足)";
+          }
+          html += '<div style="text-align:center;padding:0.75rem 1rem;margin-bottom:1rem;background:var(--bg);border-radius:var(--radius);">';
+          html += '<div style="font-size:0.75rem;color:var(--text-muted);">主观侧主位 · ' + (compSummary.label_a || 'With Skill') + ' 盲评胜率</div>';
+          html += '<div style="font-size:1.75rem;font-weight:700;color:' + wrColor + ';">★ ' + wrPct + '</div>';
+          html += '<div style="font-size:0.8125rem;color:var(--text-muted);">' + compSummary.a_wins + '胜 / ' + compSummary.b_wins + '负 / ' + compSummary.ties + '平' + failNote + wrSigHd + '</div>';
+          html += '</div>';
+        }
+
+        for (let ci = 0; ci < comparisons.length; ci++) {
+          const comp = comparisons[ci];
+          const la = (compSummary && compSummary.label_a) || 'with';
+          const lb = (compSummary && compSummary.label_b) || 'without';
+          // comparator 现打乱 position 并把 A/B 翻成语义 label_a/label_b;此处归一兼容老数据
+          // (老数据 winner=A/B 且 A 恒=side A,故 A→la、B→lb 对老数据也正确)
+          if (comp.winner === "A") comp.winner = la;
+          else if (comp.winner === "B") comp.winner = lb;
+          else if (comp.winner === "TIE") comp.winner = "tie";
+          for (const _f of ["rubric", "output_quality", "expectation_results"]) {
+            const _d = comp[_f];
+            if (_d) { if (_d.A && !_d[la]) _d[la] = _d.A; if (_d.B && !_d[lb]) _d[lb] = _d.B; }
+          }
+          if (ci > 0) html += '<hr style="border:0;border-top:1px solid var(--border);margin:1rem 0;">';
+
+          const wBadge = comp.winner === la ? la : comp.winner === lb ? lb : "平局";
+          const wColor = comp.winner === la ? "var(--green)" : comp.winner === lb ? "var(--red)" : "var(--text-muted)";
+          if (comp.failed) {
+            // 比较本身失败(调用/解析失败,重试耗尽)——winner="tie" 是兜底标签,不是真平局。
+            // 醒目区分,不混进 tie 显示,否则读着像"两边一样"。
+            html += '<div style="margin-bottom:0.5rem;"><span style="color:var(--red);font-weight:700;">⚠ 比较失败(重试耗尽,未判定)</span></div>';
+            html += '<div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:0.75rem;">这条未计入胜率分母(failed ≠ 平局)。原始原因:' + escapeHtml(comp.reasoning || "") + '</div>';
+          } else {
+            html += '<div style="margin-bottom:0.75rem;"><strong>胜者：</strong> <span style="color:' + wColor + ';font-weight:600;">' + wBadge + '</span></div>';
+            if (comp.pos_a_label) {
+              // 揭盲:reasoning 用盲评位置 A/B 写,标出当次 A/B 各是哪个语义侧,否则与"胜者:with"对不上
+              html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">揭盲位置:Output A = ' + escapeHtml(comp.pos_a_label) + ' · Output B = ' + escapeHtml(comp.pos_b_label || "") + '</div>';
+            }
+            html += '<div style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:0.75rem;">' + escapeHtml(comp.reasoning || "") + '</div>';
+          }
+
+          // Rubric scores
+          if (comp.rubric && (comp.rubric[la] || comp.rubric[lb])) {
+            html += '<div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem;">';
+            for (const side of [la, lb]) {
+              const r = comp.rubric[side] || {};
+              const scoreColor = r.overall_score >= 8 ? "var(--green)" : r.overall_score >= 5 ? "var(--accent)" : "var(--red)";
+              html += '<div style="flex:1;min-width:180px;background:var(--bg);border-radius:var(--radius);padding:0.75rem;">';
+              html += '<div style="font-weight:600;margin-bottom:0.5rem;">' + side + ' <span style="color:' + scoreColor + ';font-size:1.1rem;">' + (r.overall_score || "?").toFixed(1) + '</span>/10</div>';
+              if (r.content) {
+              html += '<div style="font-size:0.75rem;color:var(--text-muted);">内容：' + r.content_score.toFixed(1) + '/5 · 结构：' + r.structure_score.toFixed(1) + '/5</div>';
+              }
+              html += '</div>';
+            }
+            html += '</div>';
+          }
+
+          // Quality highlights
+          if (comp.output_quality && (comp.output_quality[la] || comp.output_quality[lb])) {
+            html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;">';
+            for (const side of [la, lb]) {
+              const q = comp.output_quality[side] || {};
+              html += '<div style="flex:1;min-width:160px;font-size:0.75rem;">';
+              html += '<strong>' + side + '</strong>: ' + (q.score || "?") + '/10';
+              if (q.strengths && q.strengths.length) html += '<br><span style="color:var(--green);">+</span> ' + escapeHtml(q.strengths.join("、"));
+              if (q.weaknesses && q.weaknesses.length) html += '<br><span style="color:var(--red);">-</span> ' + escapeHtml(q.weaknesses.join("、"));
+              html += '</div>';
+            }
+            html += '</div>';
+          }
+
+          // Expectation results (两侧 passed/total + per-expectation ✓/✗)
+          if (comp.expectation_results && (comp.expectation_results[la] || comp.expectation_results[lb])) {
+            html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.5rem;font-size:0.75rem;">';
+            for (const side of [la, lb]) {
+              const er = comp.expectation_results[side] || {};
+              const erPct = er.total ? Math.round((er.pass_rate || 0) * 100) : 0;
+              html += '<div style="flex:1;min-width:160px;background:var(--bg);border-radius:var(--radius);padding:0.5rem;">';
+              html += '<strong>' + side + '</strong>: ' + (er.passed || 0) + '/' + (er.total || 0) + ' (' + erPct + '%)';
+              if (er.details && er.details.length) {
+                html += '<div style="margin-top:0.25rem;">';
+                for (const d of er.details) {
+                  const erIcon = d.passed ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--red);">✗</span>';
+                  html += '<div>' + erIcon + ' ' + escapeHtml(d.text || "") + '</div>';
+                }
+                html += '</div>';
+              }
+              html += '</div>';
+            }
+            html += '</div>';
+          }
+        }
+        html += '</div>';
+      }
+
+      // ── Analysis section ──
+      if (analysis && (analysis.winner_strengths || analysis.improvement_suggestions)) {
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">深度分析</div>';
+
+        if (analysis.instruction_following) {
+          const fi = analysis.instruction_following;
+          const wsIf = fi.winner || fi.A || {};
+          const lsIf = fi.loser || fi.B || {};
+          // 败者 score=null(无 skill 基线,without 侧无 compliance)→ 显 N/A,不显假 ?/10
+          const scoreText = (v) => (v == null ? "N/A(无 skill 基线)" : v + "/10");
+          html += '<div style="display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap;">';
+          html += '<div style="flex:1;min-width:150px;"><strong>胜者指令遵循度：</strong> ' + scoreText(wsIf.score) + '</div>';
+          html += '<div style="flex:1;min-width:150px;"><strong>败者指令遵循度：</strong> ' + scoreText(lsIf.score) + '</div>';
+          html += '</div>';
+        }
+
+        if (analysis.winner_strengths && analysis.winner_strengths.length) {
+          html += '<div style="margin-bottom:0.75rem;"><strong style="color:var(--green);">胜者优势</strong><ul style="font-size:0.8125rem;margin:0.25rem 0 0 1.25rem;">';
+          for (const s of analysis.winner_strengths) html += '<li>' + escapeHtml(s) + '</li>';
+          html += '</ul></div>';
+        }
+
+        if (analysis.loser_weaknesses && analysis.loser_weaknesses.length) {
+          html += '<div style="margin-bottom:0.75rem;"><strong style="color:var(--red);">败者弱点</strong><ul style="font-size:0.8125rem;margin:0.25rem 0 0 1.25rem;">';
+          for (const w of analysis.loser_weaknesses) html += '<li>' + escapeHtml(w) + '</li>';
+          html += '</ul></div>';
+        }
+
+        if (analysis.improvement_suggestions && analysis.improvement_suggestions.length) {
+          html += '<strong>改进建议</strong>';
+          html += '<table class="benchmark-table" style="margin-top:0.5rem;"><thead><tr><th>优先级</th><th>类别</th><th>建议</th><th>预期影响</th></tr></thead><tbody>';
+          for (const s of analysis.improvement_suggestions) {
+            const prioColor = s.priority === "high" ? "var(--red)" : s.priority === "medium" ? "var(--accent)" : "var(--text-muted)";
+            html += '<tr><td><span style="color:' + prioColor + ';font-weight:600;text-transform:uppercase;font-size:0.7rem;">' + escapeHtml(s.priority) + '</span></td>';
+            html += '<td>' + escapeHtml(s.category || "") + '</td>';
+            html += '<td style="font-size:0.8125rem;">' + escapeHtml(s.suggestion || "") + '</td>';
+            html += '<td style="font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(s.expected_impact || "") + '</td></tr>';
+          }
+          html += '</tbody></table>';
+        }
+
+        if (analysis.transcript_insights && Object.keys(analysis.transcript_insights).length) {
+          html += '<div style="margin-top:0.75rem;font-size:0.75rem;color:var(--text-muted);">';
+          html += '<strong>transcript 洞察</strong>';
+          for (const k in analysis.transcript_insights) {
+            html += '<div style="margin-top:0.25rem;"><strong>' + escapeHtml(k) + '</strong>: ' + escapeHtml(analysis.transcript_insights[k]) + '</div>';
+          }
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+
+      // ── 检查点总览(per-eval 一行,3-dim mean across runs)──
+      // 多 eval 的一览索引层:逐项明细前面给一个「哪道题弱、弱在哪维」的扫描表。
+      // 点行跳到该 eval 的逐项明细(anchor #eval-{id})。程序/LLM 缺该类 expectation 显 —。
+      // 不设派生「状态」列:三率各自按本轴着色,避免用一个混合派生判决误导(混合含 LLM 噪声)。
+      // (原区块名实不符:只读首个 checkpoints.json → 只显 eval-1;且逐条 ✓/✗ 明细
+      //  已在下方检查项矩阵覆盖全 eval。此处改成聚合总览,不重复明细。)
+      const overviewRuns = data.runs || [];
+      if (overviewRuns.length > 0) {
+        const ovEvalIds = [...new Set(overviewRuns.map(r => r.eval_id))].sort((a, b) => a - b);
+        html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:1.5rem;">';
+        html += '<div class="section-header" style="margin:-1rem -1rem 1rem -1rem;">检查点总览</div>';
+        html += '<table class="benchmark-table checkpoint-overview"><thead><tr><th>题号</th><th style="text-align:left;">题名</th><th>程序</th><th>LLM</th><th>混合</th><th>token</th></tr></thead><tbody>';
+        for (const evalId of ovEvalIds) {
+          const evalRuns = overviewRuns.filter(r => r.eval_id === evalId);
+          const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : ("Eval " + evalId);
+          const flakyRange = flakyOf(evalRuns.filter(r => r.configuration === configA));
+          const mProg = meanField(evalRuns, "pass_rate_programmatic");
+          const mLlm = meanField(evalRuns, "pass_rate_llm");
+          const mMix = meanField(evalRuns, "pass_rate");
+          html += '<tr style="cursor:pointer;" onclick="document.getElementById(\'eval-' + evalId + '\').scrollIntoView({block:\'start\'});">';
+          const flakyFlag = flakyRange ? ' <span style="color:var(--red);cursor:help;" title="主侧忽过忽挂(' + fmtDim(flakyRange.min) + '–' + fmtDim(flakyRange.max) + ')·建议补跑:eval --eval-ids ' + evalId + ' --runs 更大">⚠</span>' : '';
+          html += '<td>' + evalId + flakyFlag + '</td>';
+          html += '<td style="text-align:left;">' + escapeHtml(evalName) + '</td>';
+          html += '<td class="' + dimCls(mProg) + '">' + fmtDim(mProg) + '</td>';
+          html += '<td class="' + dimCls(mLlm) + '">' + fmtDim(mLlm) + '</td>';
+          html += '<td class="' + dimCls(mMix) + '">' + fmtDim(mMix) + '</td>';
+          const mTok = meanField(evalRuns, "tokens");
+          html += '<td>' + (mTok != null ? Math.round(mTok).toLocaleString() : "—") + '</td>';
+          html += '</tr>';
+        }
+        html += '</tbody></table>';
+        html += '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.5rem;">每 eval 跨所有 run/config 取均值;点行跳到该题逐项明细。程序/LLM 缺该类 expectation 显 —。</div>';
+        html += '</div>';
+      }
+
+      // ── Per-eval breakdown table ──
+      const runs = data.runs || [];
+      if (runs.length > 0) {
+        const evalIds = [...new Set(runs.map(r => r.eval_id))].sort((a, b) => a - b);
+        html += '<div style="margin-top:1.5rem;"><h3 style="font-family:Poppins,sans-serif;margin-bottom:0.75rem;">逐项评测明细</h3>';
+        const hasTime = runs.some(r => r.result && r.result.time_seconds != null);
+        const hasTokens = runs.some(r => r.result && r.result.tokens != null);
+
+        for (const evalId of evalIds) {
+          const evalRuns = runs.filter(r => r.eval_id === evalId);
+          const evalName = evalRuns[0] && evalRuns[0].eval_name ? evalRuns[0].eval_name : "Eval " + evalId;
+          html += '<h4 id="eval-' + evalId + '" style="font-family:Poppins,sans-serif;margin:1rem 0 0.5rem;">' + escapeHtml(evalName) + '</h4>';
+          html += '<table class="benchmark-table"><thead><tr><th>配置</th><th>运行</th><th>程序</th><th>LLM</th><th>混合</th>';
+          if (hasTime) html += '<th>耗时 (秒)</th>';
+          if (hasTokens) html += '<th>token</th>';
+          html += '</tr></thead><tbody>';
+
+          const configGroups = [...new Set(evalRuns.map(r => r.configuration))];
+          for (let ci = 0; ci < configGroups.length; ci++) {
+            const config = configGroups[ci];
+            const configRuns = evalRuns.filter(r => r.configuration === config);
+            if (configRuns.length === 0) continue;
+            const rowClass = ci === 0 ? "benchmark-row-with" : "benchmark-row-without";
+            const configLabel = config.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+
+            for (const run of configRuns) {
+              const r = run.result || {};
+              const prClass = r.pass_rate >= 0.8 ? "benchmark-delta-positive" : r.pass_rate < 0.5 ? "benchmark-delta-negative" : "";
+              const anomalyTag = run.is_anomaly ? ' <span style="background:#ffc107;color:#333;padding:0 4px;border-radius:3px;font-size:0.65rem;font-family:Poppins,sans-serif;" title="' + escapeHtml(run.anomaly_reason || '异常值') + '">异常</span>' : "";
+              const retryTag = run.retry_count ? ' <span style="background:#e0e0e0;color:#666;padding:0 4px;border-radius:3px;font-size:0.65rem;font-family:Poppins,sans-serif;" title="重试 ' + run.retry_count + ' 次">R' + run.retry_count + '</span>' : "";
+              html += '<tr class="' + rowClass + '"><td>' + configLabel + '</td><td>' + run.run_number + anomalyTag + retryTag + '</td>';
+              html += '<td class="' + dimCls(r.pass_rate_programmatic) + '">' + fmtDim(r.pass_rate_programmatic) + '</td>';
+              html += '<td class="' + dimCls(r.pass_rate_llm) + '">' + fmtDim(r.pass_rate_llm) + '</td>';
+              html += '<td class="' + prClass + '">' + ((r.pass_rate || 0) * 100).toFixed(0) + '% (' + (r.passed || 0) + '/' + (r.total || 0) + ')</td>';
+              if (hasTime) {
+                const timeDisplay = r.time_seconds != null ? r.time_seconds.toFixed(1) : "—";
+                const timeStyle = r.time_seconds > 300 ? 'color:var(--red);' : '';
+                html += '<td style="' + timeStyle + '">' + timeDisplay + '</td>';
+              }
+              if (hasTokens) {
+                const tokDisplay = r.tokens != null ? Number(r.tokens).toLocaleString() : "—";
+                html += '<td>' + tokDisplay + '</td>';
+              }
+              html += '</tr>';
+            }
+
+            const rates = configRuns.map(r => (r.result || {}).pass_rate || 0);
+            const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+            const avgProg = meanField(configRuns, "pass_rate_programmatic");
+            const avgLlm = meanField(configRuns, "pass_rate_llm");
+            const avgPrClass = avgRate >= 0.8 ? "benchmark-delta-positive" : avgRate < 0.5 ? "benchmark-delta-negative" : "";
+            html += '<tr class="benchmark-row-avg ' + rowClass + '"><td>' + configLabel + '</td><td>平均</td>';
+            html += '<td class="' + dimCls(avgProg) + '">' + fmtDim(avgProg) + '</td>';
+            html += '<td class="' + dimCls(avgLlm) + '">' + fmtDim(avgLlm) + '</td>';
+            html += '<td class="' + avgPrClass + '">' + (avgRate * 100).toFixed(0) + '%</td>';
+            if (hasTime) {
+              const times = configRuns.map(r => (r.result || {}).time_seconds).filter(t => t != null);
+              html += '<td>' + (times.length ? (times.reduce((a, b) => a + b, 0) / times.length).toFixed(1) : "—") + '</td>';
+            }
+            html += '</tr>';
+          }
+          html += '</tbody></table>';
+
+          // Per-assertion detail
+          const runsWithExpectations = {};
+          for (const config of configGroups) {
+            runsWithExpectations[config] = evalRuns.filter(r => r.configuration === config && r.expectations && r.expectations.length > 0);
+          }
+          const hasAnyExp = Object.values(runsWithExpectations).some(runs => runs.length > 0);
+          if (hasAnyExp) {
+            const allAssertions = [];
+            const seen = new Set();
+            for (const config of configGroups) {
+              for (const run of runsWithExpectations[config]) {
+                for (const exp of (run.expectations || [])) {
+                  if (!seen.has(exp.text)) { seen.add(exp.text); allAssertions.push(exp.text); }
+                }
+              }
+            }
+            html += '<table class="benchmark-table" style="margin-top:0.5rem;"><thead><tr><th>检查项</th>';
+            for (const config of configGroups) {
+              html += '<th>' + escapeHtml(config.replace(/_/g, " ")) + '</th>';
+            }
+            html += '</tr></thead><tbody>';
+            for (const assertionText of allAssertions) {
+              html += '<tr><td>' + escapeHtml(assertionText) + '</td>';
+              for (const config of configGroups) {
+                html += '<td>';
+                for (const run of runsWithExpectations[config]) {
+                  const exp = (run.expectations || []).find(e => e.text === assertionText);
+                  if (exp) {
+                    // verdict 感知图标(与 grading 主列表 + checkpoints 三处统一);紧凑表不加 source 标签
+                    let cls, icon, styleAttr = "";
+                    if (exp.verdict === "UNEVAL") {
+                      cls = ""; icon = "?"; styleAttr = ' style="color:var(--accent);font-weight:600;" title="无法评估"';
+                    } else if (exp.verdict === "TIMEOUT") {
+                      cls = ""; icon = "⏱"; styleAttr = ' style="color:var(--accent);font-weight:600;" title="超时"';
+                    } else if (exp.verdict === "ERROR") {
+                      cls = ""; icon = "!"; styleAttr = ' style="color:var(--red);font-weight:600;" title="错误"';
+                    } else {
+                      cls = exp.passed ? "benchmark-delta-positive" : "benchmark-delta-negative";
+                      icon = exp.passed ? "✓" : "✗";
+                    }
+                    html += '<span class="' + cls + '"' + styleAttr + '>' + icon + '</span> ';
+                  } else {
+                    html += '— ';
+                  }
+                }
+                html += '</td>';
+              }
+              html += '</tr>';
+            }
+            html += '</tbody></table>';
+          }
+        }
+        html += '</div>';
+      }
+
+      // ── Analysis notes (string notes) ──
+      const stringNotes = notes.filter(n => typeof n === 'string');
+      if (stringNotes.length > 0) {
+        html += '<div class="benchmark-notes" style="margin-top:1.5rem;">';
+        html += '<h3>分析备注（' + stringNotes.length + '）</h3><ul>';
+        for (const note of stringNotes) html += '<li>' + escapeHtml(note) + '</li>';
+        html += '</ul></div>';
+      }
+
+      container.innerHTML = html;
+
+      // ── Chart.js pass rate bar chart(grouped bar:混合 + 客观 + 主观,与表格双率行对齐)──
+      if (configA && configB) {
+        setTimeout(() => {
+          const canvas = document.getElementById("passRateChart");
+          if (!canvas) return;
+          const labels = [configA.replace(/_/g, " "), configB.replace(/_/g, " ")];
+          // 每 config 三率(混合/客观/主观);某 config 无该类 expectation → null(该柱不画)
+          const mix = [a.pass_rate, b.pass_rate].map(s => s ? s.mean * 100 : null);
+          const prog = [a.pass_rate_programmatic, b.pass_rate_programmatic].map(s => s ? s.mean * 100 : null);
+          const llm = [a.pass_rate_llm, b.pass_rate_llm].map(s => s ? s.mean * 100 : null);
+          const datasets = [];
+          if (mix.some(v => v != null))  datasets.push({ label: "混合",         data: mix,  backgroundColor: "#8a8a8a", borderRadius: 4 });
+          if (prog.some(v => v != null)) datasets.push({ label: "程序化(客观)", data: prog, backgroundColor: "#788c5d", borderRadius: 4 });
+          if (llm.some(v => v != null))  datasets.push({ label: "LLM(主观)",    data: llm,  backgroundColor: "#c89b5a", borderRadius: 4 });
+          new Chart(canvas, {
+            type: "bar",
+            data: { labels: labels, datasets: datasets },
+            options: {
+              responsive: true,
+              plugins: { legend: { display: true } },
+              scales: { y: { beginAtZero: true, max: 100, ticks: { callback: v => v + "%" } } }
+            }
+          });
+        }, 100);
+      }
+    }
+
+    // ---- Start ----
+    init();
+    renderBenchmark();
+  </script>
+</body>
+</html>

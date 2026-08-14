@@ -1,5 +1,5 @@
 {
-  "format": "skill-eval-records",
+  "format": "sift-records",
   "records": [
     {"role": "user", "text": "dispatch test-runner"},
     {

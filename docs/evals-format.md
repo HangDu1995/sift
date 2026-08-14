@@ -1,8 +1,8 @@
 # evals.json 考卷格式参考
 
-> evals.json 是 `run`(fixture 评测)的考卷:每条 eval 是一道题(prompt + 期望 + 断言 + 测试夹具)。`init` 生成它,`run` 跑它,`inspect` 体检它。
+> evals.json 是 `eval`(fixture 评测)的考卷:每条 eval 是一道题(prompt + 期望 + 断言 + 测试夹具)。`init` 生成它,`eval` 跑它,`inspect` 体检它。
 >
-> **谁读哪段**:`run` 读 `evals` 段;`trigger` 只读 `trigger_probes` 段(忽略 `evals`)。**谁不读 evals.json**:`audit`(读 transcript 对账)、`run --task` 真任务模式。
+> **谁读哪段**:`eval` 读 `evals` 段;`trigger` 只读 `trigger_probes` 段(忽略 `evals`)。**谁不读 evals.json**:`audit`(读 transcript 对账)、`run --task` 真任务模式。
 
 ## 顶层结构
 
@@ -10,7 +10,7 @@
 {
   "skill_name": "my-skill",
   "evals": [ {EvalCase}, {EvalCase} ],
-  "trigger_probes": [ {TriggerProbe}, ... ]   // 可选,只 trigger 命令读、run 忽略(见下)
+  "trigger_probes": [ {TriggerProbe}, ... ]   // 可选,只 trigger 命令读、eval 忽略(见下)
 }
 ```
 
@@ -24,7 +24,7 @@
 | `level` | str | — | 难度层级(如 `L1`/`L2`,inspect 按此统计分布;默认 `L1`) |
 | `expectations` | list[str] | — | free-text 期望,**LLM 判**(主观,见下) |
 | `assertions` | list[Assertion] | — | 结构化断言,**机械 / LLM 判**(客观,见下) |
-| `fixtures` | list[Fixture] | — | 内嵌测试数据(run 时写入 claude 工作目录) |
+| `fixtures` | list[Fixture] | — | 内嵌测试数据(eval 时写入 claude 工作目录) |
 | `expected_output` | str | — | 期望输出(grader 参考,**不喂 cc**;喂了=答案泄露致 A/B 失真) |
 | `files` | list[str] | — | 相关文件名 |
 | `timeout` | int\|null | — | per-eval 超时秒(覆盖全局;null 走全局) |
@@ -108,7 +108,7 @@
 "fixtures": [{"path": "logs/app.log", "content": "2024-01-01 E-AUTH-001 login failed\n..."}]
 ```
 
-`run` 时把 `content` 写入 claude 工作目录的 `path`,claude 读它干活——**不用外部提供真实文件**。这就是为什么没日志也能 `run`:日志是考卷内嵌的夹具。
+`eval` 时把 `content` 写入 claude 工作目录的 `path`,claude 读它干活——**不用外部提供真实文件**。这就是为什么没日志也能 `eval`:日志是考卷内嵌的夹具。
 
 ## flags(后处理标记)
 
@@ -163,7 +163,7 @@
 
 ## trigger_probes（trigger 命令的输入，可选）
 
-顶层可选段，给 [`trigger`](skill-eval-reference.md#trigger--触发准确度第-4-维) 命令用——测 cc 会不会**仅凭 skill 的 description 自然触发**本 skill（不评输出对错）。`run` **忽略**此段（只有 `trigger` 读它）。旧 evals.json 无此段 → `[]`，向后兼容。由 `init --trigger-probes` 生成、id 接续已有 `max+1`。
+顶层可选段，给 [`trigger`](sift-reference.md#trigger--触发准确度第-4-维) 命令用——测 cc 会不会**仅凭 skill 的 description 自然触发**本 skill（不评输出对错）。`eval` **忽略**此段（只有 `trigger` 读它）。旧 evals.json 无此段 → `[]`，向后兼容。由 `init --trigger-probes` 生成、id 接续已有 `max+1`。
 
 ```json
 "trigger_probes": [
@@ -189,8 +189,8 @@
 | `expect_trigger` | bool | ✅ | `true`=该触发（贡献 `recall`）/ `false`=不该触发（贡献 `false_trigger_rate`） |
 | `rationale` | str | — | 为何该 / 不该触发（人审抓手） |
 
-两类探题各测一种失效（详见 [reference · trigger](skill-eval-reference.md#trigger--触发准确度第-4-维)）：should-trigger 测**漏召**（recall），should-not-trigger 测**误触**（false_trigger_rate）——两者是不同失效模式，`trigger` 分开报、不合成一个分。
+两类探题各测一种失效（详见 [reference · trigger](sift-reference.md#trigger--触发准确度第-4-维)）：should-trigger 测**漏召**（recall），should-not-trigger 测**误触**（false_trigger_rate）——两者是不同失效模式，`trigger` 分开报、不合成一个分。
 
 ---
 
-> 命令用法见 [skill-eval-reference.md](skill-eval-reference.md);示例 skill 见 [fixtures/example-skills/](../fixtures/example-skills/)。
+> 命令用法见 [sift-reference.md](sift-reference.md);示例 skill 见 [fixtures/example-skills/](../fixtures/example-skills/)。

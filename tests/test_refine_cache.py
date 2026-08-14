@@ -1,4 +1,4 @@
-"""tests for skill_eval.audit.refine_cache.
+"""tests for sift.audit.refine_cache.
 
 per-SKILL hash 缓存:同 instructions + model + prompt 版本只调一次 compute_fn,
 跨 audit() 调用复用(ThreadPoolExecutor 多线程并发 → 模块级 Lock + double-check)。
@@ -13,9 +13,9 @@ import time
 
 import pytest
 
-from skill_eval.audit import refine_cache
-from skill_eval.models import InstructionCheck
-from skill_eval.models.enums import (
+from sift.audit import refine_cache
+from sift.models import InstructionCheck
+from sift.models.enums import (
     CheckMethod,
     InstructionPriority,
     InstructionSource,

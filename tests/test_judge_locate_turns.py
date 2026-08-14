@@ -11,11 +11,11 @@ prompt 清洁用 monkeypatch 替换模块级 ``_run_batches_concurrent``(它收 
 """
 from __future__ import annotations
 
-from skill_eval.audit import auditor as auditor_mod
-from skill_eval.audit.auditor import TranscriptAuditor
-from skill_eval.models import InstructionCheck
-from skill_eval.models.audit_models import AuditVerdict
-from skill_eval.models.enums import (
+from sift.audit import auditor as auditor_mod
+from sift.audit.auditor import TranscriptAuditor
+from sift.models import InstructionCheck
+from sift.models.audit_models import AuditVerdict
+from sift.models.enums import (
     CheckMethod,
     InstructionPriority,
     InstructionSource,
@@ -122,7 +122,7 @@ def test_locate_turns_off_step_prompt_has_no_turn_rule(monkeypatch) -> None:
 def test_locate_turns_off_step_tool_section_has_no_turn_marker(monkeypatch) -> None:
     """step tool_section:locate_turns=False 时不给工具调用加 ``[T{idx}]`` 前缀、
     段标题不提示 ``[T{idx}]``(tool_trace 里有 turn 标注也不渲染)。"""
-    from skill_eval.models import ToolCallRecord
+    from sift.models import ToolCallRecord
 
     captured: dict = {}
     _capture_prompt(monkeypatch, captured)

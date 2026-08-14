@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from skill_eval.i18n import ANTI_FABRICATION_CN
+from sift.i18n import ANTI_FABRICATION_CN
 
 
 class TestI18nKeywords:

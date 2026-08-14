@@ -14,8 +14,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from skill_eval.cli.main import app
-from skill_eval.models.audit_models import (
+from sift.cli.main import app
+from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
     AuditMethod,
@@ -61,7 +61,7 @@ def test_audit_byskill_opencode_writes_json_slices(monkeypatch, tmp_path):
     """opencode fixture --kind skill:切出的子段是 .json,且仍是合法 opencode session,透传 auditor。"""
     fake = _FakeAuditor()
     monkeypatch.setattr(
-        "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
+        "sift.cli.commands.audit.TranscriptAuditor", lambda: fake
     )
 
     skill = _FIX / "log-error-analyzer"
@@ -82,7 +82,7 @@ def test_audit_byskill_opencode_writes_json_slices(monkeypatch, tmp_path):
     assert all(Path(p).suffix == ".json" for p in sliced), sliced
     assert all("slices" in str(p) for p in sliced), sliced
     # 子段仍是合法 opencode session(rebuild 能按格式分派)
-    from skill_eval.evals.opencode import is_opencode_session
+    from sift.evals.opencode import is_opencode_session
     assert all(is_opencode_session(Path(p)) for p in sliced), sliced
 
 
@@ -90,7 +90,7 @@ def test_audit_byskill_cc_still_writes_jsonl(monkeypatch, tmp_path):
     """cc 路径不被破坏:--kind skill 仍写 .jsonl 子段。"""
     fake = _FakeAuditor()
     monkeypatch.setattr(
-        "skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake
+        "sift.cli.commands.audit.TranscriptAuditor", lambda: fake
     )
 
     skill = _FIX / "log-error-analyzer"

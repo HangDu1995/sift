@@ -8,8 +8,8 @@ import stat
 
 import pytest
 
-from skill_eval.errors import ClaudeRunnerError
-from skill_eval.execution.cli_runner import (
+from sift.errors import ClaudeRunnerError
+from sift.execution.cli_runner import (
     ClaudeRunner,
     _build_non_interactive_prompt,
     build_live_prompt,
@@ -51,36 +51,36 @@ class TestProgressFromEvent:
     tool_use 是动作信号(Read/Bash/Write…),result 是完成信号;assistant 散文太吵不报。"""
 
     def test_tool_use_file_path(self):
-        from skill_eval.execution.cli_runner import _progress_from_event
+        from sift.execution.cli_runner import _progress_from_event
         line = json.dumps({"type": "assistant", "message": {"content": [
             {"type": "tool_use", "name": "Read", "input": {"file_path": "audit/aggregate.py"}}]}})
         assert _progress_from_event(line) == "🔧 Read: audit/aggregate.py"
 
     def test_tool_use_command(self):
-        from skill_eval.execution.cli_runner import _progress_from_event
+        from sift.execution.cli_runner import _progress_from_event
         line = json.dumps({"type": "assistant", "message": {"content": [
             {"type": "tool_use", "name": "Bash", "input": {"command": "grep -n x audit/aggregate.py"}}]}})
         assert _progress_from_event(line) == "🔧 Bash: grep -n x audit/aggregate.py"
 
     def test_result_event_completion(self):
-        from skill_eval.execution.cli_runner import _progress_from_event
+        from sift.execution.cli_runner import _progress_from_event
         line = json.dumps({"type": "result", "subtype": "success", "num_turns": 5,
                            "stop_reason": "end_turn", "usage": {"input_tokens": 12000, "output_tokens": 345}})
         assert _progress_from_event(line) == "✓ 完成: end_turn, 5 轮, 12345 tok"
 
     def test_assistant_text_not_reported(self):
-        from skill_eval.execution.cli_runner import _progress_from_event
+        from sift.execution.cli_runner import _progress_from_event
         line = json.dumps({"type": "assistant", "message": {"content": [
             {"type": "text", "text": "let me analyze the file"}]}})
         assert _progress_from_event(line) is None
 
     def test_garbage_and_empty_return_none(self):
-        from skill_eval.execution.cli_runner import _progress_from_event
+        from sift.execution.cli_runner import _progress_from_event
         assert _progress_from_event("") is None
         assert _progress_from_event("not json") is None
 
     def test_long_input_truncated(self):
-        from skill_eval.execution.cli_runner import _progress_from_event
+        from sift.execution.cli_runner import _progress_from_event
         long_cmd = "x" * 200
         line = json.dumps({"type": "assistant", "message": {"content": [
             {"type": "tool_use", "name": "Bash", "input": {"command": long_cmd}}]}})
@@ -132,7 +132,7 @@ class TestSpawnIdentity:
 
     def test_run_injects_identity_when_absent(self, monkeypatch, tmp_path):
         from unittest.mock import MagicMock
-        import skill_eval.execution.cli_runner as mod
+        import sift.execution.cli_runner as mod
         monkeypatch.delenv("AI_AGENT", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
         proc = MagicMock()
@@ -208,7 +208,7 @@ class TestSpawnDirect:
     def test_normal_completion_returns_tuple(self, monkeypatch, tmp_path):
         """正常完成:stdout 全收集、returncode 回传、timed_out=False、不 kill、stderr 透传。"""
         from unittest.mock import MagicMock
-        import skill_eval.execution.cli_runner as mod
+        import sift.execution.cli_runner as mod
 
         proc = self._make_proc(
             [
@@ -234,7 +234,7 @@ class TestSpawnDirect:
     def test_progress_callback_invoked_per_streamed_line(self, monkeypatch, tmp_path):
         """on_progress:每条 tool_use/result 事件行经 _progress_from_event 吐一条进度。"""
         from unittest.mock import MagicMock
-        import skill_eval.execution.cli_runner as mod
+        import sift.execution.cli_runner as mod
 
         proc = self._make_proc(
             [b'{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"a.py"}}]}}\n'],
@@ -250,7 +250,7 @@ class TestSpawnDirect:
         """超时但已有部分输出:timed_out=True、kill 被调一次、已读 stdout 保留、returncode 透传。"""
         import threading
         from unittest.mock import MagicMock
-        import skill_eval.execution.cli_runner as mod
+        import sift.execution.cli_runner as mod
 
         proc = MagicMock()
         # 第一行立刻吐,之后 readline 阻塞(模拟 cc 卡住,主线程 queue.get 会超时)
@@ -305,7 +305,7 @@ class TestBuildLivePrompt:
         assert out.splitlines()[-1] == "the task"  # task 在末尾
         # 与 _build_non_interactive_prompt 等价(只换入参来源);skill_body 从同一
         # parse_skill_md 取,避免硬编码与真实解析结果漂移(parse_skill_md 会去尾换行)。
-        from skill_eval.parser import parse_skill_md
+        from sift.parser import parse_skill_md
         name, _desc, _content, _refs, body = parse_skill_md(sp)
         assert out == _build_non_interactive_prompt("the task", name, body)
 
@@ -327,7 +327,7 @@ class TestRunAgent:
     def _mock_spawn_eof(self, monkeypatch):
         """mock Popen:proc 立即 EOF(returncode 0)→ _spawn 返空 stdout 正常路径。"""
         from unittest.mock import MagicMock
-        import skill_eval.execution.cli_runner as mod
+        import sift.execution.cli_runner as mod
         proc = MagicMock()
         proc.stdout.readline.return_value = b""
         proc.stderr.read.return_value = b""

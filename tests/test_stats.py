@@ -1,7 +1,7 @@
 """统计算子:Wilson 置信区间 + NormalizedGain。"""
 import math
 
-from skill_eval.stats import normalized_gain, wilson_ci
+from sift.stats import normalized_gain, wilson_ci
 
 
 class TestWilsonCI:

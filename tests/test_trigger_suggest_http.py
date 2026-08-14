@@ -7,8 +7,8 @@ schema 形状(单字段、inline 无 $ref)+ build_llm_suggestion http 行为(tra
 import json
 from unittest.mock import patch
 
-from skill_eval.concurrency import _LLMRetryExhausted
-from skill_eval.execution.trigger_suggest import _SUGGEST_SCHEMA, build_llm_suggestion
+from sift.concurrency import _LLMRetryExhausted
+from sift.execution.trigger_suggest import _SUGGEST_SCHEMA, build_llm_suggestion
 
 
 _FAILED = [{"id": 1, "prompt": "分析日志"}, {"id": 3, "prompt": "查异常"}]
@@ -21,7 +21,7 @@ class TestSuggestSchema:
         assert _SUGGEST_SCHEMA["required"] == ["suggestion"]
 
     def test_schema_inlined_no_ref_no_defs(self):
-        # $ref/$defs 经 inline_schema 就地展开(记忆 skill-eval-derived-schema-must-inline)。
+        # $ref/$defs 经 inline_schema 就地展开(记忆 sift-derived-schema-must-inline)。
         assert "$defs" not in _SUGGEST_SCHEMA
         assert '"$ref"' not in json.dumps(_SUGGEST_SCHEMA)
 
@@ -47,7 +47,7 @@ class TestBuildLlmSuggestionHttp:
             calls["n"] += 1
             return "x"
 
-        with patch("skill_eval.execution.trigger_suggest.call_llm_with_retry", side_effect=fake):
+        with patch("sift.execution.trigger_suggest.call_llm_with_retry", side_effect=fake):
             sugg, usage, reason = build_llm_suggestion("desc", [], [])
         assert sugg is None and usage == {} and reason is None
         assert calls["n"] == 0
@@ -57,7 +57,7 @@ class TestBuildLlmSuggestionHttp:
         resp = json.dumps({"suggestion": "做日志分析、不翻译\n理由:收窄 scope"})
         payload = {"input_tokens": 100, "output_tokens": 50, "total_cost_usd": 0.01}
         fake, cap = self._fake(resp, usage_payload=payload)
-        with patch("skill_eval.execution.trigger_suggest.call_llm_with_retry", side_effect=fake):
+        with patch("sift.execution.trigger_suggest.call_llm_with_retry", side_effect=fake):
             sugg, usage, reason = build_llm_suggestion(
                 "当前 desc", _FAILED, _FAILED_NOT, model="m")
         assert sugg is not None and sugg.category == "llm_rewrite" and sugg.source == "llm"
@@ -72,14 +72,14 @@ class TestBuildLlmSuggestionHttp:
     def test_transport_and_schema_passed(self):
         """call_llm_with_retry 收到 transport=http + schema=_SUGGEST_SCHEMA。"""
         fake, cap = self._fake(json.dumps({"suggestion": "x"}))
-        with patch("skill_eval.execution.trigger_suggest.call_llm_with_retry", side_effect=fake):
+        with patch("sift.execution.trigger_suggest.call_llm_with_retry", side_effect=fake):
             build_llm_suggestion("desc", _FAILED, [])
         assert cap[0]["transport"] == "http"
         assert cap[0]["schema"] is _SUGGEST_SCHEMA
 
     def test_degrades_on_retry_exhausted(self):
         """call_llm_with_retry 耗尽抛 _LLMRetryExhausted → (None, usage, reason 含「限流」)。"""
-        with patch("skill_eval.execution.trigger_suggest.call_llm_with_retry",
+        with patch("sift.execution.trigger_suggest.call_llm_with_retry",
                    side_effect=_LLMRetryExhausted("exhausted")):
             sugg, usage, reason = build_llm_suggestion("desc", _FAILED, [])
         assert sugg is None
@@ -88,7 +88,7 @@ class TestBuildLlmSuggestionHttp:
     def test_degrades_on_empty_response(self):
         """http 返空(call_llm_with_retry 不重空响应)→ (None, usage, reason 含「空」)。"""
         fake, _ = self._fake("   ")
-        with patch("skill_eval.execution.trigger_suggest.call_llm_with_retry", side_effect=fake):
+        with patch("sift.execution.trigger_suggest.call_llm_with_retry", side_effect=fake):
             sugg, usage, reason = build_llm_suggestion("desc", _FAILED, [])
         assert sugg is None
         assert reason and "空" in reason
@@ -96,7 +96,7 @@ class TestBuildLlmSuggestionHttp:
     def test_parse_failure_fallback_to_raw(self):
         """tool_use 偶发非 JSON → 整段当文本仍成 Suggestion(诊断文案不丢)。"""
         fake, _ = self._fake("这不是 JSON,就是一段纯文本 description 草案")
-        with patch("skill_eval.execution.trigger_suggest.call_llm_with_retry", side_effect=fake):
+        with patch("sift.execution.trigger_suggest.call_llm_with_retry", side_effect=fake):
             sugg, usage, reason = build_llm_suggestion("desc", _FAILED, [])
         assert sugg is not None and sugg.category == "llm_rewrite"
         assert "纯文本 description" in sugg.message
@@ -106,6 +106,6 @@ class TestBuildLlmSuggestionHttp:
         payload = {"input_tokens": 80, "output_tokens": 20,
                    "service_tier": "standard", "server_tool_use": {"count": 2}}
         fake, _ = self._fake(json.dumps({"suggestion": "x"}), usage_payload=payload)
-        with patch("skill_eval.execution.trigger_suggest.call_llm_with_retry", side_effect=fake):
+        with patch("sift.execution.trigger_suggest.call_llm_with_retry", side_effect=fake):
             sugg, _, _ = build_llm_suggestion("desc", _FAILED, [])
         assert sugg.tokens == 100                               # 80+20,非数字字段不影响

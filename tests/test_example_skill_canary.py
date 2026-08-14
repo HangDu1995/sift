@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from skill_eval.parser import parse_skill_md
-from skill_eval.audit.auditor import TranscriptAuditor
+from sift.parser import parse_skill_md
+from sift.audit.auditor import TranscriptAuditor
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "example-skills"
 # 中英简单 skill 同内容对照
@@ -38,7 +38,7 @@ _SLOW = pytest.mark.skipif(
 def test_incident_reporter_trigger_probes_load():
     """incident-reporter(trigger 专用 example)trigger_probes 完整性:能加载 + 两方向都有。fast,不调 LLM。"""
     import json
-    from skill_eval.models import EvalSet
+    from sift.models import EvalSet
     es = EvalSet.model_validate(json.loads(
         (_FIXTURES / "incident-reporter" / "evals" / "evals.json").read_text(encoding="utf-8")))
     assert es.skill_name == "incident-reporter"

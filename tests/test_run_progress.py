@@ -8,8 +8,8 @@ from __future__ import annotations
 import io
 import sys
 
-from skill_eval.cli.progress import _ProgressState, _config_label
-from skill_eval.models.grading_models import (
+from sift.cli.progress import _ProgressState, _config_label
+from sift.models.grading_models import (
     ExpectationResult,
     GradingResult,
     GradingSummary,

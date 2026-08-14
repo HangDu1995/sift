@@ -1,7 +1,7 @@
 """tests/test_audit_parallel.py — 三个 LLM 判定器并发跑(ThreadPoolExecutor max_workers=3)。
 
 **独立文件**(不带 test_auditor.py 的 `_no_llm_retry_sleep` autouse fixture):那个 fixture
-patch 的是 `skill_eval.audit.auditor.time.sleep`,而 `time` 是全局模块对象 → 等于全局 patch
+patch 的是 `sift.audit.auditor.time.sleep`,而 `time` 是全局模块对象 → 等于全局 patch
 了 `time.sleep`,会把并发测试 fake 里的 sleep 也变 no-op → 观测不到重叠。并发测试需要真
 sleep 来拉长 in-flight 窗口,故单独成文件。
 
@@ -16,8 +16,8 @@ import threading
 import time
 from pathlib import Path
 
-from skill_eval.audit.auditor import TranscriptAuditor
-from skill_eval.models.audit_models import AuditCategory, AuditVerdict
+from sift.audit.auditor import TranscriptAuditor
+from sift.models.audit_models import AuditCategory, AuditVerdict
 
 
 def _write_jsonl(path: Path, records: list[dict]) -> Path:
@@ -66,7 +66,7 @@ class TestParallelJudges:
                 inflight[0] -= 1
             return _ok_json()
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         tp = _write_jsonl(
             tmp_path / "only_user.jsonl",
             [{"message": {"role": "user", "content": "hello"}}],
@@ -76,7 +76,7 @@ class TestParallelJudges:
 
     def test_parallel_audit_findings_complete(self, tmp_path, monkeypatch) -> None:
         """并发下四类 findings 仍齐全(无竞态丢结果)。"""
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", lambda *a, **k: _ok_json())
+        monkeypatch.setattr("sift.audit.auditor.call_claude", lambda *a, **k: _ok_json())
         tp = _write_jsonl(
             tmp_path / "u.jsonl", [{"message": {"role": "user", "content": "x"}}]
         )
@@ -113,7 +113,7 @@ class TestParallelJudges:
                 {"index": i, "verdict": "pass", "evidence": "ok"} for i in range(30)
             ])
 
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", fake)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
         body = "".join(f"{i}. Perform step {i} on the input carefully\n\n" for i in range(1, 26))
         tp = _write_jsonl(
             tmp_path / "u.jsonl", [{"message": {"role": "user", "content": "x"}}],
@@ -139,7 +139,7 @@ class TestExceptionIsolation:
         """
         def boom(*a, **k):
             raise ValueError("simulated 非 RuntimeError 穿透")
-        monkeypatch.setattr("skill_eval.audit.auditor.call_claude", boom)
+        monkeypatch.setattr("sift.audit.auditor.call_claude", boom)
         body = "".join(
             f"{i}. Perform step {i} on the input carefully\n\n" for i in range(1, 26)
         )  # 25 条 step → 同类多批(走 _run_batches_concurrent 并发分支)
@@ -163,7 +163,7 @@ class TestExceptionIsolation:
             raise RuntimeError("prohibition 判定器内部 bug")
         monkeypatch.setattr(TranscriptAuditor, "_judge_prohibition", boom)
         monkeypatch.setattr(
-            "skill_eval.audit.auditor.call_claude", lambda *a, **k: _ok_json()
+            "sift.audit.auditor.call_claude", lambda *a, **k: _ok_json()
         )
         tp = _write_jsonl(
             tmp_path / "u.jsonl", [{"message": {"role": "user", "content": "x"}}]

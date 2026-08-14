@@ -5,10 +5,10 @@ from unittest.mock import patch
 
 import pytest
 
-from skill_eval.cli.pipeline import _run_ab_eval
-from skill_eval.errors import SkillEvalError
-from skill_eval.execution.runner import build_sides
-from skill_eval.models import EvalSet, EvalCase, BenchmarkData, BenchmarkMetadata, RunOutput
+from sift.cli.pipeline import _run_ab_eval
+from sift.errors import SiftError
+from sift.execution.runner import build_sides
+from sift.models import EvalSet, EvalCase, BenchmarkData, BenchmarkMetadata, RunOutput
 
 
 def _skill(tmp_path: Path, name: str) -> Path:
@@ -43,8 +43,8 @@ def test_v1v2_builds_and_threads_sides(tmp_path):
     captured: dict = {}
     fake_run, fake_agg = _wire(tmp_path, captured)
 
-    with patch("skill_eval.execution.runner.ABTestRunner.run_ab_test", fake_run), \
-         patch("skill_eval.execution.benchmark.BenchmarkAggregator.aggregate", fake_agg):
+    with patch("sift.execution.runner.ABTestRunner.run_ab_test", fake_run), \
+         patch("sift.execution.benchmark.BenchmarkAggregator.aggregate", fake_agg):
         _run_ab_eval(
             skill_path=skill_a, eval_set=eval_set, runs=1, model=None, workers=1,
             timeout=10, max_turns=2, scoring="hybrid", no_calibration=True,
@@ -64,8 +64,8 @@ def test_default_no_skill_b_threads_with_without_sides(tmp_path):
     captured: dict = {}
     fake_run, fake_agg = _wire(tmp_path, captured)
 
-    with patch("skill_eval.execution.runner.ABTestRunner.run_ab_test", fake_run), \
-         patch("skill_eval.execution.benchmark.BenchmarkAggregator.aggregate", fake_agg):
+    with patch("sift.execution.runner.ABTestRunner.run_ab_test", fake_run), \
+         patch("sift.execution.benchmark.BenchmarkAggregator.aggregate", fake_agg):
         _run_ab_eval(
             skill_path=skill, eval_set=eval_set, runs=1, model=None, workers=1,
             timeout=10, max_turns=2, scoring="hybrid", no_calibration=True,
@@ -85,12 +85,12 @@ def test_build_sides_agent_returns_single_arm(tmp_path):
 
 
 def test_build_sides_agent_rejects_skill_b(tmp_path):
-    """agent 评测与 --skill-b(A/B)互斥 → SkillEvalError。"""
+    """agent 评测与 --skill-b(A/B)互斥 → SiftError。"""
     agent = tmp_path / "agent.md"
     agent.write_text("---\nname: r\ndescription: d\n---\nbody\n", encoding="utf-8")
     skill_b = tmp_path / "b"
     skill_b.mkdir()
-    with pytest.raises(SkillEvalError, match="互斥"):
+    with pytest.raises(SiftError, match="互斥"):
         build_sides(agent, skill_b, None, None, kind="agent")
 
 
@@ -119,8 +119,8 @@ def test_run_ab_eval_agent_threads_single_arm_and_kind(tmp_path):
         captured["agg_sides"] = sides
         return BenchmarkData(metadata=BenchmarkMetadata(skill_name="r"))
 
-    with patch("skill_eval.execution.runner.ABTestRunner.run_ab_test", fake_run_ab_test), \
-         patch("skill_eval.execution.benchmark.BenchmarkAggregator.aggregate", fake_aggregate):
+    with patch("sift.execution.runner.ABTestRunner.run_ab_test", fake_run_ab_test), \
+         patch("sift.execution.benchmark.BenchmarkAggregator.aggregate", fake_aggregate):
         _run_ab_eval(
             skill_path=agent, eval_set=eval_set, runs=1, model=None, workers=1,
             timeout=10, max_turns=2, scoring="hybrid", no_calibration=True,
@@ -132,11 +132,11 @@ def test_run_ab_eval_agent_threads_single_arm_and_kind(tmp_path):
 
 
 def test_run_cli_v1v2_end_to_end(tmp_path):
-    """CLI 级端到端:run --skill-b 跑通整链,产出 v1/v2 dir + run_summary 用 label key。
+    """CLI 级端到端:eval --skill-b 跑通整链,产出 v1/v2 dir + run_summary 用 label key。
     mock ClaudeRunner(免真 LLM);programmatic scoring 免 grader/comparator LLM。"""
     import json
     from typer.testing import CliRunner
-    from skill_eval.cli.main import app
+    from sift.cli.main import app
 
     def _skill(p, name):
         p.mkdir(parents=True, exist_ok=True)
@@ -157,10 +157,10 @@ def test_run_cli_v1v2_end_to_end(tmp_path):
         return RunOutput(exit_code=0, stdout="ok", transcript="done", result_text="done")
 
     cli = CliRunner()
-    with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run), \
-         patch("skill_eval.cli.commands.run._check_claude_or_exit"):
+    with patch("sift.execution.runner.ClaudeRunner.run", fake_run), \
+         patch("sift.cli.commands.run._check_claude_or_exit"):
         r = cli.invoke(app, [
-            "run", str(skill_a), "--skill-b", str(skill_b),
+            "eval", str(skill_a), "--skill-b", str(skill_b),
             "--evals", str(evals_path), "--scoring", "programmatic",
             "--runs", "1", "-o", str(out),
             "--no-compliance", "--no-calibration",
@@ -190,7 +190,7 @@ def test_run_does_not_leak_expected_output_to_cc_prompt(tmp_path):
     """
     import json
     from typer.testing import CliRunner
-    from skill_eval.cli.main import app
+    from sift.cli.main import app
 
     skill = tmp_path / "sk"
     skill.mkdir(parents=True)
@@ -210,10 +210,10 @@ def test_run_does_not_leak_expected_output_to_cc_prompt(tmp_path):
         return RunOutput(exit_code=0, stdout="ok", transcript="done", result_text="done")
 
     cli = CliRunner()
-    with patch("skill_eval.execution.runner.ClaudeRunner.run", fake_run), \
-         patch("skill_eval.cli.commands.run._check_claude_or_exit"):
+    with patch("sift.execution.runner.ClaudeRunner.run", fake_run), \
+         patch("sift.cli.commands.run._check_claude_or_exit"):
         r = cli.invoke(app, [
-            "run", str(skill),
+            "eval", str(skill),
             "--evals", str(evals_path), "--scoring", "programmatic",
             "--runs", "1", "-o", str(out),
             "--no-compliance", "--no-calibration",
@@ -228,7 +228,7 @@ def test_run_does_not_leak_expected_output_to_cc_prompt(tmp_path):
 
 def test_run_does_not_exit_on_negative_delta(tmp_path):
     """块 C:run 退役 delta 退出码——负 delta 仍 exit 0(判决归 gate)。"""
-    from skill_eval.models import BenchmarkData, BenchmarkMetadata
+    from sift.models import BenchmarkData, BenchmarkMetadata
     skill = _skill(tmp_path, "sk")
     eval_set = EvalSet(skill_name="sk", evals=[EvalCase(id=1, prompt="do")])
     iter_dir = tmp_path / "out"
@@ -248,8 +248,8 @@ def test_run_does_not_exit_on_negative_delta(tmp_path):
     def fake_aggregate(self, iteration_dir, skill_path=Path(), sides=None, **kwargs):
         return neg_bench
 
-    with patch("skill_eval.execution.runner.ABTestRunner.run_ab_test", fake_run_ab_test), \
-         patch("skill_eval.execution.benchmark.BenchmarkAggregator.aggregate", fake_aggregate):
+    with patch("sift.execution.runner.ABTestRunner.run_ab_test", fake_run_ab_test), \
+         patch("sift.execution.benchmark.BenchmarkAggregator.aggregate", fake_aggregate):
         # 不应抛 typer.Exit(1);应正常返回
         bench, _ = _run_ab_eval(
             skill_path=skill, eval_set=eval_set, runs=1, model=None, workers=1,
@@ -261,7 +261,7 @@ def test_run_does_not_exit_on_negative_delta(tmp_path):
 
 def test_format_pass_rate_line_single_arm():
     """agent 评测 → 只报绝对 pass_rate,无 vs/delta/side B 噪音。"""
-    from skill_eval.cli.pipeline import _format_pass_rate_line
+    from sift.cli.pipeline import _format_pass_rate_line
     line = _format_pass_rate_line(["agent"], "agent", "side B", 80.0, 0.0, "—")
     assert "agent 80%" in line
     assert "vs" not in line
@@ -271,7 +271,7 @@ def test_format_pass_rate_line_single_arm():
 
 def test_format_pass_rate_line_two_sides_with_delta():
     """两臂 → A vs B + delta(回归现有行为)。"""
-    from skill_eval.cli.pipeline import _format_pass_rate_line
+    from sift.cli.pipeline import _format_pass_rate_line
     line = _format_pass_rate_line(["with_skill", "without_skill"], "with", "BASE", 80.0, 40.0, 40.0)
     assert "with 80%" in line and "BASE 40%" in line
     assert "vs" in line
@@ -280,7 +280,7 @@ def test_format_pass_rate_line_two_sides_with_delta():
 
 def test_format_run_header_single_arm():
     """agent 评测(单臂)→ 'agent eval',不含 'A/B' 措辞(无 A/B 对照)。"""
-    from skill_eval.cli.pipeline import _format_run_header
+    from sift.cli.pipeline import _format_run_header
     line = _format_run_header(1, "pr-reviewer", 5, "", "", 2)
     assert "agent eval" in line
     assert "A/B" not in line
@@ -290,7 +290,7 @@ def test_format_run_header_single_arm():
 
 def test_format_run_header_two_sides():
     """两臂 → 'A/B test'(回归现有行为)。"""
-    from skill_eval.cli.pipeline import _format_run_header
+    from sift.cli.pipeline import _format_run_header
     line = _format_run_header(2, "pdf", 7, "", "", 3)
     assert "A/B test" in line
     assert "agent eval" not in line

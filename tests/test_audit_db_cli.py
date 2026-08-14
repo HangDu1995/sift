@@ -11,8 +11,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from skill_eval.cli.main import app
-from skill_eval.models.audit_models import (
+from sift.cli.main import app
+from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
     AuditMethod,
@@ -67,12 +67,12 @@ class _FakeAuditor:
 
 # patch 三个 audit 模块级名字(模块级 import 使其可被 monkeypatch 替换,同 TranscriptAuditor)
 def _patch_db(monkeypatch, *, list_ret, export=_EXPORT, audit=None):
-    monkeypatch.setattr("skill_eval.cli.commands.audit.list_sessions", lambda db: list_ret)
+    monkeypatch.setattr("sift.cli.commands.audit.list_sessions", lambda db: list_ret)
     monkeypatch.setattr(
-        "skill_eval.cli.commands.audit.export_session", lambda db, sid: export
+        "sift.cli.commands.audit.export_session", lambda db, sid: export
     )
     fake = audit if audit is not None else _FakeAuditor()
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake)
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
     return fake
 
 
@@ -150,11 +150,11 @@ def test_audit_db_single_session_autopicks(monkeypatch, tmp_path):
         exported["sid"] = sid
         return _EXPORT
 
-    monkeypatch.setattr("skill_eval.cli.commands.audit.list_sessions",
+    monkeypatch.setattr("sift.cli.commands.audit.list_sessions",
                         lambda db: [{"id": "ses_only", "title": "唯一", "updated": 0}])
-    monkeypatch.setattr("skill_eval.cli.commands.audit.export_session", fake_export)
+    monkeypatch.setattr("sift.cli.commands.audit.export_session", fake_export)
     fake = _FakeAuditor()
-    monkeypatch.setattr("skill_eval.cli.commands.audit.TranscriptAuditor", lambda: fake)
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
 
     r = runner.invoke(app, ["audit", str(sp), "--db", str(db), "-o", str(out)])
     assert r.exit_code == 0, r.output
