@@ -318,6 +318,30 @@ class TestRetryRecovery:
         assert "场景不涉及" in f.evidence  # LLM 给的 evidence,非"无法确证"兜底
         assert calls["n"] == 1 + _LLM_RETRY_MAX  # 重试 _LLM_RETRY_MAX 次后第 3 次成功
 
+    def test_429_backoff_is_exponential(self, monkeypatch) -> None:
+        """429 连撞 → 退避指数递增(2/4/8/16s,基数×2^attempt)。
+
+        速率限制按分钟窗口计,固定 2s 退避在窗口内反复撞死(glm-5.3 实测 8 并发 3 个
+        秒 429);指数退避让连撞的等待跨过窗口。抖动置 0 断言精确序列。
+        """
+        import sift.audit.auditor as aud_mod
+        from sift.utils import _HttpRateLimited
+        sleeps: list[float] = []
+
+        def always_429(*a, **k):
+            raise _HttpRateLimited("裸 HTTP 429(账户速率/并发限制)")
+
+        monkeypatch.setattr("sift.audit.auditor.call_claude", always_429)
+        monkeypatch.setattr(aud_mod.time, "sleep", lambda s: sleeps.append(s))
+        monkeypatch.setattr(aud_mod.random, "uniform", lambda a, b: 0.0)
+
+        findings = TranscriptAuditor()._judge_conditional([_tool_inst()], [], "某场景", "t.jsonl")
+
+        assert findings[0].verdict == AuditVerdict.UNRESOLVED  # 耗尽 → 没判成
+        # 429 专属退避(except 分支):基数 × 2^attempt → 2/4/8/16(attempt 0 起)
+        throttle_waits = [s for s in sleeps if s in (2.0, 4.0, 8.0, 16.0)]
+        assert throttle_waits == [2.0, 4.0, 8.0, 16.0]
+
 
 class TestMixed:
     def test_match_and_unmixed_verdicts(self, monkeypatch) -> None:

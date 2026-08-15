@@ -528,9 +528,9 @@ def test_http_call_529_raises_throttled(monkeypatch):
         u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
 
 
-def test_http_call_sends_thinking_budget(monkeypatch):
-    """body 带 thinking 子配额硬帽:GLM 把 max_tokens 当 thinking budget 锚,
-    5.3 大 prompt 会狂想撑满总额度 → 显式 budget 锁死 thinking 上限。"""
+def test_http_call_first_attempt_has_no_thinking_field(monkeypatch):
+    """首尝试不带 thinking 字段(GLM 默认浅思考,大多数模型最快;静态配置无最优:
+    enabled+budget 锚满老模型 3× 慢、disabled 畸形更慢)→ 快路径起步、失败自适应。"""
     import json as _j
     import sift.utils as u
     captured = {}
@@ -545,17 +545,18 @@ def test_http_call_sends_thinking_budget(monkeypatch):
     monkeypatch.setattr(u.urllib.request, "urlopen", fake_urlopen)
     _http_env(monkeypatch)
     u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
-    assert captured["body"]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert "thinking" not in captured["body"]
 
 
-def test_http_call_truncated_no_tooluse_retries_larger(monkeypatch):
-    """截断(stop_reason=max_tokens)且无 tool_use → 自动 8192 升档重试一次,成功即返回。"""
+def test_http_call_truncated_no_tooluse_retries_with_budget(monkeypatch):
+    """截断(stop_reason=max_tokens)且无 tool_use → 带 budget 帽重试(同 max_tokens),成功即返。"""
     import json as _j
     import sift.utils as u
     calls = []
 
     def fake_urlopen(req, timeout=None):
-        calls.append(_j.loads(req.data.decode())["max_tokens"])
+        b = _j.loads(req.data.decode())
+        calls.append((b["max_tokens"], b.get("thinking")))
         if len(calls) == 1:
             return _FakeResp({
                 "content": [{"type": "thinking", "thinking": "x"}],
@@ -570,17 +571,21 @@ def test_http_call_truncated_no_tooluse_retries_larger(monkeypatch):
     _http_env(monkeypatch)
     out = u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
     assert _j.loads(out) == [{"i": 1}]
-    assert calls == [u._HTTP_MAX_TOKENS, 8192]
+    assert calls == [
+        (u._HTTP_MAX_TOKENS, None),
+        (u._HTTP_MAX_TOKENS, {"type": "enabled", "budget_tokens": u._HTTP_THINKING_BUDGET}),
+    ]
 
 
 def test_http_call_truncated_retry_exhausted_raises_notooluse(monkeypatch):
-    """两档都截断且无 tool_use → 仍 _HttpNoToolUse(交 dispatcher 回退 cc)。"""
+    """三档(无字段→budget→budget+8192)都截断且无 tool_use → 仍 _HttpNoToolUse(回退 cc)。"""
     import json as _j
     import sift.utils as u
     calls = []
 
     def fake_urlopen(req, timeout=None):
-        calls.append(_j.loads(req.data.decode())["max_tokens"])
+        b = _j.loads(req.data.decode())
+        calls.append((b["max_tokens"], b.get("thinking")))
         return _FakeResp({
             "content": [{"type": "thinking", "thinking": "x"}],
             "stop_reason": "max_tokens", "usage": {"input_tokens": 1, "output_tokens": 4096},
@@ -590,7 +595,11 @@ def test_http_call_truncated_retry_exhausted_raises_notooluse(monkeypatch):
     _http_env(monkeypatch)
     with pytest.raises(u._HttpNoToolUse):
         u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
-    assert calls == [u._HTTP_MAX_TOKENS, 8192]
+    assert calls == [
+        (u._HTTP_MAX_TOKENS, None),
+        (u._HTTP_MAX_TOKENS, {"type": "enabled", "budget_tokens": u._HTTP_THINKING_BUDGET}),
+        (8192, {"type": "enabled", "budget_tokens": u._HTTP_THINKING_BUDGET}),
+    ]
 
 
 def test_http_call_endturn_no_tooluse_no_retry(monkeypatch):

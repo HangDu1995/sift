@@ -119,7 +119,7 @@ def _window(text: str, limit: int = _SCENE_TRUNCATE) -> str:
 # call_claude 在超时 / 非零退出时抛 RuntimeError,多为 transient——重试大多能救回整批,
 # 避免单次抖动让一整批指令兜底 N/A(audit-out3 实测 2 个整批共 25 条因此放弃)。
 # 重试只针对 RuntimeError(语义错误重试无益,且 call_claude 也只抛这一种)。
-_LLM_RETRY_MAX = 2
+_LLM_RETRY_MAX = 4
 _LLM_RETRY_DELAY = 3.0
 # 三个 LLM 判定器(条件性/禁令/步骤)并发上限。= 类别数 = 实测安全并发(1/2/3 档全 0 失败),
 # 既是全类别并发的最优值、又天然有界(再高也无更多类别可并发)。非魔法数、无需调参。
@@ -250,7 +250,8 @@ def _judge_batch_with_retry(
     - **解析为空**:调用成功但 parse_fn 全 None(LLM 输出畸形 / 截断 / 空数组)——原是静默
       盲点(打"完成"却全 N/A),现重试。实锤 0-解析多为瞬态:同 prompt 重试常能解出。
 
-    重试上限 _LLM_RETRY_MAX,线性退避(_LLM_RETRY_DELAY × 尝试序号)。成功返回 parse_fn
+    重试上限 _LLM_RETRY_MAX;退避两档:429 指数(_RATE_LIMIT_BACKOFF × 2^attempt,跨速率窗口)、
+    其他失败线性(_LLM_RETRY_DELAY × 尝试序号)。成功返回 parse_fn
     结果;重试耗尽返回 _RETRY_EXHAUSTED(调用方保留预置全 N/A 兜底,audit 汇总"未判定"警告)。
     """
     # 进度前缀:类别名前置、括号化(三类并发交错时一眼分清哪条是哪类);单批不显 [k/总]
@@ -273,15 +274,17 @@ def _judge_batch_with_retry(
                     on_usage=on_usage, schema=schema, transport=transport,
                 )
         except _HttpRateLimited as exc:
-            # 429(账户速率/并发限制):AIMD 乘性减并发 + 退避后重试(同账号同限,cc 也撞、
-            # 不回退)。退避加抖动防多线程同步重试。在 RuntimeError 之前(更 specific,免被吞)。
+            # 429(账户速率/并发限制):AIMD 乘性减并发 + 指数退避后重试(同账号同限,cc 也撞、
+            # 不回退)。速率限制按分钟窗口计,固定短退避会在窗口内反复撞死(glm-5.3 实测 8 并发
+            # 3 个秒 429、容量低于 5.2)→ 退避按 基数×2^attempt 递增(2/4/8/16s),让连撞的
+            # 等待跨过窗口。抖动防多线程同步重试。在 RuntimeError 之前(更 specific,免被吞)。
             last_cause = "rate_limited"  # typed,直接映射(不 classify)
             _LLM_LIMITER.on_throttled()
             _emit(
                 on_progress,
                 f"  {prefix} 撞限流({str(exc)[:80]}),并发降至 {_LLM_LIMITER.ceiling},退避重试…",
             )
-            time.sleep(_RATE_LIMIT_BACKOFF + random.uniform(0, 1))
+            time.sleep(_RATE_LIMIT_BACKOFF * (2 ** attempt) + random.uniform(0, 1))
             continue
         except RuntimeError as exc:
             last_cause = classify_error(str(exc)).root_cause

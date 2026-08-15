@@ -158,7 +158,8 @@ _MAX_BATCH_CONCURRENT = 6  # AIMD 探测起点(保守);真实边界由 on_thrott
 _LLM_LIMITER = AdaptiveConcurrencyLimiter(_MAX_BATCH_CONCURRENT)
 # 向后兼容别名:旧引用/测试按 _LLM_SEMAPHORE 名访问(limiter 兼容 acquire/release/__enter__)。
 _LLM_SEMAPHORE = _LLM_LIMITER
-# AIMD 退避:撞 429 后 sleep 这么久(+ random 抖动防多线程同步重试)再重试。
+# AIMD 退避:撞 429 后按 基数×2^attempt 指数递增 sleep(+ random 抖动防多线程同步重试)
+# 再重试——速率限制按分钟窗口计,固定短退避会在窗口内反复撞死(glm-5.3 实测容量低于 5.2)。
 _RATE_LIMIT_BACKOFF = 2.0
 
 
@@ -191,7 +192,7 @@ class _LLMRetryExhausted(Exception):
     """
 
 
-_LLM_WRAPPER_RETRY_MAX = 2        # 调用级重试上限(瞬态 429 / RuntimeError)
+_LLM_WRAPPER_RETRY_MAX = 4        # 调用级重试上限(瞬态 429 / RuntimeError;4 次×指数退避跨速率窗口)
 _LLM_WRAPPER_RETRY_DELAY = 3.0    # 线性退避基数(× 尝试序号)
 _LLM_WRAPPER_BACKOFF = _RATE_LIMIT_BACKOFF  # 429 退避基数(+ random 抖动),与 audit 同源
 
@@ -237,12 +238,14 @@ def call_llm_with_retry(
                     on_usage=on_usage, transport=transport,
                 )
         except _HttpRateLimited as exc:
+            # 429 指数退避(基数×2^attempt,镜像 audit _judge_batch_with_retry):速率窗口按
+            # 分钟计,固定短退避会在窗口内反复撞死;让连撞的等待跨过窗口。
             _LLM_LIMITER.on_throttled()
             _emit(
                 on_progress,
                 f"  撞限流({str(exc)[:80]}),并发降至 {_LLM_LIMITER.ceiling},退避重试…",
             )
-            time.sleep(_LLM_WRAPPER_BACKOFF + random.uniform(0, 1))
+            time.sleep(_LLM_WRAPPER_BACKOFF * (2 ** attempt) + random.uniform(0, 1))
             continue
         except RuntimeError as exc:
             _emit(on_progress, f"  LLM 调用失败: {str(exc)[:120]}")

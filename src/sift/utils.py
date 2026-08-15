@@ -52,13 +52,15 @@ class _HttpNoToolUse(Exception):
 # max_tokens 膨胀——8192 让每批 thinking 更长、整体慢;4096 下大部分批(thinking<4096)http
 # 一次过快,撑满没 tool_use 的少数批走 _HttpNoToolUse → cc 回退救回,整体优于 8192 全慢。
 # ⚠️ 上述"8192 更慢"的顾虑已随 thinking budget 硬帽解除(thinking 不再随 max_tokens 膨胀,
-# 增量全归正文)——见 _HTTP_THINKING_BUDGET。
+# 增量全归正文)——见 _HTTP_THINKING_MODE。
 _HTTP_MAX_TOKENS = 4096
 
-# thinking 子配额(GLM 把 max_tokens 当 thinking budget 锚,新模型大 prompt 会狂想撑满
-# 总额度 → 响应分钟级/拿不到 tool_use;实测 glm-5.3 判定批负载 86.6s 超时,给 budget 后
-# 8.2s)。协议约束 1024 ≤ budget < max_tokens;对判定/精筛类结构化任务够用,正文仍留
-# _HTTP_MAX_TOKENS - budget 的输出空间。
+# thinking 自适应重试的 budget 帽值:首尝试不带 thinking 字段(GLM 默认浅思考,大多数
+# 模型最快);截断且无 tool_use(= glm-5.3 型狂想行为,大 prompt 下 thinking 撑满总额度,
+# 实测 86.6s 超时)→ 重试才带 enabled+budget。⚠️ 不能静态启用:GLM 把 budget 当锚往满想,
+# glm-5.2 本来想得少,被锚到 1024 后大 prompt 批 ~10s→~30s(judge 段 40-60s→639s);
+# disabled 也不行(实测批均 118s + 畸形连环)。无静态最优 → 快路径起步、失败自适应。
+# 协议约束 1024 ≤ budget < max_tokens。
 _HTTP_THINKING_BUDGET = 1024
 
 # 截断(stop_reason=max_tokens 且无 tool_use)时的升档重试上限:一步到位给两倍余量
@@ -149,9 +151,11 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
     schema 模式一致,下游 parser 零改动)。
 
     - **529**(过载/身份限流)→ ``_HttpThrottled``(交 ``call_claude`` dispatcher 回退 cc)。
-    - **thinking 预算硬帽**:body 带 ``thinking.budget_tokens=1024`` —— GLM 把 max_tokens 当
-      thinking budget 锚,不给上限时大 prompt 下 thinking 狂想撑满总额度(glm-5.3 判定批实测
-      86.6s 超时 → 8.2s)。对用户配的模型版本透明,不锁版本。
+    - **thinking 自适应**:首尝试不带 thinking 字段(GLM 默认浅思考,大多数模型最快);
+      截断且无 tool_use(glm-5.3 型狂想,大 prompt thinking 撑满总额度)→ 带
+      ``enabled+budget_tokens`` 帽重试,仍截断升 ``_HTTP_RETRY_MAX_TOKENS`` 再试。
+      静态配置无最优(enabled+budget 锚满老模型 ~3× 慢、disabled 畸形更慢)→ 行为驱动,
+      对用户配的模型版本透明。
     - **截断升档重试**:stop_reason=max_tokens 且无 tool_use → 以 ``_HTTP_RETRY_MAX_TOKENS``
       (8192)重发一次再论;仍失败才 ``_HttpNoToolUse`` 回退 cc。非截断的主动不调工具不重试。
     - **没拿到 tool_use 块**(GLM 只回 thinking / thinking 撑满 ``_HTTP_MAX_TOKENS``)
@@ -178,15 +182,18 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
     }
     base = base.rstrip("/")
 
-    def _attempt(max_tokens: int) -> dict:
-        """单次 forced tool_use 调用;usage 即时回报、截断即时 warn(可观测)。"""
+    def _attempt(max_tokens: int, thinking: dict | None) -> dict:
+        """单次 forced tool_use 调用;usage 即时回报、截断即时 warn(可观测)。
+
+        ``thinking=None`` → 不带该字段(GLM 默认浅思考,大多数模型的最快路径);
+        显式控制(enabled+budget / disabled)只在失败重试时按需加 —— 三态实测
+        (5.2/5.3 大 prompt judge 批):不带字段 5.2 ~10s 最优、5.3 狂想截断;
+        enabled+1024 5.3 ~10s 最优、5.2 被锚满 ~30s;disabled 两边都差(畸形+更慢)。
+        无静态最优 → 快路径起步、失败自适应。
+        """
         body = {
             "model": _resolve_http_model(model),
             "max_tokens": max_tokens,
-            # thinking 子配额硬帽:GLM 把 max_tokens 当 thinking budget 锚,不给上限时
-            # 大 prompt 下 thinking 狂想撑满总额度(实测 glm-5.3 判定批 86.6s 超时;
-            # 给 1024 后 8.2s)。协议约束 1024 ≤ budget < max_tokens。
-            "thinking": {"type": "enabled", "budget_tokens": _HTTP_THINKING_BUDGET},
             "messages": [{"role": "user", "content": prompt}],
             "tools": [{
                 "name": "emit",
@@ -195,6 +202,8 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
             }],
             "tool_choice": {"type": "tool", "name": "emit"},
         }
+        if thinking is not None:
+            body["thinking"] = thinking
         req = urllib.request.Request(
             base + "/v1/messages", data=json.dumps(body).encode(),
             headers=headers, method="POST",
@@ -236,13 +245,17 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
             )
         return obj
 
-    obj = _attempt(_HTTP_MAX_TOKENS)
+    # 快路径起步(thinking 不带字段,大多数模型最快);截断且无 tool_use(= thinking
+    # 狂想型模型,如 glm-5.3)→ 带 budget 帽重试;仍截断 → 升 8192 再试;仍败才回退 cc。
+    # GLM 主动不调工具(end_turn 无 tool_use)与预算无关,任何重试无益 → 原样
+    # _HttpNoToolUse 回退 cc。
+    obj = _attempt(_HTTP_MAX_TOKENS, None)
     tool_items = _pick_tool_items(obj)
     if tool_items is None and obj.get("stop_reason") == "max_tokens":
-        # 截断才升档重试(thinking 撞了预算,预算问题加预算:8192 一步到位,上限本身
-        # 不计费)。GLM 主动不调工具(end_turn 无 tool_use)与预算无关,重试无益 →
-        # 不重试,原样走 _HttpNoToolUse 回退 cc。
-        obj = _attempt(_HTTP_RETRY_MAX_TOKENS)
+        obj = _attempt(_HTTP_MAX_TOKENS, {"type": "enabled", "budget_tokens": _HTTP_THINKING_BUDGET})
+        tool_items = _pick_tool_items(obj)
+    if tool_items is None and obj.get("stop_reason") == "max_tokens":
+        obj = _attempt(_HTTP_RETRY_MAX_TOKENS, {"type": "enabled", "budget_tokens": _HTTP_THINKING_BUDGET})
         tool_items = _pick_tool_items(obj)
     # 没拿到 tool_use(thinking 撑满没空间产 / GLM 主动 end_turn 不调)= forced 真失败
     # → raise _HttpNoToolUse 交 dispatcher 回退 cc(cc 多轮催出 + 降级文本,绕过 http 单次 forced 死结)。
