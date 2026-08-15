@@ -528,6 +528,90 @@ def test_http_call_529_raises_throttled(monkeypatch):
         u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
 
 
+def test_http_call_sends_thinking_budget(monkeypatch):
+    """body 带 thinking 子配额硬帽:GLM 把 max_tokens 当 thinking budget 锚,
+    5.3 大 prompt 会狂想撑满总额度 → 显式 budget 锁死 thinking 上限。"""
+    import json as _j
+    import sift.utils as u
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = _j.loads(req.data.decode())
+        return _FakeResp({
+            "content": [{"type": "tool_use", "input": {"items": []}}],
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        })
+
+    monkeypatch.setattr(u.urllib.request, "urlopen", fake_urlopen)
+    _http_env(monkeypatch)
+    u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+    assert captured["body"]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+
+
+def test_http_call_truncated_no_tooluse_retries_larger(monkeypatch):
+    """截断(stop_reason=max_tokens)且无 tool_use → 自动 8192 升档重试一次,成功即返回。"""
+    import json as _j
+    import sift.utils as u
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(_j.loads(req.data.decode())["max_tokens"])
+        if len(calls) == 1:
+            return _FakeResp({
+                "content": [{"type": "thinking", "thinking": "x"}],
+                "stop_reason": "max_tokens", "usage": {"input_tokens": 1, "output_tokens": 4096},
+            })
+        return _FakeResp({
+            "content": [{"type": "tool_use", "input": {"items": [{"i": 1}]}}],
+            "usage": {"input_tokens": 1, "output_tokens": 9},
+        })
+
+    monkeypatch.setattr(u.urllib.request, "urlopen", fake_urlopen)
+    _http_env(monkeypatch)
+    out = u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+    assert _j.loads(out) == [{"i": 1}]
+    assert calls == [u._HTTP_MAX_TOKENS, 8192]
+
+
+def test_http_call_truncated_retry_exhausted_raises_notooluse(monkeypatch):
+    """两档都截断且无 tool_use → 仍 _HttpNoToolUse(交 dispatcher 回退 cc)。"""
+    import json as _j
+    import sift.utils as u
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(_j.loads(req.data.decode())["max_tokens"])
+        return _FakeResp({
+            "content": [{"type": "thinking", "thinking": "x"}],
+            "stop_reason": "max_tokens", "usage": {"input_tokens": 1, "output_tokens": 4096},
+        })
+
+    monkeypatch.setattr(u.urllib.request, "urlopen", fake_urlopen)
+    _http_env(monkeypatch)
+    with pytest.raises(u._HttpNoToolUse):
+        u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+    assert calls == [u._HTTP_MAX_TOKENS, 8192]
+
+
+def test_http_call_endturn_no_tooluse_no_retry(monkeypatch):
+    """非截断的没 tool_use(GLM 主动不调)→ 原样 _HttpNoToolUse,不做升档重试(预算无关)。"""
+    import sift.utils as u
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(1)
+        return _FakeResp({
+            "content": [{"type": "text", "text": "no"}],
+            "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1},
+        })
+
+    monkeypatch.setattr(u.urllib.request, "urlopen", fake_urlopen)
+    _http_env(monkeypatch)
+    with pytest.raises(u._HttpNoToolUse):
+        u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+    assert calls == [1]
+
+
 def test_http_call_4xx_raises_runtime_loud(monkeypatch):
     """4xx(配置错如模型名)→ RuntimeError(暴露、走重试/兜底),不回退、不 _HttpThrottled。"""
     import sift.utils as u

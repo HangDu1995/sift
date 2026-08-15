@@ -51,7 +51,20 @@ class _HttpNoToolUse(Exception):
 # 不探 GLM 上限、不 baked 模型数)。曾试 8192 治 thinking 撑满,但实测 GLM 服务端 thinking 随
 # max_tokens 膨胀——8192 让每批 thinking 更长、整体慢;4096 下大部分批(thinking<4096)http
 # 一次过快,撑满没 tool_use 的少数批走 _HttpNoToolUse → cc 回退救回,整体优于 8192 全慢。
+# ⚠️ 上述"8192 更慢"的顾虑已随 thinking budget 硬帽解除(thinking 不再随 max_tokens 膨胀,
+# 增量全归正文)——见 _HTTP_THINKING_BUDGET。
 _HTTP_MAX_TOKENS = 4096
+
+# thinking 子配额(GLM 把 max_tokens 当 thinking budget 锚,新模型大 prompt 会狂想撑满
+# 总额度 → 响应分钟级/拿不到 tool_use;实测 glm-5.3 判定批负载 86.6s 超时,给 budget 后
+# 8.2s)。协议约束 1024 ≤ budget < max_tokens;对判定/精筛类结构化任务够用,正文仍留
+# _HTTP_MAX_TOKENS - budget 的输出空间。
+_HTTP_THINKING_BUDGET = 1024
+
+# 截断(stop_reason=max_tokens 且无 tool_use)时的升档重试上限:一步到位给两倍余量
+# (重试只有一发,给 6144 这类小增量可能仍不够又浪费掉机会);上限本身不计费,按实际
+# 生成 token 付费。再截断才回退 cc。
+_HTTP_RETRY_MAX_TOKENS = 8192
 
 
 _CLAUDE_SETTINGS_PATH = os.path.expanduser("~/.claude/settings.json")
@@ -117,6 +130,15 @@ def _resolve_http_model(model: str | None) -> str:
     return model[:i] if i != -1 else model
 
 
+def _pick_tool_items(obj: dict):
+    """从响应 content 抠 tool_use.input 解包(forced tool_use 应恒有;缺失返 None)。"""
+    for b in obj.get("content", []):
+        if b.get("type") == "tool_use":
+            inp = b.get("input", {})
+            return inp.get("items", inp)   # array schema 包 {"items":[...]} → 解开
+    return None
+
+
 def _llm_http_call(prompt, model, timeout, schema, on_usage):
     """裸 HTTP 直连智谱 Anthropic 协议 endpoint(forced tool_use 保 schema)。
 
@@ -127,6 +149,11 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
     schema 模式一致,下游 parser 零改动)。
 
     - **529**(过载/身份限流)→ ``_HttpThrottled``(交 ``call_claude`` dispatcher 回退 cc)。
+    - **thinking 预算硬帽**:body 带 ``thinking.budget_tokens=1024`` —— GLM 把 max_tokens 当
+      thinking budget 锚,不给上限时大 prompt 下 thinking 狂想撑满总额度(glm-5.3 判定批实测
+      86.6s 超时 → 8.2s)。对用户配的模型版本透明,不锁版本。
+    - **截断升档重试**:stop_reason=max_tokens 且无 tool_use → 以 ``_HTTP_RETRY_MAX_TOKENS``
+      (8192)重发一次再论;仍失败才 ``_HttpNoToolUse`` 回退 cc。非截断的主动不调工具不重试。
     - **没拿到 tool_use 块**(GLM 只回 thinking / thinking 撑满 ``_HTTP_MAX_TOKENS``)
       → ``_HttpNoToolUse``(交 dispatcher 回退 cc:cc 多轮 tool_use 循环催出 + 降级文本兜底)。
     - **其它 HTTP 错**(4xx 配置)/ **传输错**(timeout / URLError)→ ``RuntimeError``
@@ -134,17 +161,6 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
     - ``on_usage``:回 ``{input_tokens, output_tokens, …, total_cost_usd:0}``(裸 API 不返
       cost,补 0 对齐 ``call_claude`` 的 payload 形状)。
     """
-    body = {
-        "model": _resolve_http_model(model),
-        "max_tokens": _HTTP_MAX_TOKENS,
-        "messages": [{"role": "user", "content": prompt}],
-        "tools": [{
-            "name": "emit",
-            "description": "emit the JSON result",
-            "input_schema": schema,
-        }],
-        "tool_choice": {"type": "tool", "name": "emit"},
-    }
     token = _anthropic_env("ANTHROPIC_AUTH_TOKEN")
     base = _anthropic_env("ANTHROPIC_BASE_URL")
     if not token or not base:
@@ -161,52 +177,73 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
         "User-Agent": "claude-code/2.1.220",
     }
     base = base.rstrip("/")
-    req = urllib.request.Request(
-        base + "/v1/messages", data=json.dumps(body).encode(),
-        headers=headers, method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            obj = json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        if e.code == 529:
-            raise _HttpThrottled(
-                f"裸 HTTP 529(后端过载/身份限流): {e.read().decode()[:200]}"
-            )
-        if e.code == 429:
-            raise _HttpRateLimited(
-                f"裸 HTTP 429(账户速率/并发限制): {e.read().decode()[:200]}"
-            )
-        raise RuntimeError(f"裸 HTTP {e.code}: {e.read().decode()[:500]}")
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        raise RuntimeError(f"裸 HTTP 传输失败: {e!r}")
-    # 先回 usage(无论成败,产出了 token 就该计;truncated 标记截断留存)。
-    truncated = obj.get("stop_reason") == "max_tokens"
-    if on_usage is not None:
-        usage = obj.get("usage")
-        if isinstance(usage, dict):
-            payload = dict(usage)
-            payload.setdefault("total_cost_usd", 0.0)
-            if truncated:
-                payload["truncated"] = True
-            on_usage(payload)
-    # 抠 tool_use.input(forced tool_use 应恒有;缺失 = 异常)。
-    tool_items = None
-    for b in obj.get("content", []):
-        if b.get("type") == "tool_use":
-            inp = b.get("input", {})
-            tool_items = inp.get("items", inp)   # array schema 包 {"items":[...]} → 解开
-            break
-    # 截断(stop_reason=max_tokens):thinking 顶到上限 → tool_use 可能不完整(有但畸形/缺字段)。
-    # **有 tool_use 就用**(即使截断;下游 parser 判完整性,不完整则 parse_failed 重试),
-    # 不 cc 回退——曾用"截断就 cc 回退"但 GLM 频繁顶到 max_tokens 致大批请求走 cc(4-6× 慢)。
-    # warn 进 stderr(可观测);on_usage payload 带 truncated 留存(accumulator 按 _KEYS 取,不受影响)。
-    if truncated:
-        warnings.warn(
-            "LLM 响应被截断(stop_reason=max_tokens, max_tokens 上限 "
-            f"{_HTTP_MAX_TOKENS}):thinking 顶到上限,tool_use 可能不完整 → 下游 parser "
-            "可能 parse_failed。反复出现可减小单批(audit _MAX_LLM_IN_BATCH)。"
+
+    def _attempt(max_tokens: int) -> dict:
+        """单次 forced tool_use 调用;usage 即时回报、截断即时 warn(可观测)。"""
+        body = {
+            "model": _resolve_http_model(model),
+            "max_tokens": max_tokens,
+            # thinking 子配额硬帽:GLM 把 max_tokens 当 thinking budget 锚,不给上限时
+            # 大 prompt 下 thinking 狂想撑满总额度(实测 glm-5.3 判定批 86.6s 超时;
+            # 给 1024 后 8.2s)。协议约束 1024 ≤ budget < max_tokens。
+            "thinking": {"type": "enabled", "budget_tokens": _HTTP_THINKING_BUDGET},
+            "messages": [{"role": "user", "content": prompt}],
+            "tools": [{
+                "name": "emit",
+                "description": "emit the JSON result",
+                "input_schema": schema,
+            }],
+            "tool_choice": {"type": "tool", "name": "emit"},
+        }
+        req = urllib.request.Request(
+            base + "/v1/messages", data=json.dumps(body).encode(),
+            headers=headers, method="POST",
         )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                obj = json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 529:
+                raise _HttpThrottled(
+                    f"裸 HTTP 529(后端过载/身份限流): {e.read().decode()[:200]}"
+                )
+            if e.code == 429:
+                raise _HttpRateLimited(
+                    f"裸 HTTP 429(账户速率/并发限制): {e.read().decode()[:200]}"
+                )
+            raise RuntimeError(f"裸 HTTP {e.code}: {e.read().decode()[:500]}")
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            raise RuntimeError(f"裸 HTTP 传输失败: {e!r}")
+        # 先回 usage(无论成败,产出了 token 就该计;truncated 标记截断留存)。
+        truncated = obj.get("stop_reason") == "max_tokens"
+        if on_usage is not None:
+            usage = obj.get("usage")
+            if isinstance(usage, dict):
+                payload = dict(usage)
+                payload.setdefault("total_cost_usd", 0.0)
+                if truncated:
+                    payload["truncated"] = True
+                on_usage(payload)
+        # 截断(stop_reason=max_tokens):thinking 顶到上限 → tool_use 可能不完整(有但畸形/缺字段)。
+        # **有 tool_use 就用**(即使截断;下游 parser 判完整性,不完整则 parse_failed 重试),
+        # 不 cc 回退——曾用"截断就 cc 回退"但 GLM 频繁顶到 max_tokens 致大批请求走 cc(4-6× 慢)。
+        # warn 进 stderr(可观测);on_usage payload 带 truncated 留存(accumulator 按 _KEYS 取,不受影响)。
+        if truncated:
+            warnings.warn(
+                "LLM 响应被截断(stop_reason=max_tokens, max_tokens 上限 "
+                f"{max_tokens}):thinking 顶到上限,tool_use 可能不完整 → 下游 parser "
+                "可能 parse_failed。反复出现可减小单批(audit _MAX_LLM_IN_BATCH)。"
+            )
+        return obj
+
+    obj = _attempt(_HTTP_MAX_TOKENS)
+    tool_items = _pick_tool_items(obj)
+    if tool_items is None and obj.get("stop_reason") == "max_tokens":
+        # 截断才升档重试(thinking 撞了预算,预算问题加预算:8192 一步到位,上限本身
+        # 不计费)。GLM 主动不调工具(end_turn 无 tool_use)与预算无关,重试无益 →
+        # 不重试,原样走 _HttpNoToolUse 回退 cc。
+        obj = _attempt(_HTTP_RETRY_MAX_TOKENS)
+        tool_items = _pick_tool_items(obj)
     # 没拿到 tool_use(thinking 撑满没空间产 / GLM 主动 end_turn 不调)= forced 真失败
     # → raise _HttpNoToolUse 交 dispatcher 回退 cc(cc 多轮催出 + 降级文本,绕过 http 单次 forced 死结)。
     if tool_items is None:
