@@ -159,6 +159,39 @@ class TestMatchedNoLlm:
         assert findings[0].evidence == "trace 中读取了 design.md"
         assert findings[0].source == "REFERENCE_USAGE"
 
+    def test_section_passthrough_source_section_wins(self, monkeypatch) -> None:
+        """finding.section 透传:source_section(真标题回填)优先,缺省回退 section。
+
+        覆盖三条构造路径:命中 PASS 工厂(_make_match_pass_finding)、LLM 失败
+        UNRESOLVED 工厂(_make_unresolved_finding)——声明分组标题在一切 verdict 路径
+        上都跟指令走(覆盖视图分组键)。
+        """
+        monkeypatch.setattr(
+            "sift.audit.auditor.call_claude", lambda *a, **k: pytest.fail("不该调 LLM")
+        )
+        auditor = TranscriptAuditor()
+        trace = [_tc("Bash", "echo hi")]
+
+        # 回退路径:source_section 空 → 用 section 伪节名/真标题
+        plain = _tool_inst(tool_name="Bash")
+        f_plain = auditor._judge_conditional([plain], trace, "某场景", "t1.jsonl")[0]
+        assert f_plain.section == "Tools"
+
+        # 回填路径:source_section 有值 → 覆盖 section
+        backfilled = _tool_inst(tool_name="Bash")
+        backfilled.source_section = "安全红线"
+        f_back = auditor._judge_conditional([backfilled], trace, "某场景", "t1.jsonl")[0]
+        assert f_back.section == "安全红线"
+
+        # UNRESOLVED 工厂同样透传(不命中 trace + LLM 抛错 → 没判成)
+        def boom(*a, **k):
+            raise RuntimeError("LLM 挂了")
+
+        monkeypatch.setattr("sift.audit.auditor.call_claude", boom)
+        f_unres = auditor._judge_conditional([backfilled], [], "某场景", "t1.jsonl")[0]
+        assert f_unres.verdict == AuditVerdict.UNRESOLVED
+        assert f_unres.section == "安全红线"
+
 
 class TestUnmatchedLlm:
     def test_applicable_true_is_fail(self, monkeypatch) -> None:
@@ -1152,6 +1185,21 @@ class TestAuditAggregate:
         non_derived = [f for f in report.findings if not f.derived_from_transcript]
         assert len(non_derived) == 2
         assert all(f.verdict == AuditVerdict.NA for f in non_derived)
+
+        # 声明分组标题透传:body "use Bash" 无标题 → 标题级 extractor 的 section="Root"
+        bash_rows = [r for r in report.by_instruction if "Bash" in r.instruction_text]
+        assert len(bash_rows) == 1
+        assert bash_rows[0].section == "Root"
+        assert all(f.section == "Root" for f in non_derived)
+
+        # 声明覆盖视图:唯一声明指令(use Bash)两段都 N/A → uncovered;derived
+        # (读取 foo.md)不计分母 → total=1。分组 "Root"。
+        cov = report.coverage
+        assert cov.total == 1
+        assert (cov.covered, cov.uncovered, cov.unknown) == (0, 1, 0)
+        assert cov.coverage_rate == 0.0
+        assert [s.section for s in cov.sections] == ["Root"]
+        assert cov.sections[0].instructions[0].instruction_text.startswith("use")
 
     def test_audit_populates_token_usage_from_call_claude(
         self, tmp_path, monkeypatch

@@ -119,6 +119,13 @@ class InstructionCheck(BaseModel):
     # **判定不读**:judge 仍吃 instruction_text。缺省空(关 --headline / 未生成 / 旧产物)→
     # 显示回退 source_excerpt → instruction_text。
     headline: str = ""
+    # 指令 match 在声明原文里所处的**真实 markdown 标题**。body 级 extractor(约束/防编造/
+    # 参考文件,跨章节扫描)的 ``section`` 是伪节名("Constraint" 等),真实归属标题由此字段
+    # 回填;标题级 extractor(HEADING_STEP / TOOL_REQUIREMENT / OUTPUT_FORMAT)的 ``section``
+    # 已是真标题,本字段留空。**判定不读、缓存键不含它**(refine/headline 键只吃 source|section|
+    # instruction_text[|source_excerpt],本字段缺省不影响命中);显示层 finding.section =
+    # source_section or section。缺省空(旧 refine 缓存条目 / 旧 JSON)→ 回退伪节名。
+    source_section: str = ""
 
 
 class HardViolation(BaseModel):

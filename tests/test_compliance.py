@@ -957,3 +957,84 @@ class TestExtractFirstBalancedPublic:
     def test_alias_still_works(self):
         """旧调用点走别名,行为不变。"""
         assert _extract_first_balanced("[1, 2, 3]") == "[1, 2, 3]"
+
+
+class TestSourceSection:
+    """source_section:body 级 extractor(跨章节扫描)在 match 偏移处回填真实标题。
+
+    `section` 伪节名("Constraint" 等)保持不动——它在 refine/headline 缓存键里,改值
+    会全量失效缓存;source_section 是纯增字段,判定不读、缓存键不含。标题级 extractor
+    (HEADING_STEP/TOOL_REQUIREMENT/OUTPUT_FORMAT)的 section 已是真标题,source_section
+    留空(finding 侧取 source_section or section)。
+    """
+
+    def test_constraint_backfills_real_heading(self):
+        ext = InstructionExtractor()
+        body = "## 数据规范\n\n禁止编造任何数值,所有数据必须来自实测。\n"
+        constraints = [c for c in ext.extract(body) if c.source == InstructionSource.CONSTRAINT]
+        assert constraints
+        for c in constraints:
+            assert c.source_section == "数据规范"
+            assert c.section == "Constraint"  # 缓存键字段不动(双断言护缓存)
+
+    def test_constraint_before_first_heading_is_root(self):
+        ext = InstructionExtractor()
+        body = "禁止编造任何数值,所有数据必须来自实测。\n\n## 规范\n\n其它内容。\n"
+        constraints = [c for c in ext.extract(body) if c.source == InstructionSource.CONSTRAINT]
+        assert constraints
+        assert all(c.source_section == "Root" for c in constraints)
+
+    def test_anti_fabrication_under_chinese_heading(self):
+        ext = InstructionExtractor()
+        body = "## 诚信要求\n\nNEVER fabricate kernel parameters or test data.\n"
+        afs = [c for c in ext.extract(body) if c.source == InstructionSource.ANTI_FABRICATION]
+        assert afs
+        for c in afs:
+            assert c.source_section == "诚信要求"
+            assert c.section == "Anti-Fabrication"
+
+    def test_reference_usage_first_mention_heading(self):
+        """同一路径在两个标题下出现 → 归属首次提及处的标题(finditer 记首现偏移)。"""
+        ext = InstructionExtractor()
+        body = (
+            "## 设计\n\n先读 references/design.md。\n\n"
+            "## 校验\n\n再对照 references/design.md,并跑 scripts/run.sh。\n"
+        )
+        refs = [c for c in ext.extract(body) if c.source == InstructionSource.REFERENCE_USAGE]
+        design = next(c for c in refs if c.params.get("script_path") == "references/design.md")
+        assert design.source_section == "设计"
+        run = next(c for c in refs if c.params.get("script_path") == "scripts/run.sh")
+        assert run.source_section == "校验"
+
+    def test_heading_level_extractors_keep_source_section_empty(self):
+        """标题级 extractor 的 section 已是真标题 → source_section 恒空(守恒不变量,
+        也是旧 refine 缓存条目等价性的保证:它们的指令不因新字段而变)。"""
+        ext = InstructionExtractor()
+        body = (
+            "## Process\n\n1. Run the validation script\n2. Verify the output\n\n"
+            "Use bash to execute scripts/validate.py\n\n"
+            "## 输出格式\n\n结果写成这样:\n\n```json\n{\"code\": \"E-001\"}\n```\n"
+        )
+        checks = ext.extract(body)
+        hs = [c for c in checks if c.source == InstructionSource.HEADING_STEP]
+        tr = [c for c in checks if c.source == InstructionSource.TOOL_REQUIREMENT]
+        of = [c for c in checks if c.source == InstructionSource.OUTPUT_FORMAT]
+        assert hs and tr and of  # 三类都真抽到了(否则断言空转)
+        for c in hs + tr + of:
+            assert c.source_section == ""
+            assert c.section in ("Process", "输出格式")
+
+    def test_heading_at_fence_naive_pinned(self):
+        """钉死 fence-naive 限制:代码块内的 # 行也当标题(与 _split_sections 同约定,
+        两处归属一致比 fence-aware 更重要——回归保护,不是 bug)。"""
+        from sift.compliance.extractor import _heading_at, _heading_map
+
+        body = "## A\n\n```\n# comment inside fence\n```\n\n禁止编造任何数值数据。\n"
+        headings = _heading_map(body)
+        # fence 内 # 行被当标题(限制如实显形)
+        assert ("comment inside fence",) in [(h,) for _, h in headings]
+        # fence 后的约束归到 fence 内"标题"名下(与 _split_sections 同一套归属)
+        ext = InstructionExtractor()
+        constraints = [c for c in ext.extract(body) if c.source == InstructionSource.CONSTRAINT]
+        assert constraints
+        assert all(c.source_section == "comment inside fence" for c in constraints)

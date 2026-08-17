@@ -1,8 +1,10 @@
 """aggregate: 多 transcript 对账的指令级聚合视图。
 
 audit 的 findings 默认平铺(每 transcript × 每指令 一条),多 transcript 时是一堆散点,
-看不出"哪条指令系统性被违反"。本模块把 findings 按 instruction_text 跨 transcript 聚合,
-算每条指令的 pass/fail/na 分布 + fail_rate,按 fail_rate 降序——让系统性违规一眼可见。
+看不出"哪条指令系统性被违反"。本模块把 findings 按 instruction_text 跨 transcript 聚合:
+``aggregate_by_instruction`` 算每条指令的 pass/fail/na 分布 + fail_rate(按 fail_rate
+降序——系统性违规一眼可见);``aggregate_coverage`` 算声明覆盖视图(covered/uncovered/
+unknown 三态,按声明分组——本次对账的证据面铺了声明的多大比例)。
 
 设计决策:
 - **本层不归一化**:按 instruction_text 如实分组。**同文 exact 重复**(同一句被抽成
@@ -19,7 +21,10 @@ from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
     AuditVerdict,
+    CoverageSummary,
     InstructionAggregate,
+    InstructionCoverage,
+    SectionCoverage,
 )
 
 
@@ -45,14 +50,16 @@ def aggregate_by_instruction(
 
     groups: dict[str, dict] = {}
     for f in findings:
-        # setdefault 取首次出现的 source/category —— 同一 instruction_text 跨 transcript
-        # 来自同一 SKILL.md 抽取(含 derived),source/category 一致,取首条即可。
+        # setdefault 取首次出现的 source/category/section —— 同一 instruction_text 跨
+        # transcript 来自同一 SKILL.md 抽取(含 derived),取首条即可(section 同文同节,
+        # dedup 后跨节合并的极端情形也 first-wins,与 source_excerpt 同约定)。
         g = groups.setdefault(
             f.instruction_text,
             {
                 "instruction_text": f.instruction_text,
                 "source_excerpt": f.source_excerpt,
                 "headline": f.headline,
+                "section": f.section or "",
                 "source": f.source,
                 "category": f.category,
                 "pass": 0,
@@ -89,6 +96,7 @@ def aggregate_by_instruction(
                 instruction_text=g["instruction_text"],
                 source_excerpt=g["source_excerpt"],
                 headline=g["headline"],
+                section=g["section"],
                 source=g["source"],
                 category=g["category"],
                 pass_count=g["pass"],
@@ -107,3 +115,113 @@ def aggregate_by_instruction(
 
     rows.sort(key=lambda r: (-r.fail_rate, -r.fail_count, r.instruction_text))
     return rows
+
+
+def aggregate_coverage(findings: list[AuditFinding]) -> CoverageSummary:
+    """声明覆盖视图:按声明分组统计指令被 transcript(s) 触达多少(纯函数、不调 LLM)。
+
+    与 ``aggregate_by_instruction`` 互为姊妹(同按 instruction_text 分键、同 verdict 计数),
+    回答的问题不同:那个查"触达的守没守规"(fail_rate),本函数查"触达了多少"
+    (coverage_rate)——本次对账证据面铺了声明的多大比例、哪些段从没被锻炼到。
+
+    分母 = 声明来的去重指令;``derived_from_transcript=True`` 不计(反推指令不是声明
+    规则、构造上偏 PASS——它存在正因为 trace 做了该动作,计入会虚增覆盖率)。
+    状态判定(优先级,与 InstructionCoverage.status 文档一致):
+    - covered:任一 transcript PASS 或 FAIL(会话碰过这条规则);
+    - uncovered:全部 transcript 都 N/A(规则存在、场景从未触发);
+    - unknown:其余(N/A+UNRESOLVED 混合 / 纯 UNRESOLVED / 纯 INDETERMINATE)。
+    coverage_rate = covered/total,unknown 计入分母、单列——宁低估不虚高。
+
+    排序:分组按 (-uncovered, -total, section)(未覆盖多的段排前,一眼看到证据缺口);
+    组内 uncovered → unknown → covered(covered 行保留在模型里供下游,模板只渲染非
+    covered),组内再按 instruction_text 升序。空输入 → 全 0 的 CoverageSummary。
+    """
+    groups: dict[str, dict] = {}
+    for f in findings:
+        if f.derived_from_transcript:
+            continue
+        g = groups.setdefault(
+            f.instruction_text,
+            {
+                "instruction_text": f.instruction_text,
+                "source_excerpt": f.source_excerpt,
+                "headline": f.headline,
+                "section": f.section or "",
+                "source": f.source,
+                "category": f.category,
+                "pass": 0,
+                "fail": 0,
+                "na": 0,
+                "unresolved": 0,
+                "indeterminate": 0,
+                "seqs": [],
+            },
+        )
+        g["seqs"].append(f.seq)
+        if f.verdict == AuditVerdict.PASS:
+            g["pass"] += 1
+        elif f.verdict == AuditVerdict.FAIL:
+            g["fail"] += 1
+        elif f.verdict == AuditVerdict.UNRESOLVED:
+            g["unresolved"] += 1
+        elif f.verdict == AuditVerdict.INDETERMINATE:
+            g["indeterminate"] += 1
+        else:  # AuditVerdict.NA(不适用)
+            g["na"] += 1
+
+    sections: dict[str, dict] = {}
+    for g in groups.values():
+        total = g["pass"] + g["fail"] + g["na"] + g["unresolved"] + g["indeterminate"]
+        if g["pass"] or g["fail"]:
+            status = "covered"
+        elif g["na"] and not (g["unresolved"] or g["indeterminate"]):
+            status = "uncovered"
+        else:
+            status = "unknown"
+        sec = sections.setdefault(
+            g["section"],
+            {"section": g["section"], "covered": 0, "uncovered": 0, "unknown": 0, "instructions": []},
+        )
+        sec[status] += 1
+        sec["instructions"].append(
+            InstructionCoverage(
+                instruction_text=g["instruction_text"],
+                source_excerpt=g["source_excerpt"],
+                headline=g["headline"],
+                section=g["section"],
+                source=g["source"],
+                category=g["category"],
+                status=status,
+                pass_count=g["pass"],
+                fail_count=g["fail"],
+                na_count=g["na"],
+                unresolved_count=g["unresolved"],
+                indeterminate_count=g["indeterminate"],
+                total=total,
+                seqs=sorted(set(g["seqs"])),
+            )
+        )
+
+    _ORDER = {"uncovered": 0, "unknown": 1, "covered": 2}
+    summary = CoverageSummary()
+    for sec in sections.values():
+        sec_total = len(sec["instructions"])
+        instructions = sorted(sec["instructions"], key=lambda i: (_ORDER[i.status], i.instruction_text))
+        summary.sections.append(
+            SectionCoverage(
+                section=sec["section"],
+                total=sec_total,
+                covered=sec["covered"],
+                uncovered=sec["uncovered"],
+                unknown=sec["unknown"],
+                coverage_rate=sec["covered"] / sec_total if sec_total else 0.0,
+                instructions=instructions,
+            )
+        )
+        summary.total += sec_total
+        summary.covered += sec["covered"]
+        summary.uncovered += sec["uncovered"]
+        summary.unknown += sec["unknown"]
+    summary.sections.sort(key=lambda s: (-s.uncovered, -s.total, s.section))
+    summary.coverage_rate = summary.covered / summary.total if summary.total else 0.0
+    return summary

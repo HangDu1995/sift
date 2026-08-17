@@ -286,3 +286,85 @@ class TestAuditReport:
         }
         restored = AuditReport.model_validate_json(json.dumps(legacy))
         assert restored.token_usage == {}
+
+
+class TestSectionDefaults:
+    """section / coverage 新字段的缺省与旧 JSON 兼容(缺字段加载不炸)。"""
+
+    def test_finding_section_defaults_empty(self):
+        f = AuditFinding(
+            instruction_text="t", source="CONSTRAINT", verdict=AuditVerdict.PASS,
+            method=AuditMethod.LLM, category=AuditCategory.PROHIBITION,
+            evidence="e", transcript="t.jsonl",
+        )
+        assert f.section == ""
+
+    def test_legacy_finding_without_section_loads_as_empty(self):
+        legacy = {
+            "instruction_text": "t", "source": "CONSTRAINT", "verdict": "PASS",
+            "method": "LLM", "category": "prohibition",
+            "evidence": "e", "transcript": "t.jsonl",
+        }
+        assert AuditFinding.model_validate(legacy).section == ""
+
+    def test_legacy_aggregate_row_without_section_loads(self):
+        from sift.models.audit_models import InstructionAggregate
+
+        row = InstructionAggregate.model_validate({
+            "instruction_text": "t", "source": "CONSTRAINT", "category": "prohibition",
+            "pass_count": 1, "fail_count": 0, "na_count": 0, "total": 1,
+            "fail_rate": 0.0, "fail_in_transcripts": [],
+        })
+        assert row.section == ""
+
+
+class TestCoverageModels:
+    """CoverageSummary / SectionCoverage / InstructionCoverage:默认、旧 JSON 兼容、roundtrip。"""
+
+    def test_report_coverage_defaults_empty(self):
+        r = AuditReport(
+            skill_name="s", transcripts=["t.jsonl"],
+            summary={"total": 0, "pass": 0, "fail": 0, "na": 0},
+            findings=[],
+        )
+        assert r.coverage.total == 0
+        assert r.coverage.sections == []
+        assert r.coverage.coverage_rate == 0.0
+
+    def test_legacy_report_without_coverage_loads(self):
+        legacy = {
+            "skill_name": "s", "transcripts": ["t.jsonl"],
+            "summary": {"total": 1, "pass": 1, "fail": 0, "na": 0},
+            "findings": [],
+        }
+        restored = AuditReport.model_validate(legacy)
+        assert restored.coverage.total == 0
+
+    def test_coverage_models_roundtrip(self):
+        from sift.models.audit_models import CoverageSummary, InstructionCoverage, SectionCoverage
+
+        cov = CoverageSummary(
+            total=2, covered=1, uncovered=1, unknown=0, coverage_rate=0.5,
+            sections=[
+                SectionCoverage(
+                    section="规则", total=2, covered=1, uncovered=1, unknown=0,
+                    coverage_rate=0.5,
+                    instructions=[
+                        InstructionCoverage(
+                            instruction_text="A", source="CONSTRAINT",
+                            category=AuditCategory.PROHIBITION, section="规则",
+                            status="covered", pass_count=1, total=1, seqs=[1],
+                        ),
+                        InstructionCoverage(
+                            instruction_text="B", source="CONSTRAINT",
+                            category=AuditCategory.PROHIBITION, section="规则",
+                            status="uncovered", na_count=1, total=1, seqs=[2],
+                        ),
+                    ],
+                )
+            ],
+        )
+        restored = CoverageSummary.model_validate_json(cov.model_dump_json())
+        assert restored.sections[0].instructions[0].status == "covered"
+        assert restored.sections[0].instructions[1].seqs == [2]
+        assert restored.coverage_rate == 0.5

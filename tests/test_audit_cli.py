@@ -43,6 +43,8 @@ def _transcript(tmp_path: Path, name: str = "t.jsonl") -> Path:
 
 
 def _fake_report() -> AuditReport:
+    from sift.models.audit_models import CoverageSummary
+
     return AuditReport(
         skill_name="myskill",
         transcripts=["t.jsonl"],
@@ -77,6 +79,7 @@ def _fake_report() -> AuditReport:
             ),
         ],
         warnings=[],
+        coverage=CoverageSummary(total=3, covered=1, uncovered=2, unknown=0, coverage_rate=1 / 3),
     )
 
 
@@ -153,6 +156,13 @@ def test_audit_writes_report_and_prints_summary(monkeypatch, tmp_path):
     assert "pass=1" in r.output
     assert "fail=1" in r.output
     assert "na=1" in r.output
+
+    # 声明覆盖一行(covered/total + 未覆盖/未知);coverage 也落盘进 JSON
+    assert "声明覆盖" in r.output
+    assert "1/3" in r.output
+    assert "未覆盖 2" in r.output
+    assert data["coverage"]["covered"] == 1
+    assert data["coverage"]["uncovered"] == 2
 
     # TranscriptAuditor 被正确接入:skill_name + body + transcript 透传
     assert len(fake.calls) == 1

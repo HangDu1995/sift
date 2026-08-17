@@ -394,6 +394,17 @@ def audit(
         f"na=[yellow]{n_na}[/yellow]{src_tail}"
     )
 
+    # 声明覆盖一行(covered=任一 transcript PASS/FAIL,uncovered=全 N/A,unknown=说不清;
+    # 反推指令不计):本批对账的证据面铺了声明的多大比例——低覆盖时上面那行 fail 数只
+    # 代表被触达的子集。total=0(空声明/全 derived)不显。
+    cov = report.coverage
+    if cov.total:
+        console.print(
+            f"声明覆盖: [bold]{cov.covered}/{cov.total}[/bold] "
+            f"({cov.coverage_rate * 100:.0f}%)  "
+            f"[dim]未覆盖 {cov.uncovered} · 未知 {cov.unknown}[/dim]"
+        )
+
     tu = report.token_usage
     if tu.get("calls"):
         cache_read = tu.get("cache_read_input_tokens", 0)

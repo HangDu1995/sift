@@ -84,19 +84,51 @@ def _clean_md(s: str) -> str:
     return s.strip()
 
 
+def _heading_map(body: str) -> list[tuple[int, str]]:
+    """``[(行起始 offset, 标题文本)]``,每个 ``#`` 开头的行一项,一趟线性扫描。
+
+    fence-naive——代码块内的 ``#`` 行也当标题(与 ``_split_sections`` 同一套约定,
+    两处归属永远一致)。首标题之前的内容隐含归 ``"Root"``。供 body 级 extractor
+    (约束/防编造/参考文件,跨章节扫描)在 match 偏移处回填真实标题(source_section)。
+    """
+    out: list[tuple[int, str]] = []
+    offset = 0
+    for line in body.split("\n"):
+        if line.startswith("#"):
+            out.append((offset, line.lstrip("#").strip()))
+        offset += len(line) + 1
+    return out
+
+
+def _heading_at(headings: list[tuple[int, str]], offset: int) -> str:
+    """``offset`` 所处(或之前最近的)标题;首标题之前 → ``"Root"``。
+
+    与 ``_split_sections`` 的节名算法逐字一致(``lstrip("#").strip()``)。列表很短,
+    线性扫到第一个起始晚于 offset 的标题即停,bisect 不必要。
+    """
+    name = "Root"
+    for start, heading in headings:
+        if start > offset:
+            break
+        name = heading
+    return name
+
+
 class InstructionExtractor:
     def extract(self, body: str) -> list[InstructionCheck]:
         checks: list[InstructionCheck] = []
         sections = self._split_sections(body)
+        # body 级 extractor(跨章节扫描)的 match 偏移 → 真实标题回填用;一趟算好共用。
+        headings = _heading_map(body)
 
         for section_name, section_text in sections:
             checks.extend(self._extract_heading_steps(section_name, section_text))
             checks.extend(self._extract_tool_requirements(section_name, section_text))
 
-        checks.extend(self._extract_constraints(body))
-        checks.extend(self._extract_anti_fabrication(body))
+        checks.extend(self._extract_constraints(body, headings))
+        checks.extend(self._extract_anti_fabrication(body, headings))
         checks.extend(self._extract_output_format(body))
-        checks.extend(self._extract_reference_usage(body))
+        checks.extend(self._extract_reference_usage(body, headings))
 
         checks = self._dedup_covered_reference_usage(checks)
 
@@ -250,7 +282,7 @@ class InstructionExtractor:
                 ))
         return checks
 
-    def _extract_constraints(self, body: str) -> list[InstructionCheck]:
+    def _extract_constraints(self, body: str, headings: list[tuple[int, str]]) -> list[InstructionCheck]:
         checks: list[InstructionCheck] = []
         # 中文约束词后跟至少 2 字内容(中文信息密度高,2 字 ≈ 英文 5 字);`.` 默认不跨行。
         # "不可" 后跟这些字构成普通词(不可用/不可见/不可数/不可能...),非禁止性约束 →
@@ -273,10 +305,11 @@ class InstructionExtractor:
                 priority=InstructionPriority.REQUIRED,
                 check_method=CheckMethod.LLM_JUDGE,
                 source_excerpt=self._bullet_excerpt(body, match.start()),
+                source_section=_heading_at(headings, match.start()),
             ))
         return checks
 
-    def _extract_anti_fabrication(self, body: str) -> list[InstructionCheck]:
+    def _extract_anti_fabrication(self, body: str, headings: list[tuple[int, str]]) -> list[InstructionCheck]:
         checks: list[InstructionCheck] = []
         lower = body.lower()
         has_af = (
@@ -300,6 +333,7 @@ class InstructionExtractor:
                     priority=InstructionPriority.REQUIRED,
                     check_method=CheckMethod.LLM_JUDGE,
                     source_excerpt=self._bullet_excerpt(body, line_start),
+                    source_section=_heading_at(headings, line_start),
                 ))
         return checks
 
@@ -342,9 +376,15 @@ class InstructionExtractor:
                 current_heading = line.lstrip("#").strip()
         return checks
 
-    def _extract_reference_usage(self, body: str) -> list[InstructionCheck]:
+    def _extract_reference_usage(self, body: str, headings: list[tuple[int, str]]) -> list[InstructionCheck]:
         checks: list[InstructionCheck] = []
-        refs = _REF_PATH_RE.findall(body)
+        # finditer 而非 findall:出现序恒等(下游有序去重不变),额外记每个 ref 首次
+        # 出现的偏移供 source_section 回填真实标题。
+        refs: list[str] = []
+        first_offset: dict[str, int] = {}
+        for m in _REF_PATH_RE.finditer(body):
+            refs.append(m.group(0))
+            first_offset.setdefault(m.group(0), m.start())
         # 区分两类(P0-1d follow-up,修路由型 skill 假红灯 —— 见 §41 观察 1):
         # - 类别级 references/<X>(X 无扩展名 = 目录/类别):路由型 skill 的**互斥备选**,
         #   每任务只 1 类适用。合并成一条"查阅参考资料"(查任意 references/ 读)。
@@ -381,6 +421,8 @@ class InstructionExtractor:
                 # 读哪类由 Claude 路由决定;误路由(读错类)属内容/scoring,不是 compliance。
                 check_method=CheckMethod.TOOL_CALL_CHECK,
                 params={"script_path": "references/"},
+                # 类别级聚合指令归到首个类别 ref 首次提及处的标题。
+                source_section=_heading_at(headings, first_offset[category_refs[0]]),
             ))
         for ref in file_refs:
             checks.append(InstructionCheck(
@@ -393,5 +435,6 @@ class InstructionExtractor:
                 # script_path 让 _check_tool_call 匹配 tool_trace 入参里的该路径。
                 check_method=CheckMethod.TOOL_CALL_CHECK,
                 params={"script_path": ref},
+                source_section=_heading_at(headings, first_offset[ref]),
             ))
         return checks

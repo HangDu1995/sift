@@ -817,7 +817,8 @@ spawn claude -p
 | `skill_name` / `transcripts[]` | 被审声明 + transcript 文件名 |
 | `summary` | 计数 `{total, pass, fail, na, unresolved, indeterminate}` |
 | `findings[]` | 每条指令的对账结果（见下） |
-| `by_instruction[]` | 按指令跨 transcript 聚合：`pass_count`/`fail_count`/`na_count`/`unresolved_count`/`indeterminate_count`/`total`/`fail_rate`/`fail_in_transcripts[]`（单 transcript 也有，每指令 1 条） |
+| `by_instruction[]` | 按指令跨 transcript 聚合：`pass_count`/`fail_count`/`na_count`/`unresolved_count`/`indeterminate_count`/`total`/`fail_rate`/`fail_in_transcripts[]`/`section`（声明分组标题，first-wins）（单 transcript 也有，每指令 1 条） |
+| `coverage` | 声明覆盖视图（旧 report 无 → 默认空）：`{total, covered, uncovered, unknown, coverage_rate, sections[]}`——covered=任一 transcript PASS/FAIL、uncovered=全 N/A、unknown=只有没判成/判不准；反推（derived）指令不计入分母 |
 | `warnings[]` | 顶部警告（没判成建议重跑、判不准占比偏高等） |
 | `token_usage` | 本次所有 **LLM 判定调用**（refine + 条件/禁令/步骤判官 × 批）的 token 用量合计：`{input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, total_cost_usd, calls}`。空 `{}` = 无 LLM 调用或旧 report。**注意是判官 token**——与 eval 侧 `RunResultMetrics.tokens`（executor 跑任务的 token，走 stream-json）不同；eval 的 grader/comparator/analyzer token 已计入 `benchmark.json.llm_token_usage`（Phase 2：`scoring` 段含 grader+comparator+analyzer；本 audit token rollup 进 `audit` 段） |
 
@@ -1427,6 +1428,7 @@ CI 脚本只读 exit code 分不清「N/A」和「UNCLEAR」，得读 gate.json 
 |------|------|
 | `instruction_text` | 指令原文 |
 | `source` | 规则类型（`InstructionSource`：CONSTRAINT / HEADING_STEP / TOOL_REQUIREMENT / REFERENCE_USAGE / ANTI_FABRICATION / OUTPUT_FORMAT） |
+| `section` | 声明分组标题（`source_section` 回填的真实标题 or 伪节名兜底），覆盖视图分组用、判定不读；缺省空（旧产物） |
 | `verdict` | 五态：`PASS` / `FAIL` / `N/A`（不适用）/ `UNRESOLVED`（没判成，可重跑）/ `INDETERMINATE`（判不准，重跑无益） |
 | `method` | `PROGRAMMATIC`（程序对账）/ `LLM`（语义判定）——「怎么查的」，与 verdict 正交 |
 | `category` | 语义类：`conditional` / `prohibition` / `step` / `output` |
@@ -1484,6 +1486,7 @@ CI 脚本只读 exit code 分不清「N/A」和「UNCLEAR」，得读 gate.json 
 
 - **`source_excerpt`**：extract 时记下指令所属 bullet（markdown 列表项 + 续行）的完整原文，带回被切的主语。确定性正则（`_bullet_excerpt` 回溯列表项首行），无 bullet 时回退所在行。
 - **`--headline`**（默认开，`--no-headline` 关）：refine 之后、判定之前的**独立 LLM 步骤**，把 instruction_text + source_excerpt 去噪 + 补主语 + 压成一句人话标题。**关键：没塞进 refine**——refine 判 is_real 决定哪些指令进 judge，把 headline 塞进去会让 is_real 漂移→滤指令集合变→判定间接变；做成独立步骤（自己的 prompt + 缓存）才真正做到判定零影响。
+- **`source_section`**：body 级 extractor（约束/防编造/参考文件，跨章节扫描）在 match 偏移处回填的**真实 markdown 标题**——它们的 `section` 字段是伪节名（"Constraint" 等）且**保持不动**（伪节名在 refine/headline 缓存键里，改值全量失效缓存），真实归属由这个纯增字段带回：`finding.section = source_section or section`，覆盖视图按它分组。判定与缓存键都不读它；旧 refine 缓存条目缺此字段 → 回退伪节名，SKILL.md 变更后自然失效重算。
 
 显示回退顺序 `headline > source_excerpt > instruction_text`：headline 优先、source_excerpt 兜底、最后才是无主语谓语；audit-report.html 都保留 instruction_text 作「判定锚点」折叠核对（judge 实际对账的就是它）。per-声明 hash 缓存（`~/.cache/sift/headline/`，键含 source_excerpt——extract 改了 bullet 回溯会失效重算），跨 audit() 复用。
 
@@ -1502,7 +1505,7 @@ CI 脚本只读 exit code 分不清「N/A」和「UNCLEAR」，得读 gate.json 
 
 ### 12.5 逐条判别：某条 FAIL 是工具噪声还是声明问题
 
-fixture 下审计的 FAIL 混着工具噪声和真声明问题。报告现在给每条 FAIL **自动标**一个启发式判别（per-run findings、整体汇总 by_instruction、单次 audit-report 的违规表都带徽章 + hover 理由）：
+fixture 下审计的 FAIL 混着工具噪声和真声明问题。报告现在给每条 FAIL **自动标**一个启发式判别（per-run findings、整体汇总 by_instruction、单次 audit-report 的违规表都带徽章 + hover 理由）。声明覆盖视图（audit-report 的 coverage 区块）是这判别的姊妹诊断：uncovered 集中的分组多为「场景没触发」（fixture 下常源于 extractor 误抽，见 §12.2），先别急着改声明：
 
 | `noise_label` | 含义 | 典型信号（命中即标）|
 |---|---|---|
@@ -1534,7 +1537,7 @@ audit 跑一次声明 × transcript 对账，内部是一条 **6 阶段顺序流
 | 标题（headline） | LLM | 把指令改写成人话标题，**仅显示、判定不读**，per-声明缓存（§12.3） |
 | 切片（rebuild） | 程序 | 把 transcript 重建为 SessionDigest + 按作用域（`--kind`）切执行段（§13.8） |
 | 判定（judge） | LLM | 三类判官（条件性 / 禁令 / 步骤）逐批调 LLM 判指令遵循性 |
-| 聚合（postprocess） | 程序 | **判定后的汇总**：跨 transcript 按指令聚合 findings（`by_instruction` 的 fail%）+ 噪声判别标注 |
+| 聚合（postprocess） | 程序 | **判定后的汇总**：跨 transcript 按指令聚合 findings（`by_instruction` 的 fail%）+ 噪声判别标注 + 声明覆盖视图（`coverage`：按声明分组统计指令被触达多少） |
 
 要点：
 
@@ -1638,7 +1641,7 @@ sift audit path/to/test-runner/ --transcript session.json --kind agent   # 审�
 - **cc / 结构化 records** = `parent_tool_use_id` 为空的全部 record（主作用域）。主 agent 自己的 turn + 它发起的 Agent dispatch tool_use / tool_result 都在主作用域（这些是主 agent 的编排动作，**包含**）；子 agent 内部 record 的 `parent_tool_use_id` 指向某 Agent 调用（**排除**——那些归各自 `kind="agent"` 单元审）。
 - **opencode** 无父子作用域，root 取 `session.info.agent`（declared 主 agent），复用 `slice_opencode_by_agent` 按连续同 agent message 切段。
 
-**断段差异**（同源于 §13.3 agent 路的「扁平切」）：cc 主作用域过滤后是连贯的主执行流，作为**单 span** 喂 auditor（即使主 record 在原序列里被子 agent record 物理夹断，过滤后仍连贯一段，区别于 agent 路的同名 run 断段）；opencode 按连续 message 切，主 agent 的 message 若被子 agent 的 message 夹断（主…子…主…子…主），会被切成**多段**——这无害，每段独立喂 auditor，findings 全量 pool 后按指令聚合（`aggregate_by_instruction`），verdict 与合成单 span 等价（与 agent 路断段无害同理）。
+**断段差异**（同源于 §13.3 agent 路的「扁平切」）：cc 主作用域过滤后是连贯的主执行流，作为**单 span** 喂 auditor（即使主 record 在原序列里被子 agent record 物理夹断，过滤后仍连贯一段，区别于 agent 路的同名 run 断段）；opencode 按连续 message 切，主 agent 的 message 若被子 agent 的 message 夹断（主…子…主…子…主），会被切成**多段**——这无害，每段独立喂 auditor，findings 全量 pool 后按指令聚合（`aggregate_by_instruction` / `aggregate_coverage` 同为 pool 后的纯聚合，断段等价性同理成立），verdict 与合成单 span 等价（与 agent 路断段无害同理）。
 
 **target 名对 root 无意义**：skill / agent 路靠声明名（`name` 契约）切，root 只认作用域（cc 的 `parent_tool_use_id` 是否为空 / opencode 的 `info.agent` 字段）——切主 agent 不看它叫什么、target 名忽略。这也是 root 能成为整 session 审计地基的原因：它不依赖某个子单元被点名调用，而是恒定的顶层作用域。
 

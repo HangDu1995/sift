@@ -58,7 +58,7 @@ from typing import Any, Callable
 from sift.audit.declare import derive_declarations
 from sift.audit.rebuild import rebuild
 from sift.audit.tool_match import extract_first_balanced, load_json_lenient, match_tool_call
-from sift.audit.aggregate import aggregate_by_instruction
+from sift.audit.aggregate import aggregate_by_instruction, aggregate_coverage
 from sift.audit.dedup import post_process_findings
 from sift.audit import headline_cache, refine_cache
 from sift.concurrency import (
@@ -689,6 +689,8 @@ class TranscriptAuditor:
         # 聚合级噪声判别(fail_count>0 的行标 noise_label / noise_reasons)。在 AuditReport
         # 构造前做,使 report.by_instruction 直接携带标注。
         by_instruction = annotate_aggregate_noise(by_instruction)
+        # 声明覆盖视图(纯 post-judge 元数据:dedup/seq 已定,seqs 交叉引用可用)。
+        coverage = aggregate_coverage(all_findings)
         stage_seconds["postprocess"] = time.perf_counter() - _t
 
         # 分阶段耗时/token(rebuild/judge 在 transcript 循环里累加;token 仅 LLM 阶段非 0)。
@@ -724,6 +726,7 @@ class TranscriptAuditor:
             summary=summary,
             findings=all_findings,
             by_instruction=by_instruction,
+            coverage=coverage,
             warnings=warnings,
             refine_dropped_count=refine_dropped_count,
             token_usage=acc.snapshot(),
@@ -798,6 +801,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
+            section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.LLM,
@@ -810,6 +814,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
+            section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.NA,
                     method=AuditMethod.LLM,
@@ -824,6 +829,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
+            section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.INDETERMINATE,
                     method=AuditMethod.LLM,
@@ -900,6 +906,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
+            section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.LLM,
@@ -914,6 +921,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
+            section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.PASS,
                     method=AuditMethod.LLM,
@@ -928,6 +936,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
+            section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.INDETERMINATE,
                     method=AuditMethod.LLM,
@@ -1011,6 +1020,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
+            section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.PASS,
                     method=AuditMethod.LLM,
@@ -1025,6 +1035,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
+            section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.LLM,
@@ -1039,6 +1050,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
+            section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.NA,
                     method=AuditMethod.LLM,
@@ -1053,6 +1065,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
+            section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.INDETERMINATE,
                     method=AuditMethod.LLM,
@@ -1106,6 +1119,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
+            section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.PASS,
                     method=AuditMethod.PROGRAMMATIC,
@@ -1123,6 +1137,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
+            section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.PROGRAMMATIC,
@@ -1205,6 +1220,7 @@ class TranscriptAuditor:
             instruction_text=inst.instruction_text,
             source_excerpt=inst.source_excerpt,
             headline=inst.headline,
+            section=inst.source_section or inst.section,
             source=inst.source.value,
             verdict=AuditVerdict.PASS,
             method=AuditMethod.PROGRAMMATIC,
@@ -1236,6 +1252,7 @@ class TranscriptAuditor:
             instruction_text=inst.instruction_text,
             source_excerpt=inst.source_excerpt,
             headline=inst.headline,
+            section=inst.source_section or inst.section,
             source=inst.source.value,
             verdict=AuditVerdict.UNRESOLVED,
             method=AuditMethod.LLM,

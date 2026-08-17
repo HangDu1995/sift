@@ -91,6 +91,10 @@ class AuditFinding(BaseModel):
     source_excerpt: str = ""
     # source_excerpt 的「人话标题」:LLM 去噪+补主语+压一句的显示标题。判定不读,缺省空回退。
     headline: str = ""
+    # 声明分组标题:透传自 InstructionCheck(source_section or section——body 级指令回填的
+    # 真实标题,缺省回退伪节名 Constraint/Anti-Fabrication/References,或标题级 extractor 的
+    # 真标题 / "transcript-derived")。覆盖视图按它分组;判定不读。缺省空(旧 JSON / 合成文案)。
+    section: str = ""
     source: str  # InstructionSource 的值(如 "CONSTRAINT")——指令的规则类型
     verdict: AuditVerdict
     method: AuditMethod  # 判定方法(PROGRAMMATIC / LLM)——怎么查的
@@ -148,6 +152,8 @@ class InstructionAggregate(BaseModel):
     # 该指令所属 bullet 的完整原文(含主语);透传自 AuditFinding,显示用、判定不读。缺省空。
     source_excerpt: str = ""
     headline: str = ""  # 人话标题,透传自 AuditFinding,显示用、判定不读。缺省空。
+    # 声明分组标题,透传自 AuditFinding(finding.section,同批同文 first-wins);缺省空兼容旧 report。
+    section: str = ""
     source: str
     category: AuditCategory
     pass_count: int
@@ -166,6 +172,54 @@ class InstructionAggregate(BaseModel):
     noise_reasons: list[str] = Field(default_factory=list)
 
 
+class InstructionCoverage(BaseModel):
+    """单条声明指令的覆盖状态(audit.aggregate.aggregate_coverage 产;覆盖视图行)。
+
+    ``status`` 三态(优先级:covered > uncovered > unknown):
+    - ``covered``:任一 transcript PASS 或 FAIL——会话碰过这条规则(守没守看 by_instruction);
+    - ``uncovered``:全部 transcript 都 N/A——规则存在、场景从未触发;
+    - ``unknown``:其余(N/A+UNRESOLVED 混合 / 纯 UNRESOLVED / 纯 INDETERMINATE)——说不清。
+    """
+
+    instruction_text: str
+    source_excerpt: str = ""
+    headline: str = ""
+    source: str
+    category: AuditCategory
+    section: str = ""  # 分组键(= finding.section,first-wins)
+    status: str  # "covered" | "uncovered" | "unknown"
+    pass_count: int = 0
+    fail_count: int = 0
+    na_count: int = 0
+    unresolved_count: int = 0
+    indeterminate_count: int = 0
+    total: int = 0
+    seqs: list[int] = Field(default_factory=list)  # 该指令全部 finding 的 #N(交叉引用 ④ 明细)
+
+
+class SectionCoverage(BaseModel):
+    """单个声明分组的覆盖聚合(覆盖视图的一个 <details> 组)。"""
+
+    section: str  # 原始键:真标题 / 伪节名(Constraint 等)/ "Root" / ""
+    total: int = 0
+    covered: int = 0
+    uncovered: int = 0
+    unknown: int = 0
+    coverage_rate: float = 0.0  # covered/total;total==0 → 0.0
+    instructions: list[InstructionCoverage] = Field(default_factory=list)
+
+
+class CoverageSummary(BaseModel):
+    """声明覆盖视图总聚合。coverage_rate = covered/total,unknown 计入分母、单列——诚实低估。"""
+
+    total: int = 0
+    covered: int = 0
+    uncovered: int = 0
+    unknown: int = 0
+    coverage_rate: float = 0.0
+    sections: list[SectionCoverage] = Field(default_factory=list)
+
+
 class AuditReport(BaseModel):
     """一个 skill 一次 audit 的完整报告。"""
 
@@ -176,6 +230,11 @@ class AuditReport(BaseModel):
     findings: list[AuditFinding]
     # 多 transcript 对账的指令级聚合(按 fail_rate 降序);单 transcript 也有(每指令 1 verdict)。
     by_instruction: list[InstructionAggregate] = Field(default_factory=list)
+    # 声明覆盖视图(aggregate.aggregate_coverage 产,纯 post-judge 元数据、不进任何 gate):
+    # 声明指令被本次 transcript(s) 触达多少,按声明分组。covered=任一 transcript PASS/FAIL;
+    # uncovered=全 N/A(规则在、场景没触发);unknown=只有没判成/判不准。反推(derived)指令
+    # 不计(不是声明规则、构造上偏 PASS)。旧 report 无此字段 → 全默认(total 0 → 渲染端不显)。
+    coverage: CoverageSummary = Field(default_factory=CoverageSummary)
     warnings: list[str] = Field(default_factory=list)
     # refine(LLM 精筛伪指令)砍掉的条数(len(before) - len(after))。
     # 0 = 没开 refine_instructions 或开了但没砍任何条;向后兼容旧 report(默认 0)。

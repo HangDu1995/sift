@@ -263,7 +263,10 @@ def _render_by_instruction_via_node(report, tmp_path):
         "console.log(JSON.stringify({"
         "failPct:o.includes('fail%'),failTotal:o.includes('fail/total'),"
         "inTrans:o.includes('in transcripts'),failTbl:o.includes('违规 FAIL'),"
-        "naTbl:o.includes('场景不适用 N/A'),kua:o.includes('跨 ')}));"
+        "naTbl:o.includes('场景不适用 N/A'),kua:o.includes('跨 '),"
+        "covTbl:o.includes('声明覆盖(coverage)'),covOverall:o.includes('总覆盖'),"
+        "covUncovered:o.includes('未覆盖'),covSection:o.includes('声明分组-规则段'),"
+        "covSeqLink:o.includes('#finding-')}));"
     )
     runfile = tmp_path / "run.js"
     runfile.write_text(preamble + js + epilogue, encoding="utf-8")
@@ -295,3 +298,80 @@ def test_audit_html_by_instruction_multi_transcript_keeps_cross_session_cols(tmp
     assert m["failPct"] is True           # 跨会话列保留
     assert m["failTotal"] is True
     assert m["inTrans"] is True
+
+
+def _coverage_report(transcripts, with_uncovered=True):
+    """带声明覆盖视图的审计报告:① covered 行 ② uncovered 行(uncovered>0 时)。
+
+    覆盖区块的数据门是 cov.total > 0——by_instruction 可为空(覆盖块独立于 ③)。
+    """
+    from sift.models.audit_models import CoverageSummary, InstructionCoverage, SectionCoverage
+
+    instructions = [
+        InstructionCoverage(
+            instruction_text="必须先读输入", source="CONSTRAINT",
+            category=AuditCategory.PROHIBITION, section="声明分组-规则段",
+            status="covered", pass_count=len(transcripts), total=len(transcripts), seqs=[1],
+        ),
+    ]
+    if with_uncovered:
+        instructions.append(
+            InstructionCoverage(
+                instruction_text="发布前必须跑回归", source="CONSTRAINT",
+                category=AuditCategory.PROHIBITION, section="声明分组-规则段",
+                status="uncovered", na_count=len(transcripts), total=len(transcripts), seqs=[2],
+            )
+        )
+    n = len(instructions)
+    uncovered = n - 1 if with_uncovered else 0
+    return AuditReport(
+        skill_name="s", transcripts=transcripts,
+        summary={"total": 2, "pass": 1, "fail": 0, "na": 1},
+        findings=[], by_instruction=[], warnings=[],
+        coverage=CoverageSummary(
+            total=n, covered=1, uncovered=uncovered, unknown=0, coverage_rate=1 / n,
+            sections=[
+                SectionCoverage(
+                    section="声明分组-规则段", total=n, covered=1, uncovered=uncovered,
+                    unknown=0, coverage_rate=1 / n, instructions=instructions,
+                )
+            ],
+        ),
+    )
+
+
+def test_audit_html_coverage_block_structural_markers():
+    """③b 声明覆盖:结构标记(RED 锚点)+ 数据落盘 + 渲染门控存在。"""
+    html = AuditReportGenerator().generate_html(_coverage_report(["t1.jsonl"]))
+    assert 'id="audit-coverage"' in html          # 结构标记(渲染逻辑存在)
+    assert "声明覆盖" in html                      # 区块标题字面量
+    assert "cov && cov.total" in html             # 数据门(total=0 不渲染)
+    assert '"coverage"' in html                   # embedded JSON 带字段
+    assert '"covered": 1' in html                 # 值落盘
+
+
+def test_audit_html_coverage_renders_for_single_and_multi_transcript(tmp_path):
+    """覆盖块单/多 transcript 都渲染(covered=任一,无 multi 分支);
+    #N 链接(→ ④ 明细锚点)也在渲染产物里。"""
+    for transcripts in (["t1.jsonl"], ["t1.jsonl", "t2.jsonl"]):
+        m = _render_by_instruction_via_node(_coverage_report(transcripts), tmp_path)
+        assert m["covTbl"] is True
+        assert m["covOverall"] is True
+        assert m["covUncovered"] is True
+        assert m["covSection"] is True            # 真实分组标题原样显示
+        assert m["covSeqLink"] is True            # #finding-N 链接
+
+
+def test_audit_html_coverage_hidden_when_total_zero(tmp_path):
+    """total=0(空声明/旧产物默认 CoverageSummary)→ 覆盖块不渲染。"""
+    from sift.models.audit_models import CoverageSummary
+
+    report = AuditReport(
+        skill_name="s", transcripts=["t1.jsonl"],
+        summary={"total": 0, "pass": 0, "fail": 0, "na": 0},
+        findings=[], by_instruction=[], warnings=[],
+        coverage=CoverageSummary(),
+    )
+    m = _render_by_instruction_via_node(report, tmp_path)
+    assert m["covTbl"] is False
+    assert m["covOverall"] is False

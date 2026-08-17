@@ -126,6 +126,11 @@
     .findings-grouped summary { font-weight: 600; cursor: pointer; margin-bottom: 0.4rem; }
     .findings-grouped details[open] { border-left: 3px solid var(--accent); }
     .findings-grouped .finding { margin-bottom: 0.4rem; }
+    /* ③b 声明覆盖:组内未覆盖/未知指令行(复用 finding-head/instruction 排版) */
+    .coverage .cov-item { margin-bottom: 0.45rem; }
+    .coverage .seq-link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
+    .coverage .seq-link:hover { border-bottom-style: solid; }
+    .coverage .all-covered { color: var(--text-muted); font-size: 0.85rem; }
   </style>
 </head>
 <body>
@@ -424,6 +429,50 @@
               '<tbody>' + naHtml + '</tbody></table>' +
             '</div>');
         }
+      }
+
+      // ③b 声明覆盖(coverage):声明指令有多少被本次会话真实触发(反推指令不计)。
+      // covered=任一 transcript PASS/FAIL;uncovered=全 N/A(规则在、场景没触发);
+      // unknown=只有没判成/判不准。coverage_rate=covered/total(unknown 计入分母 → 诚实低估)。
+      // 单/多 transcript 同一路径(covered=任一);低覆盖 ≠ 声明差——场景没触发而已,
+      // 但意味着本报告的 FAIL 只覆盖被触达的子集。
+      var cov = EMBEDDED_DATA.coverage;
+      if (cov && cov.total) {
+        var SECTION_FALLBACK = {
+          'Root': '开头(无标题段)', 'Constraint': '约束(跨章节扫描)',
+          'Anti-Fabrication': '反捏造(跨章节扫描)', 'References': '参考文件(跨章节扫描)',
+          'transcript-derived': 'transcript 反推'
+        };
+        function sectionDisplay(s) { return s ? (SECTION_FALLBACK[s] || s) : '(未分节)'; }
+        var covPct = Math.round((cov.coverage_rate || 0) * 100);
+        var covSecHtml = (cov.sections || []).map(function (sec) {
+          // 组内只列非 covered 行(covered 是默认正常态,只计数);#N 链到 ④ 明细。
+          var items = (sec.instructions || []).filter(function (it) { return it.status !== 'covered'; });
+          var itemHtml = items.map(function (it) {
+            var seqs = (it.seqs || []).map(function (s) {
+              return '<a class="seq-link" href="#finding-' + escapeHtml(s) + '">#' + escapeHtml(s) + '</a>';
+            }).join(' ');
+            var badge = it.status === 'unknown'
+              ? '<span class="badge-unresolved" title="只有没判成/判不准,覆盖状态未知">○ 未知</span>'
+              : '<span class="badge-na" title="规则存在但所有 transcript 场景均未触发">⊘ 未覆盖</span>';
+            return '<div class="cov-item"><div class="finding-head">' + badge +
+              '<span class="seq">' + seqs + '</span>' +
+              '<span class="cat">' + escapeHtml(it.category || '') + '</span></div>' +
+              renderInstruction(it) + '</div>';
+          }).join('');
+          return '<details' + (sec.uncovered ? ' open' : '') + '><summary>' +
+            escapeHtml(sectionDisplay(sec.section)) +
+            ' · <span class="badge-pass">覆盖 ' + sec.covered + '/' + sec.total + '</span>' +
+            (sec.uncovered ? ' <span class="badge-na">未覆盖 ' + sec.uncovered + '</span>' : '') +
+            (sec.unknown ? ' <span class="badge-unresolved">未知 ' + sec.unknown + '</span>' : '') +
+            '</summary>' + (itemHtml || '<div class="all-covered">本段全覆盖</div>') + '</details>';
+        }).join('');
+        root.insertAdjacentHTML('beforeend',
+          '<div id="audit-coverage" class="findings-grouped coverage"><h2>声明覆盖(coverage)</h2>' +
+          '<div class="summary"><span>总覆盖 <strong>' + cov.covered + '/' + cov.total + '</strong> = ' + covPct + '%</span>' +
+          (cov.uncovered ? '<span class="badge-na">未覆盖 ' + cov.uncovered + '</span>' : '') +
+          (cov.unknown ? '<span class="badge-unresolved">未知 ' + cov.unknown + '</span>' : '') +
+          '</div>' + covSecHtml + '</div>');
       }
 
       // ④ findings:多 transcript → 按指令分组(同指令各 transcript 并排可比);

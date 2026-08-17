@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from sift.audit.aggregate import aggregate_by_instruction
+from sift.audit.aggregate import aggregate_by_instruction, aggregate_coverage
 from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
@@ -24,6 +24,8 @@ def _f(
     source: str = "TOOL_REQUIREMENT",
     category: AuditCategory = AuditCategory.CONDITIONAL,
     seq: int = 0,
+    section: str = "",
+    derived: bool = False,
 ) -> AuditFinding:
     return AuditFinding(
         instruction_text=text,
@@ -34,6 +36,8 @@ def _f(
         evidence="e",
         transcript=transcript,
         seq=seq,
+        section=section,
+        derived_from_transcript=derived,
     )
 
 
@@ -163,3 +167,125 @@ class TestAggregateByInstruction:
         assert r.na_count == 0
         assert r.total == 4  # 全 4 态计入 total
         assert r.fail_rate == 0.25  # 1/4(unresolved/indeterminate 稀释 fail_rate,同旧 unclear 行为)
+
+
+class TestAggregateByInstructionSection:
+    def test_by_instruction_rows_carry_section_first_wins(self):
+        """by_instruction 行带 section(first-wins,同 source_excerpt 约定)。"""
+        findings = [
+            _f("必须校验", AuditVerdict.PASS, "s1", section="规则"),
+            _f("必须校验", AuditVerdict.PASS, "s2", section="规则"),
+            _f("读取 a.md", AuditVerdict.NA, "s1", section="参考资料"),
+        ]
+        rows = aggregate_by_instruction(findings)
+        by_text = {r.instruction_text: r for r in rows}
+        assert by_text["必须校验"].section == "规则"
+        assert by_text["读取 a.md"].section == "参考资料"
+
+    def test_by_instruction_section_empty_for_legacy_findings(self):
+        """旧产物 finding 无 section → 行 section 为空串(不炸、不猜)。"""
+        rows = aggregate_by_instruction([_f("必须校验", AuditVerdict.PASS, "s1")])
+        assert rows[0].section == ""
+
+
+class TestAggregateCoverage:
+    """aggregate_coverage:声明覆盖视图(covered/uncovered/unknown 三态,按声明分组)。"""
+
+    def test_covered_when_any_transcript_pass_or_fail(self):
+        """任一 transcript PASS 或 FAIL = 会话碰过(covered);PASS-only 也算。"""
+        findings = [
+            _f("A", AuditVerdict.PASS, "s1", section="规则"),
+            _f("B", AuditVerdict.FAIL, "s1", section="规则"),
+            _f("B", AuditVerdict.NA, "s2", section="规则"),  # FAIL 已触达,N/A 不影响
+        ]
+        cov = aggregate_coverage(findings)
+        assert cov.total == 2
+        assert (cov.covered, cov.uncovered, cov.unknown) == (2, 0, 0)
+        assert cov.coverage_rate == 1.0
+
+    def test_uncovered_when_all_na(self):
+        """全部 transcript 都 N/A = uncovered(规则在、场景从未触发)。"""
+        findings = [
+            _f("A", AuditVerdict.NA, "s1", section="规则"),
+            _f("A", AuditVerdict.NA, "s2", section="规则"),
+        ]
+        cov = aggregate_coverage(findings)
+        assert (cov.covered, cov.uncovered, cov.unknown) == (0, 1, 0)
+        assert cov.coverage_rate == 0.0
+
+    def test_unknown_when_only_unresolved_indeterminate_or_mixed(self):
+        """纯 UNRESOLVED / 纯 INDETERMINATE / N/A+UNRESOLVED 混合 → 全部 unknown。"""
+        findings = [
+            _f("A", AuditVerdict.UNRESOLVED, "s1", section="规则"),
+            _f("B", AuditVerdict.INDETERMINATE, "s1", section="规则"),
+            _f("C", AuditVerdict.NA, "s1", section="规则"),
+            _f("C", AuditVerdict.UNRESOLVED, "s2", section="规则"),
+        ]
+        cov = aggregate_coverage(findings)
+        assert (cov.covered, cov.uncovered, cov.unknown) == (0, 0, 3)
+
+    def test_rate_counts_unknown_in_denominator(self):
+        """unknown 计入分母(诚实低估):1 covered + 1 unknown → 0.5,不是 1.0。"""
+        findings = [
+            _f("A", AuditVerdict.PASS, "s1", section="规则"),
+            _f("B", AuditVerdict.UNRESOLVED, "s1", section="规则"),
+        ]
+        cov = aggregate_coverage(findings)
+        assert cov.coverage_rate == 0.5
+
+    def test_groups_by_section_uncovered_sections_first(self):
+        """按 finding.section 分桶;分组排序 -uncovered 优先(证据缺口一眼可见);
+        组内非 covered 行在前。"""
+        findings = [
+            _f("A", AuditVerdict.PASS, "s1", section="流程"),
+            _f("B", AuditVerdict.NA, "s1", section="规则"),
+            _f("C", AuditVerdict.NA, "s1", section="规则"),
+        ]
+        cov = aggregate_coverage(findings)
+        assert [s.section for s in cov.sections] == ["规则", "流程"]
+        rule = cov.sections[0]
+        assert (rule.total, rule.covered, rule.uncovered) == (2, 0, 2)
+        assert rule.coverage_rate == 0.0
+        assert all(i.status == "uncovered" for i in rule.instructions)
+
+    def test_section_first_wins_across_findings(self):
+        """同文指令跨节(极端情形)→ 分组键 first-wins(与 by_instruction 同约定)。"""
+        findings = [
+            _f("A", AuditVerdict.PASS, "s1", section="规则"),
+            _f("A", AuditVerdict.PASS, "s2", section="流程"),
+        ]
+        cov = aggregate_coverage(findings)
+        assert len(cov.sections) == 1
+        assert cov.sections[0].section == "规则"
+
+    def test_excludes_derived_findings(self):
+        """derived(反推)指令不是声明规则、构造上偏 PASS → 不进分母(防虚增覆盖率)。"""
+        findings = [
+            _f("A", AuditVerdict.PASS, "s1", section="规则"),
+            _f("读取 foo.md", AuditVerdict.PASS, "s1", section="transcript-derived", derived=True),
+        ]
+        cov = aggregate_coverage(findings)
+        assert cov.total == 1
+        assert cov.covered == 1
+
+    def test_empty_findings_all_zero(self):
+        cov = aggregate_coverage([])
+        assert cov.total == 0
+        assert cov.sections == []
+        assert cov.coverage_rate == 0.0
+
+    def test_seqs_collected_per_instruction(self):
+        """InstructionCoverage.seqs 收齐该指令全部 finding 的 #N(不论 verdict,
+        供报告 #N 链接到 ④ 明细);去重排序。"""
+        findings = [
+            _f("A", AuditVerdict.PASS, "s1", seq=3, section="规则"),
+            _f("A", AuditVerdict.NA, "s2", seq=1, section="规则"),
+        ]
+        cov = aggregate_coverage(findings)
+        assert cov.sections[0].instructions[0].seqs == [1, 3]
+
+    def test_empty_section_groups_under_blank(self):
+        """旧产物 finding.section 为空 → 分组键空串(渲染层显示"(未分节)")。"""
+        findings = [_f("A", AuditVerdict.PASS, "s1")]
+        cov = aggregate_coverage(findings)
+        assert cov.sections[0].section == ""
