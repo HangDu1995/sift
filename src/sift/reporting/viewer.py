@@ -271,7 +271,7 @@ def _aggregate_compliance(runs: list[dict]) -> list[dict]:
     复用 audit.aggregate_by_instruction。全空 digest 的 side(L1 理解题 cc 纯推理无工具)贡献 0 findings → 不产空聚合。
     """
     from collections import defaultdict
-    from sift.audit.aggregate import aggregate_by_instruction
+    from sift.audit.aggregate import aggregate_by_instruction, aggregate_coverage
     from sift.audit.noise import annotate_aggregate_noise
     from sift.models import AuditFinding, AuditVerdict
 
@@ -309,6 +309,11 @@ def _aggregate_compliance(runs: list[dict]) -> list[dict]:
                 "indeterminate": sum(1 for f in validated if f.verdict == AuditVerdict.INDETERMINATE),
             },
             "by_instruction": [a.model_dump(mode="json") for a in ai],
+            # 声明覆盖视图(同一 findings 池的姊妹聚合):这批考卷实测触达了声明的多大
+            # 比例(covered=任一 run PASS/FAIL;uncovered=全 N/A——所有考卷都没触发该场景;
+            # derived 反推指令不计)。旧 compliance.json findings 无 section → 分组落
+            # "(未分节)",聚合照常可算。
+            "coverage": aggregate_coverage(validated).model_dump(mode="json"),
             "runs_contributed": side_runs[side],
         })
     return out

@@ -1043,6 +1043,40 @@ class TestReportGeneratorStatic:
         assert '"noise_label": "tool_noise"' in html
         assert "HEADING_STEP" in html
 
+    def test_generate_html_compliance_aggregate_renders_coverage(self, tmp_path):
+        """整体汇总遵循性聚合块加声明覆盖:一行 rollup + 未覆盖折叠清单。
+
+        RED 锚点:JS 源引用 agg.coverage(改前 grep=0);数据流:coverage 随
+        compliance_aggregate 嵌入 EMBEDDED_DATA。运行时正确性靠 node --check + 肉眼
+        (test_reporting 惯例:render-smoke 只验模板字符串与数据流)。
+        """
+        workspace = tmp_path / "iteration-1"
+        ws_dir = workspace / "with_skill" / "run-1"
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "outputs").mkdir()
+        (ws_dir / "outputs" / "out.txt").write_text("hello")
+        (ws_dir / "compliance.json").write_text(json.dumps({
+            "summary": {"total": 2, "pass": 1, "fail": 0, "na": 1},
+            "findings": [
+                {"instruction_text": "按步骤执行", "source": "HEADING_STEP",
+                 "verdict": "PASS", "category": "step", "evidence": "ev",
+                 "method": "LLM", "transcript": "t.jsonl"},
+                {"instruction_text": "发布前跑回归", "source": "CONSTRAINT",
+                 "verdict": "N/A", "category": "prohibition", "evidence": "ev-na",
+                 "method": "LLM", "transcript": "t.jsonl"},
+            ],
+        }), encoding="utf-8")
+
+        gen = ReportGenerator()
+        html = gen.generate_html(workspace, None)
+        # RED 锚点:渲染逻辑引用 agg.coverage / 模板含「声明覆盖」「未覆盖指令」字面量
+        assert "agg.coverage" in html
+        assert "声明覆盖" in html
+        assert "未覆盖指令(按声明分组)" in html
+        # 数据流:coverage(含 uncovered 计数)嵌入 EMBEDDED_DATA
+        assert '"coverage"' in html
+        assert '"uncovered": 1' in html
+
     def test_generate_html_compliance_aggregate_renders_source_category_noise(self, tmp_path):
         """整体汇总 by_instruction 表加 source/category 徽章 + FAIL 噪声判别(Task 7)。
 
@@ -1451,3 +1485,51 @@ class TestPreviousDelta:
         html = ReportGenerator().generate_html(workspace, current)
         data = self._extract_embedded_data(html)
         assert data["previous_delta"] is None
+
+
+class TestAggregateComplianceCoverage:
+    """_aggregate_compliance 产 coverage:同一 findings 池的姊妹聚合(实测触达面)。
+
+    covered=任一 run PASS/FAIL;uncovered=全 N/A;derived 不计。旧 compliance.json
+    findings 无 section → 分组落空串(渲染层显「(未分节)」)。
+    """
+
+    def test_coverage_counts_and_uncovered(self):
+        from sift.reporting.viewer import _aggregate_compliance
+        runs = [
+            {"config": "with_skill", "compliance": {"findings": [
+                # 触达:run-1 PASS(即使 run-2 N/A 也算 covered)
+                {"instruction_text": "禁止编造", "source": "CONSTRAINT", "verdict": "PASS",
+                 "category": "prohibition", "evidence": "e", "method": "LLM", "transcript": "r1.jsonl"},
+                {"instruction_text": "禁止编造", "source": "CONSTRAINT", "verdict": "N/A",
+                 "category": "prohibition", "evidence": "e", "method": "LLM", "transcript": "r2.jsonl"},
+                # 未触达:两个 run 都 N/A
+                {"instruction_text": "发布前跑回归", "source": "CONSTRAINT", "verdict": "N/A",
+                 "category": "prohibition", "evidence": "e", "method": "LLM", "transcript": "r1.jsonl"},
+                {"instruction_text": "发布前跑回归", "source": "CONSTRAINT", "verdict": "N/A",
+                 "category": "prohibition", "evidence": "e", "method": "LLM", "transcript": "r2.jsonl"},
+            ]}},
+        ]
+        agg = _aggregate_compliance(runs)
+        cov = agg[0]["coverage"]
+        assert cov["total"] == 2
+        assert (cov["covered"], cov["uncovered"], cov["unknown"]) == (1, 1, 0)
+        assert cov["coverage_rate"] == 0.5
+        # 旧 findings 无 section → 分组键空串(渲染层「(未分节)」兜底)
+        assert [s["section"] for s in cov["sections"]] == [""]
+        # 部分触达指令(1 PASS + 1 N/A)在覆盖视角 = covered,不在未覆盖清单
+        statuses = {i["instruction_text"]: i["status"] for s in cov["sections"] for i in s["instructions"]}
+        assert statuses["禁止编造"] == "covered"
+        assert statuses["发布前跑回归"] == "uncovered"
+
+    def test_coverage_excludes_derived(self):
+        from sift.reporting.viewer import _aggregate_compliance
+        runs = [{"config": "with_skill", "compliance": {"findings": [
+            {"instruction_text": "禁止编造", "source": "CONSTRAINT", "verdict": "PASS",
+             "category": "prohibition", "evidence": "e", "method": "LLM", "transcript": "r1.jsonl"},
+            {"instruction_text": "读取 foo.md", "source": "REFERENCE_USAGE", "verdict": "PASS",
+             "category": "conditional", "evidence": "e", "method": "PROGRAMMATIC",
+             "transcript": "r1.jsonl", "derived_from_transcript": True},
+        ]}}]
+        cov = _aggregate_compliance(runs)[0]["coverage"]
+        assert cov["total"] == 1  # derived 不进分母

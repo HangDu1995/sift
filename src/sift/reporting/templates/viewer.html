@@ -1141,6 +1141,35 @@
           + (unresolvedN ? ' / 没判成 ' + unresolvedN : '')
           + (indeterminateN ? ' / 判不准 ' + indeterminateN : '')
           + ' · 聚合自 ' + (agg.runs_contributed || 0) + ' 个有判定的 run</div>';
+        // 声明覆盖(coverage):这批考卷实测触达了声明的多大比例(covered=任一 run PASS/FAIL;
+        // 未覆盖=全 N/A,所有考卷都没触发该场景;反推指令不计)。低覆盖 ≠ 声明差,但上面
+        // 的 FAIL 结论只覆盖被触达的子集。有未覆盖/未知才给折叠清单(全覆盖只显一行)。
+        const cov = agg.coverage;
+        if (cov && cov.total) {
+          const covPct = Math.round((cov.coverage_rate || 0) * 100);
+          html += '<div style="font-size:0.75rem;margin-bottom:0.5rem;">声明覆盖 <strong>' + cov.covered + '/' + cov.total + '</strong> (' + covPct + '%)'
+            + (cov.uncovered ? ' · <span style="color:var(--accent);font-weight:600;">未覆盖 ' + cov.uncovered + '</span>' : '')
+            + (cov.unknown ? ' · <span style="color:var(--text-muted);">未知 ' + cov.unknown + '</span>' : '')
+            + ' <span style="color:var(--text-muted);">(实测口径:哪条声明规则至少被一张考卷触发过)</span></div>';
+          if (cov.uncovered || cov.unknown) {
+            html += '<details style="margin-bottom:0.75rem;"><summary style="cursor:pointer;font-size:0.78rem;color:var(--text-muted);">未覆盖指令(按声明分组)</summary>';
+            for (const sec of (cov.sections || [])) {
+              const covItems = (sec.instructions || []).filter(it => it.status !== 'covered');
+              if (!covItems.length) continue;
+              html += '<div style="margin:0.4rem 0 0.4rem 0.75rem;"><span style="font-weight:600;font-size:0.78rem;">'
+                + escapeHtml(sec.section || '(未分节)') + ' · 未覆盖 ' + sec.uncovered
+                + (sec.unknown ? ' / 未知 ' + sec.unknown : '') + '</span>';
+              html += '<ul style="margin:0.25rem 0 0 0.5rem;padding-left:1.2rem;font-size:0.78rem;">';
+              for (const it of covItems) {
+                const itTitle = it.headline || it.source_excerpt || it.instruction_text || '';
+                html += '<li>' + escapeHtml(itTitle)
+                  + (it.status === 'unknown' ? ' <span style="color:var(--text-muted);">(未知)</span>' : '') + '</li>';
+              }
+              html += '</ul></div>';
+            }
+            html += '</details>';
+          }
+        }
         const bi = agg.by_instruction || [];
         if (bi.length) {
           html += '<table class="benchmark-table"><thead><tr>'

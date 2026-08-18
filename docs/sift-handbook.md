@@ -1326,7 +1326,7 @@ CI 脚本只读 exit code 分不清「N/A」和「UNCLEAR」，得读 gate.json 
 6. **通过率对比** — 双率（客观 / 主观）图表。
 7. **LLM token 用量** — 各 config / eval 的 token。
 8. **耗时** — 各 config / eval 耗时。
-9. **遵循性聚合** — 整个考试聚合的遵循性（per side 聚合 per-run findings）。
+9. **遵循性聚合** — 整个考试聚合的遵循性（per side 聚合 per-run findings），含**声明覆盖**一行 + 未覆盖折叠清单（实测口径：哪条声明规则至少被一张考卷触发过；covered=任一 run PASS/FAIL、未覆盖=全 N/A，反推指令不计——与 audit 报告 ③b 同一聚合）。
 10. **校准摘要** — `HIGH_SCORE_SUSPECT` 高分低遵循警告（5 态判决聚合）。
 11. **盲评对比** — `comparison_summary` 胜率 + 逐条比较（rubric / output_quality / expectation_results），揭盲标注 A / B 各是哪侧。
 12. **深度分析** — `analyze_comparison` 产的赢家侧 strengths / improvement_suggestions，只在有清晰赢家时显（详见下文）。
