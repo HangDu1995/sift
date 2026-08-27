@@ -368,3 +368,43 @@ class TestCoverageModels:
         assert restored.sections[0].instructions[0].status == "covered"
         assert restored.sections[0].instructions[1].seqs == [2]
         assert restored.coverage_rate == 0.5
+
+
+class TestBoundaryModels:
+    """BoundarySummary / ToolUsageEntry:默认、旧 JSON 兼容、roundtrip。"""
+
+    def test_report_boundary_defaults_empty(self):
+        r = AuditReport(
+            skill_name="s", transcripts=["t.jsonl"],
+            summary={"total": 0, "pass": 0, "fail": 0, "na": 0},
+            findings=[],
+        )
+        assert r.boundary.total_tools == 0
+        assert r.boundary.tools == []
+        assert r.boundary.declared == 0 and r.boundary.undeclared == 0
+
+    def test_legacy_report_without_boundary_loads(self):
+        legacy = {
+            "skill_name": "s", "transcripts": ["t.jsonl"],
+            "summary": {"total": 1, "pass": 1, "fail": 0, "na": 0},
+            "findings": [],
+        }
+        restored = AuditReport.model_validate(legacy)
+        assert restored.boundary.total_tools == 0
+        assert restored.boundary.tools == []
+
+    def test_boundary_nested_roundtrip(self):
+        from sift.models.audit_models import BoundarySummary, ToolUsageEntry
+
+        s = BoundarySummary(
+            total_tools=2, declared=1, undeclared=1,
+            tools=[
+                ToolUsageEntry(name="mcp__x__y", classification="undeclared-domain",
+                               sessions=2, calls=5, transcripts=["a.jsonl", "b.jsonl"]),
+                ToolUsageEntry(name="mcp__d__q", classification="domain",
+                               declared_by="用 mcp__d__q 查询", sessions=1, calls=1),
+            ],
+        )
+        restored = BoundarySummary.model_validate_json(s.model_dump_json())
+        assert restored.tools[0].calls == 5 and restored.tools[0].transcripts == ["a.jsonl", "b.jsonl"]
+        assert restored.tools[1].declared_by == "用 mcp__d__q 查询"

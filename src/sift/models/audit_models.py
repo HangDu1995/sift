@@ -220,6 +220,35 @@ class CoverageSummary(BaseModel):
     sections: list[SectionCoverage] = Field(default_factory=list)
 
 
+class ToolUsageEntry(BaseModel):
+    """越界视图单个领域工具的对账行(audit.boundary.aggregate_boundary 产)。
+
+    ``classification`` 三态:``builtin`` 不产行(不构成越界信号);``domain`` = 内置
+    表外 + 命中声明工具要求;``undeclared-domain`` = 内置表外 + 未命中(视图主体,
+    信息性标注、**不判 FAIL**)。
+    """
+
+    name: str                     # 规范名(首次观测到的原样形态;cc 大写开头 / opencode 归一形)
+    classification: str           # "domain" | "undeclared-domain"
+    declared_by: str = ""         # 命中的声明指令显示文本(headline/instruction_text;未命中空)
+    sessions: int = 0             # 出现于几个 transcript
+    calls: int = 0                # 总调用次数
+    transcripts: list[str] = Field(default_factory=list)  # 文件名(交叉定位)
+
+
+class BoundarySummary(BaseModel):
+    """越界视图(一期:领域工具对账)总聚合。纯信息性——不产 finding、不进 verdict。
+
+    ``total_tools`` = builtin 外全部(分母);排序 undeclared-domain 先(sessions 降序)
+    再 domain(calls 降序)。空输入全 0;旧 report 无此字段 → 全默认(渲染端不显)。
+    """
+
+    total_tools: int = 0
+    declared: int = 0
+    undeclared: int = 0
+    tools: list[ToolUsageEntry] = Field(default_factory=list)
+
+
 class AuditReport(BaseModel):
     """一个 skill 一次 audit 的完整报告。"""
 
@@ -235,6 +264,11 @@ class AuditReport(BaseModel):
     # uncovered=全 N/A(规则在、场景没触发);unknown=只有没判成/判不准。反推(derived)指令
     # 不计(不是声明规则、构造上偏 PASS)。旧 report 无此字段 → 全默认(total 0 → 渲染端不显)。
     coverage: CoverageSummary = Field(default_factory=CoverageSummary)
+    # 越界视图(audit.boundary.aggregate_boundary 产,一期纯信息性、不进任何 gate):
+    # 轨迹里的领域工具动作 × 声明工具要求 对账,未声明的列出来供人看。builtin 不进
+    # 分母;undeclared ≠ 违规(skill 声明通常不穷举工具),是二期行为基线的数据采集面。
+    # 旧 report 无此字段 → 全默认(total_tools 0 → 渲染端不显)。
+    boundary: BoundarySummary = Field(default_factory=BoundarySummary)
     warnings: list[str] = Field(default_factory=list)
     # refine(LLM 精筛伪指令)砍掉的条数(len(before) - len(after))。
     # 0 = 没开 refine_instructions 或开了但没砍任何条;向后兼容旧 report(默认 0)。

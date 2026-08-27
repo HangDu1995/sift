@@ -405,6 +405,20 @@ def audit(
             f"[dim]未覆盖 {cov.uncovered} · 未知 {cov.unknown}[/dim]"
         )
 
+    # 工具对账一行(越界视图一期,信息性):轨迹里的领域工具动作 × 声明工具要求。
+    # 未声明 ≠ 违规(声明通常不穷举工具),非零才打,只提示人去看 HTML 的 boundary 区块。
+    bnd = report.boundary
+    if bnd.undeclared:
+        n_bnd_sessions = len({
+            tp for e in bnd.tools
+            if e.classification == "undeclared-domain" for tp in e.transcripts
+        })
+        console.print(
+            f"工具对账: 未声明领域工具 [bold]{bnd.undeclared}[/bold] 个 · "
+            f"{n_bnd_sessions} 会话"
+            f"[dim](信息性,不构成违规判定;详见报告 boundary 区块)[/dim]"
+        )
+
     tu = report.token_usage
     if tu.get("calls"):
         cache_read = tu.get("cache_read_input_tokens", 0)

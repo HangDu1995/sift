@@ -59,6 +59,7 @@ from sift.audit.declare import derive_declarations
 from sift.audit.rebuild import rebuild
 from sift.audit.tool_match import extract_first_balanced, load_json_lenient, match_tool_call
 from sift.audit.aggregate import aggregate_by_instruction, aggregate_coverage
+from sift.audit.boundary import aggregate_boundary
 from sift.audit.dedup import post_process_findings
 from sift.audit import headline_cache, refine_cache
 from sift.concurrency import (
@@ -557,6 +558,7 @@ class TranscriptAuditor:
         all_findings: list[AuditFinding] = []
         transcript_names: list[str] = []
         transcript_sources: list[str] = []  # 与 transcript_names 同序;"cc"/"opencode"/...
+        boundary_traces: list[tuple[str, list]] = []  # 越界视图输入:(transcript 名, rebuild 的 tool_trace)
 
         for ti, tp in enumerate(transcripts, 1):
             _emit(on_progress, f"对账 transcript {ti}/{len(transcripts)}: {tp.name}")
@@ -564,6 +566,7 @@ class TranscriptAuditor:
                 _t = time.perf_counter()
                 tool_trace, transcript_text, digest = rebuild(tp, locate_turns=locate_turns)
                 stage_seconds["rebuild"] += time.perf_counter() - _t
+                boundary_traces.append((tp.name, tool_trace))
             except SiftError as e:
                 # 坏/空 transcript:不崩,记 warning 跳过(其余 transcript 照常处理)。
                 warnings.append(f"{tp.name}: {e}")
@@ -691,6 +694,9 @@ class TranscriptAuditor:
         by_instruction = annotate_aggregate_noise(by_instruction)
         # 声明覆盖视图(纯 post-judge 元数据:dedup/seq 已定,seqs 交叉引用可用)。
         coverage = aggregate_coverage(all_findings)
+        # 越界视图(一期信息性:领域工具对账,零 LLM 零缓存;只喂声明侧 instructions,
+        # 不喂 derived——拿被审对象自己声明自己会循环论证)。
+        boundary = aggregate_boundary(boundary_traces, instructions)
         stage_seconds["postprocess"] = time.perf_counter() - _t
 
         # 分阶段耗时/token(rebuild/judge 在 transcript 循环里累加;token 仅 LLM 阶段非 0)。
@@ -727,6 +733,7 @@ class TranscriptAuditor:
             findings=all_findings,
             by_instruction=by_instruction,
             coverage=coverage,
+            boundary=boundary,
             warnings=warnings,
             refine_dropped_count=refine_dropped_count,
             token_usage=acc.snapshot(),

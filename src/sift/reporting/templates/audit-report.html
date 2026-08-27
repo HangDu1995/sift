@@ -131,6 +131,12 @@
     .coverage .seq-link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
     .coverage .seq-link:hover { border-bottom-style: solid; }
     .coverage .all-covered { color: var(--text-muted); font-size: 0.85rem; }
+    .boundary { margin-top: 1.5rem; }
+    .boundary table { border-collapse: collapse; width: 100%; font-size: 0.9rem; margin-top: 0.4rem; }
+    .boundary th, .boundary td { border: 1px solid var(--border); padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+    .boundary th { background: var(--bg); font-weight: 600; }
+    .boundary td.dim { color: var(--text-muted); font-size: 0.85rem; word-break: break-all; }
+    .boundary .hint { color: var(--text-muted); font-size: 0.8rem; display: block; margin-top: 0.3rem; }
   </style>
 </head>
 <body>
@@ -473,6 +479,36 @@
           (cov.uncovered ? '<span class="badge-na">未覆盖 ' + cov.uncovered + '</span>' : '') +
           (cov.unknown ? '<span class="badge-unresolved">未知 ' + cov.unknown + '</span>' : '') +
           '</div>' + covSecHtml + '</div>');
+      }
+
+      // ③c 越界视图(boundary,一期信息性):轨迹里的领域工具动作 × 声明工具要求 对账。
+      // undeclared-domain ≠ 违规——skill 声明通常不穷举工具(bash/read 本就不在声明里),
+      // 未匹配只说明"声明没写",不构成违规判定;此视图是二期行为基线的数据采集面。
+      // builtin(read/bash/grep 等原语 + non_business 白名单)不进分母。
+      var bnd = EMBEDDED_DATA.boundary;
+      if (bnd && bnd.total_tools) {
+        var rows = (bnd.tools || []).map(function (t) {
+          return '<tr>' +
+            '<td>' + escapeHtml(t.name) + '</td>' +
+            '<td>' + (t.classification === 'undeclared-domain'
+              ? '<span class="badge-na" title="内置表外且未命中声明工具要求——信息性,不构成违规判定">未声明</span>'
+              : '<span class="badge-pass" title="命中声明工具要求">已声明</span>') + '</td>' +
+            '<td class="dim">' + (t.declared_by ? escapeHtml(t.declared_by) : '—') + '</td>' +
+            '<td>' + t.sessions + '</td>' +
+            '<td>' + t.calls + '</td>' +
+            '<td class="dim">' + escapeHtml((t.transcripts || []).join(', ')) + '</td>' +
+            '</tr>';
+        }).join('');
+        root.insertAdjacentHTML('beforeend',
+          '<div id="audit-boundary" class="findings-grouped boundary"><h2>工具对账(boundary · 信息性)</h2>' +
+          '<div class="summary"><span>领域工具 <strong>' + bnd.declared + '/' + bnd.total_tools + '</strong> 已在声明中' +
+          (bnd.undeclared ? ' · <span class="badge-na">未声明 ' + bnd.undeclared + ' 个</span>' : '') +
+          '</span>' +
+          (bnd.declared === 0 ? '<span class="hint">声明未列任何工具——下表"未声明"只说明声明侧没写工具要求,不是轨迹越界。</span>' : '') +
+          '<span class="hint">未声明 ≠ 违规:skill 声明通常不穷举工具,内置原语(read/bash/grep 等)不在此列;本视图不构成违规判定。</span>' +
+          '</div>' +
+          '<table><thead><tr><th>工具</th><th>分类</th><th>声明出处</th><th>会话数</th><th>调用数</th><th>transcripts</th></tr></thead>' +
+          '<tbody>' + rows + '</tbody></table></div>');
       }
 
       // ④ findings:多 transcript → 按指令分组(同指令各 transcript 并排可比);

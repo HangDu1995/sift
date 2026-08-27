@@ -43,7 +43,7 @@ def _transcript(tmp_path: Path, name: str = "t.jsonl") -> Path:
 
 
 def _fake_report() -> AuditReport:
-    from sift.models.audit_models import CoverageSummary
+    from sift.models.audit_models import BoundarySummary, CoverageSummary, ToolUsageEntry
 
     return AuditReport(
         skill_name="myskill",
@@ -80,6 +80,16 @@ def _fake_report() -> AuditReport:
         ],
         warnings=[],
         coverage=CoverageSummary(total=3, covered=1, uncovered=2, unknown=0, coverage_rate=1 / 3),
+        boundary=BoundarySummary(
+            total_tools=2, declared=1, undeclared=1,
+            tools=[
+                ToolUsageEntry(name="mcp__db__query", classification="undeclared-domain",
+                               sessions=1, calls=2, transcripts=["t.jsonl"]),
+                ToolUsageEntry(name="mcp__lint__check", classification="domain",
+                               declared_by="用 mcp__lint__check", sessions=1, calls=1,
+                               transcripts=["t.jsonl"]),
+            ],
+        ),
     )
 
 
@@ -164,12 +174,34 @@ def test_audit_writes_report_and_prints_summary(monkeypatch, tmp_path):
     assert data["coverage"]["covered"] == 1
     assert data["coverage"]["uncovered"] == 2
 
+    # 工具对账一行(越界视图一期,信息性);boundary 也落盘进 JSON
+    assert "工具对账" in r.output
+    assert "未声明领域工具 1 个" in r.output
+    assert "不构成违规判定" in r.output
+    assert data["boundary"]["undeclared"] == 1
+    assert data["boundary"]["tools"][0]["name"] == "mcp__db__query"
+
     # TranscriptAuditor 被正确接入:skill_name + body + transcript 透传
     assert len(fake.calls) == 1
     call = fake.calls[0]
     assert call["skill_name"] == "myskill"
     assert "body" in call["skill_body"]
     assert call["transcripts"] == [tp]
+
+
+def test_audit_boundary_line_hidden_when_no_undeclared(monkeypatch, tmp_path):
+    """undeclared=0(全 builtin / 全声明命中)→ 不打工具对账行(非零才打)。"""
+    report = _fake_report()
+    report.boundary.undeclared = 0
+    fake = _FakeAuditor()
+    fake.audit = lambda *a, **kw: report
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
+
+    sp = _skill_dir(tmp_path)
+    tp = _transcript(tmp_path)
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert "工具对账" not in r.output
 
 
 def test_audit_console_summary_includes_token_usage(monkeypatch, tmp_path):

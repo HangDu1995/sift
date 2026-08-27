@@ -1525,6 +1525,8 @@ fixture 下审计的 FAIL 混着工具噪声和真声明问题。报告现在给
 
 **诚实说**：这是**启发式 + 疑似 + 理由，不是权威判决**（可能假阳/假阴）。它**治标**（帮解读现有噪声），没让审计更准 —— 治本仍 `--refine-instructions`（判定前 LLM 砍伪指令，默认开，§12.2）/ 结构化声明（frontmatter 声明 required_*）/ 真实 transcript audit。**别以为「标了 tool_noise = 审计可信了」**。判别规则源码：`audit/noise.py`（纯函数，不调 LLM/不读 transcript）。
 
+**工具对账视图（audit-report 的 boundary 区块）是这对账面的对偶**：覆盖视图问「声明的指令被触达了吗」，它问「轨迹里的动作都有声明对应吗」——把会话里调过的**领域工具**（内置 read/bash/grep 等原语不算）逐个列出、标哪些命中声明工具要求（domain）、哪些没有（undeclared-domain）。一期**纯信息性**：不产 finding、不进 verdict——「未声明 ≠ 违规」，skill 声明通常不穷举工具，基线未成熟前判罚必乱（宁少报不乱报）。用途：一眼看出会话调了哪些声明之外的 MCP/领域工具；同时它是二期 per-skill 行为基线（声明工具要求 ∪ 零 FAIL 会话观测双源交叉后，才升级成判罚 finding）的数据采集面。声明侧工具名三源抽取：工具要求指令的 `tool_name` 参数 / 指令文本里的 `mcp__server__tool` 全名 / 反引号代码字。源码：`audit/boundary.py`（纯聚合，零 LLM 零缓存）。
+
 ### 12.6 这一层的边界：fixture 下边际价值低，真实 transcript 下价值高
 
 诚实说，审计在不同来源下价值差别很大：
@@ -1545,7 +1547,7 @@ audit 跑一次声明 × transcript 对账，内部是一条 **6 阶段顺序流
 | 标题（headline） | LLM | 把指令改写成人话标题，**仅显示、判定不读**，per-声明缓存（§12.3） |
 | 切片（rebuild） | 程序 | 把 transcript 重建为 SessionDigest + 按作用域（`--kind`）切执行段（§13.8） |
 | 判定（judge） | LLM | 三类判官（条件性 / 禁令 / 步骤）逐批调 LLM 判指令遵循性 |
-| 聚合（postprocess） | 程序 | **判定后的汇总**：跨 transcript 按指令聚合 findings（`by_instruction` 的 fail%）+ 噪声判别标注 + 声明覆盖视图（`coverage`：按声明分组统计指令被触达多少） |
+| 聚合（postprocess） | 程序 | **判定后的汇总**：跨 transcript 按指令聚合 findings（`by_instruction` 的 fail%）+ 噪声判别标注 + 声明覆盖视图（`coverage`：按声明分组统计指令被触达多少）+ 工具对账视图（`boundary`：轨迹里的领域工具 × 声明工具要求，信息性） |
 
 要点：
 
@@ -1649,7 +1651,7 @@ sift audit path/to/test-runner/ --transcript session.json --kind agent   # 审�
 - **cc / 结构化 records** = `parent_tool_use_id` 为空的全部 record（主作用域）。主 agent 自己的 turn + 它发起的 Agent dispatch tool_use / tool_result 都在主作用域（这些是主 agent 的编排动作，**包含**）；子 agent 内部 record 的 `parent_tool_use_id` 指向某 Agent 调用（**排除**——那些归各自 `kind="agent"` 单元审）。
 - **opencode** 无父子作用域，root 取 `session.info.agent`（declared 主 agent），复用 `slice_opencode_by_agent` 按连续同 agent message 切段。
 
-**断段差异**（同源于 §13.3 agent 路的「扁平切」）：cc 主作用域过滤后是连贯的主执行流，作为**单 span** 喂 auditor（即使主 record 在原序列里被子 agent record 物理夹断，过滤后仍连贯一段，区别于 agent 路的同名 run 断段）；opencode 按连续 message 切，主 agent 的 message 若被子 agent 的 message 夹断（主…子…主…子…主），会被切成**多段**——这无害，每段独立喂 auditor，findings 全量 pool 后按指令聚合（`aggregate_by_instruction` / `aggregate_coverage` 同为 pool 后的纯聚合，断段等价性同理成立），verdict 与合成单 span 等价（与 agent 路断段无害同理）。
+**断段差异**（同源于 §13.3 agent 路的「扁平切」）：cc 主作用域过滤后是连贯的主执行流，作为**单 span** 喂 auditor（即使主 record 在原序列里被子 agent record 物理夹断，过滤后仍连贯一段，区别于 agent 路的同名 run 断段）；opencode 按连续 message 切，主 agent 的 message 若被子 agent 的 message 夹断（主…子…主…子…主），会被切成**多段**——这无害，每段独立喂 auditor，findings 全量 pool 后按指令聚合（`aggregate_by_instruction` / `aggregate_coverage` / `aggregate_boundary` 同为 pool 后的纯聚合，断段等价性同理成立），verdict 与合成单 span 等价（与 agent 路断段无害同理）。
 
 **target 名对 root 无意义**：skill / agent 路靠声明名（`name` 契约）切，root 只认作用域（cc 的 `parent_tool_use_id` 是否为空 / opencode 的 `info.agent` 字段）——切主 agent 不看它叫什么、target 名忽略。这也是 root 能成为整 session 审计地基的原因：它不依赖某个子单元被点名调用，而是恒定的顶层作用域。
 

@@ -266,7 +266,10 @@ def _render_by_instruction_via_node(report, tmp_path):
         "naTbl:o.includes('场景不适用 N/A'),kua:o.includes('跨 '),"
         "covTbl:o.includes('声明覆盖(coverage)'),covOverall:o.includes('总覆盖'),"
         "covUncovered:o.includes('未覆盖'),covSection:o.includes('声明分组-规则段'),"
-        "covSeqLink:o.includes('#finding-')}));"
+        "covSeqLink:o.includes('#finding-'),"
+        "bndTbl:o.includes('工具对账(boundary'),bndUndeclared:o.includes('>未声明'),"
+        "bndDeclared:o.includes('>已声明'),bndHint:o.includes('不构成违规判定'),"
+        "bndNoDeclNote:o.includes('声明未列任何工具')}));"
     )
     runfile = tmp_path / "run.js"
     runfile.write_text(preamble + js + epilogue, encoding="utf-8")
@@ -375,3 +378,74 @@ def test_audit_html_coverage_hidden_when_total_zero(tmp_path):
     m = _render_by_instruction_via_node(report, tmp_path)
     assert m["covTbl"] is False
     assert m["covOverall"] is False
+
+
+# ---- ③c 越界视图(boundary,一期信息性)----
+
+def _boundary_report(transcripts, with_declared=True):
+    """带越界视图的报告:① undeclared 行(主体)② domain 行(声明命中)。"""
+    from sift.models.audit_models import BoundarySummary, ToolUsageEntry
+
+    tools = [
+        ToolUsageEntry(name="mcp__db__query", classification="undeclared-domain",
+                       sessions=len(transcripts), calls=3, transcripts=list(transcripts)),
+    ]
+    if with_declared:
+        tools.append(ToolUsageEntry(
+            name="mcp__lint__check", classification="domain",
+            declared_by="用 mcp__lint__check 做静态检查", sessions=1, calls=1,
+            transcripts=transcripts[:1]))
+    return AuditReport(
+        skill_name="s", transcripts=transcripts,
+        summary={"total": 0, "pass": 0, "fail": 0, "na": 0},
+        findings=[], by_instruction=[], warnings=[],
+        boundary=BoundarySummary(
+            total_tools=len(tools),
+            declared=1 if with_declared else 0,
+            undeclared=1,
+            tools=tools,
+        ),
+    )
+
+
+def test_audit_html_boundary_block_structural_markers():
+    """③c 越界视图:结构标记 + 数据落盘 + 渲染门控存在。"""
+    html = AuditReportGenerator().generate_html(_boundary_report(["t1.jsonl"]))
+    assert 'id="audit-boundary"' in html        # 结构锚点
+    assert "工具对账" in html                    # 区块标题字面量
+    assert "bnd && bnd.total_tools" in html     # 数据门(total_tools=0 不渲染)
+    assert '"boundary"' in html                 # embedded JSON 带字段
+    assert '"undeclared-domain"' in html        # 值落盘
+
+
+def test_audit_html_boundary_renders_rows_and_disclaimer(tmp_path):
+    """有声明命中 + 未声明 → 表格行(未声明/已声明徽章)+「不构成违规判定」免责声明。"""
+    for transcripts in (["t1.jsonl"], ["t1.jsonl", "t2.jsonl"]):
+        m = _render_by_instruction_via_node(_boundary_report(transcripts), tmp_path)
+        assert m["bndTbl"] is True
+        assert m["bndUndeclared"] is True       # undeclared-domain 行的「未声明」徽章
+        assert m["bndDeclared"] is True         # domain 行的「已声明」徽章
+        assert m["bndHint"] is True             # 免责声明(信息性,不构成违规判定)
+
+
+def test_audit_html_boundary_hidden_when_total_tools_zero(tmp_path):
+    """total_tools=0(全 builtin / 旧产物默认 BoundarySummary)→ 区块不渲染。"""
+    from sift.models.audit_models import BoundarySummary
+
+    report = AuditReport(
+        skill_name="s", transcripts=["t1.jsonl"],
+        summary={"total": 0, "pass": 0, "fail": 0, "na": 0},
+        findings=[], by_instruction=[], warnings=[],
+        boundary=BoundarySummary(),
+    )
+    m = _render_by_instruction_via_node(report, tmp_path)
+    assert m["bndTbl"] is False
+    assert m["bndHint"] is False
+
+
+def test_audit_html_boundary_no_declaration_note(tmp_path):
+    """declared=0 且有工具 → 头部显「声明未列任何工具」防误读(非轨迹越界)。"""
+    m = _render_by_instruction_via_node(_boundary_report(["t1.jsonl"], with_declared=False), tmp_path)
+    assert m["bndTbl"] is True
+    assert m["bndNoDeclNote"] is True
+    assert m["bndDeclared"] is False           # 无 domain 行 → 无「已声明」徽章
