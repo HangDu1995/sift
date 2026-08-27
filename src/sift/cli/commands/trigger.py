@@ -52,6 +52,7 @@ def trigger(
             duration_seconds=res["duration_ms"] / 1000,
             probes=[ProbeResult(id=p["id"], expect_trigger=p["expect_trigger"],
                                 prompt=p["prompt"],
+                                source=p.get("source", ""),
                                 phrase_type=p.get("phrase_type", ""), length_bucket=p.get("length_bucket", ""),
                                 trigger_rate=p["trigger_rate"], verdict=p["verdict"],
                                 transcript_path=p["transcript_path"],

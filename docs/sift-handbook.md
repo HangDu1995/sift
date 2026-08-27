@@ -385,9 +385,17 @@ sift init path/to/skill/ --trigger-probes --num-evals 8   # 每方向上限 8（
 
 LLM 读 skill 的 description 生成两方向探题，追加到 evals.json 的 `trigger_probes` 段（新 id 接续已有 `max+1`）。**不重生成已有 scoring evals**——载入已有 evals.json、只加 trigger 探题（`--trigger-probes` 单用、不加 `--append` 也保留原 scoring 题）。
 
-**anti-leakage（防词面命中）**：生成 prompt 强制探题 paraphrase description、不照抄措辞；生成后还做一道校验——should-trigger 探题若含 description 的 ≥15 字符连续子串，init 打「⚠ N/M 道探题为词面命中」让用户复核。词面命中的探题测的是 cc 字面匹配（抄了词就触发），不是语义触发 → recall 虚高、诊断失真。**只标记、不 retry**（词面命中探题仍有诊断价值：它告诉你 cc 对字面重叠敏感），报告里按 `phrase_type` 分层体现。
+**anti-leakage（防词面命中）**：生成 prompt 强制探题 paraphrase description、不照抄措辞；生成后还做一道校验——should-trigger 探题若含 description 的 ≥15 字符连续子串，init 打「⚠ N/M 道该触发探题为词面命中」（M = 该触发探题数；should-not 不在风险面）让用户复核。词面命中的探题测的是 cc 字面匹配（抄了词就触发），不是语义触发 → recall 虚高、诊断失真。**只标记、不 retry**（词面命中探题仍有诊断价值：它告诉你 cc 对字面重叠敏感），报告里按 `phrase_type` 分层体现。
 
 **`--num-evals` 是每方向上限、不是下限**（关键）：LLM 生成的探题多于这个数会被 trim，少于这个数**原样保留**、不强行凑满——硬凑会出重复 / 充数题，反而劣化信号质量。这是有意的「欠交付」：宁可少几道真信号，不要凑数的噪声。所以实际跑出来某方向可能少于你给的 `--num-evals`，别当成 bug。
+
+**trace-mined 负例（真题挖掘）**：配 `--from-transcript` 时附带挖 should-not 真题——
+
+```bash
+sift init path/to/skill/ --trigger-probes --from-transcript path/to/session.jsonl
+```
+
+生成负例的信号源只有 description 本身，出的题系统性偏「出题人想象」；真实会话里「领域相邻但没触发本 skill」的用户 query 才是真实分布的 near-miss。两层收题：**事实层**（零 LLM）程序判定每条用户 query 之后有没有本 skill 的调用（跳过过短 / slash 命令 / 点名本 skill 的 query）；**语义层** LLM 过滤领域相邻——**只喂 description 不喂 skill 正文**（触发本来就只看 description，喂正文等于泄题），分批 ≤10 条、每条独立 verdict。域外未触发不收（不构成对 description 的压力测试）；LLM 失败仍收、rationale 标 `unverified`（事实层的「未触发」依然成立，人审可删）。挖出的探题 `source: trace-mined`（报告明细「来源」列可见），与既有探题按 prompt（lower+strip）去重、id 接续，不受 `--num-evals` trim 约束。
 
 ### 3.6 边界：诊断定位，无门禁
 

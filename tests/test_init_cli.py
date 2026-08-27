@@ -619,7 +619,119 @@ def test_init_trigger_probes_warns_on_literal_leakage(tmp_path, monkeypatch):
     r = CliRunner().invoke(app, ["init", str(skill), "-o", str(tmp_path / "out"), "--trigger-probes"])
     assert r.exit_code == 0, r.output
     assert "词面命中" in r.output
-    assert "1/2" in r.output   # 1 道 literal(should-trigger)/ 2 道总数
+    assert "1/1" in r.output   # 1 道 literal / 1 道该触发探题(分母=该触发数,should-not 不计)
+
+
+def test_init_trigger_probes_with_from_transcript_mines_negatives(tmp_path, monkeypatch):
+    """--trigger-probes --from-transcript:生成探题 + 挖 trace 负例,source/消息/id 接续齐全。"""
+    import json
+    from typer.testing import CliRunner
+    from sift.cli.main import app
+    from sift.evals.generator import EvalInitGenerator
+    from sift.models import EvalSet, TriggerProbe
+
+    skill = tmp_path / "skill"; skill.mkdir()
+    (skill / "SKILL.md").write_text(
+        "---\nname: my\ndescription: does X\n---\n# body\n")
+    tp = tmp_path / "session.jsonl"
+    tp.write_text("\n".join([
+        json.dumps({"type": "user", "message": {"role": "user",
+                    "content": "领域相邻的真实请求,足够长"}}),
+    ]) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(EvalInitGenerator, "generate_from_transcript",
+        lambda self, sp, t, **k: EvalSet(skill_name="my", evals=[
+            {"id": 1, "prompt": "p", "expectations": ["e"]}]))
+    monkeypatch.setattr(EvalInitGenerator, "generate_trigger_probes",
+        lambda self, sp, num_each=5: [
+            TriggerProbe(id=0, prompt="gen-q", expect_trigger=True, rationale="r")])
+    monkeypatch.setattr("sift.evals.generator.call_claude",
+        lambda *a, **k: json.dumps({"verdicts": [
+            {"index": 1, "verdict": "near_miss", "reason": "same domain"}]}))
+
+    out = tmp_path / "out"; out.mkdir()
+    r = CliRunner().invoke(app, ["init", str(skill), "-o", str(out),
+                                 "--from-transcript", str(tp), "--trigger-probes"])
+    assert r.exit_code == 0, r.output
+    data = json.loads((out / "evals.json").read_text())
+    probes = data["trigger_probes"]
+    assert [p["prompt"] for p in probes] == ["gen-q", "领域相邻的真实请求,足够长"]
+    assert [p["source"] for p in probes] == ["generated", "trace-mined"]
+    assert probes[1]["expect_trigger"] is False          # 挖的负例是 should-not
+    assert [p["id"] for p in probes] == [1, 2]           # id 接续
+    assert "Mined" in r.output and "trace 负例" in r.output
+
+
+def test_init_trigger_probe_mining_dedupes_against_existing(tmp_path, monkeypatch):
+    """挖出的 query 与已有 trigger_probes 同文(lower+strip)→ 不重复入段。"""
+    import json
+    from typer.testing import CliRunner
+    from sift.cli.main import app
+    from sift.evals.generator import EvalInitGenerator
+    from sift.models import EvalSet
+
+    skill = tmp_path / "skill"; skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: my\ndescription: does X\n---\n# body\n")
+    tp = tmp_path / "session.jsonl"
+    tp.write_text("\n".join([
+        json.dumps({"type": "user", "message": {"role": "user", "content": "Same Query Text"}}),
+    ]) + "\n", encoding="utf-8")
+    out = tmp_path / "out"; out.mkdir()
+    (out / "evals.json").write_text(json.dumps({
+        "skill_name": "my", "evals": [{"id": 1, "prompt": "p"}],
+        "trigger_probes": [{"id": 1, "prompt": "same query text", "expect_trigger": False}]}))
+
+    monkeypatch.setattr(EvalInitGenerator, "generate_from_transcript",
+        lambda self, sp, t, **k: EvalSet(skill_name="my", evals=[
+            {"id": 1, "prompt": "p", "expectations": ["e"]}]))
+    monkeypatch.setattr(EvalInitGenerator, "generate_trigger_probes",
+        lambda self, sp, num_each=5: [])
+    monkeypatch.setattr("sift.evals.generator.call_claude",
+        lambda *a, **k: json.dumps({"verdicts": [
+            {"index": 1, "verdict": "near_miss", "reason": "same domain"}]}))
+
+    r = CliRunner().invoke(app, ["init", str(skill), "-o", str(out),
+                                 "--from-transcript", str(tp), "--trigger-probes"])
+    assert r.exit_code == 0, r.output
+    data = json.loads((out / "evals.json").read_text())
+    assert len(data["trigger_probes"]) == 1          # 大小写差异视为同文,不重复入段
+    assert "Mined" not in r.output                   # 全被去重 → 不打 Mined 行
+
+
+def test_init_trigger_probe_unverified_note(tmp_path, monkeypatch):
+    """LLM 过滤失败 → 候选仍收(unverified)、终端打 unverified 计数。"""
+    import json
+    from typer.testing import CliRunner
+    from sift.cli.main import app
+    from sift.evals.generator import EvalInitGenerator
+    from sift.models import EvalSet
+
+    skill = tmp_path / "skill"; skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: my\ndescription: does X\n---\n# body\n")
+    tp = tmp_path / "session.jsonl"
+    tp.write_text("\n".join([
+        json.dumps({"type": "user", "message": {"role": "user", "content": "一条足够长的请求"}}),
+    ]) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(EvalInitGenerator, "generate_from_transcript",
+        lambda self, sp, t, **k: EvalSet(skill_name="my", evals=[]))
+    monkeypatch.setattr(EvalInitGenerator, "generate_trigger_probes",
+        lambda self, sp, num_each=5: [])
+
+    def boom(*a, **k):
+        raise RuntimeError("claude down")
+
+    monkeypatch.setattr("sift.evals.generator.call_claude", boom)
+
+    out = tmp_path / "out"; out.mkdir()
+    r = CliRunner().invoke(app, ["init", str(skill), "-o", str(out),
+                                 "--from-transcript", str(tp), "--trigger-probes"])
+    assert r.exit_code == 0, r.output
+    data = json.loads((out / "evals.json").read_text())
+    assert len(data["trigger_probes"]) == 1
+    assert data["trigger_probes"][0]["source"] == "trace-mined"
+    assert data["trigger_probes"][0]["rationale"].startswith("[unverified")
+    assert "unverified" in r.output
 
 
 def test_init_prints_token_and_duration(monkeypatch, tmp_path):

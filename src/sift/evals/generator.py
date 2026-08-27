@@ -498,6 +498,35 @@ Output JSON ONLY:
                 continue
         return probes
 
+    def mine_trigger_probes(self, skill_path: Path, transcript_path: Path) -> list[TriggerProbe]:
+        """从真实会话 transcript 挖 should-not 负例(领域相邻 + 未触发本 skill 的真实 query)。
+
+        事实层(``trigger_mining.mine_untriggered_queries``,零 LLM)收「未触发 query」候选;
+        语义层(``filter_near_miss``)LLM 过滤领域相邻:near_miss 收 / unrelated 丢 /
+        unverified(LLM 失败)收但 rationale 标注(人审可删)。两层细节与注意力安全
+        设计见 ``trigger_mining`` 模块 docstring。返回的 probe 无有效 id(init 层统一
+        接续编号,同 ``generate_trigger_probes`` 约定)。
+        """
+        from sift.evals.trigger_mining import mine_untriggered_queries, filter_near_miss
+        name, description, *_ = parse_skill_md(skill_path)
+        candidates = mine_untriggered_queries(Path(transcript_path), name)
+        if not candidates:
+            return []
+        verdicts = filter_near_miss(candidates, description, self._llm_call)
+        probes: list[TriggerProbe] = []
+        for query, (verdict, reason) in zip(candidates, verdicts):
+            if verdict == "unrelated":
+                continue  # 域外未触发:低价值,不构成对 description 的压力测试
+            if verdict == "unverified":
+                rationale = "[unverified: LLM 过滤失败,仅事实层(未触发)成立,建议人审]"
+            else:
+                rationale = f"[trace-mined: 真实会话 query,领域相邻且未触发] {reason}"
+            probes.append(TriggerProbe(
+                id=0, prompt=query, expect_trigger=False,
+                rationale=rationale, source="trace-mined",
+            ))
+        return probes
+
     def _is_procedural_skill(self, content: str, skill_path: Path) -> bool:
         """Detect if skill is tool-chain/procedural (deserves L2 evals)."""
         code_blocks = len(re.findall(r'```', content)) // 2

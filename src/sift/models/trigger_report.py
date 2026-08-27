@@ -25,6 +25,7 @@ class ProbeResult(BaseModel):
     duration_seconds: float = 0.0  # 该 probe 各 run cc 耗时之和 / 1000
     phrase_type: str = ""        # 措辞分类(literal 词面命中 / paraphrase 语义改写);空=未算(旧 report 兼容)
     length_bucket: str = ""      # 长度分桶(short/medium/long);空=未算
+    source: str = ""             # 探题来源(generated/trace-mined/manual);空=旧 report 兼容(显示层当 generated)
 
 
 class TriggerReport(BaseModel):

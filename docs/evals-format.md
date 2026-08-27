@@ -188,7 +188,8 @@
 | `id` | int | ✅ | 题号（唯一） |
 | `prompt` | str | ✅ | 喂给 cc 的中性用户请求。should-trigger：**不点名 skill**（点名就只是测字面匹配）；should-not：看着相关但 skill 不该接 |
 | `expect_trigger` | bool | ✅ | `true`=该触发（贡献 `recall`）/ `false`=不该触发（贡献 `false_trigger_rate`） |
-| `rationale` | str | — | 为何该 / 不该触发（人审抓手） |
+| `rationale` | str | — | 为何该 / 不该触发（人审抓手）；trace-mined 探题带 `[trace-mined: …]` 前缀，LLM 过滤失败的带 `[unverified: …]` |
+| `source` | str | — | 来源：`generated`（LLM 生成，默认）/ `trace-mined`（`init --trigger-probes --from-transcript` 从真实会话挖的 should-not 真题）/ `manual`（手写）。旧 JSON 无 → `generated` |
 
 两类探题各测一种失效（详见 [reference · trigger](sift-reference.md#trigger--触发准确度第-4-维)）：should-trigger 测**漏召**（recall），should-not-trigger 测**误触**（false_trigger_rate）——两者是不同失效模式，`trigger` 分开报、不合成一个分。
 

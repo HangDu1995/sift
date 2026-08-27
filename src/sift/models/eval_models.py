@@ -76,6 +76,7 @@ class TriggerProbe(BaseModel):
     prompt: str
     expect_trigger: bool          # True=该触发(贡献 recall)/ False=不该触发(贡献 precision)
     rationale: str = ""           # 为什么该/不该触发(人审抓手)
+    source: str = "generated"     # generated(LLM 生成)/ trace-mined(真实会话挖的负例)/ manual(手写)
 
 
 class EvalSet(BaseModel):

@@ -313,6 +313,7 @@ class TriggerRunner:
                 "id": probe.id,
                 "expect_trigger": probe.expect_trigger,
                 "prompt": probe.prompt,
+                "source": probe.source,
                 "phrase_type": classify_phrase(probe.prompt, self.description),
                 "length_bucket": length_bucket(probe.prompt),
                 "trigger_rate": None if unresolved else trigger_rate,

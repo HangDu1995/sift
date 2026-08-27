@@ -14,7 +14,8 @@ def _sample_report(with_suggestions=True, with_fail=True):
                     trigger_rate=0.0 if with_fail else 1.0,
                     verdict="FAIL" if with_fail else "PASS", tokens=842, duration_seconds=4.5),
         ProbeResult(id=2, expect_trigger=False, prompt="翻译小说",
-                    trigger_rate=0.0, verdict="PASS", tokens=318, duration_seconds=2.1),
+                    trigger_rate=0.0, verdict="PASS", tokens=318, duration_seconds=2.1,
+                    source="trace-mined"),
     ]
     suggestions = [
         Suggestion(category="recall", source="rule",
@@ -99,3 +100,25 @@ def test_html_js_renders_badges_and_per_probe_usage():
     assert "耗时" in r.stdout and "12.3s" in r.stdout     # 汇总耗时徽章(fmtDur)
     assert "842 tok" in r.stdout and "4.5s" in r.stdout   # per-probe 消耗列
     assert "280 tok" in r.stdout and "3.1s" in r.stdout   # LLM suggestion 消耗(tokens>0 才显)
+
+
+def test_html_js_renders_source_column():
+    """探题明细「来源」列:trace-mined 显「真题」、空(旧 report)显「生成」。"""
+    html = TriggerReportGenerator().generate_html(_sample_report())
+    m = re.search(r"<script>(.*)</script>", html, re.S)
+    assert m, "no <script> block"
+    harness = (
+        "var __rendered = '';\n"
+        "var document = { getElementById: function () {"
+        "  return { set innerHTML(v) { __rendered = v; }, get innerHTML() { return __rendered; } };"
+        " } };\n"
+        + m.group(1) + "\nprocess.stdout.write(__rendered);\n"
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(harness)
+        js = f.name
+    r = subprocess.run(["node", js], capture_output=True, text=True)
+    assert r.returncode == 0, f"node failed:\n{r.stderr}"
+    assert "真题" in r.stdout          # probe-2 source=trace-mined → 真题
+    assert "生成" in r.stdout          # probe-1 source 空(旧兼容)→ 生成
+    assert "trace-mined" not in r.stdout  # 原始枚举值不裸显(有 label 映射)

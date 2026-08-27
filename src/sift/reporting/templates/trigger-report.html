@@ -160,13 +160,15 @@
       }
 
       if (D.probes && D.probes.length) {
+        var SRC_LABELS = { 'generated': '生成', 'trace-mined': '真题', 'manual': '手写' };
         html += '<div class="probes"><h2>探题明细</h2><table>';
-        html += '<tr><th>#</th><th>方向</th><th>措辞</th><th>长度</th><th>prompt</th><th>触发率</th><th>verdict</th><th>消耗</th><th>transcript</th></tr>';
+        html += '<tr><th>#</th><th>方向</th><th>来源</th><th>措辞</th><th>长度</th><th>prompt</th><th>触发率</th><th>verdict</th><th>消耗</th><th>transcript</th></tr>';
         for (var j = 0; j < D.probes.length; j++) {
           var p = D.probes[j];
           html += '<tr>'
                + '<td>' + p.id + '</td>'
                + '<td>' + (p.expect_trigger ? '该触发' : '不该触发') + '</td>'
+               + '<td>' + (p.source ? (SRC_LABELS[p.source] || escapeHtml(p.source)) : '生成') + '</td>'
                + '<td>' + (p.phrase_type ? escapeHtml(p.phrase_type) : '-') + '</td>'
                + '<td>' + (p.length_bucket ? escapeHtml(p.length_bucket) : '-') + '</td>'
                + '<td class="prompt">' + escapeHtml(p.prompt) + '</td>'

@@ -95,7 +95,7 @@ sift init path/to/agent.md --kind agent                   # 给 agent 出题(读
 | `--timeout` | 600 | LLM 调用超时秒数（mining 是单次大 prompt；撞超时 → degraded fallback） |
 | `--focus` | (无) | 定向生成某一类 eval 补盲区：`negative-cases`（反面场景）/ `edge-cases`（边界/错误）/ 任意自由文本（声明特定方向）；常配 `--append`。`anti-triggers` 是旧名，保留为静默别名 |
 | `--append` | 关 | 追加到已有 evals.json（不覆盖）：读现有 evals 喂 LLM 定向补题（只补 `--focus` 面、与现有题语义去重），新 eval id 接续已有 `max+1` |
-| `--trigger-probes` | 关 | 生成 trigger-accuracy 探题（should-trigger / should-not-trigger），追加到 evals.json 的 `trigger_probes` 段（见 [evals-format.md](evals-format.md)）。LLM 读 description 出题；默认每方向 5 道，`--num-evals` = 每方向**上限**（trim 多余、不补下限）。不重生成已有 scoring evals（载入已有 evals.json 保留原题）；新探题 id 接续已有 trigger_probes `max+1`。配合 [`trigger`](#trigger--触发准确度第-4-维) 跑 |
+| `--trigger-probes` | 关 | 生成 trigger-accuracy 探题（should-trigger / should-not-trigger），追加到 evals.json 的 `trigger_probes` 段（见 [evals-format.md](evals-format.md)）。LLM 读 description 出题；默认每方向 5 道，`--num-evals` = 每方向**上限**（trim 多余、不补下限；只 trim 生成的，挖出的真题不受限）。**配 `--from-transcript` 时附带挖 trace 负例**：真实会话里「领域相邻且未触发本 skill」的用户 query 收为 should-not 真题（事实层程序判定 + LLM 只按 description 过滤领域相邻；LLM 失败仍收、标 `unverified` 人审）。不重生成已有 scoring evals（载入已有 evals.json 保留原题）；新探题 id 接续已有 trigger_probes `max+1`，与既有探题按 prompt（lower+strip）去重。配合 [`trigger`](#trigger--触发准确度第-4-维) 跑 |
 
 `--from-transcript` 解析 session transcript（模型、user turns、用到的 skill），重建 input_files / commands / produced_files，生成带结构化 assertions 的 eval。若 LLM 失败降级为 fallback eval，会带 `degraded:*` flag 并在终端告警（不再静默）。多声明单元 transcript（多个 skill、或主 agent dispatch 了子 agent）不传 `--kind` 时会把全部当本声明挖（可能串味）→ 终端告警，建议加对应 `--kind skill` / `--kind agent` 只挖本声明段。默认 LLM 生成路径**先重试再降级**（对齐 audit 判官）：调用失败（超时/限流/CLI 错）或响应解析失败（畸形/截断）都大概率瞬态，重试最多 2 次（终端打 `重试 n/2…`），耗尽才退确定性模板出题——每题带 `degraded:llm-fallback(原因;重试 N 次后仍失败)` flag + 终端 ⚠ 块提示重跑，token 已花但考卷非 LLM 出的，一眼可辨。`--kind agent` 同样先重试（1+2 次）；耗尽返回 0 题 + 终端告警，且**不覆盖已有 evals.json**（exit 1，既有考卷字节不动——agent 无确定性 fallback，空集覆盖会把旧题毁在瞬时故障手里）。
 
@@ -468,7 +468,7 @@ sift trigger path/to/skill/ --evals path/to/evals.json --model claude-sonnet-5
 **两种探题**：
 
 - **should-trigger**（`expect_trigger: true`）：该 skill 该处理的真任务，措辞**中性**——不点名 skill、也**不照抄 description 原文**（生成时 prompt 强制 paraphrase；生成后还做一道 anti-leakage 校验：逐条检查 prompt 是否含 description 的 ≥15 字符连续子串，命中则报「词面命中」让用户复核）。照抄措辞测的是字面匹配，不是语义触发。
-- **should-not-trigger**（`expect_trigger: false`）：看着相关但 skill **不该**触发的任务——测误触发 / description 过宽。
+- **should-not-trigger**（`expect_trigger: false`）：看着相关但 skill **不该**触发的任务——测误触发 / description 过宽。两个来源（探题 `source` 字段区分）：`generated`（LLM 读 description 出题——信号源只有 description 本身，系统性偏「出题人想象」）/ `trace-mined`（`init --trigger-probes --from-transcript` 从真实会话挖的真题：领域相邻且未触发本 skill 的用户 query，事实层程序判定「未触发」、LLM 只按 description 过滤领域相邻——不喂 skill 正文防泄题；LLM 失败仍收、rationale 标 `unverified` 人审可删）。
 
 **判定**：每条 probe 跨 N runs 算 `trigger_rate = fired 次数 / runs`，阈值 0.5 二值化 → PASS / FAIL；spawn 失败 / 超时 / **cc 非零退出且没触发**（限流 / 后端不可用：cc 实测 exit 1 + 错误打 stdout、stderr 空，`run_trigger` 不 raise 而返正常输出）→ 该 probe = `UNRESOLVED`（**不进率分母**、`trigger_rate` 置 `null`，宁少报不乱报）。聚合**分开报**（各带样本量）：`recall` = should-trigger 方向均值；`false_trigger_rate` = should-not 方向均值——两者是**不同失效模式、不合成一个分**。某方向 0 probe → 对应率 `null`（N/A，不是假 0.0）。
 
@@ -808,7 +808,8 @@ sift report output/ --open # 生成并打开
 | `id` | 是 | 唯一标识，整数 |
 | `prompt` | 是 | 喂给 cc 的中性用户请求（should-trigger：不点名 skill；should-not：看着相关） |
 | `expect_trigger` | 是 | `true` = 该触发（贡献 `recall`）/ `false` = 不该触发（贡献 `false_trigger_rate`） |
-| `rationale` | 否 | 为何该 / 不该触发（人审抓手） |
+| `rationale` | 否 | 为何该 / 不该触发（人审抓手）；trace-mined 探题带 `[trace-mined: …]` 前缀，LLM 过滤失败的带 `[unverified: …]` |
+| `source` | 否 | 探题来源：`generated`（LLM 生成，默认）/ `trace-mined`（真实会话挖的负例）/ `manual`（手写）。旧 evals.json 无此字段 → `generated`；`trigger-report.json` 的 `probes[].source` 透传（HTML 探题明细「来源」列） |
 
 ### grading.json
 

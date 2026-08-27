@@ -114,6 +114,7 @@ sift init path/to/skill/
 sift init path/to/skill/ --from-transcript session.jsonl   # 从真实会话挖题
 sift init path/to/skill/ --focus negative-cases --append   # 定向补反面场景,追加到已有考卷
 sift init path/to/skill/ --trigger-probes                  # 生成触发准确度探题(should/should-not)
+sift init path/to/skill/ --trigger-probes --from-transcript session.jsonl # 附带从真实会话挖误触发真题
 sift init path/to/agent.md --kind agent                    # 给 agent 出题(凭角色造 role-matching 题)
 ```
 

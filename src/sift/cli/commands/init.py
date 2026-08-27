@@ -166,12 +166,31 @@ def init(
                 except Exception:
                     console.print(f"[yellow]⚠️ 读已有 {output} 失败,trigger 探题将附加到新生成的 evals。[/yellow]")
             with console.status("正在生成 trigger 探题…", spinner="dots"):
-                new_probes = gen.generate_trigger_probes(skill_path, num_each=(num_evals or 5))
-            if num_evals:  # 每方向上限 trim(不补下限)
+                generated_probes = gen.generate_trigger_probes(skill_path, num_each=(num_evals or 5))
+            # trace-mined 负例:配 --from-transcript 才挖(真实会话里领域相邻且未触发本
+            # skill 的用户 query → should-not 真题;单给 --trigger-probes 维持纯生成)。
+            mined_probes = []
+            if from_transcript:
+                with console.status(f"正在从 {from_transcript} 挖 trigger 负例…", spinner="dots"):
+                    mined_probes = gen.mine_trigger_probes(skill_path, from_transcript)
+            if num_evals:  # 每方向上限 trim(不补下限);只 trim 生成的——真题不受生成上限约束
                 per = max(1, num_evals)
-                should = [p for p in new_probes if p.expect_trigger][:per]
-                should_not = [p for p in new_probes if not p.expect_trigger][:per]
-                new_probes = should + should_not
+                should = [p for p in generated_probes if p.expect_trigger][:per]
+                should_not = [p for p in generated_probes if not p.expect_trigger][:per]
+                generated_probes = should + should_not
+            # 归一去重(prompt lower+strip 精确匹配):挖的 vs 已有 + 生成的;挖的内部
+            # 事实层已去重。语义去重不做——量小人审兜底。
+            from sift.evals.trigger_mining import probe_dedup_key
+            _seen_keys = {probe_dedup_key(p.prompt) for p in eval_set.trigger_probes}
+            _seen_keys.update(probe_dedup_key(p.prompt) for p in generated_probes)
+            mined_kept: list = []
+            for p in mined_probes:
+                if probe_dedup_key(p.prompt) in _seen_keys:
+                    continue
+                _seen_keys.add(probe_dedup_key(p.prompt))
+                generated_probes.append(p)
+                mined_kept.append(p)
+            new_probes = generated_probes
             # id 接续已有 trigger_probes 的 max id + 1
             existing_probes = list(eval_set.trigger_probes)
             next_id = max((p.id for p in existing_probes), default=0) + 1
@@ -183,18 +202,24 @@ def init(
                     p.model_dump(mode="json") for p in new_probes
                 )
             if new_probes:
-                console.print(f"[green]Generated[/green] {len(new_probes)} trigger probes")
+                console.print(f"[green]Generated[/green] {len(new_probes) - len(mined_kept)} trigger probes")
+                if mined_kept:
+                    n_unverified = sum(1 for p in mined_kept if p.rationale.startswith("[unverified"))
+                    note = f",{n_unverified} 条 unverified(LLM 过滤失败,建议人审)" if n_unverified else ""
+                    console.print(f"[green]Mined[/green] {len(mined_kept)} 条 trace 负例"
+                                  f"(真实会话领域相邻未触发{note})")
                 # anti-leakage:should-trigger 探题若照抄 description 措辞,cc 可能靠字面匹配
                 # 触发而非语义理解 → recall 虚高。只反馈(词面命中探题仍有诊断价值),不 retry。
                 from sift.parser import parse_skill_md
                 from sift.execution.trigger_runner import classify_phrase, PHRASE_LEAK_MIN_CHARS
                 _desc = parse_skill_md(skill_path)[1]
                 if _desc:
+                    n_generated_st = sum(1 for p in new_probes if p.expect_trigger)
                     leaks = [p for p in new_probes
                              if p.expect_trigger and classify_phrase(p.prompt, _desc) == "literal"]
                     if leaks:
                         console.print(
-                            f"[yellow]⚠ {len(leaks)}/{len(new_probes)} 道探题为词面命中"
+                            f"[yellow]⚠ {len(leaks)}/{n_generated_st} 道该触发探题为词面命中"
                             f"(照抄 description ≥{PHRASE_LEAK_MIN_CHARS} 字符),"
                             f"建议人工复核或收紧 description。[/yellow]"
                         )
