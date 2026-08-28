@@ -336,6 +336,20 @@ class TestJudgeControlFlowProgrammatic:
         assert findings[0].method == AuditMethod.LLM
         assert findings[0].category == AuditCategory.PROHIBITION
 
+    def test_count_ignores_misparsed_required_params(self) -> None:
+        """数量程序判不带参数断言:数量词里的数字被 extractor 误抽成 required_params
+        (「至少 2 次」→ ['2'])时,空 input 的真实调用仍要计数——db-migration
+        fixture 真跑实证的误判形态(调了 2 次却被断言滤成 0 次误 FAIL)。"""
+        aud = TranscriptAuditor()
+        inst = _tool_req("运行 ruff check 至少 2 次", "ruff")
+        inst.params["required_params"] = ["2"]  # 复现 extractor 误抽形态
+        findings = aud._judge_control_flow(
+            [], [(inst, QuantitySpec("count", "gte", 2))], "执行记录",
+            [_tc("Bash", "ruff check a"), _tc("Bash", "ruff check b")], "s.jsonl",
+        )
+        assert findings[0].verdict == AuditVerdict.PASS
+        assert findings[0].evidence == "实测调用 ruff 2 次,满足「至少 2 次」"
+
 
 class TestJudgeControlFlowLLM:
     def _pair(self) -> OrderPair:
@@ -690,3 +704,64 @@ class TestAuditControlFlowWiring:
         report = TranscriptAuditor().audit("plain-skill", PLAIN_SKILL_BODY, [one_transcript])
         assert all(not f.synthetic for f in report.findings)
         assert report.summary["total"] >= 3  # 2 步骤 + 1 禁令照常判
+
+
+class TestDbMigrationFixture:
+    """committed fixture(example-skills/db-migration-zh)守恒:真实 SKILL.md 的
+    检测面 + 违规 transcript 的确定性程序判输入。fixture 被改坏(顺序词/数量词
+    被删、transcript 换内容)时这里先红,防「fixture 在但检测面已空」的静默腐化。"""
+
+    BASE = Path(__file__).parent.parent / "fixtures" / "example-skills" / "db-migration-zh"
+
+    def test_declaration_detection_surface(self) -> None:
+        from sift.compliance.extractor import InstructionExtractor
+        from sift.parser import parse_skill_md
+
+        _, _, _, _, body = parse_skill_md(self.BASE)
+        insts = InstructionExtractor().extract(body)
+        # 顺序对:备份→迁移、迁移→校验(同 section 相邻,显式连词)
+        pairs = detect_order_pairs(insts)
+        assert len(pairs) == 2
+        assert "备份" in pairs[0].a.instruction_text
+        assert "迁移" in pairs[0].b.instruction_text
+        # 数量指令恰一条:count/gte/2 + tool_name(程序判输入);裸行写法防
+        # HEADING_STEP/TOOL_REQUIREMENT 同 bullet 双抽双计
+        quants = detect_quantity(insts)
+        assert [(q[0].params.get("tool_name"), q[1].kind, q[1].op, q[1].threshold)
+                for q in quants] == [("health-check", "count", "gte", 2)]
+
+    def test_violation_transcript_programmatic_fail(self, monkeypatch) -> None:
+        from sift.audit.rebuild import rebuild
+        from sift.compliance.extractor import InstructionExtractor
+        from sift.parser import parse_skill_md
+
+        tp = self.BASE / "transcripts" / "synthetic-violation.jsonl"
+        # 确定性输入:health-check 实调 1 次 < 2;Bash×3(迁移/校验/备份倒序)
+        trace, _, _ = rebuild(tp)
+        assert count_tool_calls("health-check", trace) == 1
+        assert [t.name for t in trace] == ["Bash", "Bash", "Bash", "health-check"]
+
+        fake, _ = _blanket_fake()
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
+        _, _, _, _, body = parse_skill_md(self.BASE)
+        report = TranscriptAuditor().audit("db-migration-zh", body, [tp])
+        # 程序判 FAIL(method=PROGRAMMATIC)不依赖 LLM;ORDER synthetic 照常产
+        q = [f for f in report.findings
+             if "health-check" in (f.instruction_text or "") and not f.synthetic]
+        assert q and q[0].verdict == AuditVerdict.FAIL
+        assert q[0].method == AuditMethod.PROGRAMMATIC
+        assert len([f for f in report.findings if f.synthetic]) == 2
+
+
+def test_issue_triage_agent_fixture_order_surface() -> None:
+    """agent 侧 fixture(example-agents/issue-triage-agent)守恒:原生 .md 声明的
+    步骤节同样产顺序对(控制流判官不绑 skill 形态)。"""
+    from sift.compliance.extractor import InstructionExtractor
+    from sift.parser import parse_skill_md
+
+    base = (Path(__file__).parent.parent / "fixtures" / "example-agents"
+            / "issue-triage-agent" / "issue-triage-agent.md")
+    _, _, _, _, body = parse_skill_md(base)
+    pairs = detect_order_pairs(InstructionExtractor().extract(body))
+    assert len(pairs) == 2
+    assert "检索" in pairs[0].a.instruction_text and "归类" in pairs[0].b.instruction_text

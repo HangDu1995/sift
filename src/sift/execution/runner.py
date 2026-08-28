@@ -548,7 +548,8 @@ class ABTestRunner:
                             None, 0.0, None, phase="compliance",
                         )
                         from sift.audit.auditor import TranscriptAuditor
-                        _, _, _, _, skill_body = parse_skill_md(inject_skill)
+                        from sift.audit.boundary import frontmatter_tool_names
+                        _, _, _, fm, skill_body = parse_skill_md(inject_skill)
                         compliance_report = TranscriptAuditor().audit(
                             skill_name=eval_set.skill_name,
                             skill_body=skill_body,
@@ -557,6 +558,7 @@ class ABTestRunner:
                             timeout=self.scoring_config.llm_timeout,
                             refine_instructions=self.config.refine_instructions,
                             generate_headline=self.config.generate_headline,
+                            declared_tools=frontmatter_tool_names(fm),
                         )
                         (config_dir / "compliance.json").write_text(
                             compliance_report.model_dump_json(indent=2), encoding="utf-8"

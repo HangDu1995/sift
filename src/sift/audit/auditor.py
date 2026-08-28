@@ -509,6 +509,7 @@ class TranscriptAuditor:
         generate_headline: bool = False,
         *,
         locate_turns: bool = False,
+        declared_tools: dict[str, str] | None = None,
     ) -> AuditReport:
         """聚合主入口:把 skill 声明的指令 + transcript 反推声明逐条对账若干 transcript。
 
@@ -535,6 +536,11 @@ class TranscriptAuditor:
                 ``[T{idx}]`` 前缀、禁令/步骤 judge 向 LLM 索取 ``turn_refs`` 并挂在
                 FAIL/INDETERMINATE finding 上,供能 link 到 turn 内容的下游消费方;
                 False 回到无前缀的干净判定(Task 1+2 已让 rebuild/judge 默认 False)。
+            declared_tools: 声明 frontmatter 的工具白名单(``boundary.frontmatter_tool_names``
+                产,``{lower 名: 显示文本}``),只喂越界视图对账;None = 无 frontmatter
+                声明(引擎层不读文件,由 CLI/runner 传入)。
+
+        Returns:
 
         Returns:
             ``AuditReport``:findings 为所有**有效** transcript 的平铺结果;坏/空 transcript
@@ -829,8 +835,9 @@ class TranscriptAuditor:
         # 声明覆盖视图(纯 post-judge 元数据:dedup/seq 已定,seqs 交叉引用可用)。
         coverage = aggregate_coverage(all_findings)
         # 越界视图(一期信息性:领域工具对账,零 LLM 零缓存;只喂声明侧 instructions,
-        # 不喂 derived——拿被审对象自己声明自己会循环论证)。
-        boundary = aggregate_boundary(boundary_traces, instructions)
+        # 不喂 derived——拿被审对象自己声明自己会循环论证)。declared_tools = 调用方
+        # 从声明 frontmatter 抽的工具白名单(第四源,并集兜底)。
+        boundary = aggregate_boundary(boundary_traces, instructions, declared_tools=declared_tools)
         stage_seconds["postprocess"] = time.perf_counter() - _t
 
         # 分阶段耗时/token(rebuild/judge 在 transcript 循环里累加;token 仅 LLM 阶段非 0)。
@@ -1442,13 +1449,16 @@ class TranscriptAuditor:
         """
         findings: list[AuditFinding] = []
 
-        # 程序判:count 型 + tool_name(阈值可程序比对 + 工具可数)
+        # 程序判:count 型 + tool_name(阈值可程序比对 + 工具可数)。
+        # 只数次数、不带 required_params 参数断言——数量词里的数字会被 extractor 误抽成
+        # 参数 token(「至少 2 次」→ ['2']),带断言会把空 input 的真实调用全滤掉、
+        # 误判「0 次」(db-migration fixture 真跑实证);参数级断言归 TOOL_CALLED 桶
+        # (match_tool_call),count 型问的是「调了几次」(docstring 同哲学:不问读了哪个文件)。
         llm_quantified: list[tuple[InstructionCheck, QuantitySpec]] = []
         for inst, q in quantified:
             tool_name = inst.params.get("tool_name", "")
             if q.kind == "count" and tool_name:
-                required_params = inst.params.get("required_params")
-                n = count_tool_calls(tool_name, tool_trace, required_params=required_params)
+                n = count_tool_calls(tool_name, tool_trace)
                 ok = (
                     n >= q.threshold if q.op == "gte"
                     else n <= q.threshold if q.op == "lte"

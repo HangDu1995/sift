@@ -99,13 +99,14 @@ class _FakeAuditor:
     def __init__(self):
         self.calls: list[dict] = []
 
-    def audit(self, skill_name, skill_body, transcripts, model=None, timeout=120, on_progress=None, refine_instructions=False, generate_headline=False, locate_turns=False):
+    def audit(self, skill_name, skill_body, transcripts, model=None, timeout=120, on_progress=None, refine_instructions=False, generate_headline=False, locate_turns=False, declared_tools=None):
         self.calls.append(
             {
                 "skill_name": skill_name,
                 "skill_body": skill_body,
                 "transcripts": list(transcripts),
                 "model": model,
+                "declared_tools": declared_tools,
             }
         )
         return _fake_report()
@@ -534,6 +535,61 @@ def test_audit_no_kind_hints_scope_when_skill_invoked(monkeypatch, tmp_path):
     # 提示出现 + 含本 skill 名 + 仍照常宽松对账(非阻断)
     assert "收窄" in r.output and "--kind" in r.output and "myskill" in r.output
     assert "Audited" in r.output  # 宽松对账照跑
+
+
+def test_audit_passes_frontmatter_tools_to_engine(monkeypatch, tmp_path):
+    """声明 frontmatter 的 tools:/allowed-tools: 白名单由 CLI 抽好传引擎(越界视图
+    第四声明源);普通 skill(无该字段)→ 空 dict,引擎零影响。"""
+    fake = _FakeAuditor()
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
+    sp = tmp_path / "agent"
+    sp.mkdir()
+    (sp / "SKILL.md").write_text(
+        "---\nname: a\ndescription: d\ntools:\n  - Read\n  - mcp__issues__search\n---\n# body\n",
+        encoding="utf-8",
+    )
+    tp = _transcript(tmp_path)
+    out = tmp_path / "out"
+
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    assert fake.calls[0]["declared_tools"] == {
+        "read": "frontmatter: tools", "mcp__issues__search": "frontmatter: tools",
+    }
+
+    # 无 frontmatter 工具字段的普通 skill → 空 dict
+    fake2 = _FakeAuditor()
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake2)
+    sp2 = _skill_dir(tmp_path)
+    r2 = runner.invoke(app, ["audit", str(sp2), "--transcript", str(tp), "-o", str(out)])
+    assert r2.exit_code == 0, r2.output
+    assert fake2.calls[0]["declared_tools"] == {}
+
+
+def test_audit_agent_fixture_frontmatter_boundary_end_to_end(monkeypatch, tmp_path):
+    """committed agent fixture(issue-triage-agent):frontmatter tools 是唯一声明源
+    (正文零工具名),--kind agent 整链 → mcp__issues__search=domain、
+    mcp__slack__post=undeclared-domain;切段落盘。fixture 被改坏时这里先红。"""
+    monkeypatch.setattr(
+        "sift.audit.auditor.call_claude",
+        lambda *a, **k: '[{"index":0,"applicable":true,"violated":false,"verdict":"pass","evidence":"未违规"}]',
+    )
+    base = Path(__file__).parent.parent / "fixtures" / "example-agents" / "issue-triage-agent"
+    out = tmp_path / "out"
+    r = runner.invoke(app, [
+        "audit", str(base / "issue-triage-agent.md"),
+        "--transcript", str(base / "transcripts" / "synthetic-mcp.jsonl"),
+        "--kind", "agent", "-o", str(out),
+    ])
+    assert r.exit_code == 0, r.output
+    data = json.loads((out / "audit-report.json").read_text(encoding="utf-8"))
+    b = data["boundary"]
+    assert b["declared"] == 1 and b["undeclared"] == 1
+    by_name = {t["name"]: t for t in b["tools"]}
+    assert by_name["mcp__issues__search"]["classification"] == "domain"
+    assert by_name["mcp__issues__search"]["declared_by"] == "frontmatter: tools"
+    assert by_name["mcp__slack__post"]["classification"] == "undeclared-domain"
+    assert list((out / "slices").glob("*issue-triage-agent*"))
 
 
 def test_audit_no_kind_hints_scope_when_agent_present(monkeypatch, tmp_path):

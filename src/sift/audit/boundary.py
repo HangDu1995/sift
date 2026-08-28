@@ -22,7 +22,9 @@ undeclared-domain,人看一眼即可补表);**Skill 调用本身不算动作**(s
 ``params.tool_name``(extractor 已抽好,直接用);另扫全部指令文本里的
 ``mcp__[server]__[tool]`` 全名与反引号代码字(约束/禁令里划边界的 MCP 工具)。
 抽不出 → 空(该 skill 无工具声明 → 全部 builtin 外工具进 undeclared-domain,视图头
-注明防误读)。
+注明防误读)。第四源(声明文件 frontmatter):agent 声明的 ``tools:`` 白名单(cc 强制
+生效)与 skill 的 ``allowed-tools:`` ——由调用方(CLI/runner,拿得到 frontmatter)抽好
+传入,引擎层不读文件。
 """
 from __future__ import annotations
 
@@ -55,14 +57,40 @@ _MCP_FULL_NAME_RE = re.compile(r"\bmcp__[A-Za-z0-9_\-]+__[A-Za-z0-9_\-]+")
 _BACKTICK_TOKEN_RE = re.compile(r"`([A-Za-z][\w\-\.]*)`")
 
 
-def declared_tool_names(instructions: list[InstructionCheck]) -> dict[str, str]:
+def frontmatter_tool_names(frontmatter: dict) -> dict[str, str]:
+    """从声明 frontmatter 抽工具白名单 → ``{规范化名(lower): 显示文本}``。
+
+    认两个字段:agent 声明的 ``tools:``(cc 强制生效的白名单)、skill 的
+    ``allowed-tools:``。值必须是 str 列表(别的形态静默忽略——YAML 手写体多样,
+    宁可漏声明也不猜);builtin 名收进来无害(builtin 判定在前)。无命中 → 空 dict。
+    """
+    out: dict[str, str] = {}
+    for field in ("tools", "allowed-tools"):
+        val = frontmatter.get(field)
+        if not isinstance(val, list):
+            continue
+        for item in val:
+            if not isinstance(item, str):
+                continue
+            key = item.strip().lower()
+            if key and key not in out:
+                out[key] = f"frontmatter: {field}"
+    return out
+
+
+def declared_tool_names(
+    instructions: list[InstructionCheck],
+    declared_tools: dict[str, str] | None = None,
+) -> dict[str, str]:
     """从声明指令抽工具名 → ``{规范化名(lower): 显示文本}``。
 
-    三个来源(保守并集,宁多列进 undeclared 也不静默吞——信息性视图的方向安全):
+    四个来源(保守并集,宁多列进 undeclared 也不静默吞——信息性视图的方向安全):
     1. ``TOOL_REQUIREMENT.params.tool_name``(extractor 已抽好,最可靠);
     2. 任意指令文本里的 ``mcp__server__tool`` 全名(约束/禁令划边界的 MCP 工具);
     3. 任意指令文本里的反引号代码字(`` `Grep` `` 等;文件名/脚本名收进来也无害——
-       它们不匹配任何 tool_use 名,不影响 undeclared 计数)。
+       它们不匹配任何 tool_use 名,不影响 undeclared 计数);
+    4. ``declared_tools``(调用方从 frontmatter ``tools:``/``allowed-tools:`` 抽好的
+       白名单,见 ``frontmatter_tool_names``;并集兜底——正文指令的显示文本优先)。
     显示文本取 headline > instruction_text(first-wins)。无工具声明 → 空 dict。
     """
     declared: dict[str, str] = {}
@@ -81,12 +109,15 @@ def declared_tool_names(instructions: list[InstructionCheck]) -> dict[str, str]:
             _add(m.group(0), display)
         for m in _BACKTICK_TOKEN_RE.finditer(text):
             _add(m.group(1), display)
+    for key, display in (declared_tools or {}).items():
+        _add(key, display)
     return declared
 
 
 def aggregate_boundary(
     tool_traces: list[tuple[str, list]],
     instructions: list[InstructionCheck],
+    declared_tools: dict[str, str] | None = None,
 ) -> BoundarySummary:
     """分类 + 对账 + 聚合出 BoundarySummary(纯聚合,零 LLM)。
 
@@ -95,11 +126,13 @@ def aggregate_boundary(
             (cc/opencode 同形;名字大小写双形由 lower 统一)。
         instructions: 声明侧指令(refine 后;derived 反推指令不传——拿被审对象自己
             声明自己会造成循环论证)。
+        declared_tools: frontmatter 工具白名单(``frontmatter_tool_names`` 产;引擎层
+            不读文件,由调用方传入)。并集兜底——正文指令声明优先。
 
     排序:undeclared-domain 先(sessions 降序,再 calls 降序),再 domain(calls 降序);
     空输入 → 全 0。builtin 不进 ``tools``(不构成越界信号)。
     """
-    declared = declared_tool_names(instructions)
+    declared = declared_tool_names(instructions, declared_tools)
     entries: dict[str, ToolUsageEntry] = {}
 
     for transcript_name, trace in tool_traces:

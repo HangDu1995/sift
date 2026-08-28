@@ -6,7 +6,7 @@
 
 ## 这是什么
 
-四份**域无关**的 agent 声明,演示 sift 对 agent 的两条产品线:
+五份**域无关**的 agent 声明,演示 sift 对 agent 的两条产品线:
 
 - **审计线**(test-runner / lint-reviewer):两份短、规则化的 agent + 一份它们被 dispatch 过的
   multi-agent session,演示 `audit` 对 agent 的遵循性对账。agent 和 skill 在 sift 里是
@@ -26,6 +26,7 @@
 |---|---|---|---|
 | [test-runner/](test-runner/) | 跑测试 + 核查覆盖率 + 落报告 | audit | 跑 `pytest`、覆盖率 ≥80%、**严禁** `pytest -x`、写 `TEST_REPORT.md`、禁止捏造 |
 | [lint-reviewer/](lint-reviewer/) | 跑 linter + 复查 | audit | 使用 `./lint.sh`、跑 `ruff check`、必须报全错误、修复后必须复查 |
+| [issue-triage-agent.md](issue-triage-agent/issue-triage-agent.md) | 工单分诊(检索/归类/建议) | audit(boundary 工具对账) | frontmatter `tools:` 白名单是唯一工具声明源;步骤带顺序连词;禁止直接对外发消息 |
 | [pr-reviewer.md](pr-reviewer/pr-reviewer.md) | 审查 PR diff 给行级建议 | critique + 出题 + 打分 | 失败机制(大 diff/AI 生成/批量重命名)+ 黑名单(硬编码密钥/`rm -rf`/测试绿放行)+ 边界(不改码/不 nitpick) |
 | [release-notes-writer.md](release-notes-writer/release-notes-writer.md) | 读 git commit 写 release notes | critique + 出题 + 打分(L2 产文件) | 四类分档、Breaking 带迁移、别捏造、别把 Internal 当 Feature |
 
@@ -35,6 +36,9 @@ agent 的指令必须是在**任何 dev 环境都能真做**的动作(pytest / r
 session 的 verdict 才是"对账抓到了 misbehavior"的信号,而不是"环境缺失导致全 FAIL"的噪声。
 绑特定运行环境的真实 agent(需要真实构建产物 / 硬件 / 数据集的那类),其有意义对账要靠
 **真实 session**(真有那些环境产物),由调用方端到端跑,不靠这种自包含 fixture。
+例外:issue-triage-agent 的 MCP 工具是假想的——它的 session 是**合成**的(演示 boundary
+对账读 frontmatter 白名单,不真跑),对账信号是「调了白名单内/外的工具」本身,不依赖
+环境里真有那两个 MCP server。
 
 ## 示例 session:[multi-agent-session.json](multi-agent-session.json)
 
@@ -141,3 +145,32 @@ sift eval fixtures/example-agents/release-notes-writer/release-notes-writer.md -
 
 (真 LLM 实跑:种下的 `pytest -x` 违规被 FAIL 抓到,遵守的 PASS——见
 `tests/test_agent_audit_example.py::test_full_audit_real_llm`。)
+
+### 审计线(frontmatter 工具白名单):issue-triage-agent
+
+上面两个审计线的 agent 正文里写了工具要求;[issue-triage-agent.md](issue-triage-agent/issue-triage-agent.md)
+演示**工具只声明在 frontmatter `tools:` 白名单**(正文一字不提工具名)的形态——这正是
+agent 的常见写法(cc 对该白名单强制生效),也是 audit **boundary 工具对账视图**的第四
+声明源:不读 frontmatter,声明过的 MCP 工具会被全标「未声明」。
+
+自带 [transcripts/synthetic-mcp.jsonl](issue-triage-agent/transcripts/synthetic-mcp.jsonl):
+主 agent dispatch 本 agent 处理工单,agent 段调了两个 MCP 工具——白名单内的
+`mcp__issues__search`(检索历史工单)和白名单外的 `mcp__slack__post`(直接发值班群,
+同时违反正文「禁止直接对外发消息」边界):
+
+```bash
+sift audit fixtures/example-agents/issue-triage-agent/issue-triage-agent.md \
+  --transcript fixtures/example-agents/issue-triage-agent/transcripts/synthetic-mcp.jsonl \
+  --kind agent --suggest -o /tmp/ita-audit
+```
+
+> **预期结果(真 LLM 实跑验证过)**:
+> - **boundary 工具对账**:`mcp__issues__search` → 已声明(`声明出处` 显
+>   `frontmatter: tools`——只可能来自 frontmatter,正文零工具名);`mcp__slack__post` →
+>   未声明(标警但**不判违规**——「未声明 ≠ 违规」)。
+> - **禁令 FAIL**:「禁止直接对外发消息」被抓到(evidence 引 agent 自述「我把结论直接
+>   发到值班群」+ slack 调用)。
+> - **顺序 PASS**:步骤节的三步(先检索 → 再归类 → 后建议)执行顺序正确,ORDER 判官
+>   (顺序对合成指令,`related` 链两端)两对全 PASS;`--suggest` 对该 FAIL 产一条
+>   skill_fix 建议(把边界句扩写为可执行约束)。
+

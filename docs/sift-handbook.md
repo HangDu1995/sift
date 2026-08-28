@@ -1535,7 +1535,7 @@ fixture 下审计的 FAIL 混着工具噪声和真声明问题。报告现在给
 
 **诚实说**：这是**启发式 + 疑似 + 理由，不是权威判决**（可能假阳/假阴）。它**治标**（帮解读现有噪声），没让审计更准 —— 治本仍 `--refine-instructions`（判定前 LLM 砍伪指令，默认开，§12.2）/ 结构化声明（frontmatter 声明 required_*）/ 真实 transcript audit。**别以为「标了 tool_noise = 审计可信了」**。判别规则源码：`audit/noise.py`（纯函数，不调 LLM/不读 transcript）。
 
-**工具对账视图（audit-report 的 boundary 区块）是这对账面的对偶**：覆盖视图问「声明的指令被触达了吗」，它问「轨迹里的动作都有声明对应吗」——把会话里调过的**领域工具**（内置 read/bash/grep 等原语不算）逐个列出、标哪些命中声明工具要求（domain）、哪些没有（undeclared-domain）。一期**纯信息性**：不产 finding、不进 verdict——「未声明 ≠ 违规」，skill 声明通常不穷举工具，基线未成熟前判罚必乱（宁少报不乱报）。用途：一眼看出会话调了哪些声明之外的 MCP/领域工具；同时它是二期 per-skill 行为基线（声明工具要求 ∪ 零 FAIL 会话观测双源交叉后，才升级成判罚 finding）的数据采集面。声明侧工具名三源抽取：工具要求指令的 `tool_name` 参数 / 指令文本里的 `mcp__server__tool` 全名 / 反引号代码字。源码：`audit/boundary.py`（纯聚合，零 LLM 零缓存）。
+**工具对账视图（audit-report 的 boundary 区块）是这对账面的对偶**：覆盖视图问「声明的指令被触达了吗」，它问「轨迹里的动作都有声明对应吗」——把会话里调过的**领域工具**（内置 read/bash/grep 等原语不算）逐个列出、标哪些命中声明工具要求（domain）、哪些没有（undeclared-domain）。一期**纯信息性**：不产 finding、不进 verdict——「未声明 ≠ 违规」，skill 声明通常不穷举工具，基线未成熟前判罚必乱（宁少报不乱报）。用途：一眼看出会话调了哪些声明之外的 MCP/领域工具；同时它是二期 per-skill 行为基线（声明工具要求 ∪ 零 FAIL 会话观测双源交叉后，才升级成判罚 finding）的数据采集面。声明侧工具名四源抽取：工具要求指令的 `tool_name` 参数 / 指令文本里的 `mcp__server__tool` 全名 / 反引号代码字 / **声明 frontmatter 的工具白名单**（agent 声明的 `tools:`（cc 强制生效）、skill 的 `allowed-tools:`——对 agent 尤其关键：工具白名单常只写在 frontmatter、正文一字不提，不读它会把声明过的工具全标「未声明」；CLI 与 run 内 compliance 都自动从声明文件抽好传入，`declared_by` 显 `frontmatter: tools`）。源码：`audit/boundary.py`（纯聚合，零 LLM 零缓存）。
 
 ### 12.6 这一层的边界：fixture 下边际价值低，真实 transcript 下价值高
 

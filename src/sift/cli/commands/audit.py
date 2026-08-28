@@ -23,6 +23,7 @@ import typer
 from rich.table import Table
 
 from sift.audit.auditor import TranscriptAuditor
+from sift.audit.boundary import frontmatter_tool_names
 from sift.audit.suggest import build_suggestions
 from sift.concurrency import (
     _MAX_BATCH_CONCURRENT,
@@ -230,6 +231,9 @@ def audit(
             configure_adaptive()
 
         name, _desc, _content, _frontmatter, body = parse_skill_md(skill_path)
+        # frontmatter 工具白名单(agent 声明的 tools: / skill 的 allowed-tools:)喂越界
+        # 视图对账(第四声明源;抽不出 → 空 dict,引擎侧零影响)。
+        fm_tools = frontmatter_tool_names(_frontmatter)
 
         if kind is not None and kind not in ("skill", "agent", "root"):
             console.print(f"[red]Error:[/red] --kind 只接受 skill / agent / root,收到 {kind!r}")
@@ -355,6 +359,7 @@ def audit(
             refine_instructions=refine_instructions,
             generate_headline=generate_headline,
             locate_turns=locate_turns,
+            declared_tools=fm_tools,
             on_progress=lambda msg: console.print(msg),
         )
     except SiftError as exc:
@@ -432,7 +437,7 @@ def audit(
         console.print(
             f"工具对账: 未声明领域工具 [bold]{bnd.undeclared}[/bold] 个 · "
             f"{n_bnd_sessions} 会话"
-            f"[dim](信息性,不构成违规判定;详见报告 boundary 区块)[/dim]"
+            f"[dim](不构成违规判定;详见报告 boundary 区块)[/dim]"
         )
 
     # 改进建议一行(--suggest 产;渲染优先级 skipped_reason 先行——失败 ≠ 全怪模型)。

@@ -1,6 +1,6 @@
 # example-skills — 主力示例 skill
 
-6 个示例 skill + 1 条多 skill `--kind skill` 切分 demo transcript,演示 sift 的评测 / 静态诊断能力。**每个示例擅长的面不同**(取决于自带 `evals.json` / `transcript` / `trigger_probes` / 是否为 critique 量身做),照下表选,照命令跑。
+7 个示例 skill + 1 条多 skill `--kind skill` 切分 demo transcript,演示 sift 的评测 / 静态诊断能力。**每个示例擅长的面不同**(取决于自带 `evals.json` / `transcript` / `trigger_probes` / 是否为 critique 量身做),照下表选,照命令跑。
 
 ## 能力速查
 
@@ -10,6 +10,7 @@
 | [log-error-analyzer-zh/](log-error-analyzer-zh/) | 日志分诊 / 中 | ✅ 自带 evals.json | ✅ 自带 transcript | — | 需 `init --trigger-probes` | ✅ |
 | [code-review-auditor/](code-review-auditor/) | 代码 review / 英 | 需先 `init` | — | ✅ 专为真任务设计 | 需 `init --trigger-probes` | ✅ |
 | [release-checklist-zh/](release-checklist-zh/) | 发布自检 / 中 | 需先 `init` | ✅ 自带 transcript | — | 需 `init --trigger-probes` | ✅ |
+| [db-migration-zh/](db-migration-zh/) | 数据库迁移 / 中 | — | ✅ 自带 transcript(控制流) | — | — | ✅ |
 | [incident-reporter/](incident-reporter/) | 事故分诊 / 中 | — | — | — | ✅ 自带 trigger_probes | ✅ |
 | [secret-rotator/](secret-rotator/) | 密钥轮换 / 中 | — | — | — | — | critique ✅(量身示例) |
 
@@ -116,9 +117,23 @@ sift init fixtures/example-skills/release-checklist-zh/ \
 >
 > 典型计数 **pass≈11 / fail≈12 / na≈5**(total≈28)。这个 skill 故意复杂(7 步骤 + 代码块 + 示例列表),extractor 会把"示例当步骤、代码块当输出格式"抽成噪音,所以信噪比低于简单 skill、会出现少量假 FAIL;但真违规仍穿透噪音被抓。同样别钉精确条数,对照"上面这些违规是否都出现在 FAIL"即可。
 
+### db-migration-zh(控制流判定演示:顺序 + 数量)
+
+上面几个 audit 示例的违规都是「漏做 / 编造」类;这一个专为**控制流判官**的两个判定维度造的场景——声明里的步骤带**显式顺序连词**(先备份 → 再迁移 → 后校验)+ 一条 **count 型数量期望**(health-check 至少 2 次),transcript 植入倒序执行 + 少调:
+
+```bash
+sift audit fixtures/example-skills/db-migration-zh/ \
+  --transcript fixtures/example-skills/db-migration-zh/transcripts/synthetic-violation.jsonl --suggest
+```
+
+> **预期 audit 结果(跑完对照)**:
+> - **顺序违规被抓**:transcript 直接跑迁移 → 校验 → **最后才补备份**(用户明说「先做备份」),ORDER 判官对「备份须先于迁移」产 **FAIL**——合成指令(文案形如「(顺序)『先备份数据库…』须先于『…schema 迁移…』」),`related` 链到两端真实步骤;「迁移须先于校验」这步做对了 → **PASS**。
+> - **数量违规(程序判,确定性)**:声明「health-check **至少 2 次**」,transcript 只调 1 次 → **FAIL**,method 显**程序**——count 型 + 工具名走 `count_tool_calls` 计数比对,不经 LLM、无方差。
+> - 已知噪声:步骤里的 `db-backup` / `db-migrate` / `db-verify` 会被抽成工具要求类指令(trace 里实际用 Bash 跑),个别可能 LLM 判 FAIL——与 release-checklist-zh 的信噪比说明同理,对照上面两条核心信号即可,别钉精确条数。
+
 ### incident-reporter(`trigger` 触发准确度演示)
 
-上面 4 个演示 run / audit / task;这一个专为 [`trigger`](../../docs/sift-reference.md)(第 4 维)演示——**frontmatter description 故意写得不精准**,让真跑容易暴露 description 的触发问题,演示 trigger 报告 + 改进建议怎么读。
+上面 5 个演示 run / audit / task;这一个专为 [`trigger`](../../docs/sift-reference.md)(第 4 维)演示——**frontmatter description 故意写得不精准**,让真跑容易暴露 description 的触发问题,演示 trigger 报告 + 改进建议怎么读。
 
 description = 「处理文本内容,生成结构化报告。」——真实 scope 是**事故报告**(见 body),但 description 没说「事故/incident」,且「文本内容/报告」过宽。自带 5 条 `trigger_probes`(2 条该触发的 incident 任务 + 3 条不该触发的相近文本任务):
 
@@ -134,7 +149,7 @@ sift trigger fixtures/example-skills/incident-reporter/ --runs 2 -o /tmp/trig
 
 ### secret-rotator(`critique` 内容质量诊断演示)
 
-上面 5 个演示 run / audit / task / trigger;这一个专为 [`critique`](../../docs/sift-reference.md) 演示——SKILL.md **故意写成内容质量有区分度的混合态**(各维 verdict 不同),让 critique 的 6 维(正文 4 + description 2)各落不同档,跑出来一目了然它查什么、怎么读。
+上面 6 个演示 run / audit / task / trigger;这一个专为 [`critique`](../../docs/sift-reference.md) 演示——SKILL.md **故意写成内容质量有区分度的混合态**(各维 verdict 不同),让 critique 的 6 维(正文 4 + description 2)各落不同档,跑出来一目了然它查什么、怎么读。
 
 ```bash
 sift critique fixtures/example-skills/secret-rotator/            # 6 维内容质量(正文 4 + description 2)
@@ -150,7 +165,7 @@ sift critique fixtures/example-skills/secret-rotator/ --runs 3   # 多数投票(
 
 ### multi-skill-demo(`--kind skill` 多 skill 切分对账)
 
-上面 4 个是**单 skill** 示例;这一个演示**多 skill 会话的 `--kind skill` 切分**(audit 对账 / mining 出卷都支持)。transcript 里交错调了 log-error-analyzer / code-review-auditor / release-checklist-zh(log-error-analyzer 调两次 + 一个子 agent 调 code-review-auditor),`--kind skill` 只取指定 skill 被调用期间的段。两份 transcript **结构相同、产物不同**:
+上面 5 个是**单 skill** 示例;这一个演示**多 skill 会话的 `--kind skill` 切分**(audit 对账 / mining 出卷都支持)。transcript 里交错调了 log-error-analyzer / code-review-auditor / release-checklist-zh(log-error-analyzer 调两次 + 一个子 agent 调 code-review-auditor),`--kind skill` 只取指定 skill 被调用期间的段。两份 transcript **结构相同、产物不同**:
 
 - `multi-skill.jsonl` —— **违规版**(各 skill 产物刻意缺字段/缺段),给 `audit --kind skill` 验切片纯度 + 各段独立抓违规。
 - `multi-skill-clean.jsonl` —— **好版本**(各 skill 产物正确),给 `init --from-transcript --kind skill` 演示多 skill 切分出卷(各 skill 挖各的干净考卷)。

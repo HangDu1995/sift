@@ -7,7 +7,12 @@
 
 import json
 
-from sift.audit.boundary import BUILTIN_TOOLS, aggregate_boundary, declared_tool_names
+from sift.audit.boundary import (
+    BUILTIN_TOOLS,
+    aggregate_boundary,
+    declared_tool_names,
+    frontmatter_tool_names,
+)
 from sift.models.audit_models import BoundarySummary, ToolUsageEntry
 from sift.models.batch_models import InstructionCheck
 from sift.models.enums import CheckMethod, InstructionPriority, InstructionSource
@@ -90,6 +95,51 @@ def test_declared_tool_names_case_insensitive_match():
 
 def test_declared_tool_names_empty_when_no_tool_refs():
     assert declared_tool_names([_inst("输出必须是 JSON 格式")]) == {}
+
+
+# ---------------------------------------------------------------------------
+# 声明侧抽取第四源:frontmatter 工具白名单(agent tools: / skill allowed-tools:)
+# ---------------------------------------------------------------------------
+
+def test_frontmatter_tool_names_agent_tools_list():
+    """agent 声明 frontmatter 的 tools: 白名单(如 pr-reviewer 的 Read/Grep/Bash)。"""
+    fm = {"name": "pr-reviewer", "tools": ["Read", "Grep", "mcp__issues__search"]}
+    assert frontmatter_tool_names(fm) == {
+        "read": "frontmatter: tools",
+        "grep": "frontmatter: tools",
+        "mcp__issues__search": "frontmatter: tools",
+    }
+
+
+def test_frontmatter_tool_names_skill_allowed_tools():
+    fm = {"allowed-tools": ["Bash", "mcp__db__query"]}
+    assert set(frontmatter_tool_names(fm)) == {"bash", "mcp__db__query"}
+
+
+def test_frontmatter_tool_names_ignores_non_list_and_non_str():
+    """YAML 手写体多样:非 list 字段 / list 里非 str 项一律静默忽略(宁漏不猜)。"""
+    assert frontmatter_tool_names({}) == {}
+    assert frontmatter_tool_names({"tools": "Read, Grep"}) == {}      # 逗号串不是 list
+    assert frontmatter_tool_names({"tools": None}) == {}
+    assert frontmatter_tool_names({"tools": ["Read", 3, None]}) == {"read": "frontmatter: tools"}
+
+
+def test_frontmatter_declared_tools_reclassifies_domain():
+    """frontmatter 声明的 MCP 工具 → domain(不声明则 undeclared);builtin 名无害。"""
+    fm_tools = frontmatter_tool_names({"tools": ["mcp__issues__search"]})
+    s = aggregate_boundary(
+        [("t.jsonl", _trace("mcp__issues__search", "mcp__slack__post"))], [], fm_tools,
+    )
+    assert s.declared == 1 and s.undeclared == 1
+    hit = next(e for e in s.tools if e.classification == "domain")
+    assert hit.name == "mcp__issues__search" and hit.declared_by == "frontmatter: tools"
+
+
+def test_declared_tool_names_body_display_wins_over_frontmatter():
+    """并集兜底:同一工具正文指令与 frontmatter 都声明 → 正文显示文本优先。"""
+    insts = [_inst("必须用 mcp__db__query 查数据", headline="用 db 查询")]
+    declared = declared_tool_names(insts, {"mcp__db__query": "frontmatter: tools"})
+    assert declared["mcp__db__query"] == "用 db 查询"
 
 
 # ---------------------------------------------------------------------------
@@ -193,3 +243,29 @@ def test_audit_report_boundary_no_declared_tools(monkeypatch, tmp_path):
     assert report.boundary.undeclared == 1 and report.boundary.declared == 0
     e = report.boundary.tools[0]
     assert e.name == "mcp__db__query" and e.sessions == 1 and e.calls == 1
+
+
+def test_audit_declared_tools_param_feeds_boundary(monkeypatch, tmp_path):
+    """audit(declared_tools=...) 透传越界视图:frontmatter 声明的工具 → domain。"""
+    from sift.audit.auditor import TranscriptAuditor
+
+    monkeypatch.setattr(
+        "sift.audit.auditor.call_claude",
+        lambda *a, **k: '[{"index":0,"violated":false,"evidence":"未违规"}]',
+    )
+    lines = [
+        json.dumps({"type": "user", "message": {"role": "user", "content": "查点东西"}}),
+        json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "name": "mcp__issues__search", "id": "t1", "input": {"q": "x"}}]}}),
+        json.dumps({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}),
+        json.dumps({"type": "result", "result": "done", "usage": {"input_tokens": 1, "output_tokens": 1}}),
+    ]
+    tp = tmp_path / "session.jsonl"
+    tp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    report = TranscriptAuditor().audit(
+        "s", "# x\n\nNEVER fabricate data.\n", [tp],
+        declared_tools={"mcp__issues__search": "frontmatter: tools"},
+    )
+    assert report.boundary.declared == 1 and report.boundary.undeclared == 0
+    assert report.boundary.tools[0].declared_by == "frontmatter: tools"
