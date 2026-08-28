@@ -548,9 +548,11 @@ def test_http_call_first_attempt_has_no_thinking_field(monkeypatch):
     assert "thinking" not in captured["body"]
 
 
-def test_http_call_truncated_no_tooluse_retries_with_budget(monkeypatch):
-    """截断(stop_reason=max_tokens)且无 tool_use → 带 budget 帽重试(同 max_tokens),成功即返。"""
+def test_http_call_truncated_no_tooluse_boosts_max_tokens(monkeypatch):
+    """截断(stop_reason=max_tokens)且无 tool_use → ×2 升档重试(两档,无 budget 中档),
+    成功即返;**升档路上的截断不 warn**(最终结果完整,无 parser 风险)。"""
     import json as _j
+    import warnings as _w
     import sift.utils as u
     calls = []
 
@@ -569,16 +571,18 @@ def test_http_call_truncated_no_tooluse_retries_with_budget(monkeypatch):
 
     monkeypatch.setattr(u.urllib.request, "urlopen", fake_urlopen)
     _http_env(monkeypatch)
-    out = u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
+    with _w.catch_warnings():
+        _w.simplefilter("error", UserWarning)  # 被救回的中间截断不得打 warn
+        out = u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
     assert _j.loads(out) == [{"i": 1}]
     assert calls == [
         (u._HTTP_MAX_TOKENS, None),
-        (u._HTTP_MAX_TOKENS, {"type": "enabled", "budget_tokens": u._HTTP_THINKING_BUDGET}),
+        (u._HTTP_MAX_TOKENS * 2, None),
     ]
 
 
 def test_http_call_truncated_retry_exhausted_raises_notooluse(monkeypatch):
-    """三档(无字段→budget→budget+8192)都截断且无 tool_use → 仍 _HttpNoToolUse(回退 cc)。"""
+    """两档(首档→×2 升档)都截断且无 tool_use → 仍 _HttpNoToolUse(回退 cc)。"""
     import json as _j
     import sift.utils as u
     calls = []
@@ -597,13 +601,12 @@ def test_http_call_truncated_retry_exhausted_raises_notooluse(monkeypatch):
         u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
     assert calls == [
         (u._HTTP_MAX_TOKENS, None),
-        (u._HTTP_MAX_TOKENS, {"type": "enabled", "budget_tokens": u._HTTP_THINKING_BUDGET}),
-        (8192, {"type": "enabled", "budget_tokens": u._HTTP_THINKING_BUDGET}),
+        (u._HTTP_MAX_TOKENS * 2, None),
     ]
 
 
 def test_http_call_escalation_reports_progress_lines(monkeypatch):
-    """截断升档三连 → 每档重试前经 on_progress 报一行(判官批/suggest 单发动辄数百秒,
+    """截断升档 → 重试前经 on_progress 报一行(判官批/suggest 单发动辄数百秒,
     静默数分钟终端像死机;报行让看终端的人知道它在动)。"""
     import sift.utils as u
     lines = []
@@ -619,9 +622,33 @@ def test_http_call_escalation_reports_progress_lines(monkeypatch):
     with pytest.raises(u._HttpNoToolUse):
         u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None,
                          on_progress=lines.append)
-    assert len(lines) == 2
-    assert "thinking 帽" in lines[0]
-    assert "升档" in lines[1] and str(u._HTTP_RETRY_MAX_TOKENS) in lines[1]
+    assert len(lines) == 1
+    assert "升档" in lines[0] and str(u._HTTP_MAX_TOKENS * 2) in lines[0]
+
+
+def test_http_call_max_tokens_override_starts_ladder(monkeypatch):
+    """max_tokens 覆盖:首档从覆盖值起、升档 = min(首档×2, 绝对上限) 一发——调用方按工作量
+    给首档(suggest 按簇数 6000+2500×n),固定小帽的截断不再靠人肉调常数追。"""
+    import json as _j
+    import sift.utils as u
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        b = _j.loads(req.data.decode())
+        calls.append((b["max_tokens"], b.get("thinking")))
+        return _FakeResp({
+            "content": [{"type": "thinking", "thinking": "x"}],
+            "stop_reason": "max_tokens", "usage": {"input_tokens": 1, "output_tokens": 4096},
+        })
+
+    monkeypatch.setattr(u.urllib.request, "urlopen", fake_urlopen)
+    _http_env(monkeypatch)
+    with pytest.raises(u._HttpNoToolUse):
+        u._llm_http_call("p", "glm-5.3", 60, {"type": "object"}, None, max_tokens=19096)
+    assert calls == [
+        (19096, None),
+        (u._HTTP_RETRY_MAX_TOKENS, None),
+    ]  # 19096×2=38192 超绝对上限 → 封顶
 
 
 def test_http_call_progress_silent_on_success_and_without_callback(monkeypatch):
@@ -772,7 +799,10 @@ def test_http_call_truncated_without_usage_callback_still_warns(monkeypatch):
 
 def test_http_call_truncated_no_tooluse_raises_typed(monkeypatch):
     """stop_reason=max_tokens + 没 tool_use(thinking 撑满,tool_use 没空间产)
-    → raise _HttpNoToolUse(stop_reason=max_tokens,交 dispatcher 回退 cc)。"""
+    → raise _HttpNoToolUse(stop_reason=max_tokens,交 dispatcher 回退 cc)。
+    **不打截断 warn**——升档/cc 回退路上的中间截断由进度行叙事,warn 只留给
+    真正被下游消费的截断结果(被救回的截断满屏 warn 像出了 bug)。"""
+    import warnings as _w
     import sift.utils as u
     monkeypatch.setattr(u.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp({
         "stop_reason": "max_tokens",
@@ -780,7 +810,8 @@ def test_http_call_truncated_no_tooluse_raises_typed(monkeypatch):
         "usage": {"input_tokens": 1, "output_tokens": 1},
     }))
     _http_env(monkeypatch)
-    with pytest.warns(UserWarning, match="截断"):
+    with _w.catch_warnings():
+        _w.simplefilter("error", UserWarning)  # 任何截断 UserWarning 直接炸
         with pytest.raises(u._HttpNoToolUse) as ei:
             u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
     assert ei.value.stop_reason == "max_tokens"

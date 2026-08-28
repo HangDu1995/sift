@@ -323,8 +323,8 @@ def test_call_llm_with_retry_success_calls_on_success(monkeypatch):
 
 
 def test_call_llm_with_retry_forwards_on_progress_to_call_claude(monkeypatch):
-    """on_progress 透传进 call_claude(http 层升档/cc 回退进度行从这走;suggest 等单发调用方
-    只给 call_llm_with_retry 一个回调,不透传就永远静默)。"""
+    """on_progress/max_tokens 透传进 call_claude(进度行从这走;max_tokens = 调用方按
+    工作量给的首档上限,suggest 按簇数)。"""
     cc = _reset_limiter_and_time(monkeypatch)
     captured = {}
 
@@ -333,8 +333,9 @@ def test_call_llm_with_retry_forwards_on_progress_to_call_claude(monkeypatch):
         return "ok"
 
     monkeypatch.setattr(cc, "call_claude", fake_call_claude)
-    assert cc.call_llm_with_retry("p", on_progress=print) == "ok"
+    assert cc.call_llm_with_retry("p", on_progress=print, max_tokens=12345) == "ok"
     assert captured.get("on_progress") is print
+    assert captured.get("max_tokens") == 12345
 
 
 def test_call_llm_with_retry_429_then_success_calls_on_throttled(monkeypatch):

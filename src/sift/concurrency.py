@@ -215,6 +215,7 @@ def call_llm_with_retry(
     transport: str = "http",
     on_progress=None,
     max_retries: int = _LLM_WRAPPER_RETRY_MAX,
+    max_tokens: int | None = None,
 ) -> str:
     """调用级 LLM 重试壳:AIMD 门控(``_LLM_LIMITER`` 限在飞)+ 429 退避重试(同份重发)→ 耗尽抛
     ``_LLMRetryExhausted``。
@@ -237,6 +238,7 @@ def call_llm_with_retry(
                     prompt, model=model, timeout=timeout, schema=schema,
                     on_usage=on_usage, transport=transport,
                     on_progress=on_progress,  # http 升档/cc 回退的进度行透传(utils 报行)
+                    max_tokens=max_tokens,    # 按工作量给首档上限(suggest 按簇数);None=默认
                 )
         except _HttpRateLimited as exc:
             # 429 指数退避(基数×2^attempt,镜像 audit _judge_batch_with_retry):速率窗口按

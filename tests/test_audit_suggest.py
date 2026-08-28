@@ -362,18 +362,83 @@ class TestRobustness:
         assert "意外炸了" in result.skipped_reason
 
     def test_batch_parse_failure_counts_dropped(self, monkeypatch) -> None:
-        """整批解析失败 → 该批簇计 dropped、其余批照跑(一批不毁全部)。"""
-        responses = iter(["不是 JSON", _wire([
-            {"category": "model_env", "target_seqs": [1], "rationale": "第二批归因"},
-        ])])
-
+        """整批解析失败 → 该批簇计 dropped、其余批照跑(一批不毁全部)。
+        分批并行后调用序不定,fake 按 prompt 内容分流(第二批 prompt 含「违规11」)。"""
         def fake(prompt, *a, **k):
-            return next(responses)
+            if "#11" in prompt:
+                return _wire([{"category": "model_env", "target_seqs": [1], "rationale": "第二批归因"}])
+            return "不是 JSON"
 
         findings = [_finding(f"违规{i}", AuditVerdict.FAIL, seq=i) for i in range(1, 13)]
         monkeypatch.setattr("sift.audit.suggest.call_llm_with_retry", fake)
         result = build_suggestions(_report(findings), "正文")
         assert result is not None
         assert result.skipped_reason == ""
-        assert result.dropped_count == 10  # 第一批 10 簇整批没解出
+        assert result.dropped_count == 10  # 第一批(违规1..10)10 簇整批没解出
         assert result.model_env_count == 1  # 第二批 wire 的 seq=1 是合法引用,照计(簇归簇)
+
+
+# ---- 弹性上限 + 分批并行 ----------------------------------------------------------
+
+
+class TestElasticParallel:
+    """首档输出上限按批内簇数弹性给(固定小帽对深度归因必截断)、批间并行、单批挂不毁其余批。
+
+    探针锚点(glm-5.3 直连,2026-08-28):6 簇 → output 10.2k,12 簇 → 16.2k
+    (≈ 4k 底噪 + 1.0k/簇);公式 4096 + 1500×簇数全程留余量。
+    """
+
+    @staticmethod
+    def _n_fail_report(n: int) -> AuditReport:
+        return _report([_finding(f"违规{i}", AuditVerdict.FAIL, seq=i)
+                        for i in range(1, n + 1)])
+
+    def test_max_tokens_scales_with_batch_clusters(self, monkeypatch) -> None:
+        """max_tokens = 6000 + 2500×批内簇数(从宽:过量给免费、给窄撞方差浪费一整趟截断);
+        超 10 簇分批后各批按各自己算。"""
+        captured: list[int | None] = []
+
+        def fake(prompt, *a, **k):
+            captured.append(k.get("max_tokens"))
+            return _wire([{"category": "model_env", "target_seqs": [1], "rationale": "r"}])
+
+        monkeypatch.setattr("sift.audit.suggest.call_llm_with_retry", fake)
+        build_suggestions(self._n_fail_report(3), "正文")
+        assert captured == [6000 + 2500 * 3]     # 单批:3 簇
+        captured.clear()
+        build_suggestions(self._n_fail_report(12), "正文")   # 两批:10 + 2
+        assert sorted(captured) == sorted([6000 + 2500 * 10, 6000 + 2500 * 2])
+
+    def test_batches_merge_and_usage_summed(self, monkeypatch) -> None:
+        """两批并行各自调 LLM;建议按簇序合并,usage 并发回报不丢(锁累加,tokens=两批之和)。"""
+        def fake(prompt, *a, **k):
+            if on_usage := k.get("on_usage"):
+                on_usage({"input_tokens": 10, "output_tokens": 5, "note": "x"})
+            if "#11" in prompt:   # 第二批(违规11/12)
+                return _wire([{"category": "model_env", "target_seqs": [12], "rationale": "第二批"}])
+            return _wire([{"category": "skill_fix", "target_seqs": [1], "rationale": "第一批",
+                           "suggestion": "改一改"}])
+
+        monkeypatch.setattr("sift.audit.suggest.call_llm_with_retry", fake)
+        result = build_suggestions(self._n_fail_report(12), "正文")
+        assert result is not None
+        assert [(s.category, s.target_seqs) for s in result.suggestions] == [("skill_fix", [1])]
+        assert result.model_env_count == 1
+        assert result.tokens == 2 * 15          # 两批并发回报,锁防覆盖丢计数
+
+    def test_one_batch_exhausted_keeps_other(self, monkeypatch) -> None:
+        """单批重试耗尽:skipped_reason 收尾,其余批建议保留,挂掉批的簇计 dropped。"""
+        from sift.concurrency import _LLMRetryExhausted
+
+        def fake(prompt, *a, **k):
+            if "#11" in prompt:
+                raise _LLMRetryExhausted("LLM 调用重试耗尽(max_retries=4)")
+            return _wire([{"category": "skill_fix", "target_seqs": [1], "rationale": "r",
+                           "suggestion": "s"}])
+
+        monkeypatch.setattr("sift.audit.suggest.call_llm_with_retry", fake)
+        result = build_suggestions(self._n_fail_report(12), "正文")
+        assert result is not None
+        assert "重试耗尽" in result.skipped_reason
+        assert [(s.category, s.target_seqs) for s in result.suggestions] == [("skill_fix", [1])]
+        assert result.dropped_count == 2         # 挂掉那批的 2 簇

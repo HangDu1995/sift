@@ -50,23 +50,24 @@ class _HttpNoToolUse(Exception):
 # 裸 HTTP forced tool_use 的输出上限。4096(协议级保守默认,所有 Anthropic 兼容端点都接受;
 # 不探 GLM 上限、不 baked 模型数)。曾试 8192 治 thinking 撑满,但实测 GLM 服务端 thinking 随
 # max_tokens 膨胀——8192 让每批 thinking 更长、整体慢;4096 下大部分批(thinking<4096)http
-# 一次过快,撑满没 tool_use 的少数批走 _HttpNoToolUse → cc 回退救回,整体优于 8192 全慢。
-# ⚠️ 上述"8192 更慢"的顾虑已随 thinking budget 硬帽解除(thinking 不再随 max_tokens 膨胀,
-# 增量全归正文)——见 _HTTP_THINKING_MODE。
+# 一次过快,撑满没 tool_use 的少数批走升档重试→cc 回退救回,整体优于 8192 全慢。
 _HTTP_MAX_TOKENS = 4096
 
-# thinking 自适应重试的 budget 帽值:首尝试不带 thinking 字段(GLM 默认浅思考,大多数
-# 模型最快);截断且无 tool_use(= glm-5.3 型狂想行为,大 prompt 下 thinking 撑满总额度,
-# 实测 86.6s 超时)→ 重试才带 enabled+budget。⚠️ 不能静态启用:GLM 把 budget 当锚往满想,
-# glm-5.2 本来想得少,被锚到 1024 后大 prompt 批 ~10s→~30s(judge 段 40-60s→639s);
-# disabled 也不行(实测批均 118s + 畸形连环)。无静态最优 → 快路径起步、失败自适应。
-# 协议约束 1024 ≤ budget < max_tokens。
-_HTTP_THINKING_BUDGET = 1024
+# 请求**不带 thinking 字段**(GLM 默认浅思考,最快)。曾按截断自适应带
+# enabled+budget_tokens 帽重试,2026-08-28 直连探针后删:glm-5.3 的兼容端点**完全无视**
+# budget(budget=1024 时 output_tokens 仍= max_tokens、thinking 填满全部额度)——同值
+# 重试必是重复同样的截断,白烧一趟;glm-5.2 则被 budget 当锚往满想(大 prompt 批
+# ~10s→~30s,judge 段 40-60s→639s);disabled 实测畸形连环更慢。三态无一稳赚 → 不带,
+# 截断的杠杆只有 max_tokens(见 _HTTP_RETRY_MAX_TOKENS)。
 
-# 截断(stop_reason=max_tokens 且无 tool_use)时的升档重试上限:一步到位给两倍余量
-# (重试只有一发,给 6144 这类小增量可能仍不够又浪费掉机会);上限本身不计费,按实际
+# 截断(stop_reason=max_tokens 且无 tool_use)时的升档**绝对上限**:升档 = 首档 ×2、
+# 封顶此值,**只有一发**(首档 4096 默认 → 8192;suggest 按簇数弹性首档 → ×2 到顶)。
+# 不再多开档——深度任务的治本是调用方按工作量给首档(max_tokens 覆盖),这里只兜意外,
+# 档越多只是「不够再开一档」的循环。glm-5.3 直连探针(2026-08-28,suggest 归因任务):
+# 深度推理 thinking ~8.5k token**磨完才动笔**,8192 差一口气(tool_use 空壳刚开头被切),
+# 16384 一发过(10.2k output/161s);端点实收 22k max_tokens。上限本身不计费,按实际
 # 生成 token 付费。再截断才回退 cc。
-_HTTP_RETRY_MAX_TOKENS = 8192
+_HTTP_RETRY_MAX_TOKENS = 32768
 
 
 _CLAUDE_SETTINGS_PATH = os.path.expanduser("~/.claude/settings.json")
@@ -150,7 +151,7 @@ def _emit_progress(on_progress, msg: str) -> None:
             pass
 
 
-def _llm_http_call(prompt, model, timeout, schema, on_usage, on_progress=None):
+def _llm_http_call(prompt, model, timeout, schema, on_usage, on_progress=None, max_tokens=None):
     """裸 HTTP 直连智谱 Anthropic 协议 endpoint(forced tool_use 保 schema)。
 
     省 cc CLI 的进程 spawn + ~25k 系统 prompt/批(spike 实测 refine 5.3×、headline 2.7×、
@@ -160,13 +161,12 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage, on_progress=None):
     schema 模式一致,下游 parser 零改动)。
 
     - **529**(过载/身份限流)→ ``_HttpThrottled``(交 ``call_claude`` dispatcher 回退 cc)。
-    - **thinking 自适应**:首尝试不带 thinking 字段(GLM 默认浅思考,大多数模型最快);
-      截断且无 tool_use(glm-5.3 型狂想,大 prompt thinking 撑满总额度)→ 带
-      ``enabled+budget_tokens`` 帽重试,仍截断升 ``_HTTP_RETRY_MAX_TOKENS`` 再试。
-      静态配置无最优(enabled+budget 锚满老模型 ~3× 慢、disabled 畸形更慢)→ 行为驱动,
-      对用户配的模型版本透明。
-    - **截断升档重试**:stop_reason=max_tokens 且无 tool_use → 以 ``_HTTP_RETRY_MAX_TOKENS``
-      (8192)重发一次再论;仍失败才 ``_HttpNoToolUse`` 回退 cc。非截断的主动不调工具不重试。
+    - **截断升档(两档,升档只有一发)**:首尝试不带 thinking 字段(GLM 默认浅思考,
+      最快);截断且无 tool_use(glm-5.3 型狂想,大 prompt thinking 撑满总额度)→
+      ×2 升档再试(封顶 ``_HTTP_RETRY_MAX_TOKENS``)。不带 budget 帽重试——glm-5.3
+      端点无视 budget(同值重试必重复同样截断),glm-5.2 被 budget 锚满反而慢。
+    - **max_tokens 覆盖**(可选):调用方按工作量给首档上限(如 suggest 按批内簇数),
+      升档从覆盖值起 ×2;不传用 ``_HTTP_MAX_TOKENS``(浅任务默认,判官批)。
     - **没拿到 tool_use 块**(GLM 只回 thinking / thinking 撑满 ``_HTTP_MAX_TOKENS``)
       → ``_HttpNoToolUse``(交 dispatcher 回退 cc:cc 多轮 tool_use 循环催出 + 降级文本兜底)。
     - **其它 HTTP 错**(4xx 配置)/ **传输错**(timeout / URLError)→ ``RuntimeError``
@@ -191,14 +191,11 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage, on_progress=None):
     }
     base = base.rstrip("/")
 
-    def _attempt(max_tokens: int, thinking: dict | None) -> dict:
+    def _attempt(max_tokens: int) -> dict:
         """单次 forced tool_use 调用;usage 即时回报、截断即时 warn(可观测)。
 
-        ``thinking=None`` → 不带该字段(GLM 默认浅思考,大多数模型的最快路径);
-        显式控制(enabled+budget / disabled)只在失败重试时按需加 —— 三态实测
-        (5.2/5.3 大 prompt judge 批):不带字段 5.2 ~10s 最优、5.3 狂想截断;
-        enabled+1024 5.3 ~10s 最优、5.2 被锚满 ~30s;disabled 两边都差(畸形+更慢)。
-        无静态最优 → 快路径起步、失败自适应。
+        请求不带 thinking 字段(GLM 默认浅思考,最快;为何不带见 ``_HTTP_RETRY_MAX_TOKENS``
+        上方的三态实测注释)。
         """
         body = {
             "model": _resolve_http_model(model),
@@ -211,8 +208,6 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage, on_progress=None):
             }],
             "tool_choice": {"type": "tool", "name": "emit"},
         }
-        if thinking is not None:
-            body["thinking"] = thinking
         req = urllib.request.Request(
             base + "/v1/messages", data=json.dumps(body).encode(),
             headers=headers, method="POST",
@@ -245,37 +240,43 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage, on_progress=None):
         # 截断(stop_reason=max_tokens):thinking 顶到上限 → tool_use 可能不完整(有但畸形/缺字段)。
         # **有 tool_use 就用**(即使截断;下游 parser 判完整性,不完整则 parse_failed 重试),
         # 不 cc 回退——曾用"截断就 cc 回退"但 GLM 频繁顶到 max_tokens 致大批请求走 cc(4-6× 慢)。
-        # warn 进 stderr(可观测);on_usage payload 带 truncated 留存(accumulator 按 _KEYS 取,不受影响)。
-        if truncated:
-            warnings.warn(
-                "LLM 响应被截断(stop_reason=max_tokens, max_tokens 上限 "
-                f"{max_tokens}):thinking 顶到上限,tool_use 可能不完整 → 下游 parser "
-                "可能 parse_failed。"
-            )
+        # warn 不在这里打(升档路上的中间截断由 on_progress 进度行叙事,再打 Python UserWarning
+        # 像出了 bug),只打在最终被消费的截断结果上(见 _llm_http_call 返回前);on_usage
+        # payload 带 truncated 留存(accumulator 按 _KEYS 取,不受影响)。
         return obj
 
     # 快路径起步(thinking 不带字段,大多数模型最快);截断且无 tool_use(= thinking
-    # 狂想型模型,如 glm-5.3)→ 带 budget 帽重试;仍截断 → 升 8192 再试;仍败才回退 cc。
-    # GLM 主动不调工具(end_turn 无 tool_use)与预算无关,任何重试无益 → 原样
-    # _HttpNoToolUse 回退 cc。升档前经 on_progress 报一行(判官批 40-257s、升档三连时
-    # 终端会静默数分钟,像死机;报行让看终端的人知道它在动)。
-    obj = _attempt(_HTTP_MAX_TOKENS, None)
+    # 狂想型模型,如 glm-5.3)→ ×2 升档(封顶)再试一发;仍败才回退 cc。**只有两档**:
+    # 首档 = 调用方按工作量给的 max_tokens 覆盖(suggest 按簇数),无覆盖用保守默认
+    # (判官批浅任务);深度任务的余量靠首档给足,不靠这里多开档。GLM 主动不调工具
+    # (end_turn 无 tool_use)与预算无关,任何重试无益 → 原样 _HttpNoToolUse 回退 cc。
+    # 升档前经 on_progress 报一行(判官批 40-257s、升档时终端会静默数分钟,像死机;
+    # 报行让看终端的人知道它在动)。
+    first = max_tokens or _HTTP_MAX_TOKENS
+    boosted = min(first * 2, _HTTP_RETRY_MAX_TOKENS)
+    obj = _attempt(first)
     tool_items = _pick_tool_items(obj)
+    mt_used = first
     if tool_items is None and obj.get("stop_reason") == "max_tokens":
-        _emit_progress(on_progress, "  ↳ 截断(thinking 顶满、没出结果),带 thinking 帽重试…")
-        obj = _attempt(_HTTP_MAX_TOKENS, {"type": "enabled", "budget_tokens": _HTTP_THINKING_BUDGET})
+        _emit_progress(on_progress, f"  ↳ 截断(thinking 顶满、没出结果),升档 max_tokens={boosted} 重试…")
+        obj = _attempt(boosted)
         tool_items = _pick_tool_items(obj)
-    if tool_items is None and obj.get("stop_reason") == "max_tokens":
-        _emit_progress(
-            on_progress, f"  ↳ 仍截断,升档 max_tokens={_HTTP_RETRY_MAX_TOKENS} 重试…")
-        obj = _attempt(_HTTP_RETRY_MAX_TOKENS, {"type": "enabled", "budget_tokens": _HTTP_THINKING_BUDGET})
-        tool_items = _pick_tool_items(obj)
+        mt_used = boosted
     # 没拿到 tool_use(thinking 撑满没空间产 / GLM 主动 end_turn 不调)= forced 真失败
     # → raise _HttpNoToolUse 交 dispatcher 回退 cc(cc 多轮催出 + 降级文本,绕过 http 单次 forced 死结)。
     if tool_items is None:
         raise _HttpNoToolUse(
             f"裸 HTTP 未返回 tool_use(force 失败,thinking 撑满或 GLM 主动不调?): {str(obj)[:300]}",
             stop_reason=obj.get("stop_reason"),
+        )
+    # warn 只打在**最终被下游消费**的截断结果上(截断但有 tool_use、要交给 parser 的)——
+    # 这才是 parser 可能 parse_failed 的真风险点;升档/cc 回退路上的中间截断由进度行叙事,
+    # 不打 Python UserWarning(被救回的截断满屏 warn 只会像出了 bug,真跑反馈)。
+    if obj.get("stop_reason") == "max_tokens":
+        warnings.warn(
+            "LLM 响应被截断(stop_reason=max_tokens, max_tokens 上限 "
+            f"{mt_used}):thinking 顶到上限,tool_use 可能不完整 → 下游 parser "
+            "可能 parse_failed。"
         )
     return json.dumps(tool_items, ensure_ascii=False)
 
@@ -387,6 +388,7 @@ def call_claude(
     *,
     transport: str = "cc",
     on_progress: Callable[[str], None] | None = None,
+    max_tokens: int | None = None,
 ) -> str:
     """调 claude CLI 拿文本回。
 
@@ -425,7 +427,8 @@ def call_claude(
     """
     if transport == "http":
         try:
-            return _llm_http_call(prompt, model, timeout, schema, on_usage, on_progress=on_progress)
+            return _llm_http_call(prompt, model, timeout, schema, on_usage,
+                                  on_progress=on_progress, max_tokens=max_tokens)
         except (_HttpThrottled, _HttpNoToolUse):
             # 529(过载/身份限流)/ forced tool_use 拿不到 tool_use 块(GLM 只回 thinking /
             # thinking 撑满 max_tokens)→ 回退 cc:cc 多轮 tool_use 循环催出 + 降级文本兜底,

@@ -12,8 +12,11 @@
 
 归因粒度 = **逐指令簇**:一条 attribution = 一条 by_instruction 指令,target_seqs =
 其全部 FAIL finding 的 #N(合成 finding 无聚合行,逐条一簇)。粒度定死 LLM 不自选
-——计数稳、渲染不重复、输出规模有界。分批 ≤10 簇/批(http forced tool_use 输出帽
-4096 硬顶,几十簇一次调用必超帽;skill_body + PASS 清单每批全量,典型审计单次调用)。
+——计数稳、渲染不重复、输出规模有界。分批 ≤10 簇/批,批间**并行**(独立 LLM 调用,
+AIMD 限流照常门控;几十簇的墙钟 ≈ 最慢一批,不随批数线性叠加);**输出上限按批内
+簇数弹性给**(glm-5.3 直连探针 2026-08-28:6 簇归因实测 output 10.2k ≈ 底噪 ~3k +
+1.4k/簇,同任务方差 ±30%——深度推理的 thinking 磨完才动笔、不受任何帽控制,只能
+从宽给足额度,固定小帽必截断,撞方差就是浪费一整趟)。
 
 ``build_suggestions`` **永不向外抛**(挂点在落盘前,抛了毁整份报告):一切失败走
 skipped_reason;**无 FAIL 是正常终态 → 返回 None 不落盘**(同 trigger 无失败不留
@@ -23,7 +26,9 @@ skipped_reason;**无 FAIL 是正常终态 → 返回 None 不落盘**(同 trigge
 from __future__ import annotations
 
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from sift.concurrency import _LLMRetryExhausted, call_llm_with_retry
 from sift.models.audit_models import (
@@ -33,9 +38,16 @@ from sift.models.audit_models import (
     AuditVerdict,
 )
 from sift.scoring._jsonschema import inline_schema
+from sift.utils import _HTTP_RETRY_MAX_TOKENS
 
 # 簇/批上限:批判官同款(10/批)。skill_body + PASS 清单每批全量(压缩后很小),FAIL 簇分批。
 _CLUSTERS_PER_BATCH = 10
+# 弹性输出上限:首档 = base + 每簇 N。探针实测 6 簇 output 10.2k、12 簇 16.2k(≈ 4k 底噪 +
+# 1.0k/簇),但同任务思考量 run-to-run 方差 ±30%(实测 10~16k)——给窄了撞方差就是浪费一整趟
+# 截断(e2e 实测多花 ~4min),过量给免费(上限不计费,按实际生成付费)→ 从宽:6k 底噪 +
+# 2.5k/簇。封顶 utils._HTTP_RETRY_MAX_TOKENS(升档梯子也从首档起 ×2)。
+_SUGGEST_TOKENS_BASE = 6000
+_SUGGEST_TOKENS_PER_CLUSTER = 2500
 # 数据完整度门:UNRESOLVED 占比超此值不跑(证据残缺时建议必乱)。分母 = summary.total
 # (全部 findings);INDETERMINATE 不进分子(判不准、重跑无益,不是重跑能救回的残缺)。
 _MAX_UNRESOLVED_RATE = 0.30
@@ -206,8 +218,10 @@ def build_suggestions(
 
     - **无 FAIL → None 不落盘**(正常终态,同 trigger 无失败不留产物);
     - UNRESOLVED 占比 > 30% → 空结果 + skipped_reason(证据残缺,先重跑);
-    - 分批 ≤10 簇/批;**永不向外抛**(挂点在落盘前):重试耗尽 → skipped_reason 收尾
-      (保留已成功批的建议);整批空响应/解析失败 → 该批簇计 dropped_count 继续;
+    - 分批 ≤10 簇/批、批间并行(≤4 workers,AIMD 门控),首档输出上限按簇数弹性
+      (6000 + 2500×簇数,封顶 utils._HTTP_RETRY_MAX_TOKENS);
+    - **永不向外抛**(挂点在落盘前):单批重试耗尽/异常 → skipped_reason 收尾
+      (保留其余批的建议,该批簇计 dropped);整批空响应/解析失败 → 同;
     - 归因映射:fix 两类须非空 suggestion(缺 → 整条丢 + dropped_count);
       model_env 折叠计数 = Σ target_seqs 去重(= FAIL 条数,与文案单位一致);
       target_seqs 引用不存在 #N → 剔除该 seq,全无效 → 丢条目。
@@ -233,54 +247,89 @@ def build_suggestions(
     model_env_seqs: set[int] = set()
     dropped = 0
     skipped_reason = ""
-    try:
-        for bstart in range(0, len(clusters), _CLUSTERS_PER_BATCH):
-            batch = clusters[bstart:bstart + _CLUSTERS_PER_BATCH]
-            prompt = _prompt(skill_body, pass_list, batch, n_transcripts)
+    batches = [clusters[i:i + _CLUSTERS_PER_BATCH]
+               for i in range(0, len(clusters), _CLUSTERS_PER_BATCH)]
+    usage_lock = threading.Lock()
+
+    def _on_usage(payload: dict) -> None:
+        # 并行批各自回报本批用量:锁内**累加**(update 是覆盖,后到批会把先到批的计数冲掉
+        # ——并行下丢一半 token 账);非数字字段(note 等)跳过,_tokens_of 同款守卫。
+        with usage_lock:
+            for k, v in payload.items():
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    usage[k] = usage.get(k, 0) + v
+
+    def _call_batch(k: int, batch: list[dict]):
+        """单批一次 LLM 调用;异常就地收(永不外抛),返回 ("ok"|"exhausted"|"error", payload)。"""
+        mt = min(_HTTP_RETRY_MAX_TOKENS,
+                 _SUGGEST_TOKENS_BASE + _SUGGEST_TOKENS_PER_CLUSTER * len(batch))
+        prog = on_progress
+        if on_progress and len(batches) > 1:
+            prog = (lambda m, _k=k + 1, _n=len(batches):
+                    on_progress(f"  [批 {_k}/{_n}] {m.strip()}"))
+        prompt = _prompt(skill_body, pass_list, batch, n_transcripts)
+        try:
             resp = call_llm_with_retry(
                 prompt, model=model, timeout=timeout,
-                schema=_WIRE_SCHEMA, on_usage=usage.update, transport="http",
-                on_progress=on_progress,  # http 升档/cc 回退进度行(单发最长 600s,静默像死机)
+                schema=_WIRE_SCHEMA, on_usage=_on_usage, transport="http",
+                on_progress=prog,  # http 升档/cc 回退进度行(单发最长 600s,静默像死机)
+                max_tokens=mt,
             )
-            items = _parse_attributions(resp)
-            if items is None:
-                # 整批没解出来:该批簇透明计数(继续跑其余批,别让一批毁全部)
-                dropped += len(batch)
+        except _LLMRetryExhausted:
+            return ("exhausted", None)
+        except Exception as exc:  # 单批挂不毁其余批(并行下其余批照常完成);原因带回汇总
+            return ("error", str(exc)[:120])
+        return ("ok", _parse_attributions(resp))
+
+    # 批间独立 → 并行(≤4 workers;call_llm_with_retry 内部过 AIMD 限流器,在飞照常受控)。
+    # results 按提交序返回(ex.map 语义),下游按簇序消费,建议顺序确定。
+    with ThreadPoolExecutor(max_workers=min(4, len(batches))) as ex:
+        results = list(ex.map(lambda k, b: _call_batch(k, b), range(len(batches)), batches))
+
+    for (status, payload), batch in zip(results, batches):
+        if status == "exhausted":
+            skipped_reason = skipped_reason or "LLM 调用重试耗尽(疑似限流)"
+            dropped += len(batch)
+            continue
+        if status == "error":
+            skipped_reason = skipped_reason or f"建议生成失败: {payload}"
+            dropped += len(batch)
+            continue
+        items = payload
+        if items is None:
+            # 整批没解出来:该批簇透明计数(继续收其余批,别让一批毁全部)
+            dropped += len(batch)
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                dropped += 1
                 continue
-            for item in items:
-                if not isinstance(item, dict):
-                    dropped += 1
-                    continue
-                category = item.get("category")
-                if category not in _WIRE_CATEGORIES:
-                    dropped += 1
-                    continue
-                seqs = [
-                    s for s in (item.get("target_seqs") or [])
-                    if isinstance(s, int) and not isinstance(s, bool) and 1 <= s <= max_seq
-                ]
-                if not seqs:
-                    dropped += 1
-                    continue
-                if category == "model_env":
-                    model_env_seqs.update(seqs)
-                    continue
-                text = str(item.get("suggestion") or "").strip()
-                if not text:
-                    dropped += 1  # fix 类缺 suggestion:不硬凑(归因纪律在 wire 层的落实)
-                    continue
-                suggestions.append(AuditSuggestion(
-                    category=category,
-                    target_seqs=seqs,
-                    suggestion=text,
-                    rationale=str(item.get("rationale") or ""),
-                    keeps_pass=bool(item.get("keeps_pass", False)),
-                    keeps_pass_note=str(item.get("keeps_pass_note") or ""),
-                ))
-    except _LLMRetryExhausted:
-        skipped_reason = "LLM 调用重试耗尽(疑似限流)"
-    except Exception as exc:  # catch-all:挂点在落盘前,永不向外抛
-        skipped_reason = f"建议生成失败: {str(exc)[:120]}"
+            category = item.get("category")
+            if category not in _WIRE_CATEGORIES:
+                dropped += 1
+                continue
+            seqs = [
+                s for s in (item.get("target_seqs") or [])
+                if isinstance(s, int) and not isinstance(s, bool) and 1 <= s <= max_seq
+            ]
+            if not seqs:
+                dropped += 1
+                continue
+            if category == "model_env":
+                model_env_seqs.update(seqs)
+                continue
+            text = str(item.get("suggestion") or "").strip()
+            if not text:
+                dropped += 1  # fix 类缺 suggestion:不硬凑(归因纪律在 wire 层的落实)
+                continue
+            suggestions.append(AuditSuggestion(
+                category=category,
+                target_seqs=seqs,
+                suggestion=text,
+                rationale=str(item.get("rationale") or ""),
+                keeps_pass=bool(item.get("keeps_pass", False)),
+                keeps_pass_note=str(item.get("keeps_pass_note") or ""),
+            ))
 
     return AuditSuggestResult(
         suggestions=suggestions,
