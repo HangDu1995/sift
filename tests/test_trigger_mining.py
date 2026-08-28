@@ -7,6 +7,7 @@ Skill 调用 → 未触发)+ query 卫生(过短/slash 命令/点名本 skill �
 """
 
 import json
+from pathlib import Path
 
 from sift.evals.trigger_mining import (
     MINED_QUERY_MIN_CHARS,
@@ -363,3 +364,39 @@ def test_mined_query_min_chars_boundary(tmp_path):
     assert mine_untriggered_queries(p, name) == ["x" * MINED_QUERY_MIN_CHARS]
     p2 = _write(tmp_path, [_user("x" * (MINED_QUERY_MIN_CHARS - 1))], name="t2.jsonl")
     assert mine_untriggered_queries(p2, name) == []
+
+
+def test_multi_query_session_fixture_fact_layer():
+    """committed fixture(log-error-analyzer/multi-query-session.jsonl)守恒:多 query
+    会话的事实层收题面——触发的 query 不收、三类卫生不过关(slash/过短/点名本
+    skill)不收、未触发且卫生过关的 3 条按序收。fixture 被改坏时这里先红。"""
+    tp = (Path(__file__).parent.parent / "fixtures" / "example-skills"
+          / "log-error-analyzer" / "transcripts" / "multi-query-session.jsonl")
+    assert mine_untriggered_queries(tp, "log-error-analyzer") == [
+        "帮我写个上周的工作周报",
+        "这个报错是什么意思:Connection refused",
+        "帮我看看这段 Python 代码为什么这么慢",
+    ]
+
+
+def test_multi_query_session_fixture_probe_assembly(tmp_path, monkeypatch):
+    """fixture + mock 语义层:near_miss 收(trace-mined 落 rationale)、unrelated 丢
+    ——mine_trigger_probes 两层在 committed fixture 上的端到端组装。"""
+    from sift.evals.generator import EvalInitGenerator
+
+    def fake_llm(prompt: str) -> str:
+        # 3 条候选的固定 verdict:周报=unrelated、报错含义=near_miss、代码慢=unrelated
+        return json.dumps({"verdicts": [
+            {"index": 1, "verdict": "unrelated", "reason": "行政写作,与日志分诊无关"},
+            {"index": 2, "verdict": "near_miss", "reason": "同领域词汇(报错),人类可能误发"},
+            {"index": 3, "verdict": "unrelated", "reason": "性能问题,与日志分诊无关"},
+        ]})
+
+    gen = EvalInitGenerator.__new__(EvalInitGenerator)
+    gen._llm_call = fake_llm
+    base = Path(__file__).parent.parent / "fixtures" / "example-skills" / "log-error-analyzer"
+    probes = gen.mine_trigger_probes(base, base / "transcripts" / "multi-query-session.jsonl")
+    assert [(p.prompt, p.expect_trigger, p.source) for p in probes] == [
+        ("这个报错是什么意思:Connection refused", False, "trace-mined"),
+    ]
+    assert "领域相邻且未触发" in probes[0].rationale

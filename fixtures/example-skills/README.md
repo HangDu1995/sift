@@ -23,6 +23,8 @@
 >
 > 另两个不带这种 transcript:`code-review-auditor` 走路径1 真任务(自己 run 出来再审),`multi-skill-demo` 靠 `build_multi_skill.py` 脚本生成(验的是切分纯度,不是确定性违规)。
 >
+> 还有一类**给 trigger 挖题的**:**`multi-query-session.jsonl`**(仅 log-error-analyzer)— 多 query 会话,不做 audit 输入,是 `init --trigger-probes --from-transcript` 挖 trigger 负例的正源:挖题的窗口判定(「query 到下一条 query 之间有没有本 skill 调用」)只有在连续问多件事的会话里才切得出,单任务会话喂进去挖不到东西。怎么跑见该 skill 章节。
+>
 > **opencode 格式 transcript(`opencode-sessions/`)**:audit `--transcript` 除 cc `.jsonl` 外也吃 **opencode session `.json`** —— 即真实 `opencode export <sessionID>` 的产出(顶层 `info`/`messages`,parts 嵌在 message 里、role/agent 在 `message.info`;与 cc fixture 用真 cc jsonl 同理,用真 opencode export 格式,非自造)。两者重建成同一 `SessionDigest`、对账等价。`log-error-analyzer-zh/opencode-sessions/synthetic-violation.json` 是 cc 同名 `.jsonl` 的 opencode 镜像(同 prompt、同 3 植入违规、同样不写报告);多 skill 版见下面 multi-skill-demo 的 `build_multi_skill_opencode.py`。生产导出真会话:`opencode session list` 找 id → `opencode export <id> > session.json` → audit。**拿到一个 .db 文件**(别处拷来的库):直接 `audit --db handed.db`——内部自动 list/export/audit(单 session 自动选,多个列出挑;底层三步见 [reference 的 audit 段](../../docs/sift-reference.md))。
 
 ## 每个怎么跑
@@ -58,6 +60,15 @@ sift audit fixtures/example-skills/log-error-analyzer/ \
 > ```
 >
 > 实测对照(en/zh 一致):两者都挖出核心客观断言(`FILE_EXISTS error-report.json` + schema 字段 + 真实码);**手构**干净聚焦(同任务多条合并成 1 题),**真跑**更丰富(6-7 题,还多捕获 `security` 字段——真 cc 主动多读了 `security-policy.md`)。手构=确定可控,真跑=反映真实 cc 行为(含小怪癖),正是两者并存对照的意义。
+
+> **挖 trigger 负例(`multi-query-session.jsonl`)**:上面两份是单任务会话(audit / 出卷用);`transcripts/multi-query-session.jsonl` 是**多 query 会话**——用户连续问 7 件事(日志分析 → 写周报 → 问报错含义 → `/clear` → `ok` → 点名本 skill → 看代码慢),专为 `--trigger-probes` 的 **trace-mined 挖题**造。**跑前先把 skill 目录拷到别处**(init 会写 `evals.json`,这份示例的手写考卷别覆盖):
+> ```bash
+> cp -r fixtures/example-skills/log-error-analyzer /tmp/lea-copy
+> sift init /tmp/lea-copy --trigger-probes \
+>   --from-transcript fixtures/example-skills/log-error-analyzer/transcripts/multi-query-session.jsonl
+> ```
+>
+> **预期(真 LLM 实跑验证过)**:事实层(零 LLM)收 3 条「问了但没动用本 skill」的 query(周报 / 报错含义 / 代码慢)——触发的日志分析不收、`/clear` 与 `ok`(卫生不过关)不收、点名本 skill 的不收;语义层 LLM 只留**领域相邻**的「这个报错是什么意思:Connection refused」(near_miss,真跑 rationale:「与错误分类/triage 域高度相邻……有效的假触发探针」),收为 `source: trace-mined` 的 should-not 探题;周报 / 代码慢判 unrelated 丢弃。挖出的负例再喂 `sift trigger` 就能测「问报错含义会不会误唤醒日志分析」。
 
 ### log-error-analyzer-zh(中文示例)
 
