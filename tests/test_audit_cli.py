@@ -204,6 +204,87 @@ def test_audit_boundary_line_hidden_when_no_undeclared(monkeypatch, tmp_path):
     assert "工具对账" not in r.output
 
 
+def test_audit_suggest_default_off(monkeypatch, tmp_path):
+    """--suggest 默认关:不调 build_suggestions,JSON suggestions 为 null、终端不打建议行。"""
+    monkeypatch.setattr(
+        "sift.cli.commands.audit.build_suggestions",
+        lambda *a, **k: pytest.fail("默认关不应调 build_suggestions"),
+    )
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    sp = _skill_dir(tmp_path)
+    tp = _transcript(tmp_path)
+    out = tmp_path / "out"
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "-o", str(out)])
+    assert r.exit_code == 0, r.output
+    assert "改进建议" not in r.output
+    data = json.loads((out / "audit-report.json").read_text(encoding="utf-8"))
+    assert data["suggestions"] is None
+
+
+def test_audit_suggest_flag_persists_and_prints(monkeypatch, tmp_path):
+    """--suggest 开:build_suggestions 挂在落盘前(报告带上建议),终端打汇总行。"""
+    from sift.models.audit_models import AuditSuggestResult, AuditSuggestion
+
+    result = AuditSuggestResult(
+        suggestions=[
+            AuditSuggestion(
+                category="skill_fix", target_seqs=[2],
+                suggestion="给约束加显式措辞", rationale="系统性没做到", keeps_pass=True,
+            ),
+        ],
+        model_env_count=1,
+    )
+    captured: dict = {}
+
+    def fake_build(report, body, model=None, timeout=600):
+        captured["skill_body"] = body
+        captured["fail"] = report.summary.get("fail")
+        return result
+
+    monkeypatch.setattr("sift.cli.commands.audit.build_suggestions", fake_build)
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    sp = _skill_dir(tmp_path)
+    tp = _transcript(tmp_path)
+    out = tmp_path / "out"
+    r = runner.invoke(
+        app, ["audit", str(sp), "--transcript", str(tp), "-o", str(out), "--suggest"],
+    )
+    assert r.exit_code == 0, r.output
+    assert captured["fail"] == 1  # 拿到的是生成完的 report
+    assert "改进建议" in r.output and "skill_fix" in r.output
+    # rich 按终端宽度折行,断言先拍平空白
+    flat = " ".join(r.output.split())
+    assert "1 条 FAIL 归因模型/环境不出建议" in flat
+    data = json.loads((out / "audit-report.json").read_text(encoding="utf-8"))
+    assert data["suggestions"]["suggestions"][0]["category"] == "skill_fix"
+    assert data["suggestions"]["model_env_count"] == 1
+
+
+def test_audit_suggest_skipped_reason_prints_without_counts(monkeypatch, tmp_path):
+    """门控拦下/失败也落盘空 result:终端只显原因行、不显计数(失败 ≠ 全怪模型)。"""
+    from sift.models.audit_models import AuditSuggestResult
+
+    monkeypatch.setattr(
+        "sift.cli.commands.audit.build_suggestions",
+        lambda report, body, model=None, timeout=600: AuditSuggestResult(
+            skipped_reason="UNRESOLVED 占比 2/4 > 30%,证据残缺——先重跑",
+        ),
+    )
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    sp = _skill_dir(tmp_path)
+    tp = _transcript(tmp_path)
+    out = tmp_path / "out"
+    r = runner.invoke(
+        app, ["audit", str(sp), "--transcript", str(tp), "-o", str(out), "--suggest"],
+    )
+    assert r.exit_code == 0, r.output
+    assert "改进建议未生成" in r.output
+    assert "归因模型/环境" not in r.output  # 不显计数行(优先级:reason 先行)
+    data = json.loads((out / "audit-report.json").read_text(encoding="utf-8"))
+    assert data["suggestions"]["skipped_reason"]
+    assert data["suggestions"]["suggestions"] == []
+
+
 def test_audit_console_summary_includes_token_usage(monkeypatch, tmp_path):
     # token_usage 非空 → console 打 token 行 + 写出 JSON 带字段。
     report = _fake_report()

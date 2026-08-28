@@ -137,6 +137,13 @@
     .boundary th { background: var(--bg); font-weight: 600; }
     .boundary td.dim { color: var(--text-muted); font-size: 0.85rem; word-break: break-all; }
     .boundary .hint { color: var(--text-muted); font-size: 0.8rem; display: block; margin-top: 0.3rem; }
+    .suggest { margin-top: 1.5rem; }
+    .suggest-group { margin-top: 0.5rem; }
+    .suggest-item { margin: 0.5rem 0 0.8rem; padding-left: 0.6rem; border-left: 3px solid var(--border); }
+    .suggest-item .suggest-head { margin-bottom: 0.25rem; }
+    .suggest-item .evidence { color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem; }
+    .suggest-env { color: var(--text-muted); font-size: 0.88rem; margin-top: 0.5rem; }
+    .suggest .badge-pass, .suggest .badge-fail { font-size: 0.78rem; margin-left: 0.4rem; }
   </style>
 </head>
 <body>
@@ -561,6 +568,54 @@
           groups[v].forEach(function (f) { det.appendChild(findingRow(f)); });
           fc.appendChild(det);
         });
+      }
+
+      // ⑥ 改进建议(--suggest 产,可选视图;审计独立判决,建议仅供参考)。渲染优先级写死:
+      // skipped_reason 非空 → 只显原因行、不显 model_env 计数(失败与「全归因 model_env」
+      // 两条路都产空 suggestions,不先查 reason 会把失败误读成「没怪模型」或反之);
+      // 跑成但零归因 → 整块不渲染(正常态不渲染空视图,同 boundary/coverage 口径)。
+      var sug = EMBEDDED_DATA.suggestions;
+      if (sug && (sug.skipped_reason || (sug.suggestions || []).length || sug.model_env_count)) {
+        if (sug.skipped_reason) {
+          root.insertAdjacentHTML('beforeend',
+            '<div id="audit-suggest" class="suggest"><h2>💡 改进建议(未生成)</h2>' +
+            '<div class="evidence">' + escapeHtml(sug.skipped_reason) + '</div></div>');
+        } else {
+          var sugGroups = { skill_fix: [], declaration_fix: [] };
+          (sug.suggestions || []).forEach(function (s) {
+            (sugGroups[s.category] || (sugGroups[s.category] = [])).push(s);
+          });
+          var sugHtml = '<div id="audit-suggest" class="suggest"><h2>💡 改进建议(--suggest 产,仅供参考)</h2>';
+          [['skill_fix', '改 skill 建议'], ['declaration_fix', '改声明建议']].forEach(function (pair) {
+            var items = sugGroups[pair[0]] || [];
+            if (!items.length) return;
+            sugHtml += '<details class="suggest-group" open><summary>' + escapeHtml(pair[1]) + ' · ' + items.length + ' 项</summary>';
+            items.forEach(function (s) {
+              var seqs = (s.target_seqs || []).map(function (q) {
+                return '<a class="seq-link" href="#finding-' + escapeHtml(q) + '">#' + escapeHtml(q) + '</a>';
+              }).join(', ');
+              var kpTitle = escapeHtml(s.keeps_pass_note || '');
+              var kp = s.keeps_pass
+                ? '<span class="badge-pass" title="' + kpTitle + '">✓ 不与 PASS 冲突</span>'
+                : '<span class="badge-fail" title="' + kpTitle + '">⚠ 未自检通过</span>';
+              sugHtml += '<div class="suggest-item">' +
+                '<div class="suggest-head">' + seqs + kp + '</div>' +
+                '<div>' + escapeHtml(s.suggestion || '') + '</div>' +
+                '<div class="evidence">归因:' + escapeHtml(s.rationale || '') + '</div>' +
+              '</div>';
+            });
+            sugHtml += '</details>';
+          });
+          if (sug.model_env_count) {
+            sugHtml += '<div class="suggest-env">' + sug.model_env_count +
+              ' 条 FAIL 归因为模型/环境问题,不出建议(透明计数,不是静默吞)</div>';
+          }
+          if (sug.dropped_count) {
+            sugHtml += '<div class="suggest-env">' + sug.dropped_count + ' 条模型输出不合规已丢弃</div>';
+          }
+          sugHtml += '</div>';
+          root.insertAdjacentHTML('beforeend', sugHtml);
+        }
       }
     })();
   </script>

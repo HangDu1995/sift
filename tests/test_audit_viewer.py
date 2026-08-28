@@ -269,7 +269,13 @@ def _render_by_instruction_via_node(report, tmp_path):
         "covSeqLink:o.includes('#finding-'),"
         "bndTbl:o.includes('工具对账(boundary'),bndUndeclared:o.includes('>未声明'),"
         "bndDeclared:o.includes('>已声明'),bndHint:o.includes('不构成违规判定'),"
-        "bndNoDeclNote:o.includes('声明未列任何工具')}));"
+        "bndNoDeclNote:o.includes('声明未列任何工具'),"
+        "sugBlock:o.includes('id=\"audit-suggest\"'),"
+        "sugGroup:o.includes('改 skill 建议'),"
+        "sugEnv:o.includes('归因为模型/环境问题'),"
+        "sugReason:o.includes('改进建议(未生成)'),"
+        "sugSeqLink:o.includes('#finding-2'),"
+        "sugDropped:o.includes('模型输出不合规已丢弃')}));"
     )
     runfile = tmp_path / "run.js"
     runfile.write_text(preamble + js + epilogue, encoding="utf-8")
@@ -449,3 +455,62 @@ def test_audit_html_boundary_no_declaration_note(tmp_path):
     assert m["bndTbl"] is True
     assert m["bndNoDeclNote"] is True
     assert m["bndDeclared"] is False           # 无 domain 行 → 无「已声明」徽章
+
+
+# ---- ⑥ 改进建议区块(--suggest 产;渲染优先级 skipped_reason 先行) --------------
+
+
+def _suggest_report(result) -> AuditReport:
+    return AuditReport(
+        skill_name="s", transcripts=["t1.jsonl"],
+        summary={"total": 2, "pass": 0, "fail": 2, "na": 0},
+        findings=[], by_instruction=[], warnings=[],
+        suggestions=result,
+    )
+
+
+def test_audit_html_suggest_renders_groups_env_count_and_links(tmp_path):
+    """有建议 → 分组(改 skill/改声明)+ model_env 计数行 + #N 可点跳链接。"""
+    from sift.models.audit_models import AuditSuggestResult, AuditSuggestion
+
+    result = AuditSuggestResult(
+        suggestions=[
+            AuditSuggestion(category="skill_fix", target_seqs=[2],
+                            suggestion="加显式约束", rationale="系统性", keeps_pass=True),
+            AuditSuggestion(category="declaration_fix", target_seqs=[1],
+                            suggestion="改为可选", rationale="声明过时", keeps_pass=False),
+        ],
+        model_env_count=3,
+        dropped_count=1,
+    )
+    m = _render_by_instruction_via_node(_suggest_report(result), tmp_path)
+    assert m["sugBlock"] is True
+    assert m["sugGroup"] is True
+    assert m["sugEnv"] is True            # 「N 条 FAIL 归因为模型/环境问题,不出建议」
+    assert m["sugSeqLink"] is True        # target_seqs → #finding-N 链接
+    assert m["sugDropped"] is True        # dropped 透明一行
+
+
+def test_audit_html_suggest_hidden_when_none(tmp_path):
+    """suggestions=None(默认关/无 FAIL)→ 区块不渲染。"""
+    m = _render_by_instruction_via_node(_suggest_report(None), tmp_path)
+    assert m["sugBlock"] is False
+
+
+def test_audit_html_suggest_zero_attribution_hidden(tmp_path):
+    """跑成但零归因(全空计数、reason 空)→ 正常态不渲染空视图(同 boundary/coverage)。"""
+    from sift.models.audit_models import AuditSuggestResult
+
+    m = _render_by_instruction_via_node(_suggest_report(AuditSuggestResult()), tmp_path)
+    assert m["sugBlock"] is False
+
+
+def test_audit_html_suggest_skipped_reason_only_no_env_count(tmp_path):
+    """skipped_reason 非空 → 只显原因行、不显 model_env 计数(失败 ≠ 全怪模型)。"""
+    from sift.models.audit_models import AuditSuggestResult
+
+    result = AuditSuggestResult(skipped_reason="UNRESOLVED 占比过高,先重跑", model_env_count=5)
+    m = _render_by_instruction_via_node(_suggest_report(result), tmp_path)
+    assert m["sugBlock"] is True
+    assert m["sugReason"] is True
+    assert m["sugEnv"] is False           # 计数行不显(渲染优先级写死)

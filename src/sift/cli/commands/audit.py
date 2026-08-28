@@ -23,6 +23,7 @@ import typer
 from rich.table import Table
 
 from sift.audit.auditor import TranscriptAuditor
+from sift.audit.suggest import build_suggestions
 from sift.concurrency import (
     _MAX_BATCH_CONCURRENT,
     configure_adaptive,
@@ -192,6 +193,13 @@ def audit(
         help=("LLM 判定并发上限:显式设 = 固定该值(关自适应);不设 = 默认 AIMD 自适应"
               "(动态探当前后端容量边界,通用工具适配多后端)。"
               "也读 env SIFT_MAX_CONCURRENT;env SIFT_ADAPTIVE_CONCURRENCY=0 显式关自适应"),
+    ),
+    suggest: bool = typer.Option(
+        False,
+        "--suggest/--no-suggest",
+        help=("改进建议(默认关,审计默认姿态是纯判决):对 FAIL findings 做三类归因的 LLM 后处理"
+              "——改 skill 建议 / 改声明建议 / 归因模型·环境的只透明计数不出建议。"
+              "仅供参考,不进任何 gate、不影响 exit code;全 PASS 不跑不落盘"),
     ),
 ):
     """对账真实 session transcript 与声明(不 re-run,直接审历史执行)。"""
@@ -364,6 +372,14 @@ def audit(
     # transcript 名 → 来源(cc/opencode/...);摘要 + findings 表标注用。同序 zip,同名 last-wins。
     src_of = dict(zip(report.transcripts, report.transcript_sources))
 
+    # 改进建议(--suggest 可选,CLI 层后处理——引擎零感知,run 内 compliance 不经这里)。
+    # build_suggestions 永不外抛:无 FAIL → None(正常终态不落盘);残缺/失败 → 空结果 +
+    # skipped_reason(异常态留痕)。token 记在结果自身,不进 report.token_usage(扁平数值键)。
+    if suggest:
+        suggest_result = build_suggestions(report, body, model=model)
+        if suggest_result is not None:
+            report.suggestions = suggest_result
+
     out.mkdir(parents=True, exist_ok=True)
     report_path = out / "audit-report.json"
     report_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
@@ -418,6 +434,24 @@ def audit(
             f"{n_bnd_sessions} 会话"
             f"[dim](信息性,不构成违规判定;详见报告 boundary 区块)[/dim]"
         )
+
+    # 改进建议一行(--suggest 产;渲染优先级 skipped_reason 先行——失败 ≠ 全怪模型)。
+    sug = report.suggestions
+    if sug is not None:
+        if sug.skipped_reason:
+            console.print(f"[yellow]改进建议未生成:[/yellow] {sug.skipped_reason}")
+        else:
+            n_skill = sum(1 for s in sug.suggestions if s.category == "skill_fix")
+            n_decl = sum(1 for s in sug.suggestions if s.category == "declaration_fix")
+            if sug.suggestions or sug.model_env_count:
+                console.print(
+                    f"改进建议: skill_fix [bold]{n_skill}[/bold] 项 · "
+                    f"declaration_fix [bold]{n_decl}[/bold] 项 · "
+                    f"另有 {sug.model_env_count} 条 FAIL 归因模型/环境不出建议"
+                    f"[dim](--suggest 产,仅供参考;详见报告建议区块)[/dim]"
+                )
+            if sug.dropped_count:
+                console.print(f"[dim]建议生成: {sug.dropped_count} 条模型输出不合规已丢弃[/dim]")
 
     tu = report.token_usage
     if tu.get("calls"):

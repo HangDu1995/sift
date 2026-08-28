@@ -256,6 +256,37 @@ class BoundarySummary(BaseModel):
     tools: list[ToolUsageEntry] = Field(default_factory=list)
 
 
+class AuditSuggestion(BaseModel):
+    """一条改进建议(audit --suggest 产,可选视图;诊断产物、不进任何 gate)。
+
+    粒度 = 逐指令簇:一条建议对应一条 by_instruction 指令(或一条合成 finding),
+    ``target_seqs`` 列其全部 FAIL 的 finding #N(渲染复用 seq-link → #finding-N)。
+    """
+
+    category: str            # skill_fix(改 skill 正文) / declaration_fix(改声明)
+    target_seqs: list[int]   # 关联 FAIL finding 的 #N(可点跳)
+    suggestion: str          # 可直接照做的修改建议(含改哪段、怎么改)
+    rationale: str           # 归因理由(为何属这类)
+    keeps_pass: bool         # 自检:建议改的段落不与任何 PASS 指令撞车(可查面有限,见 note)
+    keeps_pass_note: str = ""
+
+
+class AuditSuggestResult(BaseModel):
+    """--suggest 一次运行的产物(CLI 层后处理,引擎不感知)。
+
+    ``skipped_reason`` 只有两个来源(UNRESOLVED 过高 / 失败)——**无 FAIL 是正常终态**,
+    整个字段不落(None),不产空 result(同 trigger 无失败不留产物);渲染端
+    skipped_reason 非空 → 只显原因行、不显计数(失败 ≠ 全怪模型)。
+    """
+
+    suggestions: list[AuditSuggestion] = Field(default_factory=list)
+    model_env_count: int = 0   # 归因 model_env 的 FAIL 条数 = Σ target_seqs 去重,与文案单位一致
+    dropped_count: int = 0     # wire 不合规整条丢弃计数(fix 类缺 suggestion / target_seqs 全无效 / 整批解析失败)
+    skipped_reason: str = ""   # 未跑/失败原因(UNRESOLVED 过高 / LLM 失败);空 = 跑成
+    tokens: int = 0
+    duration_seconds: float = 0.0
+
+
 class AuditReport(BaseModel):
     """一个 skill 一次 audit 的完整报告。"""
 
@@ -276,6 +307,12 @@ class AuditReport(BaseModel):
     # 分母;undeclared ≠ 违规(skill 声明通常不穷举工具),是二期行为基线的数据采集面。
     # 旧 report 无此字段 → 全默认(total_tools 0 → 渲染端不显)。
     boundary: BoundarySummary = Field(default_factory=BoundarySummary)
+    # 改进建议(audit.suggest.build_suggestions 产,--suggest 可选、默认关):对 FAIL
+    # findings 做三类归因并起草改 skill/改声明建议;model_env 归因只透明计数不出建议。
+    # **CLI 层后处理,引擎零感知**(run 内 compliance 不产)。None = 没跑(默认关 /
+    # 无 FAIL 正常终态不落盘)——与 coverage/boundary 的全默认不同,可选产物不跑就没有;
+    # 旧 report 无此字段 → None(向后兼容)。
+    suggestions: AuditSuggestResult | None = None
     warnings: list[str] = Field(default_factory=list)
     # refine(LLM 精筛伪指令)砍掉的条数(len(before) - len(after))。
     # 0 = 没开 refine_instructions 或开了但没砍任何条;向后兼容旧 report(默认 0)。
