@@ -110,6 +110,19 @@ class TestAuditFinding:
         )
         assert f.unresolved_cause == "timeout"
 
+    def test_control_flow_legacy_default_and_roundtrip(self) -> None:
+        # 旧 finding JSON 无 control_flow 字段 → ""(渲染端不显;「数量」记号是新产物才显)
+        base = {
+            "instruction_text": "x", "source": "CONSTRAINT",
+            "verdict": "FAIL", "method": "PROGRAMMATIC",
+            "category": "conditional", "evidence": "实测 1 次", "transcript": "t.jsonl",
+        }
+        assert AuditFinding.model_validate(base).control_flow == ""
+        # 新产物往返保真
+        f = AuditFinding.model_validate({**base, "control_flow": "quantity"})
+        assert f.control_flow == "quantity"
+        assert f.model_dump()["control_flow"] == "quantity"
+
 
 class TestAuditReportUnresolvedBreakdown:
     def test_default_empty(self) -> None:

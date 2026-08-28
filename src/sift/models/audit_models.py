@@ -109,6 +109,12 @@ class AuditFinding(BaseModel):
     # noise_label——「LLM+related」启发式在 ORDER 上语义是 pair 两端不是稳定性存疑)。
     # summary 照常计入(真实遵循面)。旧 JSON → False(向后兼容)。
     synthetic: bool = False
+    # 控制流判官标记(纯显示):"quantity"=数量指令(带数量词,移交控制流判官判——程序计数
+    # 或 LLM 数量判定)。数量 finding 按设计沿用原指令原文/category(对聚合透明),没有任何
+    # 自明记号,报告里认不出来(实测连作者都要翻 evidence 找);此字段让 CLI/HTML 给它挂
+    # 「数量」记号。ORDER 不设——synthetic=True + 「(顺序)」文案已自明。判定/聚合/缓存
+    # 键都不读;旧 JSON → ""(向后兼容,渲染端不显)。
+    control_flow: str = ""
     # findings 后处理(audit.dedup.post_process_findings)填:
     seq: int = 0  # #1..#N:去重后编排的序号(供 related 引用 + 报告里 #N 可读定位)
     sources: list[str] = Field(default_factory=list)  # 同文去重后合并的所有来源;单条=[source]

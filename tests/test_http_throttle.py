@@ -94,3 +94,18 @@ def test_call_claude_http_no_tool_use_falls_back_to_cc(monkeypatch):
     )
     monkeypatch.setattr(utils, "_call_claude_cc", lambda *a, **k: "cc-result")
     assert utils.call_claude("prompt", model="m", transport="http") == "cc-result"
+
+
+def test_call_claude_http_fallback_reports_progress(monkeypatch):
+    """http → cc 回退前经 on_progress 报一行(升档三连耗尽后 cc 还要磨几分钟,
+    不报行的话前后连起来整段静默像挂死)。429 不回退(既有行为)也不报行。"""
+    lines = []
+    monkeypatch.setattr(
+        utils, "_llm_http_call",
+        _raise(utils._HttpNoToolUse("only thinking", stop_reason="max_tokens")),
+    )
+    monkeypatch.setattr(utils, "_call_claude_cc", lambda *a, **k: "cc-result")
+    out = utils.call_claude("prompt", model="m", transport="http",
+                            on_progress=lines.append)
+    assert out == "cc-result"
+    assert lines == ["  ↳ http 通道拿不到结果,回退 cc…"]

@@ -200,6 +200,7 @@ def build_suggestions(
     skill_body: str,
     model: str | None = None,
     timeout: int = _TIMEOUT_DEFAULT,
+    on_progress=None,
 ) -> AuditSuggestResult | None:
     """对 report 的 FAIL findings 做三类归因并起草建议(CLI 层,--suggest 显式要才调)。
 
@@ -239,6 +240,7 @@ def build_suggestions(
             resp = call_llm_with_retry(
                 prompt, model=model, timeout=timeout,
                 schema=_WIRE_SCHEMA, on_usage=usage.update, transport="http",
+                on_progress=on_progress,  # http 升档/cc 回退进度行(单发最长 600s,静默像死机)
             )
             items = _parse_attributions(resp)
             if items is None:

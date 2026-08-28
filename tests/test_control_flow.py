@@ -295,6 +295,7 @@ class TestJudgeControlFlowProgrammatic:
         assert f.verdict == AuditVerdict.FAIL
         assert f.method == AuditMethod.PROGRAMMATIC
         assert f.category == AuditCategory.CONDITIONAL
+        assert f.control_flow == "quantity"
         assert "实测" in f.evidence and "1" in f.evidence
 
     def test_count_meets_threshold_passes(self) -> None:
@@ -306,6 +307,7 @@ class TestJudgeControlFlowProgrammatic:
         )
         assert findings[0].verdict == AuditVerdict.PASS
         assert findings[0].method == AuditMethod.PROGRAMMATIC
+        assert findings[0].control_flow == "quantity"
         assert "3" in findings[0].evidence
 
     def test_programmatic_only_no_llm_call(self, monkeypatch) -> None:
@@ -335,6 +337,7 @@ class TestJudgeControlFlowProgrammatic:
         assert findings[0].verdict == AuditVerdict.FAIL
         assert findings[0].method == AuditMethod.LLM
         assert findings[0].category == AuditCategory.PROHIBITION
+        assert findings[0].control_flow == "quantity"
 
     def test_count_ignores_misparsed_required_params(self) -> None:
         """数量程序判不带参数断言:数量词里的数字被 extractor 误抽成 required_params
@@ -371,6 +374,7 @@ class TestJudgeControlFlowLLM:
         assert f.category == AuditCategory.STEP
         assert f.source == "HEADING_STEP"
         assert f.instruction_text == "(顺序)「读日志」须先于「分类」"  # headline 优先
+        assert f.control_flow == ""  # ORDER 靠 synthetic+(顺序) 文案自明,不另标
         assert f.related == []  # related 由 audit() 回填,判官不设
         assert f.turn_refs == []  # locate_turns 默认关 → 即便 LLM 给了也丢
 
@@ -750,6 +754,7 @@ class TestDbMigrationFixture:
              if "health-check" in (f.instruction_text or "") and not f.synthetic]
         assert q and q[0].verdict == AuditVerdict.FAIL
         assert q[0].method == AuditMethod.PROGRAMMATIC
+        assert q[0].control_flow == "quantity"
         assert len([f for f in report.findings if f.synthetic]) == 2
 
 

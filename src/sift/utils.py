@@ -141,7 +141,16 @@ def _pick_tool_items(obj: dict):
     return None
 
 
-def _llm_http_call(prompt, model, timeout, schema, on_usage):
+def _emit_progress(on_progress, msg: str) -> None:
+    """尽力把 http 层进度行报给调用方(on_progress 异常吞掉,进度不是主路径)。"""
+    if on_progress is not None:
+        try:
+            on_progress(msg)
+        except Exception:
+            pass
+
+
+def _llm_http_call(prompt, model, timeout, schema, on_usage, on_progress=None):
     """裸 HTTP 直连智谱 Anthropic 协议 endpoint(forced tool_use 保 schema)。
 
     省 cc CLI 的进程 spawn + ~25k 系统 prompt/批(spike 实测 refine 5.3×、headline 2.7×、
@@ -241,20 +250,24 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage):
             warnings.warn(
                 "LLM 响应被截断(stop_reason=max_tokens, max_tokens 上限 "
                 f"{max_tokens}):thinking 顶到上限,tool_use 可能不完整 → 下游 parser "
-                "可能 parse_failed。反复出现可减小单批(audit _MAX_LLM_IN_BATCH)。"
+                "可能 parse_failed。"
             )
         return obj
 
     # 快路径起步(thinking 不带字段,大多数模型最快);截断且无 tool_use(= thinking
     # 狂想型模型,如 glm-5.3)→ 带 budget 帽重试;仍截断 → 升 8192 再试;仍败才回退 cc。
     # GLM 主动不调工具(end_turn 无 tool_use)与预算无关,任何重试无益 → 原样
-    # _HttpNoToolUse 回退 cc。
+    # _HttpNoToolUse 回退 cc。升档前经 on_progress 报一行(判官批 40-257s、升档三连时
+    # 终端会静默数分钟,像死机;报行让看终端的人知道它在动)。
     obj = _attempt(_HTTP_MAX_TOKENS, None)
     tool_items = _pick_tool_items(obj)
     if tool_items is None and obj.get("stop_reason") == "max_tokens":
+        _emit_progress(on_progress, "  ↳ 截断(thinking 顶满、没出结果),带 thinking 帽重试…")
         obj = _attempt(_HTTP_MAX_TOKENS, {"type": "enabled", "budget_tokens": _HTTP_THINKING_BUDGET})
         tool_items = _pick_tool_items(obj)
     if tool_items is None and obj.get("stop_reason") == "max_tokens":
+        _emit_progress(
+            on_progress, f"  ↳ 仍截断,升档 max_tokens={_HTTP_RETRY_MAX_TOKENS} 重试…")
         obj = _attempt(_HTTP_RETRY_MAX_TOKENS, {"type": "enabled", "budget_tokens": _HTTP_THINKING_BUDGET})
         tool_items = _pick_tool_items(obj)
     # 没拿到 tool_use(thinking 撑满没空间产 / GLM 主动 end_turn 不调)= forced 真失败
@@ -373,6 +386,7 @@ def call_claude(
     schema: dict | None = None,
     *,
     transport: str = "cc",
+    on_progress: Callable[[str], None] | None = None,
 ) -> str:
     """调 claude CLI 拿文本回。
 
@@ -405,16 +419,20 @@ def call_claude(
     tool_use 块(GLM 只回 thinking / thinking 撑满 ``_HTTP_MAX_TOKENS`` → ``_HttpNoToolUse``)
     → 回退 cc(cc 多轮催出 + 降级文本兜底);其余 HTTP 错(4xx/timeout→RuntimeError)不回退
     (同 endpoint 无意义)。
-    默认 ``"cc"`` 保持现有调用方 / ~35 处 mock 零改动。
+    默认 ``"cc"`` 保持现有调用方 / ~35 处 mock 零改动。``on_progress``(可选,http 路内部用):
+    截断升档重试 / cc 回退前各报一行进度——判官批与 suggest 单发 40-600s,升档三连时终端
+    会静默数分钟,报行让看终端的人知道它在动;不传则零输出(历史行为)。
     """
     if transport == "http":
         try:
-            return _llm_http_call(prompt, model, timeout, schema, on_usage)
+            return _llm_http_call(prompt, model, timeout, schema, on_usage, on_progress=on_progress)
         except (_HttpThrottled, _HttpNoToolUse):
             # 529(过载/身份限流)/ forced tool_use 拿不到 tool_use 块(GLM 只回 thinking /
             # thinking 撑满 max_tokens)→ 回退 cc:cc 多轮 tool_use 循环催出 + 降级文本兜底,
             # 绕过 http 单次 forced 的结构死结。其它错(4xx/timeout→RuntimeError)不回退——
-            # 同 endpoint 回退无意义。
+            # 同 endpoint 回退无意义。回退也报一行(否则 http 升档三连耗尽后终端又静默几分钟
+            # 换 cc 磨,前后连起来像整个挂死)。
+            _emit_progress(on_progress, "  ↳ http 通道拿不到结果,回退 cc…")
             return _call_claude_cc(prompt, model, timeout, max_turns, on_usage, schema)
     return _call_claude_cc(prompt, model, timeout, max_turns, on_usage, schema)
 

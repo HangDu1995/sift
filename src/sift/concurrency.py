@@ -236,6 +236,7 @@ def call_llm_with_retry(
                 result = call_claude(
                     prompt, model=model, timeout=timeout, schema=schema,
                     on_usage=on_usage, transport=transport,
+                    on_progress=on_progress,  # http 升档/cc 回退的进度行透传(utils 报行)
                 )
         except _HttpRateLimited as exc:
             # 429 指数退避(基数×2^attempt,镜像 audit _judge_batch_with_retry):速率窗口按

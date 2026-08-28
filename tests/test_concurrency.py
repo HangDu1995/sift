@@ -322,6 +322,21 @@ def test_call_llm_with_retry_success_calls_on_success(monkeypatch):
     assert spied == [1]
 
 
+def test_call_llm_with_retry_forwards_on_progress_to_call_claude(monkeypatch):
+    """on_progress 透传进 call_claude(http 层升档/cc 回退进度行从这走;suggest 等单发调用方
+    只给 call_llm_with_retry 一个回调,不透传就永远静默)。"""
+    cc = _reset_limiter_and_time(monkeypatch)
+    captured = {}
+
+    def fake_call_claude(*a, **k):
+        captured.update(k)
+        return "ok"
+
+    monkeypatch.setattr(cc, "call_claude", fake_call_claude)
+    assert cc.call_llm_with_retry("p", on_progress=print) == "ok"
+    assert captured.get("on_progress") is print
+
+
 def test_call_llm_with_retry_429_then_success_calls_on_throttled(monkeypatch):
     cc = _reset_limiter_and_time(monkeypatch)
     seq = [_HttpRateLimited("429"), "ok"]

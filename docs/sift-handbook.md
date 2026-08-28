@@ -1444,6 +1444,7 @@ CI 脚本只读 exit code 分不清「N/A」和「UNCLEAR」，得读 gate.json 
 | `transcript` | 对应 transcript 文件名 |
 | `derived_from_transcript` | 是否反推声明来的（见 §13.6） |
 | `synthetic` | 审计器**合成**的关系声明标 True（ORDER 的 `(顺序)…` 文案，见 §11.5）——不进覆盖视图/by_instruction 聚合、噪声判别豁免；旧产物恒 False |
+| `control_flow` | 控制流判官标记（纯显示）：`quantity` = 数量指令移交控制流判官判（程序计数或 LLM 数量判定），CLI/HTML 据此挂「数量」记号；判定/聚合都不读；缺省空（旧产物） |
 | `seq` | `#N` 序号（去重后编排，供 `related` 引用 + 报告定位） |
 | `sources[]` | 同文去重合并的全部来源（单条 = `[source]`） |
 | `related[]` | 同行为跨类关联的其它 finding 序号（如 `["#9"]`） |
@@ -1459,7 +1460,7 @@ CI 脚本只读 exit code 分不清「N/A」和「UNCLEAR」，得读 gate.json 
 - **顺序（ORDER）**：同节**相邻**两条步骤 bullet，任一含**显式**顺序连词（先/然后/再/接着/随后/之后/其次/下一步/最后…；负向排除「优先/预先/不再」）才配对（纯程序检测）；判定交给判官（看执行记录 + 工具调用序列）。宁少报的口径：只有 B 的**全部**证据都先于 A 才算违序——交错、部分重排算过；A 或 B 压根没发生算 N/A。**数字编号列表（1. 2. 3.）不算顺序声明**（编号是排版惯例，倒序执行常常无害，当顺序声明误报面极大）。
 - **数量（QUANTITY）**：带数量词的指令（每个/所有/逐个… = 逐项分布；至少 N 次/不超过 N 次… = 阈值）从原判官桶**移交**给控制流判官——每条指令仍只有一个 verdict，避免两个判官打架。判定口径的另一半（错误理由的少报也是乱报）：**应做未做、数量不足一律 FAIL**，N/A 只给无可数对象的场景（整场没发现错误 → 无从引用）；count 型且带工具名的少数场景由**程序**数 tool_trace 调用次数（零 LLM，evidence 带实测数）。
 
-两条下游纪律：ORDER 的 finding 是审计器**合成**的关系文案（`(顺序)「A」须先于「B」`，`synthetic` 标记）——**不进**声明覆盖视图、by_instruction 聚合表，也不参与噪声判别（「LLM+related」启发式在它身上语义是 pair 两端，不是稳定性存疑），其 `related` 链两端可点跳到真实 finding；数量 finding 沿用原指令全文与原桶类别，对聚合透明。turn_refs 同受 `--turn-refs` 整链开关（§13.7），批级失败/判官整体异常的兜底与三判官同款（全部 UNRESOLVED，不击穿 audit）。
+两条下游纪律：ORDER 的 finding 是审计器**合成**的关系文案（`(顺序)「A」须先于「B」`，`synthetic` 标记）——**不进**声明覆盖视图、by_instruction 聚合表，也不参与噪声判别（「LLM+related」启发式在它身上语义是 pair 两端，不是稳定性存疑），其 `related` 链两端可点跳到真实 finding；数量 finding 沿用原指令全文与原桶类别，对聚合透明，但带 `control_flow="quantity"` 纯显示标记——CLI 违规表在指令前显 `(数量)`、HTML 挂「数量」徽章（不挂记号它在报告里长得跟普通 conditional/step 判定一模一样，认不出）。turn_refs 同受 `--turn-refs` 整链开关（§13.7），批级失败/判官整体异常的兜底与三判官同款（全部 UNRESOLVED，不击穿 audit）。
 
 ---
 

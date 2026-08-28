@@ -381,7 +381,10 @@ def audit(
     # build_suggestions 永不外抛:无 FAIL → None(正常终态不落盘);残缺/失败 → 空结果 +
     # skipped_reason(异常态留痕)。token 记在结果自身,不进 report.token_usage(扁平数值键)。
     if suggest:
-        suggest_result = build_suggestions(report, body, model=model)
+        suggest_result = build_suggestions(
+            report, body, model=model,
+            on_progress=lambda msg: console.print(f"[dim]{msg}[/dim]"),
+        )
         if suggest_result is not None:
             report.suggestions = suggest_result
 
@@ -547,10 +550,15 @@ def audit(
             tcol = f.transcript
             if src_of.get(f.transcript):
                 tcol = f"{f.transcript} [dim]· {src_of[f.transcript]}[/dim]"
+            # 数量 finding 沿用原指令原文(对聚合透明),不加记号报告里认不出;显式 (数量)
+            # 前缀对齐 ORDER 合成 finding 自带的 (顺序) 文案。
+            icol = _truncate(f.instruction_text)
+            if f.control_flow == "quantity":
+                icol = f"[dim](数量)[/dim] {icol}"
             table.add_row(
                 f"[{color}]{f.verdict.value}[/{color}]",
                 f.category.value,
-                _truncate(f.instruction_text),
+                icol,
                 tcol,
                 _truncate(f.evidence),
             )

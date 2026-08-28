@@ -205,6 +205,27 @@ def test_audit_boundary_line_hidden_when_no_undeclared(monkeypatch, tmp_path):
     assert "工具对账" not in r.output
 
 
+def test_audit_findings_table_marks_quantity_findings(monkeypatch, tmp_path):
+    """control_flow='quantity' 的非 PASS finding 在 findings 表 instruction 前加 (数量) 记号
+    ——数量 finding 沿用原指令原文/原类别(对聚合透明),不加记号在报告里认不出是数量判定
+    (实测连作者都要翻 evidence 找);普通 FAIL 不加。"""
+    report = _fake_report()
+    qf = next(f for f in report.findings if f.verdict == AuditVerdict.FAIL)
+    qf.control_flow = "quantity"
+    fake = _FakeAuditor()
+    fake.audit = lambda *a, **kw: report
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
+
+    sp = _skill_dir(tmp_path)
+    tp = _transcript(tmp_path)
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert "(数量)" in r.output
+    # 落盘 JSON 同步带记号(HTML/下游从这读)
+    data = json.loads((tmp_path / "out" / "audit-report.json").read_text(encoding="utf-8"))
+    assert any(f.get("control_flow") == "quantity" for f in data["findings"])
+
+
 def test_audit_suggest_default_off(monkeypatch, tmp_path):
     """--suggest 默认关:不调 build_suggestions,JSON suggestions 为 null、终端不打建议行。"""
     monkeypatch.setattr(
@@ -237,7 +258,7 @@ def test_audit_suggest_flag_persists_and_prints(monkeypatch, tmp_path):
     )
     captured: dict = {}
 
-    def fake_build(report, body, model=None, timeout=600):
+    def fake_build(report, body, model=None, timeout=600, on_progress=None):
         captured["skill_body"] = body
         captured["fail"] = report.summary.get("fail")
         return result
@@ -267,7 +288,7 @@ def test_audit_suggest_skipped_reason_prints_without_counts(monkeypatch, tmp_pat
 
     monkeypatch.setattr(
         "sift.cli.commands.audit.build_suggestions",
-        lambda report, body, model=None, timeout=600: AuditSuggestResult(
+        lambda report, body, model=None, timeout=600, on_progress=None: AuditSuggestResult(
             skipped_reason="UNRESOLVED 占比 2/4 > 30%,证据残缺——先重跑",
         ),
     )

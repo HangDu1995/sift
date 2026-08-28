@@ -77,6 +77,7 @@
     .finding { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem; margin-bottom: 0.5rem; }
     .finding-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; font-size: 0.85rem; margin-bottom: 0.25rem; }
     .finding-head .cat, .finding-head .src { color: var(--text-muted); background: var(--bg); padding: 0.05rem 0.4rem; border-radius: 3px; }
+    .finding-head .qty { color: var(--text-muted); background: var(--bg); padding: 0.05rem 0.4rem; border-radius: 3px; font-size: 0.8rem; }
     .finding-head .seq { color: var(--text-muted); font-weight: 600; }
     .finding-head .related { font-size: 0.8rem; color: var(--text-muted); }
     /* turn-refs:色由 verdict cls(badge-fail…)给,这里只给字号/字重 */
@@ -249,6 +250,10 @@
         var related = relLinks ? '<span class="related">↔ 同源</span>' + relLinks : '';
         // FAIL 噪声判别徽章(仅 FAIL 且 noise_label 才显);放 method 前,留在徽章簇里(不跟 method 跑到右侧)
         var noise = (f.verdict === 'FAIL' && f.noise_label) ? noiseBadge(f.noise_label, f.noise_reasons) : '';
+        // 数量判官徽章(control_flow==='quantity':带数量词的指令移交控制流判官判,程序计数或
+        // LLM 数量判定)。数量 finding 沿用原指令原文/原类别(对聚合透明),不挂徽章报告里
+        // 认不出是数量判定;ORDER 靠 synthetic + (顺序) 文案自明,不另标。
+        var quantity = (f.control_flow === 'quantity') ? '<span class="qty" title="带数量词的指令,由控制流判官判定(程序计数或 LLM 数量判定)">数量</span>' : '';
         // turn 定位徽章(turn_refs 非空才显,即 FAIL / INDETERMINATE 违规);放噪声后、method 前,留徽章簇里
         var turn = turnBadge(f.turn_refs, vd.cls);
         // UNRESOLVED cause 徽章(仅没判成才显,标"为什么没判成"的根因类别);留徽章簇里。
@@ -256,7 +261,7 @@
         return '<div class="finding-head">' + verdictHtml +
           seqTag +
           '<span class="cat">' + escapeHtml(f.category || '') + '</span>' +
-          srcTag + derived + related + noise + turn + unresolvedCause +
+          srcTag + derived + related + quantity + noise + turn + unresolvedCause +
           methodTag(f.method) + '</div>' +
           renderInstruction(f) +
           '<div class="evidence">' + escapeHtml(f.evidence || '') + '</div>' +

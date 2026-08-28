@@ -209,6 +209,42 @@ def test_audit_html_renders_noise_badges_on_fail_findings_and_aggregate():
     assert 'id="audit-findings-grouped"' in html
 
 
+def test_audit_html_quantity_badge_on_control_flow_findings():
+    """control_flow==='quantity' 的 finding 挂「数量」徽章——数量 finding 按设计沿用
+    原指令原文/原类别(对聚合透明),不挂徽章在报告里认不出是数量判定(实测连作者都要
+    翻 evidence 找);ORDER 靠 synthetic + 「(顺序)」文案自明,不另标。
+    RED 锚点:模板读 f.control_flow、qty 徽章 class(改前 grep=0);label 字面量「数量」。
+    运行时正确性靠 node --check(test_audit_cli)+ 肉眼;pytest 验模板 JS 源引用。
+    """
+    report = AuditReport(
+        skill_name="s",
+        transcripts=["t1.jsonl"],
+        summary={"total": 2, "pass": 0, "fail": 2, "na": 0},
+        findings=[
+            AuditFinding(
+                instruction_text="调用 health-check 至少 2 次", source="TOOL_REQUIREMENT",
+                verdict=AuditVerdict.FAIL, category=AuditCategory.CONDITIONAL,
+                evidence="实测调用 health-check 1 次,不满足「至少 2 次」",
+                method=AuditMethod.PROGRAMMATIC, transcript="t1.jsonl",
+                control_flow="quantity",
+            ),
+            AuditFinding(
+                instruction_text="(顺序)「A」须先于「B」", source="HEADING_STEP",
+                verdict=AuditVerdict.FAIL, category=AuditCategory.STEP,
+                evidence="B 的全部证据先于 A", method=AuditMethod.LLM,
+                transcript="t1.jsonl", synthetic=True,
+            ),
+        ],
+        warnings=[],
+    )
+    html = AuditReportGenerator().generate_html(report)
+    # RED 锚点:模板判断 + 徽章 class(改前无)
+    assert "f.control_flow" in html
+    assert 'class="qty"' in html
+    # 数据流:control_flow 随 model_dump 嵌入(HTML 徽章的读数来源)
+    assert '"control_flow": "quantity"' in html
+
+
 def _by_instruction_report(transcripts):
     """单/多 transcript + by_instruction(各 1 fail 行 + 1 na 行)的审计报告,供 ③ 渲染测。"""
     return AuditReport(

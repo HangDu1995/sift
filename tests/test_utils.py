@@ -602,6 +602,48 @@ def test_http_call_truncated_retry_exhausted_raises_notooluse(monkeypatch):
     ]
 
 
+def test_http_call_escalation_reports_progress_lines(monkeypatch):
+    """截断升档三连 → 每档重试前经 on_progress 报一行(判官批/suggest 单发动辄数百秒,
+    静默数分钟终端像死机;报行让看终端的人知道它在动)。"""
+    import sift.utils as u
+    lines = []
+
+    def fake_urlopen(req, timeout=None):
+        return _FakeResp({
+            "content": [{"type": "thinking", "thinking": "x"}],
+            "stop_reason": "max_tokens", "usage": {"input_tokens": 1, "output_tokens": 4096},
+        })
+
+    monkeypatch.setattr(u.urllib.request, "urlopen", fake_urlopen)
+    _http_env(monkeypatch)
+    with pytest.raises(u._HttpNoToolUse):
+        u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None,
+                         on_progress=lines.append)
+    assert len(lines) == 2
+    assert "thinking 帽" in lines[0]
+    assert "升档" in lines[1] and str(u._HTTP_RETRY_MAX_TOKENS) in lines[1]
+
+
+def test_http_call_progress_silent_on_success_and_without_callback(monkeypatch):
+    """首次成功无进度行(无事可报);on_progress=None 时升档也不炸(零输出,历史行为)。"""
+    import json as _j
+    import sift.utils as u
+
+    def ok_urlopen(req, timeout=None):
+        return _FakeResp({
+            "content": [{"type": "tool_use", "input": {"items": [{"i": 1}]}}],
+            "usage": {"input_tokens": 1, "output_tokens": 9},
+        })
+
+    monkeypatch.setattr(u.urllib.request, "urlopen", ok_urlopen)
+    _http_env(monkeypatch)
+    lines = []
+    out = u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None,
+                           on_progress=lines.append)
+    assert _j.loads(out) == [{"i": 1}]
+    assert lines == []
+
+
 def test_http_call_endturn_no_tooluse_no_retry(monkeypatch):
     """非截断的没 tool_use(GLM 主动不调)→ 原样 _HttpNoToolUse,不做升档重试(预算无关)。"""
     import sift.utils as u

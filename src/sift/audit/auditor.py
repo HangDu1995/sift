@@ -334,6 +334,7 @@ def _judge_batch_with_retry(
                 result_text = call_claude(
                     prompt, model=model, timeout=timeout, max_turns=1,
                     on_usage=on_usage, schema=schema, transport=transport,
+                    on_progress=on_progress,  # http 升档/cc 回退的进度行透传(utils 报行)
                 )
         except _HttpRateLimited as exc:
             # 429(账户速率/并发限制):AIMD 乘性减并发 + 指数退避后重试(同账号同限,cc 也撞、
@@ -1474,6 +1475,7 @@ class TranscriptAuditor:
                     verdict=AuditVerdict.PASS if ok else AuditVerdict.FAIL,
                     method=AuditMethod.PROGRAMMATIC,
                     category=self.classify(inst),
+                    control_flow="quantity",
                     evidence=(
                         f"实测调用 {tool_name} {n} 次,满足「{label} {q.threshold} 次」"
                         if ok else
@@ -1522,6 +1524,7 @@ class TranscriptAuditor:
                 verdict=verdict,
                 method=AuditMethod.LLM,
                 category=self.classify(inst),
+                control_flow="quantity",
                 evidence=ev,
                 transcript=transcript_name,
                 turn_refs=tr,

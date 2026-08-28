@@ -2146,7 +2146,7 @@ def test_refine_passes_http_transport_down_the_chain(monkeypatch):
     seen = {}
 
     def fake_call_claude(prompt, *, model=None, timeout=120, max_turns=None,
-                         on_usage=None, schema=None, transport="cc"):
+                         on_usage=None, schema=None, transport="cc", on_progress=None):
         seen["transport"] = transport
         # 返 is_real=true(真指令,保留一条)
         return json.dumps([{"index": 0, "is_real": True}])
@@ -2163,7 +2163,7 @@ def test_headline_passes_http_transport_down_the_chain(monkeypatch):
     seen = {}
 
     def fake_call_claude(prompt, *, model=None, timeout=120, max_turns=None,
-                         on_usage=None, schema=None, transport="cc"):
+                         on_usage=None, schema=None, transport="cc", on_progress=None):
         seen["transport"] = transport
         return json.dumps([{"index": 0, "headline": "标题"}])
 
@@ -2179,7 +2179,7 @@ def test_judge_applicable_passes_http_transport(monkeypatch):
     seen = {}
 
     def fake_call_claude(prompt, *, model=None, timeout=120, max_turns=None,
-                         on_usage=None, schema=None, transport="cc"):
+                         on_usage=None, schema=None, transport="cc", on_progress=None):
         seen["transport"] = transport
         return json.dumps([{"index": 0, "applicable": False, "reason": "不涉及"}])
 
@@ -2195,7 +2195,7 @@ def test_judge_prohibition_passes_http_transport(monkeypatch):
     seen = {}
 
     def fake_call_claude(prompt, *, model=None, timeout=120, max_turns=None,
-                         on_usage=None, schema=None, transport="cc"):
+                         on_usage=None, schema=None, transport="cc", on_progress=None):
         seen["transport"] = transport
         return json.dumps([{"index": 0, "violated": False, "evidence": "未违反"}])
 
@@ -2211,7 +2211,7 @@ def test_judge_step_passes_http_transport(monkeypatch):
     seen = {}
 
     def fake_call_claude(prompt, *, model=None, timeout=120, max_turns=None,
-                         on_usage=None, schema=None, transport="cc"):
+                         on_usage=None, schema=None, transport="cc", on_progress=None):
         seen["transport"] = transport
         return json.dumps([{"index": 0, "verdict": "pass", "evidence": "做过"}])
 
@@ -2228,7 +2228,7 @@ def test_judge_batch_with_retry_forwards_transport_to_call_claude(monkeypatch):
     seen = {}
 
     def fake_call_claude(prompt, *, model=None, timeout=120, max_turns=None,
-                         on_usage=None, schema=None, transport="cc"):
+                         on_usage=None, schema=None, transport="cc", on_progress=None):
         seen.setdefault("transports", []).append(transport)
         return json.dumps([{"index": 0, "applicable": False}])
 
