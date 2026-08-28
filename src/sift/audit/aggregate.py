@@ -50,6 +50,12 @@ def aggregate_by_instruction(
 
     groups: dict[str, dict] = {}
     for f in findings:
+        if f.synthetic:
+            # 合成 finding(ORDER 的“(顺序)…”)不进 by_instruction——聚合表保持
+            # 「声明指令」纯度(合成指令无系统性/单发信号可言),聚合级噪声规则(noise.py
+            # 按 HEADING_STEP 行判)也因无行而不误触发。过滤落点在本函数入口:auditor /
+            # eval 侧遵循性聚合(viewer)/ 整段审计(slice)三处复用一次覆盖。
+            continue
         # setdefault 取首次出现的 source/category/section —— 同一 instruction_text 跨
         # transcript 来自同一 SKILL.md 抽取(含 derived),取首条即可(section 同文同节,
         # dedup 后跨节合并的极端情形也 first-wins,与 source_excerpt 同约定)。
@@ -138,7 +144,9 @@ def aggregate_coverage(findings: list[AuditFinding]) -> CoverageSummary:
     """
     groups: dict[str, dict] = {}
     for f in findings:
-        if f.derived_from_transcript:
+        if f.derived_from_transcript or f.synthetic:
+            # synthetic(ORDER 合成文案)同 derived 不进覆盖分母——它不是声明指令,
+            # 且其 na(A/B 未发生)是预期高频态,计入会虚增 unknown、压低 coverage_rate。
             continue
         g = groups.setdefault(
             f.instruction_text,

@@ -57,7 +57,21 @@ from typing import Any, Callable
 
 from sift.audit.declare import derive_declarations
 from sift.audit.rebuild import rebuild
-from sift.audit.tool_match import extract_first_balanced, load_json_lenient, match_tool_call
+from sift.audit.control_flow import (
+    OrderPair,
+    QuantitySpec,
+    context_text,
+    detect_order_pairs,
+    detect_quantity,
+    order_instruction_text,
+    quantity_op_label,
+)
+from sift.audit.tool_match import (
+    count_tool_calls,
+    extract_first_balanced,
+    load_json_lenient,
+    match_tool_call,
+)
 from sift.audit.aggregate import aggregate_by_instruction, aggregate_coverage
 from sift.audit.boundary import aggregate_boundary
 from sift.audit.dedup import post_process_findings
@@ -116,6 +130,53 @@ def _window(text: str, limit: int = _SCENE_TRUNCATE) -> str:
     half = limit // 2
     omitted = len(text) - limit
     return f"{text[:half]}\n\n[…截断中段约 {omitted} 字…]\n\n{text[-half:]}"
+
+
+def _tool_trace_section(tool_trace, locate_turns: bool) -> str:
+    """tool_trace 的 prompt 段(工具调用是硬证据,勿只凭文字声称;canary 缺口修复)。
+
+    step 判官与控制流判官共用——ORDER 判动作位置关系、数量判可数证据,都
+    依赖工具调用记录(``_window`` 只留头尾,中段动作全盲)。locate_turns=True 时每条带
+    ``[T{idx}]``(若 ToolCallRecord.turn 有标注)让 LLM 能对到具体 turn;False 时不带
+    前缀、段标题也不提示 [T{idx}](整链关 turn 定位)。空 tool_trace → ""。
+    """
+    if not tool_trace:
+        return ""
+    if locate_turns:
+        tool_lines = "\n".join(
+            f"- [T{t.turn}] {t.name}: {t.input_summary}" if t.turn is not None
+            else f"- {t.name}: {t.input_summary}"
+            for t in tool_trace
+        )
+        return (
+            "## 实际工具调用记录(判涉及工具的步骤时以此为准,勿只凭文字声称;"
+            "``[T{idx}]`` 标该调用所属 turn)\n"
+            f"{tool_lines}\n\n"
+        )
+    tool_lines = "\n".join(f"- {t.name}: {t.input_summary}" for t in tool_trace)
+    return (
+        "## 实际工具调用记录(判涉及工具的步骤时以此为准,勿只凭文字声称)\n"
+        f"{tool_lines}\n\n"
+    )
+
+
+def _turn_rule_section(locate_turns: bool) -> str:
+    """turn 引用规则的 prompt 段(locate_turns=False 时整段不进 prompt,与 judge 侧丢弃同款)。"""
+    return (
+        "## turn 引用规则\n"
+        "执行记录每行开头的 ``[T{idx}]`` 标记该动作所属的全局 turn 序号(从 1 计);"
+        "工具调用记录同。当 verdict=fail 或 indeterminate 时,**必须**在 ``turn_refs`` "
+        "列出该问题(应走未走 / 证据矛盾)涉及的 turn 序号(如 ``[8]`` 或 ``[8, 15]``)——"
+        "指向具体动作,便于人工复核定位。**段级缺席**(如「整段全程未走该步」)"
+        "时留空 ``[]`` 并在 evidence 说明是全程性的。verdict=pass / na 留空 ``[]``。\n\n"
+    ) if locate_turns else ""
+
+
+def _turn_refs_field_hint(locate_turns: bool) -> str:
+    """输出格式行里 turn_refs 的示例片段(locate_turns=False 时不要求该键)。"""
+    return (
+        ', "turn_refs": [8, 15]  // fail/indeterminate 涉及的 turn 序号;段级缺席或 pass/na 留空 []'
+    ) if locate_turns else ""
 # 整批 LLM 判定 transient 失败(超时 / CLI 非零退出 / 限流)的重试次数与退避间隔。
 # call_claude 在超时 / 非零退出时抛 RuntimeError,多为 transient——重试大多能救回整批,
 # 避免单次抖动让一整批指令兜底 N/A(audit-out3 实测 2 个整批共 25 条因此放弃)。
@@ -555,6 +616,19 @@ class TranscriptAuditor:
                 if _i < len(headlines):
                     _inst.headline = headlines[_i]
         stage_seconds["headline"] = time.perf_counter() - _t
+        # 控制流检测:ORDER 顺序对 + 数量指令——纯程序、transcript 无关,循环外
+        # 算一次。只吃静态 instructions(derived 恒 REFERENCE_USAGE、反推范围仅
+        # required_reads,不沾两检测域);refine/headline 缓存键均不含 params,不受影响。
+        order_pairs = detect_order_pairs(instructions)
+        quantity_specs = detect_quantity(instructions)
+        quantified_ids = {id(inst) for inst, _q in quantity_specs}
+        # ORDER related 回填的端点查找表:合成文案 → (A/B 的**原始** instruction_text。
+        # 回填按原文查 findings,合成文案里的 headline 仅用于显示——按 headline 查会
+        # 全部落空、ORDER 整体静默不产)。
+        order_endpoints: dict[str, tuple[str, str]] = {
+            order_instruction_text(p.a, p.b): (p.a.instruction_text, p.b.instruction_text)
+            for p in order_pairs
+        }
         all_findings: list[AuditFinding] = []
         transcript_names: list[str] = []
         transcript_sources: list[str] = []  # 与 transcript_names 同序;"cc"/"opencode"/...
@@ -583,6 +657,10 @@ class TranscriptAuditor:
                 AuditCategory.OUTPUT: [],
             }
             for inst in all_inst:
+                if id(inst) in quantified_ids:
+                    # 带数量词的指令移交控制流判官,原桶不重复判——每条指令
+                    # 仍只有一个 verdict(移交路由,避免双判官 verdict 冲突仲裁)。
+                    continue
                 buckets[self.classify(inst)].append(inst)
 
             # conditional 判官靠 user_turns 当"场景"判指令该不该触发。skill/agent 切片
@@ -615,6 +693,18 @@ class TranscriptAuditor:
                     on_usage=acc.scoped("judge"),
                     locate_turns=locate_turns,
                 )
+                # 控制流判官作第 4 个 submit:排队等空位、可搭三类判官拖尾,落在
+                # 本 judge 计时段内;内部多批由 _run_batches_concurrent 自带池并发,全局在飞
+                # 仍受 _LLM_LIMITER(AIMD)门控(两层无死锁)。无 pairs/移交指令时不 submit。
+                fut_cf = (
+                    pool.submit(
+                        self._judge_control_flow, order_pairs, quantity_specs,
+                        transcript_text, tool_trace, tp.name, model, timeout,
+                        on_progress=on_progress, on_usage=acc.scoped("judge"),
+                        locate_turns=locate_turns,
+                    )
+                    if order_pairs or quantity_specs else None
+                )
                 findings: list[AuditFinding] = []
                 # 三个判定器并发跑;单个整体抛异常(内部 bug,非 call_claude 的 RuntimeError
                 # —— 那已被 _judge_batch_with_retry 捕获)时兜底:该类每条指令 UNRESOLVED
@@ -637,6 +727,27 @@ class TranscriptAuditor:
                                 f"{_label}判定器异常,未出判定 → 没判成", _cat,
                                 cause="judge_error",
                             ))
+                if fut_cf is not None:
+                    try:
+                        findings += fut_cf.result()
+                    except Exception as exc:
+                        # 兜底镜像三判官:移交出去的指令已脱离原桶兜底,这里必须接住——
+                        # pairs + 移交指令全部 UNRESOLVED(judge_error),不让指令"消失"。
+                        _emit(
+                            on_progress,
+                            f"  [控制流] 判定器异常 → {len(order_pairs)} 对 + "
+                            f"{len(quantity_specs)} 条兜底 UNRESOLVED: {str(exc)[:120]}",
+                        )
+                        for p in order_pairs:
+                            findings.append(self._make_order_finding(
+                                p, AuditVerdict.UNRESOLVED, tp.name,
+                                "控制流判定器异常,未出判定 → 没判成", cause="judge_error",
+                            ))
+                        for inst, _q in quantity_specs:
+                            findings.append(self._make_unresolved_finding(
+                                inst, tp.name, "控制流判定器异常,未出判定 → 没判成",
+                                category=self.classify(inst), cause="judge_error",
+                            ))
             findings += self._judge_output(
                 buckets[AuditCategory.OUTPUT], transcript_text, tp.name
             )
@@ -655,6 +766,29 @@ class TranscriptAuditor:
         # findings(同文重复不再虚增 fail、by_instruction 不再同 transcript 双计)。
         _t = time.perf_counter()
         all_findings = post_process_findings(all_findings)
+
+        # ORDER related 回填:窗口 = post_process_findings(seq 已定)之后、
+        # annotate_noise(读 related)之前;link_related 已跳过 synthetic(不覆写)。
+        # 查找键 = 端点的原始 instruction_text;端点查不到 → 该 ORDER finding 丢弃不产
+        # (悬空链接不如不产;此时序下丢弃产生 seq 跳号,下游 fail_seqs/related 均按
+        # 实际 finding 收集、无 1..N 连续性假设,无害)。
+        if order_endpoints and any(f.synthetic for f in all_findings):
+            step_seq: dict[tuple[str, str], int] = {}
+            for f in all_findings:
+                if not f.synthetic and f.category == AuditCategory.STEP:
+                    step_seq[(f.transcript, f.instruction_text)] = f.seq
+            kept_findings: list[AuditFinding] = []
+            for f in all_findings:
+                if f.synthetic:
+                    ends = order_endpoints.get(f.instruction_text)
+                    a_seq = step_seq.get((f.transcript, ends[0])) if ends else None
+                    b_seq = step_seq.get((f.transcript, ends[1])) if ends else None
+                    if a_seq and b_seq:
+                        f.related = [f"#{a_seq}", f"#{b_seq}"]
+                        kept_findings.append(f)
+                    continue  # 端点缺失 → 丢弃该 ORDER finding
+                kept_findings.append(f)
+            all_findings = kept_findings
 
         # FAIL 噪声/skill 判别(每条 FAIL 标 noise_label / noise_reasons,非 FAIL 置 None)。
         # 在 dedup 后、汇总前做:基于去重后的 findings,related 已就位(LLM+related 信号要用)。
@@ -1269,6 +1403,274 @@ class TranscriptAuditor:
             unresolved_cause=cause,
         )
 
+    # ---- 控制流判官:ORDER 顺序 + QUANTITY 数量 -----------------------
+
+    def _judge_control_flow(
+        self,
+        pairs: list[OrderPair],
+        quantified: list[tuple[InstructionCheck, QuantitySpec]],
+        transcript_text: str,
+        tool_trace: list | None,
+        transcript_name: str,
+        model: str | None = None,
+        timeout: int = 600,
+        on_progress: ProgressFn | None = None,
+        on_usage: Callable[[dict], None] | None = None,
+        *,
+        locate_turns: bool = False,
+    ) -> list[AuditFinding]:
+        """判定 ORDER 顺序对与移交来的数量指令(;作为 audit() 第 4 个判官跑)。
+
+        两路:
+        - **程序判先行**(count 型 + params.tool_name):``count_tool_calls`` 数 tool_trace
+          命中次数 vs 阈值 → PASS/FAIL,method=PROGRAMMATIC,零 LLM。诚实定位:此路覆盖
+          面窄(带数字阈值的工具指令很少),是可数场景的精确化,不是主力。
+        - **LLM 判官**(其余:distributive 型 / 无工具映射的 count 型 + ORDER pairs):
+          输入 = 条目声明 + windowed transcript_text + tool_trace 段(同 step 判官——
+          ORDER 判动作位置关系、数量判可数证据,都依赖工具调用记录;_window 只留头尾,
+          不喂 tool_trace 会把被截断的动作误判「未发生」= 假 na)。verdict 四态同 step
+          判官(indeterminate:证据矛盾时的诚实出口,不逼 LLM 在 pass/fail/na 里猜)。
+
+        数量 na 口径(宁少报的对偶——错误理由的少报也是乱报):na 仅限无可数对象/场景
+        不涉及(如整场没发现错误 → 无从引用);应做未做、数量不足一律 fail,evidence
+        必须带实测数字与期望(prompt 强制)。失败语义镜像三判官:批失败重试耗尽 →
+        UNRESOLVED(cause 入 mask);判官整体异常由 audit() 兜底(不在此 catch)。
+
+        quantity finding 沿用原指令全文/category=原桶类别——不是 synthetic、不是
+        derived,coverage/by_instruction/噪声判别照常参与(对聚合透明);ORDER finding
+        是合成关系文案(synthetic=True),只在 findings 明细出现。
+        """
+        findings: list[AuditFinding] = []
+
+        # 程序判:count 型 + tool_name(阈值可程序比对 + 工具可数)
+        llm_quantified: list[tuple[InstructionCheck, QuantitySpec]] = []
+        for inst, q in quantified:
+            tool_name = inst.params.get("tool_name", "")
+            if q.kind == "count" and tool_name:
+                required_params = inst.params.get("required_params")
+                n = count_tool_calls(tool_name, tool_trace, required_params=required_params)
+                ok = (
+                    n >= q.threshold if q.op == "gte"
+                    else n <= q.threshold if q.op == "lte"
+                    else n == q.threshold
+                )
+                label = quantity_op_label(q.op)
+                findings.append(AuditFinding(
+                    instruction_text=inst.instruction_text,
+                    source_excerpt=inst.source_excerpt,
+                    headline=inst.headline,
+                    section=inst.source_section or inst.section,
+                    source=inst.source.value,
+                    verdict=AuditVerdict.PASS if ok else AuditVerdict.FAIL,
+                    method=AuditMethod.PROGRAMMATIC,
+                    category=self.classify(inst),
+                    evidence=(
+                        f"实测调用 {tool_name} {n} 次,满足「{label} {q.threshold} 次」"
+                        if ok else
+                        f"实测调用 {tool_name} {n} 次,不满足「{label} {q.threshold} 次」"
+                    ),
+                    transcript=transcript_name,
+                ))
+            else:
+                llm_quantified.append((inst, q))
+
+        if not pairs and not llm_quantified:
+            return findings
+
+        # LLM 判官:items = ("order", pair) | ("quantity", inst),统一编 index
+        items: list[tuple[str, object]] = (
+            [("order", p) for p in pairs]
+            + [("quantity", inst) for inst, _q in llm_quantified]
+        )
+        verdict_mask, cause_mask = self._llm_judge_control_flow(
+            items, transcript_text, tool_trace, model, timeout, on_progress, on_usage,
+            locate_turns=locate_turns,
+        )
+        max_turn = self._max_turn_from_text(transcript_text) if locate_turns else 0
+        ev_fallback: dict[str, dict[AuditVerdict, str]] = {
+            "order": {
+                AuditVerdict.PASS: "A 的证据不晚于 B(含交错/部分重排)",
+                AuditVerdict.FAIL: "B 的全部证据先于 A(违序)",
+                AuditVerdict.NA: "A 或 B 未发生/场景不涉及",
+            },
+            "quantity": {
+                AuditVerdict.PASS: "数量满足",
+                AuditVerdict.FAIL: "数量不满足",
+                AuditVerdict.NA: "无可数对象/场景不涉及",
+            },
+        }
+
+        def _quantity_llm_finding(
+            inst: InstructionCheck, verdict: AuditVerdict, ev: str, tr: list[int],
+        ) -> AuditFinding:
+            return AuditFinding(
+                instruction_text=inst.instruction_text,
+                source_excerpt=inst.source_excerpt,
+                headline=inst.headline,
+                section=inst.source_section or inst.section,
+                source=inst.source.value,
+                verdict=verdict,
+                method=AuditMethod.LLM,
+                category=self.classify(inst),
+                evidence=ev,
+                transcript=transcript_name,
+                turn_refs=tr,
+            )
+
+        for i, (kind, payload) in enumerate(items):
+            verdict, ev, tr_raw = verdict_mask[i]
+            turn_refs = (
+                self._sanitize_turn_refs(tr_raw, max_turn)
+                if locate_turns and verdict in (AuditVerdict.FAIL, AuditVerdict.INDETERMINATE)
+                else []
+            )
+            if kind == "order":
+                pair: OrderPair = payload
+                if verdict is None:
+                    findings.append(self._make_order_finding(
+                        pair, AuditVerdict.UNRESOLVED, transcript_name,
+                        "LLM 判定失败,无法确证顺序 → 没判成", cause=cause_mask[i],
+                    ))
+                elif verdict == AuditVerdict.INDETERMINATE:
+                    findings.append(self._make_order_finding(
+                        pair, verdict, transcript_name, ev, turn_refs=turn_refs,
+                    ))
+                else:
+                    findings.append(self._make_order_finding(
+                        pair, verdict, transcript_name,
+                        ev or ev_fallback["order"][verdict], turn_refs=turn_refs,
+                    ))
+            else:
+                inst: InstructionCheck = payload
+                if verdict is None:
+                    findings.append(self._make_unresolved_finding(
+                        inst, transcript_name, "LLM 判定失败,无法确证数量 → 没判成",
+                        category=self.classify(inst), cause=cause_mask[i],
+                    ))
+                elif verdict == AuditVerdict.INDETERMINATE:
+                    findings.append(_quantity_llm_finding(inst, verdict, ev, turn_refs))
+                else:
+                    findings.append(_quantity_llm_finding(
+                        inst, verdict, ev or ev_fallback["quantity"][verdict], turn_refs,
+                    ))
+        return findings
+
+    def _llm_judge_control_flow(
+        self,
+        items: list[tuple[str, object]],
+        transcript_text: str,
+        tool_trace: list | None,
+        model: str | None,
+        timeout: int,
+        on_progress: ProgressFn | None = None,
+        on_usage: Callable[[dict], None] | None = None,
+        *,
+        locate_turns: bool = False,
+    ) -> tuple[list[tuple[AuditVerdict | None, str, list[int]]], list[str]]:
+        """分批判定控制流条目;批/prompt/重试模式同 _llm_judge_step(每批 ≤10 条)。
+
+        items 元素 = ("order", OrderPair) | ("quantity", InstructionCheck),批内统一编
+        index。输出 schema/解析复用 step 判官(_STEP_SCHEMA / _parse_step——verdict 四态
+        + evidence + turn_refs 完全同构,不另造 parser)。
+        """
+        n = len(items)
+        results: list[tuple[AuditVerdict | None, str, list[int]]] = [(None, "", [])] * n
+        cause_mask: list[str] = ["unmentioned"] * n
+        total = (n + _MAX_LLM_IN_BATCH - 1) // _MAX_LLM_IN_BATCH
+        specs: list[tuple[int, int, int, str]] = []
+        for start in range(0, n, _MAX_LLM_IN_BATCH):
+            batch = items[start:start + _MAX_LLM_IN_BATCH]
+            bn = len(batch)
+            k = start // _MAX_LLM_IN_BATCH + 1
+            item_list = "".join(
+                f"[{i}] {self._cf_item_line(kind, payload)}\n"
+                for i, (kind, payload) in enumerate(batch)
+            )
+            prompt = (
+                "判定以下顺序/数量要求在本次真实执行里是否被满足。\n\n"
+                "## 判定标准(宁少报:拿不准别判违规;但也别把该报的洗成不适用)\n"
+                "- 顺序对(声明:A 须先于 B):\n"
+                "  - pass:A 的证据不晚于 B(交错/部分重排也算 pass)。\n"
+                "  - fail:B 的**全部**证据都先于 A(先做了本该后做的)。\n"
+                "  - na:A 或 B 压根没发生/本场景不涉及(evidence 注明哪步没发生)。\n"
+                "- 数量要求:\n"
+                "  - pass:数量满足。\n"
+                "  - fail:数量不满足——**应做未做、数量不足都算 fail**;evidence 必须带"
+                "实测数字与期望(如「3 个错误仅 2 个有引用」)。\n"
+                "  - na:**仅限**无可数对象/场景不涉及(如整场没发现错误 → 无从引用);"
+                "不得把「没做」洗成 na。\n"
+                "- indeterminate(两类通用):证据真的相互矛盾或关键缺失才用,**必须**在"
+                " evidence 写明具体矛盾/缺失;不要用它偷懒回避判断。\n\n"
+                f"{_turn_rule_section(locate_turns)}"
+                f"## 执行记录摘录\n{_window(transcript_text)}\n\n"
+                f"{_tool_trace_section(tool_trace, locate_turns)}"
+                f"## 待判条目 ({bn} 条)\n{item_list}\n"
+                "## 输出格式\n"
+                '只返回 JSON 数组,每元素:'
+                '{"index": 0, "verdict": "pass"|"fail"|"na"|"indeterminate", '
+                '"evidence": "中文简述(具体到证据;数量类必须带实测数字与期望)"'
+                f"{_turn_refs_field_hint(locate_turns)}"
+                "}\n"
+            )
+            specs.append((start, bn, k, prompt))
+        successes, failures = _run_batches_concurrent(
+            specs, self._parse_step, model, timeout, on_progress, on_usage,
+            "控制流", total, lambda v: v[0] is None,
+            schema=_STEP_SCHEMA,
+            transport="http",
+        )
+        for start, parsed in successes:
+            for j, val in enumerate(parsed):
+                results[start + j] = val
+        for start, bn, cause in failures:
+            for j in range(bn):
+                cause_mask[start + j] = cause
+        return results, cause_mask
+
+    @staticmethod
+    def _cf_item_line(kind: str, payload) -> str:
+        """控制流判官的单条条目渲染(顺序对列 A/B 两条 bullet 原文;数量列完整 bullet)。
+
+        文本用 source_excerpt 优先(含被切走的主语前缀——数量词多在那里;判官与
+        detect_quantity 看到同一份文本)。
+        """
+        if kind == "order":
+            p: OrderPair = payload
+            return f"(顺序) 先做:「{context_text(p.a)}」 后做:「{context_text(p.b)}」"
+        inst: InstructionCheck = payload
+        return f"(数量) 「{context_text(inst)}」"
+
+    def _make_order_finding(
+        self,
+        pair: OrderPair,
+        verdict: AuditVerdict,
+        transcript_name: str,
+        evidence: str,
+        *,
+        turn_refs: list[int] | None = None,
+        cause: str | None = None,
+    ) -> AuditFinding:
+        """ORDER finding:审计器合成的关系文案(synthetic=True;category=STEP、source=A 端)。
+
+        source_excerpt/headline 留空(合成文案无原文 bullet,模型字段约定);related 由
+        audit() 在 post_process 之后按端点原始 instruction_text 回填(不在此设)。
+        """
+        return AuditFinding(
+            instruction_text=order_instruction_text(pair.a, pair.b),
+            source_excerpt="",
+            headline="",
+            section=pair.a.source_section or pair.a.section,
+            source=InstructionSource.HEADING_STEP.value,
+            verdict=verdict,
+            method=AuditMethod.LLM,
+            category=AuditCategory.STEP,
+            evidence=evidence,
+            transcript=transcript_name,
+            synthetic=True,
+            turn_refs=turn_refs or [],
+            unresolved_cause=cause,
+        )
+
     # ---- LLM 场景触发判定 ----------------------------------------------------
 
     def _llm_judge_applicable(
@@ -1802,40 +2204,11 @@ class TranscriptAuditor:
             # locate_turns=True 时每条 tool call 带 [T{idx}](若 ToolCallRecord.turn 有标注),
             # 让 LLM 能把工具调用对到具体 turn → step 的 turn_refs 引用更准(turn 粒度定位);
             # locate_turns=False 时不带前缀、段标题也不提示 [T{idx}](整链关 turn 定位)。
-            tool_section = ""
-            if tool_trace:
-                if locate_turns:
-                    tool_lines = "\n".join(
-                        f"- [T{t.turn}] {t.name}: {t.input_summary}" if t.turn is not None
-                        else f"- {t.name}: {t.input_summary}"
-                        for t in tool_trace
-                    )
-                    tool_section = (
-                        "## 实际工具调用记录(判涉及工具的步骤时以此为准,勿只凭文字声称;"
-                        "``[T{idx}]`` 标该调用所属 turn)\n"
-                        f"{tool_lines}\n\n"
-                    )
-                else:
-                    tool_lines = "\n".join(
-                        f"- {t.name}: {t.input_summary}" for t in tool_trace
-                    )
-                    tool_section = (
-                        "## 实际工具调用记录(判涉及工具的步骤时以此为准,勿只凭文字声称)\n"
-                        f"{tool_lines}\n\n"
-                    )
+            tool_section = _tool_trace_section(tool_trace, locate_turns)
             # locate_turns=False 时整段 turn 引用规则不进 prompt,输出格式也不要求 turn_refs
             # (与 _llm_judge_prohibition 同款;judge 层 locate_turns=False 时返回的 turn_refs 丢弃)。
-            turn_rule_section = (
-                "## turn 引用规则\n"
-                "执行记录每行开头的 ``[T{idx}]`` 标记该动作所属的全局 turn 序号(从 1 计);"
-                "工具调用记录同。当 verdict=fail 或 indeterminate 时,**必须**在 ``turn_refs`` "
-                "列出该问题(应走未走 / 证据矛盾)涉及的 turn 序号(如 ``[8]`` 或 ``[8, 15]``)——"
-                "指向具体动作,便于人工复核定位。**段级缺席**(如「整段全程未走该步」)"
-                "时留空 ``[]`` 并在 evidence 说明是全程性的。verdict=pass / na 留空 ``[]``。\n\n"
-            ) if locate_turns else ""
-            turn_refs_field = (
-                ', "turn_refs": [8, 15]  // fail/indeterminate 涉及的 turn 序号;段级缺席或 pass/na 留空 []'
-            ) if locate_turns else ""
+            turn_rule_section = _turn_rule_section(locate_turns)
+            turn_refs_field = _turn_refs_field_hint(locate_turns)
             prompt = (
                 "判断以下每个步骤在本次执行里是否被走过。\n\n"
                 "## 判定标准(优先给出明确结论;只有证据真的相互矛盾或关键缺失时才用 indeterminate)\n"

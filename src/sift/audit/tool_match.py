@@ -155,6 +155,39 @@ def _params_satisfied(required_params, tc) -> bool:
     return all(p.lower() in cmd for p in params)
 
 
+def _tc_tool_hit(tc, tool_name: str, cmd_re) -> tuple[bool, bool]:
+    """单条 tool call 的工具命中判定(match_tool_call 条件 1/3,per-record 谓词)。
+
+    返回 ``(name_hit, cmd_hit)``:工具名子串命中 / 命令词词边界命中。提取为独立谓词
+    供 ``match_tool_call``(是否存在)与 ``count_tool_calls``(数几次,数量判定的
+    程序路)共用,两函数语义互不影响。``tc`` 支持 attr / dict 风格。
+    """
+    tc_name = tc.name if hasattr(tc, "name") else tc.get("name", "")
+    tc_input = tc.input_summary if hasattr(tc, "input_summary") else tc.get("input_summary", "")
+    name_hit = bool(tool_name) and tool_name.lower() in tc_name.lower()
+    cmd_hit = bool(cmd_re) and bool(cmd_re.search(tc_input))
+    return name_hit, cmd_hit
+
+
+def count_tool_calls(tool_name: str, tool_trace, required_params=None) -> int:
+    """数 tool_trace 里匹配该工具的调用**次数**(数量判定的程序路)。
+
+    命中判定 = match_tool_call 的条件 1/3(工具名子串 / 命令词词边界,含 required_params
+    断言);**不含**条件 2(script_path 路径匹配)——count 型数量指令问的是「调了几次」,
+    不是「读了哪个文件」。与 ``match_tool_call``(答「是否存在」)分工,不动其语义。
+    空 tool_name / 空工具名 → 0(无从计数)。
+    """
+    if not tool_trace or not tool_name:
+        return 0
+    cmd_re = _command_word_re(tool_name)
+    n = 0
+    for tc in tool_trace:
+        name_hit, cmd_hit = _tc_tool_hit(tc, tool_name, cmd_re)
+        if (name_hit or cmd_hit) and _params_satisfied(required_params, tc):
+            n += 1
+    return n
+
+
 def match_tool_call(tool_name: str, script_path: str, tool_trace, required_params=None) -> bool:
     """tool_trace 里是否存在匹配的调用(大小写不敏感)。
 
@@ -178,10 +211,7 @@ def match_tool_call(tool_name: str, script_path: str, tool_trace, required_param
         return False
     cmd_re = _command_word_re(tool_name)
     for tc in tool_trace:
-        tc_name = tc.name if hasattr(tc, "name") else tc.get("name", "")
-        tc_input = tc.input_summary if hasattr(tc, "input_summary") else tc.get("input_summary", "")
-        name_hit = bool(tool_name) and tool_name.lower() in tc_name.lower()
-        cmd_hit = bool(cmd_re) and bool(cmd_re.search(tc_input))
+        name_hit, cmd_hit = _tc_tool_hit(tc, tool_name, cmd_re)
         if required_params:
             # 有参数要求:命中工具(名/命令词)+ 所有参数满足才 True
             if (name_hit or cmd_hit) and _params_satisfied(required_params, tc):

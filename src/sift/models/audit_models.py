@@ -102,6 +102,13 @@ class AuditFinding(BaseModel):
     evidence: str  # 中文,为何这个 verdict(INDETERMINATE 时此即 indeterminate_reason)
     transcript: str  # 该 finding 对应的 transcript 文件名
     derived_from_transcript: bool = False  # 反推声明来的指令标 True
+    # 审计器**合成**的关系声明标 True(ORDER:“(顺序)「A」须先于「B」”)——既非
+    # 声明原文指令、也非 transcript 反推,复用 derived 语义会污染 header 的反推计数。
+    # 下游口径:coverage / by_instruction 不进分母(合成指令不是声明指令)、link_related
+    # 跳过(不进 token 索引,related 由 audit() 按 pair 两端回填)、噪声判别豁免(不标
+    # noise_label——「LLM+related」启发式在 ORDER 上语义是 pair 两端不是稳定性存疑)。
+    # summary 照常计入(真实遵循面)。旧 JSON → False(向后兼容)。
+    synthetic: bool = False
     # findings 后处理(audit.dedup.post_process_findings)填:
     seq: int = 0  # #1..#N:去重后编排的序号(供 related 引用 + 报告里 #N 可读定位)
     sources: list[str] = Field(default_factory=list)  # 同文去重后合并的所有来源;单条=[source]

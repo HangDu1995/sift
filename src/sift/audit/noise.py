@@ -68,6 +68,14 @@ def annotate_noise(findings: list[AuditFinding]) -> list[AuditFinding]:
     (告诉用户具体命了哪几条);skill_issue / uncertain 各只附一条 reason。
     """
     for f in findings:
+        if f.synthetic:
+            # 合成 finding(ORDER)豁免:启发式 3 的「LLM+related」信号在 ORDER 上
+            # 语义是「pair 两端」不是「跨类稳定性存疑」,恒命中会把全部 ORDER FAIL 打成
+            # 工具噪声;聚合级规则(noise.py 按 HEADING_STEP 行判)因 synthetic 不进
+            # by_instruction 天然不触发。置 None/[](同非 FAIL)。
+            f.noise_label = None
+            f.noise_reasons = []
+            continue
         if f.verdict != AuditVerdict.FAIL:
             f.noise_label = None
             f.noise_reasons = []

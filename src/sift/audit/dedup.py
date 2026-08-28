@@ -79,9 +79,17 @@ def link_related(findings: list[AuditFinding]) -> list[AuditFinding]:
     # (transcript, token) → 该组所有 seq
     by_token: dict[tuple[str, str], list[int]] = {}
     for f in findings:
+        if f.synthetic:
+            # 合成 finding(ORDER)不进 token 索引:其合成文本内嵌两端 headline,
+            # headline 带文件名是常态——不跳过则共享 token 的**真实** finding 会被链向
+            # 合成 finding(单向悬链),噪声启发式「LLM+related」再把真实 FAIL 误标 tool_noise。
+            # ORDER 的 related 由 audit() 在 post_process 之后按 pair 两端回填(覆写式)。
+            continue
         for tok in _ref_tokens(f.instruction_text):
             by_token.setdefault((f.transcript, tok), []).append(f.seq)
     for f in findings:
+        if f.synthetic:
+            continue  # 同上:不参与 Case B 关联,留给 audit() 回填
         related: set[int] = set()
         for tok in _ref_tokens(f.instruction_text):
             for other in by_token.get((f.transcript, tok), ()):

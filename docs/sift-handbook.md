@@ -1443,6 +1443,7 @@ CI 脚本只读 exit code 分不清「N/A」和「UNCLEAR」，得读 gate.json 
 | `evidence` | 判定理由（INDETERMINATE 时即判不准的理由） |
 | `transcript` | 对应 transcript 文件名 |
 | `derived_from_transcript` | 是否反推声明来的（见 §13.6） |
+| `synthetic` | 审计器**合成**的关系声明标 True（ORDER 的 `(顺序)…` 文案，见 §11.5）——不进覆盖视图/by_instruction 聚合、噪声判别豁免；旧产物恒 False |
 | `seq` | `#N` 序号（去重后编排，供 `related` 引用 + 报告定位） |
 | `sources[]` | 同文去重合并的全部来源（单条 = `[source]`） |
 | `related[]` | 同行为跨类关联的其它 finding 序号（如 `["#9"]`） |
@@ -1450,6 +1451,15 @@ CI 脚本只读 exit code 分不清「N/A」和「UNCLEAR」，得读 gate.json 
 ### 11.4 eval 内的遵循性 = audit 命令
 
 重要：**eval 里的遵循性判定和独立的 `audit` 命令是同一套引擎**。eval 直接调它喂单条 transcript.jsonl，产出的 `compliance.json` 就是 AuditReport，schema 和 audit 命令的 `audit-report.json` 一致。所以第十一章–第十三章讲的判法对 eval 内 compliance 和独立 audit 都成立——eval 是「执行后顺手查一遍」，audit 是「把这套对账独立深化、能审任意会话」。
+
+### 11.5 控制流判官：顺序遵循（ORDER）+ 数量期望（QUANTITY）
+
+三类判官各自逐条判「这步做了没」，判不了两件**跨条**的事：步骤间的**顺序**（声明写「先 A 再 B」，执行却 B 先 A 后）和**数量**（「每个错误都要引用原文」，3 个错误只引了 2 个）。第 4 个判官——**控制流判官**——补这两个维度，只在声明里真有相应信号时才跑（无信号零调用、零行为变化）：
+
+- **顺序（ORDER）**：同节**相邻**两条步骤 bullet，任一含**显式**顺序连词（先/然后/再/接着/随后/之后/其次/下一步/最后…；负向排除「优先/预先/不再」）才配对（纯程序检测）；判定交给判官（看执行记录 + 工具调用序列）。宁少报的口径：只有 B 的**全部**证据都先于 A 才算违序——交错、部分重排算过；A 或 B 压根没发生算 N/A。**数字编号列表（1. 2. 3.）不算顺序声明**（编号是排版惯例，倒序执行常常无害，当顺序声明误报面极大）。
+- **数量（QUANTITY）**：带数量词的指令（每个/所有/逐个… = 逐项分布；至少 N 次/不超过 N 次… = 阈值）从原判官桶**移交**给控制流判官——每条指令仍只有一个 verdict，避免两个判官打架。判定口径的另一半（错误理由的少报也是乱报）：**应做未做、数量不足一律 FAIL**，N/A 只给无可数对象的场景（整场没发现错误 → 无从引用）；count 型且带工具名的少数场景由**程序**数 tool_trace 调用次数（零 LLM，evidence 带实测数）。
+
+两条下游纪律：ORDER 的 finding 是审计器**合成**的关系文案（`(顺序)「A」须先于「B」`，`synthetic` 标记）——**不进**声明覆盖视图、by_instruction 聚合表，也不参与噪声判别（「LLM+related」启发式在它身上语义是 pair 两端，不是稳定性存疑），其 `related` 链两端可点跳到真实 finding；数量 finding 沿用原指令全文与原桶类别，对聚合透明。turn_refs 同受 `--turn-refs` 整链开关（§13.7），批级失败/判官整体异常的兜底与三判官同款（全部 UNRESOLVED，不击穿 audit）。
 
 ---
 
@@ -1546,7 +1556,7 @@ audit 跑一次声明 × transcript 对账，内部是一条 **6 阶段顺序流
 | 精筛（refine） | LLM | 判定前用 LLM 砍掉 extractor 误抽的示例/占位伪指令，精度 > 召回、per-声明缓存（§12.2） |
 | 标题（headline） | LLM | 把指令改写成人话标题，**仅显示、判定不读**，per-声明缓存（§12.3） |
 | 切片（rebuild） | 程序 | 把 transcript 重建为 SessionDigest + 按作用域（`--kind`）切执行段（§13.8） |
-| 判定（judge） | LLM | 三类判官（条件性 / 禁令 / 步骤）逐批调 LLM 判指令遵循性 |
+| 判定（judge） | LLM | 三类判官（条件性 / 禁令 / 步骤）逐批调 LLM 判指令遵循性；声明含顺序对/数量指令时另有控制流判官搭车（§11.5） |
 | 聚合（postprocess） | 程序 | **判定后的汇总**：跨 transcript 按指令聚合 findings（`by_instruction` 的 fail%）+ 噪声判别标注 + 声明覆盖视图（`coverage`：按声明分组统计指令被触达多少）+ 工具对账视图（`boundary`：轨迹里的领域工具 × 声明工具要求，信息性） |
 
 要点：
@@ -1597,7 +1607,7 @@ sift audit path/to/decl/ --transcript a.jsonl --transcript b.jsonl            # 
 sift audit path/to/decl/ --transcript opencode-session.json                   # opencode session(.json)
 ```
 
-判定要逐批调 LLM（每批约 40–257s），跑期间实时打印进度（`[条件性/禁令/步骤] 判定 N 条…`），三个 LLM 类别判定器（条件性 / 禁令 / 步骤；输出格式走程序判定不调 LLM）并发跑（约 2× 提速）；全局并发由 AIMD 自适应限制器动态调（机制见 §12.8）。看到 `[类别] …` 滚动就是在跑，别误以为卡死。
+判定要逐批调 LLM（每批约 40–257s），跑期间实时打印进度（`[条件性/禁令/步骤] 判定 N 条…`），三个 LLM 类别判定器（条件性 / 禁令 / 步骤；输出格式走程序判定不调 LLM）并发跑（约 2× 提速）；声明含顺序对/数量指令时控制流判官作第 4 个搭车跑（§11.5）；全局并发由 AIMD 自适应限制器动态调（机制见 §12.8）。看到 `[类别] …` 滚动就是在跑，别误以为卡死。
 
 **对账作用域（两层，skill/agent/root 一视同仁）**：
 

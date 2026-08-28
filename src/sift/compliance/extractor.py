@@ -190,9 +190,14 @@ class InstructionExtractor:
         """
         if not text or anchor < 0 or anchor >= len(text):
             return ""
-        # 回溯到最近的列表项起始行(- * + 或 数字.)。text[:anchor+1] 含 anchor 所在行首。
+        # 回溯到最近的列表项起始行(- * + 或 数字.)。窗口须含 anchor 所在**整行**:
+        # anchor 常是行首(marker 首字符),截到 anchor+1 会把本行 marker 切掉,本条
+        # bullet 的起始匹配不到、恒取到**前一条** bullet(实测 zh fixture 第 2/3 步与
+        # body 级指令的 excerpt 全部指向前一条;docstring 语义 = 所在 bullet)。
+        line_end = text.find("\n", anchor)
+        window = text[: (line_end if line_end != -1 else len(text)) + 1]
         item_starts = [
-            m.start() for m in re.finditer(r"(?m)^[ \t]*([-*+]\s+|\d+\.\s+)", text[: anchor + 1])
+            m.start() for m in re.finditer(r"(?m)^[ \t]*([-*+]\s+|\d+\.\s+)", window)
         ]
         if not item_starts:
             # 散文:回退到 anchor 所在行(整行,可能自带主语)
