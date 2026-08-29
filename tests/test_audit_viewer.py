@@ -209,7 +209,7 @@ def test_audit_html_renders_noise_badges_on_fail_findings_and_aggregate():
     assert 'id="audit-findings-grouped"' in html
 
 
-def test_audit_html_quantity_badge_on_control_flow_findings():
+def test_audit_html_quantity_badge_on_control_flow_findings(tmp_path):
     """control_flow==='quantity' 的 finding 挂「数量」徽章——数量 finding 按设计沿用
     原指令原文/原类别(对聚合透明),不挂徽章在报告里认不出是数量判定(实测连作者都要
     翻 evidence 找);ORDER 靠 synthetic + 「(顺序)」文案自明,不另标。
@@ -243,6 +243,50 @@ def test_audit_html_quantity_badge_on_control_flow_findings():
     assert 'class="qty"' in html
     # 数据流:control_flow 随 model_dump 嵌入(HTML 徽章的读数来源)
     assert '"control_flow": "quantity"' in html
+    # 指令行也挂徽章(renderInstruction):只低头读指令的人不看 finding 头徽章簇也认得出
+    # (此 report 无 by_instruction → 命中只能来自 ④ 明细的指令行,非概要表)
+    m = _render_by_instruction_via_node(report, tmp_path)
+    assert m["qtyAny"] is True
+    assert m["qtyInstr"] is True
+
+
+def test_audit_html_quantity_badge_on_by_instruction_fail_rows(tmp_path):
+    """概要表(③ 违规 FAIL 行)同样挂「数量」徽章——数量 finding 沿用原指令原文,
+    概览表不挂记号认不出是控制流判定(与 CLI 终端违规表的 (数量) 前缀同一信息)。
+    隔离验证:finding 不带 control_flow、聚合行带 → 徽章只能来自表行渲染路径。"""
+    from sift.models.audit_models import InstructionAggregate
+
+    report = AuditReport(
+        skill_name="s", transcripts=["t1.jsonl"],
+        summary={"total": 1, "pass": 0, "fail": 1, "na": 0},
+        findings=[
+            AuditFinding(
+                instruction_text="调用 health-check 至少 2 次", source="TOOL_REQUIREMENT",
+                verdict=AuditVerdict.FAIL, category=AuditCategory.CONDITIONAL,
+                evidence="实测调用 1 次", method=AuditMethod.PROGRAMMATIC,
+                transcript="t1.jsonl", seq=1,
+            ),
+        ],
+        by_instruction=[
+            InstructionAggregate(
+                instruction_text="调用 health-check 至少 2 次", source="TOOL_REQUIREMENT",
+                category=AuditCategory.CONDITIONAL, pass_count=0, fail_count=1,
+                na_count=0, unresolved_count=0, indeterminate_count=0, total=1,
+                fail_rate=1.0, fail_in_transcripts=["t1.jsonl"], fail_seqs=[1],
+                control_flow="quantity",
+            ),
+        ],
+        warnings=[],
+    )
+    html = AuditReportGenerator().generate_html(report)
+    assert "a.control_flow" in html          # 表行渲染读聚合行字段(RED 锚点)
+    assert '"control_flow": "quantity"' in html
+    # CSS 不限定 .finding-head(改前 .finding-head .qty 只管 ④ 明细,概要表格子里的
+    # span 无样式 → 退化成纯文本挤在指令开头,看着像句子一部分、不像记号)
+    assert ".qty {" in html
+    assert ".finding-head .qty" not in html
+    m = _render_by_instruction_via_node(report, tmp_path)
+    assert m["qtyAny"] is True               # finding 未带标记 → 徽章来自概要表行
 
 
 def _by_instruction_report(transcripts):
@@ -285,7 +329,8 @@ def _render_by_instruction_via_node(report, tmp_path):
     assert "multi && (EMBEDDED_DATA.by_instruction" not in html   # 门控已放开(不再要求 multi)
     js = "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", html, re.DOTALL))
     preamble = (
-        "var __c=[];function FN(){this._k=[];}"
+        "var __c=[];var __els=[];function FN(){this._k=[];this._h='';__els.push(this);}"
+        "Object.defineProperty(FN.prototype,'innerHTML',{set:function(v){this._h=v;},get:function(){return this._h;}});"
         "FN.prototype.insertAdjacentHTML=function(p,h){__c.push(h);};"
         "FN.prototype.appendChild=function(c){this._k.push(c);return c;};"
         "FN.prototype.setAttribute=function(){};"
@@ -294,8 +339,10 @@ def _render_by_instruction_via_node(report, tmp_path):
         "var document={getElementById:function(i){if(!__m[i])__m[i]=new FN();return __m[i];},"
         "createElement:function(){return new FN();}};\n"
     )
+    # o = insertAdjacentHTML 产物 + createElement 元素的 innerHTML(findingRow 走
+    # createElement+innerHTML+appendChild,只收前者会漏掉 ④ 明细的渲染产物)。
     epilogue = (
-        "\nvar o=__c.join('\\n');"
+        "\nvar o=__c.concat(__els.map(function(e){return e._h;})).join('\\n');"
         "console.log(JSON.stringify({"
         "failPct:o.includes('fail%'),failTotal:o.includes('fail/total'),"
         "inTrans:o.includes('in transcripts'),failTbl:o.includes('违规 FAIL'),"
@@ -316,7 +363,9 @@ def _render_by_instruction_via_node(report, tmp_path):
         "stageSug:o.includes('>建议</td>'),"
         "stageJudgeCf:o.includes('顺序对/数量'),"
         "stagePct67:o.includes('(67%)'),"
-        "stagePct200:o.includes('(200%)')}));"
+        "stagePct200:o.includes('(200%)'),"
+        "qtyAny:o.includes('class=\"qty\"'),"
+        "qtyInstr:o.includes('数量</span> 调用 health-check 至少 2 次')}));"
     )
     runfile = tmp_path / "run.js"
     runfile.write_text(preamble + js + epilogue, encoding="utf-8")

@@ -329,6 +329,7 @@ class TestSectionDefaults:
             "fail_rate": 0.0, "fail_in_transcripts": [],
         })
         assert row.section == ""
+        assert row.control_flow == ""   # 同款纯显示透传字段,旧 JSON 默认空
 
 
 class TestCoverageModels:

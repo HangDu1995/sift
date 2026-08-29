@@ -167,6 +167,9 @@ class InstructionAggregate(BaseModel):
     headline: str = ""  # 人话标题,透传自 AuditFinding,显示用、判定不读。缺省空。
     # 声明分组标题,透传自 AuditFinding(finding.section,同批同文 first-wins);缺省空兼容旧 report。
     section: str = ""
+    # 控制流纯显示标记透传("quantity":带数量词指令移交控制流判官判;first-wins 同上)。
+    # 概要表指令前挂「数量」徽章用——数量 finding 沿用原指令原文,聚合行不带头认不出;判定不读。
+    control_flow: str = ""
     source: str
     category: AuditCategory
     pass_count: int

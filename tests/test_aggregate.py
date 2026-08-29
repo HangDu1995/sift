@@ -26,6 +26,7 @@ def _f(
     seq: int = 0,
     section: str = "",
     derived: bool = False,
+    control_flow: str = "",
 ) -> AuditFinding:
     return AuditFinding(
         instruction_text=text,
@@ -38,6 +39,7 @@ def _f(
         seq=seq,
         section=section,
         derived_from_transcript=derived,
+        control_flow=control_flow,
     )
 
 
@@ -186,6 +188,18 @@ class TestAggregateByInstructionSection:
         """旧产物 finding 无 section → 行 section 为空串(不炸、不猜)。"""
         rows = aggregate_by_instruction([_f("必须校验", AuditVerdict.PASS, "s1")])
         assert rows[0].section == ""
+
+    def test_by_instruction_rows_carry_control_flow(self):
+        """数量 finding 的 control_flow 透传到聚合行(HTML 概要表挂「数量」徽章用;
+        数量指令整条移交控制流判官,行级 first-wins 同 section 约定)。"""
+        rows = aggregate_by_instruction([
+            _f("调用 health-check 至少 2 次", AuditVerdict.FAIL, "s1",
+               control_flow="quantity"),
+            _f("普通禁令", AuditVerdict.FAIL, "s1"),
+        ])
+        by_text = {r.instruction_text: r for r in rows}
+        assert by_text["调用 health-check 至少 2 次"].control_flow == "quantity"
+        assert by_text["普通禁令"].control_flow == ""   # 旧产物/非数量指令默认空
 
 
 class TestAggregateCoverage:
