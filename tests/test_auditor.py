@@ -847,6 +847,30 @@ class TestJudgeStep:
         for i, f in enumerate(findings):
             assert f.evidence == f"global#{i}", f"位置 {i} 映射错位: {f.evidence}"
 
+    def test_step_prompt_has_window_boundary_rule(self, monkeypatch) -> None:
+        """步骤判官 prompt 必须含「记录窗口外 → na」规则 + 防洗回闸。
+
+        2026-08-30 判定质量回归的守卫:深思考档模型把「记录止于 Tn、其后的计划任务
+        从未开始」的步骤批量判 fail(64/72),prompt 不写明窗口语义时该口径随模型
+        漂移。钉住两条:① 窗口外(所属任务/阶段从未开始)判 na 不是 fail;② 反向闸
+        ——任务/阶段已开始、中途没走的仍判 fail,防规则被滥用成洗 fail 的口子。
+        """
+        prompts: list[str] = []
+
+        def fake(prompt, *a, **k):
+            prompts.append(prompt)
+            return json.dumps([{"index": 0, "verdict": "na", "evidence": "记录止于 T120"}])
+
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
+        auditor = TranscriptAuditor()
+
+        auditor._judge_step([_step_inst()], "某执行记录", "w.jsonl")
+
+        assert len(prompts) == 1
+        assert "执行记录是有限窗口" in prompts[0]
+        assert "从未开始" in prompts[0]
+        assert "不得借此洗成 na" in prompts[0]
+
 
 # ---------------------------------------------------------------------------
 # _judge_output: OUTPUT_FORMAT(PATTERN_MATCH)确定性子串判定,不调 LLM

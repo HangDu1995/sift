@@ -167,8 +167,9 @@ def _turn_rule_section(locate_turns: bool) -> str:
         "执行记录每行开头的 ``[T{idx}]`` 标记该动作所属的全局 turn 序号(从 1 计);"
         "工具调用记录同。当 verdict=fail 或 indeterminate 时,**必须**在 ``turn_refs`` "
         "列出该问题(应走未走 / 证据矛盾)涉及的 turn 序号(如 ``[8]`` 或 ``[8, 15]``)——"
-        "指向具体动作,便于人工复核定位。**段级缺席**(如「整段全程未走该步」)"
-        "时留空 ``[]`` 并在 evidence 说明是全程性的。verdict=pass / na 留空 ``[]``。\n\n"
+        "指向具体动作,便于人工复核定位。**段级缺席**(所属任务/阶段已开始,但这一步"
+        "或这一违规全程未走/未发生)时留空 ``[]`` 并在 evidence 说明是全程性的。"
+        "verdict=pass / na 留空 ``[]``。\n\n"
     ) if locate_turns else ""
 
 
@@ -2183,7 +2184,7 @@ class TranscriptAuditor:
         - ``results`` 每元素 ``(verdict, evidence, turn_refs_raw)``:
           - (PASS, ev, tr)          = 走过
           - (FAIL, ev, tr)          = 该走没走
-          - (NA, ev, tr)            = 场景不涉及
+          - (NA, ev, tr)            = 场景不涉及(含窗口外:所属任务/阶段在记录里从未开始)
           - (INDETERMINATE, ev, tr) = 判不准(LLM 看了证据真矛盾/缺失,带具体 evidence)
           - (None, "", [])          = 没判成(调用/解析失败/未提及/未知 verdict/非字符串/indeterminate 无 evidence)
         - ``cause_mask`` 每元素 str(verdict 为 None 时读):批级失败覆写成 infra cause,
@@ -2227,7 +2228,11 @@ class TranscriptAuditor:
                 "## 判定标准(优先给出明确结论;只有证据真的相互矛盾或关键缺失时才用 indeterminate)\n"
                 "- pass:这次执行走过了这一步。\n"
                 "- fail:这个场景本该走这一步但没走。\n"
-                "- na:这个场景根本不涉及该步骤。\n"
+                "- na:这个场景根本不涉及该步骤;或该步骤所属的任务/阶段在执行记录里"
+                "从未开始——执行记录是有限窗口,记录止于某处、排在它之后的计划步骤在"
+                "记录里自然无从发生,属证据不覆盖而非「本该走没走」(evidence 注明记录"
+                "止于何处)。但所属任务/阶段已经开始、只是中途没走某步的仍判 fail,"
+                "不得借此洗成 na。\n"
                 "- indeterminate:你看了执行记录,但证据真的相互矛盾或关键信息缺失,"
                 "判断不了走没走。**必须**在 evidence 写明具体矛盾 / 缺失的证据;"
                 "不要用 indeterminate 偷懒回避判断。\n\n"
