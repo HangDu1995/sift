@@ -60,14 +60,24 @@ _HTTP_MAX_TOKENS = 4096
 # ~10s→~30s,judge 段 40-60s→639s);disabled 实测畸形连环更慢。三态无一稳赚 → 不带,
 # 截断的杠杆只有 max_tokens(见 _HTTP_RETRY_MAX_TOKENS)。
 
-# 截断(stop_reason=max_tokens 且无 tool_use)时的升档**绝对上限**:升档 = 首档 ×2、
-# 封顶此值,**只有一发**(首档 4096 默认 → 8192;suggest 按簇数弹性首档 → ×2 到顶)。
-# 不再多开档——深度任务的治本是调用方按工作量给首档(max_tokens 覆盖),这里只兜意外,
-# 档越多只是「不够再开一档」的循环。glm-5.3 直连探针(2026-08-28,suggest 归因任务):
-# 深度推理 thinking ~8.5k token**磨完才动笔**,8192 差一口气(tool_use 空壳刚开头被切),
-# 16384 一发过(10.2k output/161s);端点实收 22k max_tokens。上限本身不计费,按实际
-# 生成 token 付费。再截断才回退 cc。
+# 截断(stop_reason=max_tokens 且无 tool_use)时的升档**绝对上限**:升档 = max(首档×2,
+# 下限 _HTTP_RETRY_FLOOR_TOKENS)、封顶此值,**只有一发**(首档 4096 默认 → 16384;
+# suggest 按簇数弹性首档 → ×2 到顶,下限不生效)。不再多开档——深度任务的治本是调用方
+# 按工作量给首档(max_tokens 覆盖),这里只兜意外,档越多只是「不够再开一档」的循环。
+# glm-5.3 直连探针(2026-08-28,suggest 归因任务):深度推理 thinking ~8.5k token
+# **磨完才动笔**,8192 差一口气(tool_use 空壳刚开头被切),16384 一发过(10.2k
+# output/161s);端点实收 22k max_tokens。上限本身不计费,按实际生成 token 付费。
+# 再截断才回退 cc。
 _HTTP_RETRY_MAX_TOKENS = 32768
+
+# 升档**下限**——×2 会跟着首档缩水:判官批不传 max_tokens(默认 4096 → ×2 只有 8192),
+# 而 glm-5.3 的思考深度在服务端漂移:2026-08-29 实测同样的判官批请求(与 8 月中字节级
+# 相同)8192 也顶满、大批直落 cc 回退(cc 每发 1.5-3 分钟,判官批 10 条/批的 root 对账
+# 从 ~1 分钟恶化到 25 分钟)。深度余量放升档、不抬首档:首档保持 4096,浅批的快路径与
+# 稳定期行为逐字节不变——GLM 把 max_tokens 当思考锚往满想,抬首档会把不需要深的批也
+# 拖慢(见 _HTTP_MAX_TOKENS 上方注释);跨模型主流语义 max_tokens 是上限不是目标
+# (Claude/OpenAI 做完就停),抬升档对它们零代价。取 16384 = 上面探针的一发过实测值。
+_HTTP_RETRY_FLOOR_TOKENS = 16384
 
 
 _CLAUDE_SETTINGS_PATH = os.path.expanduser("~/.claude/settings.json")
@@ -163,7 +173,8 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage, on_progress=None, m
     - **529**(过载/身份限流)→ ``_HttpThrottled``(交 ``call_claude`` dispatcher 回退 cc)。
     - **截断升档(两档,升档只有一发)**:首尝试不带 thinking 字段(GLM 默认浅思考,
       最快);截断且无 tool_use(glm-5.3 型狂想,大 prompt thinking 撑满总额度)→
-      ×2 升档再试(封顶 ``_HTTP_RETRY_MAX_TOKENS``)。不带 budget 帽重试——glm-5.3
+      ×2 升档再试(下限 ``_HTTP_RETRY_FLOOR_TOKENS``、封顶 ``_HTTP_RETRY_MAX_TOKENS``)。
+      不带 budget 帽重试——glm-5.3
       端点无视 budget(同值重试必重复同样截断),glm-5.2 被 budget 锚满反而慢。
     - **max_tokens 覆盖**(可选):调用方按工作量给首档上限(如 suggest 按批内簇数),
       升档从覆盖值起 ×2;不传用 ``_HTTP_MAX_TOKENS``(浅任务默认,判官批)。
@@ -253,7 +264,7 @@ def _llm_http_call(prompt, model, timeout, schema, on_usage, on_progress=None, m
     # 升档前经 on_progress 报一行(判官批 40-257s、升档时终端会静默数分钟,像死机;
     # 报行让看终端的人知道它在动)。
     first = max_tokens or _HTTP_MAX_TOKENS
-    boosted = min(first * 2, _HTTP_RETRY_MAX_TOKENS)
+    boosted = min(max(first * 2, _HTTP_RETRY_FLOOR_TOKENS), _HTTP_RETRY_MAX_TOKENS)
     obj = _attempt(first)
     tool_items = _pick_tool_items(obj)
     mt_used = first

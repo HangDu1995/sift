@@ -549,8 +549,9 @@ def test_http_call_first_attempt_has_no_thinking_field(monkeypatch):
 
 
 def test_http_call_truncated_no_tooluse_boosts_max_tokens(monkeypatch):
-    """截断(stop_reason=max_tokens)且无 tool_use → ×2 升档重试(两档,无 budget 中档),
-    成功即返;**升档路上的截断不 warn**(最终结果完整,无 parser 风险)。"""
+    """截断(stop_reason=max_tokens)且无 tool_use → 升档重试(两档,无 budget 中档;
+    默认首档 4096 → ×2=8192 低于升档下限 → 取下限 16384),成功即返;
+    **升档路上的截断不 warn**(最终结果完整,无 parser 风险)。"""
     import json as _j
     import warnings as _w
     import sift.utils as u
@@ -577,12 +578,12 @@ def test_http_call_truncated_no_tooluse_boosts_max_tokens(monkeypatch):
     assert _j.loads(out) == [{"i": 1}]
     assert calls == [
         (u._HTTP_MAX_TOKENS, None),
-        (u._HTTP_MAX_TOKENS * 2, None),
-    ]
+        (u._HTTP_RETRY_FLOOR_TOKENS, None),
+    ]  # 默认首档 4096,×2=8192 低于升档下限 → 取下限
 
 
 def test_http_call_truncated_retry_exhausted_raises_notooluse(monkeypatch):
-    """两档(首档→×2 升档)都截断且无 tool_use → 仍 _HttpNoToolUse(回退 cc)。"""
+    """两档(首档→升档)都截断且无 tool_use → 仍 _HttpNoToolUse(回退 cc)。"""
     import json as _j
     import sift.utils as u
     calls = []
@@ -601,8 +602,8 @@ def test_http_call_truncated_retry_exhausted_raises_notooluse(monkeypatch):
         u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None)
     assert calls == [
         (u._HTTP_MAX_TOKENS, None),
-        (u._HTTP_MAX_TOKENS * 2, None),
-    ]
+        (u._HTTP_RETRY_FLOOR_TOKENS, None),
+    ]  # 默认首档 4096,×2=8192 低于升档下限 → 取下限
 
 
 def test_http_call_escalation_reports_progress_lines(monkeypatch):
@@ -623,13 +624,15 @@ def test_http_call_escalation_reports_progress_lines(monkeypatch):
         u._llm_http_call("p", "glm-5.2", 60, {"type": "object"}, None,
                          on_progress=lines.append)
     assert len(lines) == 1
-    assert "升档" in lines[0] and str(u._HTTP_MAX_TOKENS * 2) in lines[0]
+    assert "升档" in lines[0] and str(u._HTTP_RETRY_FLOOR_TOKENS) in lines[0]
 
 
 def test_http_call_max_tokens_override_starts_ladder(monkeypatch):
-    """max_tokens 覆盖:首档从覆盖值起、升档 = min(首档×2, 绝对上限) 一发——调用方按工作量
-    给首档(suggest 按簇数 6000+2500×n),固定小帽的截断不再靠人肉调常数追。"""
+    """max_tokens 覆盖:首档从覆盖值起、升档 = min(max(首档×2, 下限), 绝对上限) 一发——
+    调用方按工作量给首档(suggest 按簇数 6000+2500×n),固定小帽的截断不再靠人肉调常数追。
+    ×2 超绝对上限 → 封顶;×2 低于下限 → 取下限(弹性首档给小的调用方也保底)。"""
     import json as _j
+    import pytest as _pt
     import sift.utils as u
     calls = []
 
@@ -649,6 +652,13 @@ def test_http_call_max_tokens_override_starts_ladder(monkeypatch):
         (19096, None),
         (u._HTTP_RETRY_MAX_TOKENS, None),
     ]  # 19096×2=38192 超绝对上限 → 封顶
+    calls.clear()
+    with _pt.raises(u._HttpNoToolUse):
+        u._llm_http_call("p", "glm-5.3", 60, {"type": "object"}, None, max_tokens=6000)
+    assert calls == [
+        (6000, None),
+        (u._HTTP_RETRY_FLOOR_TOKENS, None),
+    ]  # 6000×2=12000 低于下限 → 取下限
 
 
 def test_http_call_progress_silent_on_success_and_without_callback(monkeypatch):
