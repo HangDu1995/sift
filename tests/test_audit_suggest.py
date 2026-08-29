@@ -425,6 +425,9 @@ class TestElasticParallel:
         assert [(s.category, s.target_seqs) for s in result.suggestions] == [("skill_fix", [1])]
         assert result.model_env_count == 1
         assert result.tokens == 2 * 15          # 两批并发回报,锁防覆盖丢计数
+        assert result.input_tokens == 2 * 10    # 分项同锁累加(阶段表 suggest 行用)
+        assert result.output_tokens == 2 * 5
+        assert result.calls == 2                # 每次响应计 1,与判官阶段 calls 同口径
 
     def test_one_batch_exhausted_keeps_other(self, monkeypatch) -> None:
         """单批重试耗尽:skipped_reason 收尾,其余批建议保留,挂掉批的簇计 dropped。"""
@@ -442,3 +445,31 @@ class TestElasticParallel:
         assert "重试耗尽" in result.skipped_reason
         assert [(s.category, s.target_seqs) for s in result.suggestions] == [("skill_fix", [1])]
         assert result.dropped_count == 2         # 挂掉那批的 2 簇
+
+    def test_progress_announces_phase_and_batches(self, monkeypatch) -> None:
+        """判官→汇总行之间的静默期先报阶段头(「生成改进建议:归因 N 簇…」——判官
+        完成后一静默数分钟不知道在干嘛);多批时各批完成/失败打批级行(看得出最慢
+        一批),单批不打批级行(CLI 汇总行收口,不叠噪声)。"""
+        from sift.concurrency import _LLMRetryExhausted
+
+        def fake(prompt, *a, **k):
+            if "#11" in prompt:   # 第二批(违规11/12)
+                raise _LLMRetryExhausted("LLM 调用重试耗尽(max_retries=4)")
+            return _wire([{"category": "model_env", "target_seqs": [1], "rationale": "r"}])
+
+        monkeypatch.setattr("sift.audit.suggest.call_llm_with_retry", fake)
+        lines: list[str] = []
+        result = build_suggestions(self._n_fail_report(12), "正文", on_progress=lines.append)
+        assert result is not None
+        assert any(
+            "生成改进建议" in l and "12 个失败簇" in l and "2 批并行" in l for l in lines
+        )
+        done = [l for l in lines if "完成 ⏱" in l]
+        fail = [l for l in lines if "失败:重试耗尽" in l]
+        assert len(done) == 1 and "[批 1/2]" in done[0]
+        assert len(fail) == 1 and "[批 2/2]" in fail[0]
+
+        lines.clear()
+        build_suggestions(self._n_fail_report(6), "正文", on_progress=lines.append)
+        assert any("生成改进建议" in l and "1 批" in l for l in lines)
+        assert not [l for l in lines if "[批" in l]   # 单批无批级行

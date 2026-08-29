@@ -315,11 +315,12 @@
           '</div>' +
         '</div>');
 
-      // ①b 各阶段耗时/token(诊断 audit 慢在哪:extract/refine/headline/rebuild 切片/judge/postprocess)
-      var STAGE_LABEL = { extract: '抽取', refine: '精筛', headline: '标题', rebuild: '切片', judge: '判定', postprocess: '聚合' };
-      // 阶段类型:LLM(调 call_claude:refine/headline/judge)vs 程序(本地:extract/rebuild/postprocess)。
+      // ①b 各阶段耗时/token(诊断 audit 慢在哪:extract/refine/headline/rebuild 切片/judge/postprocess;
+      // --suggest 真跑过 LLM 时 CLI 会多追加一行 suggest——它是引擎外的 CLI 层后处理)
+      var STAGE_LABEL = { extract: '抽取', refine: '精筛', headline: '标题', rebuild: '切片', judge: '判定', postprocess: '聚合', suggest: '建议' };
+      // 阶段类型:LLM(调 call_claude:refine/headline/judge/suggest)vs 程序(本地:extract/rebuild/postprocess)。
       // 程序阶段 calls/tokens 恒 0,标出来免误读成"漏跑/合计行"。
-      var STAGE_KIND = { extract: '程序', refine: 'LLM', headline: 'LLM', rebuild: '程序', judge: 'LLM', postprocess: '程序' };
+      var STAGE_KIND = { extract: '程序', refine: 'LLM', headline: 'LLM', rebuild: '程序', judge: 'LLM', postprocess: '程序', suggest: 'LLM' };
       // 每阶段一句话说明(进 label 的 title hover 显):让"这阶段干啥"可诊断、不再靠猜。
       // postprocess 是判定后的汇总阶段(跨 transcript 按指令聚合 findings + 噪声标注)→ 名字"聚合"直说。
       var STAGE_DESC = {
@@ -327,12 +328,20 @@
         refine: 'LLM 精筛:砍 extractor 误抽的示例/占位/描述性伪指令(per-SKILL 缓存)',
         headline: 'LLM 把指令改写成人话标题(仅显示、判定不读;per-声明缓存)',
         rebuild: '把 transcript 重建为 SessionDigest + 按作用域切执行段',
-        judge: '三类 LLM 判官(条件性/禁令/步骤)逐批判定指令遵循性',
-        postprocess: '判定后汇总:跨 transcript 按指令聚合 findings + 噪声判别标注'
+        judge: 'LLM 判官逐批判定指令遵循性(条件性/禁令/步骤 + 控制流:顺序对/数量)',
+        postprocess: '判定后汇总:跨 transcript 按指令聚合 findings + 噪声判别标注',
+        suggest: '对 FAIL findings 三类归因 + 起草改进建议(--suggest 显式开启;引擎外后处理)'
       };
       var stages = EMBEDDED_DATA.stage_breakdown || [];
       if (stages.length) {
         var dur = EMBEDDED_DATA.duration_seconds || 0;
+        // suggest 在引擎墙钟之外:有它的行时 % 分母 = 引擎墙钟 + 建议耗时(否则建议行
+        // 占比会 >100%、其余行的占比也失真——% 占的是整条流水线)。
+        var sugSec = 0;
+        for (var si = 0; si < stages.length; si++) {
+          if (stages[si].stage === 'suggest') sugSec = Number(stages[si].seconds || 0);
+        }
+        if (sugSec) dur += sugSec;
         var sumSec = 0, sumIn = 0, sumOut = 0, sumCr = 0, sumCalls = 0;
         var stageRows = stages.map(function (s) {
           var sec = Number(s.seconds || 0);

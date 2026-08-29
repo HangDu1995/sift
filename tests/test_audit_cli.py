@@ -255,8 +255,20 @@ def test_audit_suggest_flag_persists_and_prints(monkeypatch, tmp_path):
             ),
         ],
         model_env_count=1,
+        input_tokens=900, output_tokens=300, calls=4, duration_seconds=12.4,
     )
     captured: dict = {}
+    engine_report = _fake_report()
+    engine_report.duration_seconds = 7.2
+    engine_report.token_usage = {
+        "input_tokens": 100, "output_tokens": 50,
+        "cache_read_input_tokens": 0, "calls": 3,
+    }
+
+    class _EngFake(_FakeAuditor):
+        def audit(self, *a, **k):
+            super().audit(*a, **k)
+            return engine_report
 
     def fake_build(report, body, model=None, timeout=600, on_progress=None):
         captured["skill_body"] = body
@@ -264,7 +276,7 @@ def test_audit_suggest_flag_persists_and_prints(monkeypatch, tmp_path):
         return result
 
     monkeypatch.setattr("sift.cli.commands.audit.build_suggestions", fake_build)
-    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _EngFake())
     sp = _skill_dir(tmp_path)
     tp = _transcript(tmp_path)
     out = tmp_path / "out"
@@ -277,9 +289,16 @@ def test_audit_suggest_flag_persists_and_prints(monkeypatch, tmp_path):
     # rich 按终端宽度折行,断言先拍平空白
     flat = " ".join(r.output.split())
     assert "1 条 FAIL 归因模型/环境不出建议" in flat
+    # 底部汇总是这次执行的总消耗:--suggest 跑过 → tokens/耗时并计建议段
+    assert "+ 建议 input=900 output=300 · 4 call(s)" in flat
+    assert "耗时: 7s + 建议生成 12s = 19s" in flat
     data = json.loads((out / "audit-report.json").read_text(encoding="utf-8"))
     assert data["suggestions"]["suggestions"][0]["category"] == "skill_fix"
     assert data["suggestions"]["model_env_count"] == 1
+    # 消耗并入阶段表:真跑过 LLM(calls>0)→ 多一行 suggest(引擎外后处理单列才可见)
+    sug_rows = [r_ for r_ in data["stage_breakdown"] if r_["stage"] == "suggest"]
+    assert len(sug_rows) == 1
+    assert sug_rows[0]["input_tokens"] == 900 and sug_rows[0]["calls"] == 4
 
 
 def test_audit_suggest_skipped_reason_prints_without_counts(monkeypatch, tmp_path):
@@ -305,6 +324,8 @@ def test_audit_suggest_skipped_reason_prints_without_counts(monkeypatch, tmp_pat
     data = json.loads((out / "audit-report.json").read_text(encoding="utf-8"))
     assert data["suggestions"]["skipped_reason"]
     assert data["suggestions"]["suggestions"] == []
+    # 门控拦下 = 零 LLM 消耗(calls=0)→ 不产 suggest 阶段行(零消耗不占行)
+    assert all(r_["stage"] != "suggest" for r_ in data["stage_breakdown"])
 
 
 def test_audit_console_summary_includes_token_usage(monkeypatch, tmp_path):

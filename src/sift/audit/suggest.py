@@ -250,14 +250,25 @@ def build_suggestions(
     batches = [clusters[i:i + _CLUSTERS_PER_BATCH]
                for i in range(0, len(clusters), _CLUSTERS_PER_BATCH)]
     usage_lock = threading.Lock()
+    calls_made = 0  # 每次响应计 1(含截断/升档重试),阶段表 suggest 行用
 
     def _on_usage(payload: dict) -> None:
         # 并行批各自回报本批用量:锁内**累加**(update 是覆盖,后到批会把先到批的计数冲掉
         # ——并行下丢一半 token 账);非数字字段(note 等)跳过,_tokens_of 同款守卫。
+        # calls 每次响应计 1(含截断/升档重试的每次尝试,与判官阶段 calls 同口径)——
+        # 报告阶段表 suggest 行要用,见 AuditSuggestResult 分项字段。
+        nonlocal calls_made
         with usage_lock:
+            calls_made += 1
             for k, v in payload.items():
                 if isinstance(v, (int, float)) and not isinstance(v, bool):
                     usage[k] = usage.get(k, 0) + v
+
+    def _batch_note(k: int, msg: str) -> None:
+        # 批级可观测:仅多批时打(单批由 CLI 汇总行收口,不叠噪声);前缀与升档/cc 回退
+        # 进度行同形("  [批 k/n] "),看终端的人能对上哪条行属于哪一批。
+        if on_progress is not None and len(batches) > 1:
+            on_progress(f"  [批 {k + 1}/{len(batches)}] {msg}")
 
     def _call_batch(k: int, batch: list[dict]):
         """单批一次 LLM 调用;异常就地收(永不外抛),返回 ("ok"|"exhausted"|"error", payload)。"""
@@ -268,6 +279,7 @@ def build_suggestions(
             prog = (lambda m, _k=k + 1, _n=len(batches):
                     on_progress(f"  [批 {_k}/{_n}] {m.strip()}"))
         prompt = _prompt(skill_body, pass_list, batch, n_transcripts)
+        t0 = time.perf_counter()
         try:
             resp = call_llm_with_retry(
                 prompt, model=model, timeout=timeout,
@@ -276,10 +288,21 @@ def build_suggestions(
                 max_tokens=mt,
             )
         except _LLMRetryExhausted:
+            _batch_note(k, f"失败:重试耗尽 ⏱ {time.perf_counter() - t0:.1f}s")
             return ("exhausted", None)
         except Exception as exc:  # 单批挂不毁其余批(并行下其余批照常完成);原因带回汇总
+            _batch_note(k, f"失败:{str(exc)[:80]} ⏱ {time.perf_counter() - t0:.1f}s")
             return ("error", str(exc)[:120])
+        _batch_note(k, f"完成 ⏱ {time.perf_counter() - t0:.1f}s")
         return ("ok", _parse_attributions(resp))
+
+    # 判官完成 → CLI 汇总行之间原本整段静默(单批深度任务一静默就是数分钟,不知道在
+    # 干嘛)——像判官的「[条件性] 判定 N 条…」一样先报一行阶段头。
+    if on_progress is not None:
+        _par = f"{len(batches)} 批并行" if len(batches) > 1 else "1 批"
+        on_progress(
+            f"生成改进建议:归因 {len(clusters)} 个失败簇 · {_par}(深度归因,可能数分钟)…"
+        )
 
     # 批间独立 → 并行(≤4 workers;call_llm_with_retry 内部过 AIMD 限流器,在飞照常受控)。
     # results 按提交序返回(ex.map 语义),下游按簇序消费,建议顺序确定。
@@ -337,5 +360,8 @@ def build_suggestions(
         dropped_count=dropped,
         skipped_reason=skipped_reason,
         tokens=_tokens_of(usage),
+        input_tokens=int(usage.get("input_tokens", 0)),
+        output_tokens=int(usage.get("output_tokens", 0)),
+        calls=calls_made,
         duration_seconds=time.perf_counter() - start,
     )

@@ -383,10 +383,25 @@ def audit(
     if suggest:
         suggest_result = build_suggestions(
             report, body, model=model,
-            on_progress=lambda msg: console.print(f"[dim]{msg}[/dim]"),
+            on_progress=lambda msg: console.print(msg),  # 阶段头/批级行与判官进度同明文风格
         )
         if suggest_result is not None:
             report.suggestions = suggest_result
+            # 消耗并入报告阶段表(suggest 行):suggest 是 CLI 层后处理,引擎墙钟
+            # (duration_seconds)不含它——不单列一行,「时间花哪了」就看不见这段。
+            # 只计真跑过 LLM 的(calls>0);UNRESOLVED 过高被拦 / 无 FAIL 不产 →
+            # 零消耗不占行。token/calls 与判官阶段同口径(含截断/升档重试)。
+            if suggest_result.calls > 0:
+                report.stage_breakdown.append({
+                    "stage": "suggest",
+                    "seconds": round(suggest_result.duration_seconds, 3),
+                    "input_tokens": suggest_result.input_tokens,
+                    "output_tokens": suggest_result.output_tokens,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "calls": suggest_result.calls,
+                    "note": "",
+                })
 
     out.mkdir(parents=True, exist_ok=True)
     report_path = out / "audit-report.json"
@@ -461,6 +476,9 @@ def audit(
             if sug.dropped_count:
                 console.print(f"[dim]建议生成: {sug.dropped_count} 条模型输出不合规已丢弃[/dim]")
 
+    # 底部汇总是「这次执行总消耗」:--suggest 跑过时(calls>0)建议段在引擎墙钟与
+    # token_usage 之外,须并计——否则上面建议行说 133s、底下汇总却只报判定 19s,自相矛盾。
+    _sug_ran = sug is not None and sug.calls > 0
     tu = report.token_usage
     if tu.get("calls"):
         cache_read = tu.get("cache_read_input_tokens", 0)
@@ -469,9 +487,16 @@ def audit(
             f"output={tu.get('output_tokens', 0)}"
             + (f" cache_read={cache_read}" if cache_read else "")
             + f" [dim]· {tu['calls']} call(s)[/dim]"  # cost 暂隐藏:http 路径不记 total_cost_usd,cc/http 混报误导;token 仍全记
+            + (f" [dim]+ 建议 input={sug.input_tokens} output={sug.output_tokens}"
+               f" · {sug.calls} call(s)[/dim]" if _sug_ran else "")
         )
     if report.duration_seconds:
-        console.print(f"[dim]耗时:[/dim] {report.duration_seconds:.0f}s")
+        _eng_s = round(report.duration_seconds)
+        console.print(
+            f"[dim]耗时:[/dim] {_eng_s}s"
+            + (f" [dim]+ 建议生成 {_sug_s}s = {_eng_s + _sug_s}s[/dim]"
+               if _sug_ran and (_sug_s := round(sug.duration_seconds)) else "")
+        )
 
     if report.warnings:
         console.print("[yellow]Warnings:[/yellow]")

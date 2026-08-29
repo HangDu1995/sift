@@ -311,7 +311,12 @@ def _render_by_instruction_via_node(report, tmp_path):
         "sugEnv:o.includes('归因为模型/环境问题'),"
         "sugReason:o.includes('改进建议(未生成)'),"
         "sugSeqLink:o.includes('#finding-2'),"
-        "sugDropped:o.includes('模型输出不合规已丢弃')}));"
+        "sugDropped:o.includes('模型输出不合规已丢弃'),"
+        "stageTbl:o.includes('阶段耗时 / token'),"
+        "stageSug:o.includes('>建议</td>'),"
+        "stageJudgeCf:o.includes('顺序对/数量'),"
+        "stagePct67:o.includes('(67%)'),"
+        "stagePct200:o.includes('(200%)')}));"
     )
     runfile = tmp_path / "run.js"
     runfile.write_text(preamble + js + epilogue, encoding="utf-8")
@@ -420,6 +425,32 @@ def test_audit_html_coverage_hidden_when_total_zero(tmp_path):
     m = _render_by_instruction_via_node(report, tmp_path)
     assert m["covTbl"] is False
     assert m["covOverall"] is False
+
+
+# ---- ①b 阶段耗时/token 表(suggest 行)----
+
+def test_audit_html_stage_table_suggest_row_pct_of_whole_pipeline(tmp_path):
+    """suggest 行(--suggest 真跑过 LLM 才由 CLI 追加)入阶段表;% 占整条流水线
+    (引擎墙钟 + 建议耗时)——不是只占引擎墙钟,否则建议行 >100%、其余行失真。
+    顺带钉死 judge 行 hover 描述含控制流判官(判定行的消耗口径)。"""
+    report = AuditReport(
+        skill_name="s", transcripts=["t1.jsonl"],
+        summary={"total": 0, "pass": 0, "fail": 0, "na": 0},
+        findings=[], by_instruction=[], warnings=[],
+        duration_seconds=40.0,
+        stage_breakdown=[
+            {"stage": "judge", "seconds": 40.0, "input_tokens": 100, "output_tokens": 50,
+             "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "calls": 3, "note": ""},
+            {"stage": "suggest", "seconds": 80.0, "input_tokens": 900, "output_tokens": 300,
+             "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "calls": 4, "note": ""},
+        ],
+    )
+    m = _render_by_instruction_via_node(report, tmp_path)
+    assert m["stageTbl"] is True
+    assert m["stageSug"] is True          # 「建议」行渲染(标签/类型/描述映射补齐)
+    assert m["stageJudgeCf"] is True      # 判定行描述含「控制流:顺序对/数量」
+    assert m["stagePct67"] is True        # 80/(40+80)=67%:分母含建议耗时
+    assert m["stagePct200"] is False      # 不是 80/40=200%(旧分母=引擎墙钟)
 
 
 # ---- ③c 越界视图(boundary,一期信息性)----

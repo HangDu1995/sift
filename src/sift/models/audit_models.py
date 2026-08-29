@@ -290,6 +290,11 @@ class AuditSuggestResult(BaseModel):
     dropped_count: int = 0     # wire 不合规整条丢弃计数(fix 类缺 suggestion / target_seqs 全无效 / 整批解析失败)
     skipped_reason: str = ""   # 未跑/失败原因(UNRESOLVED 过高 / LLM 失败);空 = 跑成
     tokens: int = 0
+    # 消耗分项(CLI 把 suggest 行并入报告阶段表用;旧 JSON 默认 0):in/out 拆分 +
+    # 实际响应次数(含截断/升档重试,与判官阶段 calls 同口径)。tokens = in + out 之和不变。
+    input_tokens: int = 0
+    output_tokens: int = 0
+    calls: int = 0
     duration_seconds: float = 0.0
 
 
