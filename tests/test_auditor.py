@@ -27,7 +27,7 @@ from sift.audit.auditor import (
     _MAX_LLM_IN_BATCH, _LLM_RETRY_MAX, TranscriptAuditor,
     _judge_batch_with_retry, _RetryExhaustedType, _run_batches_concurrent,
 )
-from sift.models import InstructionCheck
+from sift.models import InstructionCheck, ToolCallRecord
 from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
@@ -320,6 +320,38 @@ class TestUnmatchedLlm:
         assert f.verdict == AuditVerdict.UNRESOLVED  # 没判成 → UNRESOLVED,不报 FAIL
         assert f.method == AuditMethod.LLM
         assert "无法确证" in f.evidence
+
+    def test_applicable_prompt_has_trace_and_window_rule(self, monkeypatch) -> None:
+        """未命中交 LLM 时,prompt 必须带工具调用记录 + 「窗口外不判应触发」规则。
+
+        2026-08-30 误报修复的守卫:条件性判官原只看场景描述、看不到记录止于何处——
+        场景文本提过整个计划,就对「系于从未开始阶段的指令」一律 applicable=true →
+        trace 未调用 → 假 FAIL(真跑暴露:验收标准段里的标识符会被抽成工具要求)。
+        补 tool_trace 可见性 + 窗口规则(含反向闸:已开始阶段不得借窗口洗掉)。
+        """
+        prompts: list[str] = []
+
+        def fake(prompt, *a, **k):
+            prompts.append(prompt)
+            return json.dumps([{
+                "index": 0, "applicable": False,
+                "reason": "记录止于 Task 32 验收,Task 37 从未开始",
+            }])
+
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
+        trace = [ToolCallRecord(name="Task", input_summary="Verify Task 32 - Branch-1 KernelST")]
+
+        TranscriptAuditor()._judge_conditional(
+            [_tool_inst(text="调用 TilingFunc", tool_name="TilingFunc")],
+            trace, "某场景", "w.jsonl",
+        )
+
+        assert len(prompts) == 1
+        assert "实际工具调用记录" in prompts[0]
+        assert "Verify Task 32" in prompts[0]  # trace 内容真进了 prompt(不是空段)
+        assert "从未开始" in prompts[0]        # 窗口规则
+        assert "不判应触发" in prompts[0]
+        assert "不得借「记录窗口」" in prompts[0]  # 反向闸
 
 
 class TestRetryRecovery:
@@ -2309,6 +2341,68 @@ class TestRetryExhaustedCause:
         # call 成功但 parse 全 None(LLM 返畸形)→ 0-解析重试耗尽
         r = self._judge(monkeypatch, lambda *a, **k: "not json at all")
         assert isinstance(r, _RetryExhaustedType) and r.cause == "parse_failed"
+
+
+class TestUndercoveredBatchRetry:
+    """批内漏答过半的覆盖率重试闸(_judge_batch_with_retry)。
+
+    2026-08-30:不稳期实锤一个批返回只覆盖 2/10 的合法数组——原闸只认「整批 0 解析」,
+    部分省略直通 → 8 条 UNRESOLVED(建议重跑整单)。现过半缺席也重试;耗尽回覆盖
+    最高的那份而非弃批(已判对的不再变没判成);恰好半数(1/2)不重试——模型系统性
+    漏近重复指令是常态,别为它每批白烧重试。
+    """
+
+    @staticmethod
+    def _step_json(*verdicts: str) -> str:
+        return json.dumps([
+            {"index": i, "verdict": v, "evidence": f"ev{i}"}
+            for i, v in enumerate(verdicts)
+        ])
+
+    def _judge(self, monkeypatch, replies: list[str], bn: int):
+        calls = {"n": 0}
+
+        def fake(prompt, *a, **k):
+            r = replies[min(calls["n"], len(replies) - 1)]
+            calls["n"] += 1
+            return r
+
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
+        monkeypatch.setattr(auditor.time, "sleep", lambda *a, **k: None)
+        out = _judge_batch_with_retry(
+            "p", None, 600, TranscriptAuditor._parse_step, bn,
+            on_progress=None, label="测试", k=1, total=1,
+            is_unparsed=lambda v: v[0] is None, transport="http",
+        )
+        return out, calls["n"]
+
+    def test_under_half_retries_and_recovers(self, monkeypatch) -> None:
+        """10 条只答 2 条 → 视同批失败重试;第二次全答 → 采用第二次。"""
+        out, calls = self._judge(monkeypatch, [
+            self._step_json("pass", "na"),        # 2/10 → 漏答过半,重试
+            self._step_json(*(["pass"] * 10)),    # 10/10
+        ], 10)
+
+        assert calls == 2
+        assert all(v[0] is AuditVerdict.PASS for v in out)
+
+    def test_exhausted_returns_best_not_sentinel(self, monkeypatch) -> None:
+        """始终 2/10 → 重试耗尽后回覆盖最高的一份(非 _RetryExHAUSTED 弃批)。"""
+        out, calls = self._judge(monkeypatch, [self._step_json("pass", "na")], 10)
+
+        assert calls == _LLM_RETRY_MAX + 1
+        assert not isinstance(out, _RetryExhaustedType)
+        assert out[0][0] is AuditVerdict.PASS   # 已判的保留
+        assert out[1][0] is AuditVerdict.NA
+        assert out[2][0] is None                # 漏的保持没判成(unmentioned 语义)
+
+    def test_exactly_half_no_retry(self, monkeypatch) -> None:
+        """1/2 恰好半数 → 不重试;1 条有判定、1 条 None(漏 1 条是常态税)。"""
+        out, calls = self._judge(monkeypatch, [self._step_json("pass")], 2)
+
+        assert calls == 1
+        assert out[0][0] is AuditVerdict.PASS
+        assert out[1][0] is None
 
 
 class TestRunBatchesReturnsFailures:

@@ -142,10 +142,16 @@ def _tool_trace_section(tool_trace, locate_turns: bool) -> str:
     """
     if not tool_trace:
         return ""
+    # 元素支持 attr(ToolCallRecord)/ dict 双风格(同 match_tool_call 惯例)——
+    # 条件性判官的 trace 可能来自旧 checker 路径的 dict 记录。
+    def _f(t, attr: str):
+        return getattr(t, attr) if hasattr(t, attr) else t.get(attr, "")
     if locate_turns:
+        def _turn(t):
+            return t.get("turn") if isinstance(t, dict) else getattr(t, "turn", None)
         tool_lines = "\n".join(
-            f"- [T{t.turn}] {t.name}: {t.input_summary}" if t.turn is not None
-            else f"- {t.name}: {t.input_summary}"
+            f"- [T{_turn(t)}] {_f(t, 'name')}: {_f(t, 'input_summary')}" if _turn(t) is not None
+            else f"- {_f(t, 'name')}: {_f(t, 'input_summary')}"
             for t in tool_trace
         )
         return (
@@ -153,7 +159,7 @@ def _tool_trace_section(tool_trace, locate_turns: bool) -> str:
             "``[T{idx}]`` 标该调用所属 turn)\n"
             f"{tool_lines}\n\n"
         )
-    tool_lines = "\n".join(f"- {t.name}: {t.input_summary}" for t in tool_trace)
+    tool_lines = "\n".join(f"- {_f(t, 'name')}: {_f(t, 'input_summary')}" for t in tool_trace)
     return (
         "## 实际工具调用记录(判涉及工具的步骤时以此为准,勿只凭文字声称)\n"
         f"{tool_lines}\n\n"
@@ -307,11 +313,16 @@ def _judge_batch_with_retry(
 ) -> list | _RetryExhaustedType:
     """call+parse 一个 LLM 批,RuntimeError 或整批 0 解析成功则重试(共用 _LLM_RETRY_MAX 预算)。
 
-    合并两种"这批没拿到可用判定"的失败,共用同一份重试预算(不再为 0-解析另设次数):
+    合并三种"这批没拿到可用判定"的失败,共用同一份重试预算(不再为 0-解析另设次数):
 
     - **调用失败**:call_claude 抛 RuntimeError(超时 / CLI 非零退出 / 限流)。
     - **解析为空**:调用成功但 parse_fn 全 None(LLM 输出畸形 / 截断 / 空数组)——原是静默
       盲点(打"完成"却全 N/A),现重试。实锤 0-解析多为瞬态:同 prompt 重试常能解出。
+    - **漏答过半**:调用成功、部分解析,但有判定者不足半数(输出契约要求逐条判,过半
+      缺席多为瞬态——深思考档偶发漏答/截断救回的短数组)。重试一发常能救回,免得整批
+      落"建议重跑";**漏 1 条不重试**(如 1/2:模型系统性漏近重复指令会每批白烧重试)。
+      重试期间保留覆盖最高的一份,耗尽时**回它而非弃批**——已判对的保留,漏的由调用方
+      标 unmentioned → UNRESOLVED(与弃批的差别:不再把已判对的也变没判成)。
 
     重试上限 _LLM_RETRY_MAX;退避两档:429 指数(_RATE_LIMIT_BACKOFF × 2^attempt,跨速率窗口)、
     其他失败线性(_LLM_RETRY_DELAY × 尝试序号)。成功返回 parse_fn
@@ -322,6 +333,8 @@ def _judge_batch_with_retry(
     batch_tag = f" 批 {k}/{total}" if total > 1 else ""
     prefix = f"[{label}]{batch_tag}"
     last_cause = "unknown"
+    best: list | None = None  # 漏答过半重试期间覆盖最高的一份(耗尽时回它,不弃批)
+    best_ok = 0
     for attempt in range(_LLM_RETRY_MAX + 1):
         if attempt > 0:
             time.sleep(_LLM_RETRY_DELAY * attempt)
@@ -357,11 +370,22 @@ def _judge_batch_with_retry(
         _LLM_LIMITER.on_success()
         _emit(on_progress, f"  {prefix} 完成 ⏱ {time.monotonic() - t0:.0f}s")
         parsed = parse_fn(result_text, bn)
-        if bn and all(is_unparsed(v) for v in parsed):
+        ok = sum(1 for v in parsed if not is_unparsed(v)) if bn else 0
+        if bn and ok == 0:
             last_cause = "parse_failed"
             _emit(on_progress, f"  {prefix} ⚠ 0 条解析成功(LLM 输出畸形/截断?),重试…")
             continue
-        return parsed
+        if ok >= best_ok:
+            best, best_ok = parsed, ok
+        if not bn or ok * 2 >= bn:
+            return parsed  # 覆盖过半(含恰好半数):直接采用本次
+        last_cause = "undercovered"
+        _emit(on_progress, f"  {prefix} ⚠ 仅 {ok}/{bn} 条有判定(漏答过半),重试…")
+    # 耗尽:手里有漏答过半以下但非零覆盖的最优一份 → 回它(已判对的保留,漏的走
+    # unmentioned);从没拿到过任何有判定结果(全是调用失败/0-解析)才弃批。
+    if best is not None:
+        _emit(on_progress, f"  {prefix} 重试耗尽 → 采用覆盖最高的 {best_ok}/{bn} 份,其余未判")
+        return best
     _emit(on_progress, f"  {prefix} 重试耗尽 → 本批 {bn} 条全兜底 N/A")
     return _RetryExhaustedType(cause=last_cause)
 
@@ -936,9 +960,11 @@ class TranscriptAuditor:
             return [f for f in findings if f is not None]
 
         # 未命中全量交 LLM 判(>_MAX_LLM_IN_BATCH 由 _llm_judge_applicable 内部分批循环,
-        # 不再单次截断 + 超限保守 FAIL)。
+        # 不再单次截断 + 超限保守 FAIL)。tool_trace 一并喂 LLM:系于「记录窗口外」
+        # (从未开始的任务/阶段)的指令不判应触发,防场景文本提过整个计划就一律 true 的假 FAIL。
         applicable_mask, cause_mask = self._llm_judge_applicable(
-            [inst for _, inst in unmatched], transcript_scene, model, timeout, on_progress, on_usage,
+            [inst for _, inst in unmatched], transcript_scene, model, timeout,
+            on_progress, on_usage, tool_trace=tool_trace,
         )
 
         for local_pos, (orig_i, inst) in enumerate(unmatched):
@@ -1695,6 +1721,7 @@ class TranscriptAuditor:
         timeout: int,
         on_progress: ProgressFn | None = None,
         on_usage: Callable[[dict], None] | None = None,
+        tool_trace: list | None = None,
     ) -> tuple[list[tuple[AuditVerdict | None, str]], list[str]]:
         """分批 call_claude 判每条未命中指令在该场景是否"该触发"(每批 _MAX_LLM_IN_BATCH(10) 条,处理全部)。
 
@@ -1702,7 +1729,8 @@ class TranscriptAuditor:
 
         - ``mask`` 每元素 ``(verdict, reason)``:
           - (FAIL, "")     = 该触发(该做没做)
-          - (NA, reason)   = 不涉及(场景不触发,带 LLM 给的"为何不涉及";空则调用方退兜底套话)
+          - (NA, reason)   = 不涉及(场景不触发,带 LLM 给的"为何不涉及";空则调用方退兜底套话;
+            含窗口外——指令系于从未开始的任务/阶段,证据不覆盖不判应触发)
           - (INDETERMINATE, reason) = 判不准(LLM 看了场景但证据真矛盾/缺失,带具体 reason)
           - (None, "")     = 没判成(调用/解析失败/未提及/indeterminate 无 reason)
         - ``cause_mask`` 每元素 str(verdict 为 None 时读,附到 UNRESOLVED finding):
@@ -1736,14 +1764,20 @@ class TranscriptAuditor:
                 "判断以下每条条件性指令在给定场景下是否应该被触发执行。\n\n"
                 "## 判定标准(优先给出明确结论;只有证据真的相互矛盾或关键缺失时才用 indeterminate)\n"
                 "- ✅ true(该触发):这个场景满足指令的隐含条件——执行者本应做该动作"
-                "(如场景涉及该工具应被调用、该参考文件应被读取),却没做 = 疑似违规。\n"
+                "(如场景涉及该工具应被调用、该参考文件应被读取),却没做 = 疑似违规。"
+                "该指令所属任务/阶段已开始的,照常判断该不该触发,不得借「记录窗口」"
+                "把已开始的阶段洗成不涉及。\n"
                 "- ❌ false(不涉及):这个场景根本不涉及该指令(场景未触及该工具 / 参考"
-                "文件的适用范围,本就不该触发)。**reason 必须写明:场景为何不触及该指令的适用范围**"
+                "文件的适用范围,本就不该触发;或该指令系于某个具体任务/阶段/分支——"
+                "如某 Task 的验收标准、某 Branch 的实现要求——而工具调用记录显示记录"
+                "结束时该任务/阶段从未开始:执行记录是有限窗口,窗口外属证据不覆盖,"
+                "不判应触发)。**reason 必须写明:场景为何不触及该指令的适用范围**"
                 "(不许空口'不涉及',要给可核对的依据)。\n"
                 "- ⚠ indeterminate(判不准):你看了场景,但证据真的相互矛盾或关键信息缺失,"
                 "判断不了该不该触发。**必须**在 reason 写明具体矛盾 / 缺失的证据;"
                 "不要用 indeterminate 偷懒回避判断。\n\n"
                 f"## 场景描述\n{_window(transcript_scene)}\n\n"
+                f"{_tool_trace_section(tool_trace, False)}"
                 f"## 待判指令 ({bn} 条)\n{instruction_list}\n"
                 "## 输出格式\n"
                 '只返回 JSON 数组,每元素:'
