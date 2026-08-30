@@ -2,7 +2,8 @@
 
 分类三分:builtin(lower 口径,cc 大写/opencode 小写双形统一)/ domain(命中声明工具
 要求)/ undeclared-domain(未命中,视图主体)。纯聚合零 LLM;不产 finding、不进 verdict。
-声明侧抽取三源:TOOL_REQUIREMENT.params.tool_name / mcp__server__tool 全名 / 反引号代码字。
+声明侧抽取四源:TOOL_REQUIREMENT.params.tool_name / mcp__server__tool 全名 / 反引号
+代码字 / 声明 frontmatter 工具白名单(agent tools: / skill allowed-tools:,调用方抽好传入)。
 """
 
 import json
@@ -141,6 +142,18 @@ def test_aggregate_boundary_accepts_dict_style_records():
     s = aggregate_boundary([("t.jsonl", mixed)], [])
     assert s.total_tools == 2
     assert {e.name for e in s.tools} == {"mcp__a__x", "mcp__b__y"}
+
+
+def test_frontmatter_server_level_whitelist_covers_server_tools():
+    """server 级白名单(mcp__server,授权整个 server)前缀匹配工具全名。
+
+    cc 权限规则的合法形态;不认会把该 server 全部工具误标 undeclared-domain
+    (与 Tool(spec) 权限后缀同族的不匹配形态)。
+    """
+    fm = frontmatter_tool_names({"tools": ["mcp__issues"]})
+    s = aggregate_boundary([("t.jsonl", _trace("mcp__issues__search"))], [], fm)
+    assert s.declared == 1 and s.undeclared == 0
+    assert s.tools[0].declared_by == "frontmatter: tools"
 
 
 def test_frontmatter_tool_names_ignores_non_list_and_non_str():

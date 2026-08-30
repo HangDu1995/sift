@@ -745,6 +745,13 @@ class TestAuditControlFlowWiring:
         def boom(self, *a, **k):
             raise RuntimeError("cf judge down")
 
+        # mock 三判官:本测试只断言 CF 兜底产物,别让 refine/条件性/禁令/步骤真调
+        # 后端(有凭据的开发机上每次跑测试都烧真实 token,实测单用例 7.85s→0.14s)
+        monkeypatch.setattr(
+            "sift.audit.auditor.call_claude",
+            lambda *a, **k: '[{"index": 0, "applicable": false, "violated": false,'
+                            ' "verdict": "pass", "evidence": "mock"}]',
+        )
         monkeypatch.setattr(TranscriptAuditor, "_judge_control_flow", boom)
         report = TranscriptAuditor().audit("cf-skill", CF_SKILL_BODY, [one_transcript])
         synth_unresolved = [f for f in report.findings

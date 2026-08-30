@@ -12,9 +12,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from sift.cli.main import app
+
+
+@pytest.fixture(autouse=True)
+def _no_llm_retry_sleep(monkeypatch) -> None:
+    """重试退避的 time.sleep → no-op(同 test_auditor/test_control_flow 惯例)——
+    mock 答不满批时「漏答过半」重试的线性退避会让单个用例白睡数十秒。"""
+    monkeypatch.setattr("sift.audit.auditor.time.sleep", lambda *a, **k: None)
 from sift.models.audit_models import (
     AuditCategory,
     AuditFinding,
@@ -110,6 +118,25 @@ class _FakeAuditor:
             }
         )
         return _fake_report()
+
+
+def test_audit_findings_table_escapes_rich_markup_in_evidence(monkeypatch, tmp_path):
+    """evidence/instruction 含 `[/x]` 形态(判官 LLM 引用方括号原文)→ 表格照常渲染。
+
+    回归钉:_truncate 原不转义,rich 对未配对闭合标签抛 MarkupError——报告已落盘、
+    命令却以 traceback 非零退出,CI 会误读为审计失败。转义后 exit 0、原文保留。
+    """
+    report = _fake_report()
+    report.findings[1].evidence = "引用了会话原文 [red]Error[/red] 与未配对 [/dev/davinci] 片段"
+    report.findings[1].instruction_text = "步骤 [/odd] 引用"
+    report.findings[1].control_flow = "quantity"  # (数量) 前缀与转义文本拼接路径
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _FakeAuditor())
+    monkeypatch.setattr(_FakeAuditor, "audit", lambda self, *a, **k: report)  # 本用例返回带毒报告
+    sp = _skill_dir(tmp_path)
+    tp = _transcript(tmp_path)
+    r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp), "-o", str(tmp_path / "o")])
+    assert r.exit_code == 0, r.output
+    assert "[/dev/davinci]" in r.output  # 原文保留(转义渲染,不是丢弃)
 
 
 def test_audit_sift_error_prints_triage(monkeypatch, tmp_path):
@@ -651,7 +678,12 @@ def test_audit_agent_fixture_frontmatter_boundary_end_to_end(monkeypatch, tmp_pa
     mcp__slack__post=undeclared-domain;切段落盘。fixture 被改坏时这里先红。"""
     monkeypatch.setattr(
         "sift.audit.auditor.call_claude",
-        lambda *a, **k: '[{"index":0,"applicable":true,"violated":false,"verdict":"pass","evidence":"未违规"}]',
+        # 覆盖 0..9:只答 index 0 会让每批「漏答过半」触发重试至耗尽,退避 sleep
+        # 白等一分钟(实测 60s 纯 sleep;refine+judge 两批各 30s)——mock 要答满批
+        lambda *a, **k: "[" + ",".join(
+            f'{{"index":{i},"applicable":true,"violated":false,"verdict":"pass","evidence":"未违规"}}'
+            for i in range(10)
+        ) + "]",
     )
     base = Path(__file__).parent.parent / "fixtures" / "example-agents" / "issue-triage-agent"
     out = tmp_path / "out"

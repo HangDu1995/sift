@@ -601,7 +601,7 @@
       // 两条路都产空 suggestions,不先查 reason 会把失败误读成「没怪模型」或反之);
       // 跑成但零归因 → 整块不渲染(正常态不渲染空视图,同 boundary/coverage 口径)。
       var sug = EMBEDDED_DATA.suggestions;
-      if (sug && (sug.skipped_reason || (sug.suggestions || []).length || sug.model_env_count)) {
+      if (sug && (sug.skipped_reason || (sug.suggestions || []).length || sug.model_env_count || sug.dropped_count)) {
         if (sug.skipped_reason) {
           root.insertAdjacentHTML('beforeend',
             '<div id="audit-suggest" class="suggest"><h2>💡 改进建议(未生成)</h2>' +

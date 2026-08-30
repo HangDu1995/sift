@@ -489,8 +489,13 @@ Output JSON ONLY:
             # 合法 JSON 但非对象(裸数组/字符串)——不守卫 .get 会 AttributeError 炸穿
             # 调用方(init 顶层只捕 SiftError);同 _parse_llm_response 的既有守卫。
             return []
+        raw_probes = data.get("trigger_probes")
+        if not isinstance(raw_probes, list):
+            # 键在但值非数组(裸 int/bool)——enumerate 取迭代器这步就 TypeError,
+            # 循环体内的逐条 try 救不到 → 按解析失败处理,返 []。
+            return []
         probes: list[TriggerProbe] = []
-        for i, item in enumerate(data.get("trigger_probes", []) or [], 1):
+        for i, item in enumerate(raw_probes, 1):
             try:
                 probes.append(TriggerProbe(
                     id=item.get("id", i),

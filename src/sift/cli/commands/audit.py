@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from rich.markup import escape as rich_markup_escape
 from rich.table import Table
 
 from sift.audit.auditor import TranscriptAuditor
@@ -42,9 +43,17 @@ _TRUNCATE_WIDTH = 60
 
 
 def _truncate(text: str, width: int = _TRUNCATE_WIDTH) -> str:
-    """单行化 + 截断,供表格单元格展示(instruction_text / evidence 可能很长)。"""
+    """单行化 + 截断 + **rich markup 转义**,供表格单元格展示(instruction_text / evidence 可能很长)。
+
+    evidence 是判官 LLM 的输出、instruction_text 可能内嵌 headline(同为 LLM 产物)——
+    含 `[/x]` 形态时 rich 按未配对闭合标签抛 MarkupError,直接崩掉整个 audit 命令
+    (报告已落盘、exit code 非零,被 CI 误读为审计失败);含真实样式名时文字被错误
+    染色。先截断后转义(转义会扩字符,以展示宽度为准)。外层再拼 `[dim](数量)[/dim]`
+    一类**有意**的标记不受影响(转义只作用于本函数的输入)。
+    """
     flat = text.replace("\n", " ").strip()
-    return flat if len(flat) <= width else flat[: width - 1] + "…"
+    cut = flat if len(flat) <= width else flat[: width - 1] + "…"
+    return rich_markup_escape(cut)
 
 
 def format_unresolved_breakdown(breakdown: dict[str, int]) -> str:
@@ -92,12 +101,15 @@ def _audit_from_db(db: Path, session: Optional[str]) -> Path:
         t.add_column("title")
         t.add_column("updated")
         for s in sessions:
-            t.add_row(str(s.get("id", "?")), str(s.get("title", "")), _fmt_ms(s.get("updated")))
+            # title 是模型生成的会话摘要,按不可信文本转义(含 [/x] 会 MarkupError)
+            t.add_row(str(s.get("id", "?")),
+                      rich_markup_escape(str(s.get("title", ""))),
+                      _fmt_ms(s.get("updated")))
         console.print(t)
         console.print("[red]Error:[/red] 多个 session,请带 --session <id> 重跑(见上表)")
         raise typer.Exit(code=2)
     sid = target.get("id", "?")
-    console.print(f"[dim]--db: 导出 session {sid}({target.get('title', '')})…[/dim]")
+    console.print(f"[dim]--db: 导出 session {sid}({rich_markup_escape(str(target.get('title', '')))})…[/dim]")
     json_str = export_session(db, sid)
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", delete=False, encoding="utf-8"
@@ -462,7 +474,8 @@ def audit(
     sug = report.suggestions
     if sug is not None:
         if sug.skipped_reason:
-            console.print(f"[yellow]改进建议未生成:[/yellow] {sug.skipped_reason}")
+            # skipped_reason 含异常文本(HTTP 响应体片段可拼进来)——转义防 markup 注入
+            console.print(f"[yellow]改进建议未生成:[/yellow] {rich_markup_escape(sug.skipped_reason)}")
         else:
             n_skill = sum(1 for s in sug.suggestions if s.category == "skill_fix")
             n_decl = sum(1 for s in sug.suggestions if s.category == "declaration_fix")

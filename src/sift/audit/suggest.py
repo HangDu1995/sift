@@ -331,8 +331,9 @@ def build_suggestions(
             if category not in _WIRE_CATEGORIES:
                 dropped += 1
                 continue
+            raw_seqs = item.get("target_seqs")
             seqs = [
-                s for s in (item.get("target_seqs") or [])
+                s for s in (raw_seqs if isinstance(raw_seqs, list) else [])
                 if isinstance(s, int) and not isinstance(s, bool) and 1 <= s <= max_seq
             ]
             if not seqs:

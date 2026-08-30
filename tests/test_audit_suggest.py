@@ -216,6 +216,21 @@ class TestAttributionMapping:
         assert result.suggestions[0].target_seqs == [1]  # 越界/bool 剔除
         assert result.model_env_count == 0 and result.dropped_count == 1  # 全无效 → 丢条目
 
+    def test_non_list_target_seqs_dropped_not_raised(self, monkeypatch) -> None:
+        """target_seqs 是裸标量(int/bool)→ 按无效丢条目,不得 TypeError 外抛。
+
+        item 循环在 _call_batch 的 try 之外——裸标量在列表推导的 for 取迭代器这步
+        就抛,会击穿 build_suggestions 的「永不向外抛」契约(挂点在落盘前)。
+        """
+        monkeypatch.setattr("sift.audit.suggest.call_llm_with_retry", _fake_llm(_wire([
+            {"category": "skill_fix", "target_seqs": 5, "rationale": "r",
+             "suggestion": "改"},
+            {"category": "model_env", "target_seqs": True},
+        ])))
+        result = build_suggestions(self._fail_report(), "skill 正文")
+        assert result is not None
+        assert result.suggestions == [] and result.dropped_count == 2
+
     def test_unknown_category_dropped(self, monkeypatch) -> None:
         """schema enum 正常会拦;代码侧防御(schema 外通道/畸形)照样丢弃。"""
         monkeypatch.setattr("sift.audit.suggest.call_llm_with_retry", _fake_llm(_wire([
@@ -385,7 +400,7 @@ class TestElasticParallel:
     """首档输出上限按批内簇数弹性给(固定小帽对深度归因必截断)、批间并行、单批挂不毁其余批。
 
     探针锚点(glm-5.3 直连,2026-08-28):6 簇 → output 10.2k,12 簇 → 16.2k
-    (≈ 4k 底噪 + 1.0k/簇);公式 4096 + 1500×簇数全程留余量。
+    (≈ 4k 底噪 + 1.0k/簇);首档公式 6000 + 2500×簇数从宽覆盖(见 suggest.py 常量)。
     """
 
     @staticmethod

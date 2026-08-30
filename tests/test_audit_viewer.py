@@ -613,6 +613,20 @@ def test_audit_html_suggest_hidden_when_none(tmp_path):
     assert m["sugBlock"] is False
 
 
+def test_audit_html_suggest_dropped_only_still_visible(tmp_path):
+    """全 dropped(真跑了、整批解析失败)→ 区块不消失,dropped 计数行可见。
+
+    渲染门原漏 dropped_count:该状态下 CLI 打「N 条已丢弃」、JSON 有 dropped_count,
+    HTML 却整个不渲染——看 HTML 会误以为 suggest 正常零归因。
+    """
+    from sift.models.audit_models import AuditSuggestResult
+
+    result = AuditSuggestResult(dropped_count=3)  # suggestions 空 / reason 空 / 计数全 0
+    m = _render_by_instruction_via_node(_suggest_report(result), tmp_path)
+    assert m["sugBlock"] is True
+    assert m["sugDropped"] is True
+
+
 def test_audit_html_suggest_zero_attribution_hidden(tmp_path):
     """跑成但零归因(全空计数、reason 空)→ 正常态不渲染空视图(同 boundary/coverage)。"""
     from sift.models.audit_models import AuditSuggestResult

@@ -247,6 +247,17 @@ def test_filter_near_miss_non_dict_items_mark_unverified():
     assert out[1] == ("near_miss", "ok")
 
 
+def test_filter_near_miss_non_list_verdicts_marks_unverified():
+    """verdicts 键在但值非数组(裸 int/bool)→ 整批 unverified,不 TypeError。
+
+    for 取迭代器这步就抛,循环体内的 item 守卫救不到——解析失败形态的第三层
+    (data 非 dict → item 非 dict → verdicts 非数组)。
+    """
+    for bad in ('{"verdicts": 5}', '{"verdicts": true}', '{"nope": 1}'):
+        out = filter_near_miss(["甲条候选"], "desc", lambda p, b=bad: b)
+        assert out == [("unverified", "LLM 过滤失败或该条缺失,仅事实层(未触发)成立")]
+
+
 def test_filter_near_miss_batches_beyond_limit():
     """> NEAR_MISS_BATCH 候选 → 分多批调用(注意力安全 b)。"""
     calls = []

@@ -907,6 +907,17 @@ def test_generate_trigger_probes_non_dict_json_returns_empty(tmp_path):
     assert probes == []
 
 
+def test_generate_trigger_probes_non_list_probes_returns_empty(tmp_path):
+    """trigger_probes 键在但值非数组(裸 int/bool)→ 返 [],不 TypeError 炸穿 init。
+
+    enumerate 取迭代器这步就抛,循环体内的逐条 try 救不到。
+    """
+    gen = EvalInitGenerator()
+    with patch("sift.evals.generator.call_claude", return_value='{"trigger_probes": 5}'):
+        probes = gen.generate_trigger_probes(_skill(tmp_path))
+    assert probes == []
+
+
 # ---------------------------------------------------------------------------
 # 共享内核:定向补题(_supplement_directive)
 # 有现有题(init --append / coverage --augment)→ 硬化 focus + 喂现有题清单做语义去重;

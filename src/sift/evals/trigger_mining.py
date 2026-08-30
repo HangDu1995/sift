@@ -185,8 +185,13 @@ def _parse_near_miss_response(response: str, batch_size: int) -> dict[int, tuple
         # 合法 JSON 但非对象(裸数组/字符串)——不守卫会在 .get 上 AttributeError 炸穿
         # filter_near_miss 的 except RuntimeError(init 顶层只捕 SiftError)。
         return {}
+    verdicts = data.get("verdicts")
+    if not isinstance(verdicts, list):
+        # 键在但值非数组(裸 int/bool/字符串)——for 取迭代器这步就 TypeError,
+        # 循环体内的条目守卫救不到;同属解析失败 → {}(该批降 unverified)。
+        return {}
     out: dict[int, tuple[str, str]] = {}
-    for item in data.get("verdicts", []) or []:
+    for item in verdicts:
         if not isinstance(item, dict):
             # 条目非对象(裸字符串/数字——截断或输出漂移的形态):跳过该条不影响
             # 其余;不守卫则 item.get 抛 AttributeError 穿透调用链(同 data 层

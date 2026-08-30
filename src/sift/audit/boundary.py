@@ -158,6 +158,11 @@ def aggregate_boundary(
             seen_in_session.add(key)
             if key not in entries:
                 hit = declared.get(key)
+                if hit is None and key.startswith("mcp__") and key.count("__") >= 2:
+                    # server 级白名单(``mcp__server``,授权整个 server——cc 权限规则
+                    # 的合法形态)前缀匹配:工具全名 ``mcp__server__tool`` 落回
+                    # server 键;不认会把该 server 全部工具误标未声明。
+                    hit = declared.get(key.rsplit("__", 1)[0])
                 entries[key] = ToolUsageEntry(
                     name=name,
                     classification="domain" if hit else "undeclared-domain",

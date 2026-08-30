@@ -549,7 +549,9 @@ class TranscriptAuditor:
            纯新增、去重 vs 静态指令);existing + derived 合并后按 ``classify`` 分四桶
            (CONDITIONAL / PROHIBITION / STEP / OUTPUT);
         4. 四个 ``_judge_*`` 各判各桶 → findings;derived 来的 finding 标
-           ``derived_from_transcript=True``(按 instruction_text 命中 derived_texts 集合);
+           ``derived_from_transcript=True``(按 instruction_text 命中 derived 文案集合;
+           与静态指令**同文**的 derived 文案除外——碰撞时该文本按真声明指令对待,
+           不得把静态指令踢出 coverage 分母);
         5. 汇总 summary(total/pass/fail/na)+ warnings → ``AuditReport``。
 
         Args:
@@ -681,6 +683,11 @@ class TranscriptAuditor:
             derived = derive_declarations(digest, instructions)
             all_inst = instructions + derived
             derived_texts = {d.instruction_text for d in derived}
+            # 同文碰撞排除:derived 文案恰好与某条静态声明指令同文时,该文本不参与
+            # 事后标 derived(finding 无法区分出处,但文本在静态集里 = 存在真声明
+            # 指令,按真声明指令对待)。
+            static_texts = {i.instruction_text for i in instructions}
+            derived_only_texts = derived_texts - static_texts
 
             buckets: dict[AuditCategory, list[InstructionCheck]] = {
                 AuditCategory.CONDITIONAL: [],
@@ -787,7 +794,12 @@ class TranscriptAuditor:
             stage_seconds["judge"] += time.perf_counter() - _t
 
             for f in findings:
-                if f.instruction_text in derived_texts:
+                # derived 反推文案与静态声明指令**同文**时(trace 绝对路径 Read 归一后
+                # 与声明步骤措辞一致是常态),该文本的 finding 代表的是真声明指令——
+                # 纯文本命中会把静态指令误标 derived,踢出 coverage 分母与 suggest 的
+                # PASS 保留账本。同文碰撞时宁可不标(两者同判同 verdict,dedup 已视
+                # 为同一条;不标只影响"额外多一条 derived 指令"的排除,不丢信号)。
+                if f.instruction_text in derived_only_texts:
                     f.derived_from_transcript = True
 
             all_findings.extend(findings)

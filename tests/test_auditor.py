@@ -2236,6 +2236,39 @@ def test_source_excerpt_propagates_to_finding(tmp_path, monkeypatch):
     assert all("design_doc_cases.json" not in f.instruction_text for f in must)
 
 
+def test_derived_text_collision_with_static_instruction(tmp_path, monkeypatch):
+    """derived 反推文案与静态声明指令同文 → 静态指令不得被误标 derived。
+
+    回归钉:trace 里绝对路径 Read 归一后,derived 反推的「读取 references/x.md」
+    与声明步骤同文——按纯文本命中会把静态 HEADING_STEP finding 标成 derived,
+    踢出 coverage 分母(实测 total 少 1)与 suggest 的 PASS 保留账本。同文碰撞时
+    该文本按真声明指令对待(finding 无法区分出处,但静态集里存在即按静态算)。
+    """
+    monkeypatch.setattr("sift.audit.auditor.call_claude", _pass_fake())
+    body = (
+        "# 步骤\n\n"
+        "1. 读取 references/error-codes.md\n"
+        "2. 总结错误类别\n\n"
+        "## 规则\n\n禁止编造数据。\n"
+    )
+    tp = _write_jsonl(tmp_path / "s.jsonl",
+                      _read_file_records("/ws/references/error-codes.md"))
+    report = TranscriptAuditor().audit("s", body, [tp])
+
+    step = [f for f in report.findings
+            if f.source == "HEADING_STEP"
+            and f.instruction_text == "读取 references/error-codes.md"]
+    assert step, "静态步骤指令应有 finding"
+    assert step[0].derived_from_transcript is False
+    # coverage 分母里保留这条真声明指令(修复前被 derived 标记踢出)
+    covered_texts = {
+        i.instruction_text
+        for sec in report.coverage.sections
+        for i in sec.instructions
+    }
+    assert "读取 references/error-codes.md" in covered_texts
+
+
 def test_generate_headlines_feeds_source_excerpt_and_returns_list(monkeypatch):
     """_generate_headlines 把 instruction_text + source_excerpt 喂 LLM,返回等长 headline 列表。
 
