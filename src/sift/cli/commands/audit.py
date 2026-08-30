@@ -490,6 +490,14 @@ def audit(
             + (f" [dim]+ 建议 input={sug.input_tokens} output={sug.output_tokens}"
                f" · {sug.calls} call(s)[/dim]" if _sug_ran else "")
         )
+    elif _sug_ran:
+        # 引擎零 LLM 调用(refine/headline 全缓存命中 + 判定全程序对账)而 --suggest
+        # 真跑了:token 汇总只剩建议段,也要报——不能随引擎 calls 门一起被吞掉
+        # (耗时行同场景是并计的,两行口径须一致)。
+        console.print(
+            f"[dim]LLM tokens:[/dim] 建议 input={sug.input_tokens} "
+            f"output={sug.output_tokens} [dim]· {sug.calls} call(s)[/dim]"
+        )
     if report.duration_seconds:
         _eng_s = round(report.duration_seconds)
         console.print(

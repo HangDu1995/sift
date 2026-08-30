@@ -187,6 +187,11 @@ def _parse_near_miss_response(response: str, batch_size: int) -> dict[int, tuple
         return {}
     out: dict[int, tuple[str, str]] = {}
     for item in data.get("verdicts", []) or []:
+        if not isinstance(item, dict):
+            # 条目非对象(裸字符串/数字——截断或输出漂移的形态):跳过该条不影响
+            # 其余;不守卫则 item.get 抛 AttributeError 穿透调用链(同 data 层
+            # 非 dict 守卫的对位,item 层)。
+            continue
         try:
             idx = int(item.get("index", 0)) - 1
             verdict = str(item.get("verdict", ""))

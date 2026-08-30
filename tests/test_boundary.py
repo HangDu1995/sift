@@ -116,6 +116,33 @@ def test_frontmatter_tool_names_skill_allowed_tools():
     assert set(frontmatter_tool_names(fm)) == {"bash", "mcp__db__query"}
 
 
+def test_frontmatter_tool_names_strips_permission_suffix():
+    """权限限定形 ``Tool(spec)``(skill allowed-tools 的标准写法)剥括号后缀入键。
+
+    trace 里的调用名是裸名——键带后缀会在 aggregate_boundary 的 declared.get
+    永不命中,声明过的工具被误标 undeclared-domain(恰是第四声明源要消灭的)。
+    """
+    fm = {"allowed-tools": ["Bash(git add:*)", "mcp__db__query(read)"]}
+    assert frontmatter_tool_names(fm) == {
+        "bash": "frontmatter: allowed-tools",
+        "mcp__db__query": "frontmatter: allowed-tools",
+    }
+    # 端到端:带后缀声明的工具调用 → domain,不再误标
+    s = aggregate_boundary(
+        [("t.jsonl", _trace("mcp__db__query"))], [],
+        frontmatter_tool_names(fm),
+    )
+    assert s.declared == 1 and s.undeclared == 0
+
+
+def test_aggregate_boundary_accepts_dict_style_records():
+    """dict 风格 trace 记录(同 _tool_trace_section 双风格惯例)也统计,不静默丢。"""
+    mixed = [_trace("mcp__a__x")[0], {"name": "mcp__b__y", "input": {}}]
+    s = aggregate_boundary([("t.jsonl", mixed)], [])
+    assert s.total_tools == 2
+    assert {e.name for e in s.tools} == {"mcp__a__x", "mcp__b__y"}
+
+
 def test_frontmatter_tool_names_ignores_non_list_and_non_str():
     """YAML 手写体多样:非 list 字段 / list 里非 str 项一律静默忽略(宁漏不猜)。"""
     assert frontmatter_tool_names({}) == {}

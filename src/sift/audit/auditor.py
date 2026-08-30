@@ -779,6 +779,7 @@ class TranscriptAuditor:
                             findings.append(self._make_unresolved_finding(
                                 inst, tp.name, "控制流判定器异常,未出判定 → 没判成",
                                 category=self.classify(inst), cause="judge_error",
+                                control_flow="quantity",
                             ))
             findings += self._judge_output(
                 buckets[AuditCategory.OUTPUT], transcript_text, tp.name
@@ -1412,6 +1413,7 @@ class TranscriptAuditor:
         evidence: str,
         category: AuditCategory = AuditCategory.CONDITIONAL,
         cause: str = "unmentioned",
+        control_flow: str = "",
     ) -> AuditFinding:
         """没判成(UNRESOLVED)finding:LLM 失败 / 解析失败 / 畸形值 / 未提及 / indeterminate 无 reason。
 
@@ -1423,6 +1425,9 @@ class TranscriptAuditor:
         CONDITIONAL,prohibition / step 各自传入对应类别,以反映真实指令类别。
         ``cause`` 标"为什么没判成"(timeout/rate_limited/parse_failed=基础设施,可重跑;
         unmentioned=语义;judge_error=判定器崩溃),纯诊断,不改 verdict。默认 unmentioned。
+        ``control_flow`` 透传纯显示记号:数量指令移交控制流判官后的 UNRESOLVED 也要带
+        "quantity"(否则最需要人复核的没判成条目在 CLI/HTML 里认不出是数量判定,与
+        PASS/FAIL 路径不一致);其它路径默认空。
         """
         return AuditFinding(
             instruction_text=inst.instruction_text,
@@ -1433,6 +1438,7 @@ class TranscriptAuditor:
             verdict=AuditVerdict.UNRESOLVED,
             method=AuditMethod.LLM,
             category=category,
+            control_flow=control_flow,
             evidence=evidence,
             transcript=transcript_name,
             unresolved_cause=cause,
@@ -1586,6 +1592,7 @@ class TranscriptAuditor:
                     findings.append(self._make_unresolved_finding(
                         inst, transcript_name, "LLM 判定失败,无法确证数量 → 没判成",
                         category=self.classify(inst), cause=cause_mask[i],
+                        control_flow="quantity",
                     ))
                 elif verdict == AuditVerdict.INDETERMINATE:
                     findings.append(_quantity_llm_finding(inst, verdict, ev, turn_refs))

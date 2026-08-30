@@ -397,6 +397,24 @@ class TestJudgeControlFlowLLM:
         f = TranscriptAuditor()._judge_control_flow([self._pair()], [], "x", [], "s.jsonl")[0]
         assert f.verdict == AuditVerdict.INDETERMINATE
 
+    def test_quantity_unresolved_keeps_marker(self, monkeypatch) -> None:
+        """数量指令 LLM 没出判定(缺 verdict)→ UNRESOLVED 也带 quantity 记号。
+
+        记号是纯显示,但别在「最需要人复核的没判成条目」上失去识别度——CLI/HTML
+        靠它挂「数量」徽章,与 PASS/FAIL 路径的记号口径须一致。
+        """
+        monkeypatch.setattr(
+            "sift.audit.auditor.call_claude",
+            lambda *a, **k: '[{"index": 0, "evidence": ""}]',
+        )
+        aud = TranscriptAuditor()
+        inst = _constraint("每个错误都要引用对应的日志原文行。")
+        f = aud._judge_control_flow(
+            [], [(inst, QuantitySpec("distributive"))], "执行记录", [], "s.jsonl",
+        )[0]
+        assert f.verdict == AuditVerdict.UNRESOLVED
+        assert f.control_flow == "quantity"
+
     def test_order_indeterminate_without_evidence_downgrades(self, monkeypatch) -> None:
         # 滥用闸(镜像步判官):indeterminate 无 evidence → UNRESOLVED,不是 INDETERMINATE
         monkeypatch.setattr(
@@ -737,6 +755,8 @@ class TestAuditControlFlowWiring:
              if f.instruction_text == "必须为报告的每个错误引用对应的日志原文行。"]
         assert q and q[0].verdict == AuditVerdict.UNRESOLVED
         assert q[0].unresolved_cause == "judge_error"
+        # 兜底 UNRESOLVED 也带 quantity 记号:最需要人复核的没判成条目得认得出是数量判定
+        assert q[0].control_flow == "quantity"
 
     def test_no_control_flow_signal_zero_behavior_change(
             self, tmp_path, monkeypatch, one_transcript) -> None:

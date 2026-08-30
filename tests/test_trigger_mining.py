@@ -235,6 +235,18 @@ def test_filter_near_miss_non_dict_json_marks_unverified():
     assert [v for v, _ in out] == ["unverified", "unverified"]
 
 
+def test_filter_near_miss_non_dict_items_mark_unverified():
+    """verdicts 数组里的条目不是对象(裸字符串/数字)→ 该条跳过,不炸穿调用方。
+
+    data 层非 dict 守卫的 item 层对位:item.get 对 str 抛 AttributeError,穿透
+    同一条只捕 RuntimeError 的链。docstring 承诺「畸形条目跳过不影响其余」。
+    """
+    resp = '{"verdicts": ["near_miss", {"index": 2, "verdict": "near_miss", "reason": "ok"}]}'
+    out = filter_near_miss(["甲条候选", "乙条候选"], "desc", lambda p: resp)
+    assert out[0] == ("unverified", "LLM 过滤失败或该条缺失,仅事实层(未触发)成立")
+    assert out[1] == ("near_miss", "ok")
+
+
 def test_filter_near_miss_batches_beyond_limit():
     """> NEAR_MISS_BATCH 候选 → 分多批调用(注意力安全 b)。"""
     calls = []

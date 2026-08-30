@@ -301,6 +301,43 @@ def test_audit_suggest_flag_persists_and_prints(monkeypatch, tmp_path):
     assert sug_rows[0]["input_tokens"] == 900 and sug_rows[0]["calls"] == 4
 
 
+def test_audit_suggest_tokens_line_when_engine_zero_calls(monkeypatch, tmp_path):
+    """引擎零 LLM 调用(全缓存/全程序)而 --suggest 真跑了 → 建议 token 单独报。
+
+    建议 token 行原嵌在 `if tu.get("calls"):` 内,引擎 calls=0 时被门吞掉——
+    耗时行同场景是并计的,两行口径须一致(底部汇总=这次执行总消耗)。
+    """
+    from sift.models.audit_models import AuditSuggestResult, AuditSuggestion
+
+    result = AuditSuggestResult(
+        suggestions=[AuditSuggestion(
+            category="skill_fix", target_seqs=[2],
+            suggestion="加显式约束", rationale="系统性没做到", keeps_pass=True,
+        )],
+        input_tokens=900, output_tokens=300, calls=4, duration_seconds=12.4,
+    )
+    engine_report = _fake_report()
+    engine_report.token_usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+
+    class _EngFake(_FakeAuditor):
+        def audit(self, *a, **k):
+            super().audit(*a, **k)
+            return engine_report
+
+    monkeypatch.setattr("sift.cli.commands.audit.build_suggestions",
+                        lambda *a, **k: result)
+    monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: _EngFake())
+    sp = _skill_dir(tmp_path)
+    tp = _transcript(tmp_path)
+    r = runner.invoke(
+        app, ["audit", str(sp), "--transcript", str(tp),
+              "-o", str(tmp_path / "out"), "--suggest"],
+    )
+    assert r.exit_code == 0, r.output
+    flat = " ".join(r.output.split())
+    assert "LLM tokens: 建议 input=900 output=300 · 4 call(s)" in flat
+
+
 def test_audit_suggest_skipped_reason_prints_without_counts(monkeypatch, tmp_path):
     """门控拦下/失败也落盘空 result:终端只显原因行、不显计数(失败 ≠ 全怪模型)。"""
     from sift.models.audit_models import AuditSuggestResult

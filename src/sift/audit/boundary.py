@@ -62,7 +62,10 @@ def frontmatter_tool_names(frontmatter: dict) -> dict[str, str]:
 
     认两个字段:agent 声明的 ``tools:``(cc 强制生效的白名单)、skill 的
     ``allowed-tools:``。值必须是 str 列表(别的形态静默忽略——YAML 手写体多样,
-    宁可漏声明也不猜);builtin 名收进来无害(builtin 判定在前)。无命中 → 空 dict。
+    宁可漏声明也不猜);权限限定形 ``Tool(spec)``(skill allowed-tools 的标准写法,
+    如 ``Bash(git add:*)`` / ``mcp__db__query(read)``)剥去括号后缀入键——trace 里的
+    调用名是裸名,带后缀永不匹配。builtin 名收进来无害(builtin 判定在前)。
+    无命中 → 空 dict。
     """
     out: dict[str, str] = {}
     for field in ("tools", "allowed-tools"):
@@ -72,7 +75,7 @@ def frontmatter_tool_names(frontmatter: dict) -> dict[str, str]:
         for item in val:
             if not isinstance(item, str):
                 continue
-            key = item.strip().lower()
+            key = item.split("(", 1)[0].strip().lower()
             if key and key not in out:
                 out[key] = f"frontmatter: {field}"
     return out
@@ -138,7 +141,12 @@ def aggregate_boundary(
     for transcript_name, trace in tool_traces:
         seen_in_session: set[str] = set()
         for call in trace:
-            name = (getattr(call, "name", "") or "").strip()
+            # attr(ToolCallRecord)/ dict 双风格取 name(同 _tool_trace_section 惯例——
+            # dict 记录走 .get 静默空,不炸:信息性视图不因个别坏记录中断)。
+            _name = getattr(call, "name", None)
+            if _name is None and isinstance(call, dict):
+                _name = call.get("name")
+            name = (_name or "").strip()
             if not name:
                 continue
             key = name.lower()
