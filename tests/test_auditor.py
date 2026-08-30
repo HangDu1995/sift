@@ -1853,6 +1853,9 @@ class TestRefineInstructions:
         # v3:任务编号词类目(「`./run.sh` 跑 Task 25 用例」抽出「跑 Task」——Task 不是工具)
         assert "任务编号词" in prompts[0]
         assert "跑 Task" in prompts[0]
+        # v4:任务清单行是真指令——v3 实测误砍同构任务行(同句式不同分支的行被当示例)
+        assert "任务清单行是真指令" in prompts[0]
+        assert "不得当示例砍" in prompts[0]
 
     def test_output_format_skipped_not_sent_to_llm(self, monkeypatch) -> None:
         """OUTPUT_FORMAT(PATTERN_MATCH,纯程序判定)不进精筛候选 → 直接保留、不发给 LLM。"""
