@@ -181,6 +181,10 @@ def _parse_near_miss_response(response: str, batch_size: int) -> dict[int, tuple
             data = json.loads(match.group())
         except (json.JSONDecodeError, Exception):
             return {}
+    if not isinstance(data, dict):
+        # 合法 JSON 但非对象(裸数组/字符串)——不守卫会在 .get 上 AttributeError 炸穿
+        # filter_near_miss 的 except RuntimeError(init 顶层只捕 SiftError)。
+        return {}
     out: dict[int, tuple[str, str]] = {}
     for item in data.get("verdicts", []) or []:
         try:

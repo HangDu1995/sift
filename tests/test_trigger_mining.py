@@ -225,6 +225,16 @@ def test_filter_near_miss_two_stage_parse():
     assert out == [("near_miss", "r")]
 
 
+def test_filter_near_miss_non_dict_json_marks_unverified():
+    """响应是合法 JSON 但非对象(裸数组)→ 该批全 unverified,不炸穿调用方。
+
+    回归钉:json.loads 成功 + 非 dict 时 data.get 会 AttributeError,而
+    filter_near_miss 只捕 RuntimeError(LLM 失败约定)、init 顶层只捕 SiftError。
+    """
+    out = filter_near_miss(["甲条候选", "乙条候选"], "desc", lambda p: '["a", "b"]')
+    assert [v for v, _ in out] == ["unverified", "unverified"]
+
+
 def test_filter_near_miss_batches_beyond_limit():
     """> NEAR_MISS_BATCH 候选 → 分多批调用(注意力安全 b)。"""
     calls = []

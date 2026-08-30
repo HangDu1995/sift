@@ -899,6 +899,14 @@ def test_generate_trigger_probes_empty_on_llm_failure(tmp_path):
     assert probes == []
 
 
+def test_generate_trigger_probes_non_dict_json_returns_empty(tmp_path):
+    """响应是合法 JSON 但非对象(裸数组)→ 返 [],不 AttributeError 炸穿 init。"""
+    gen = EvalInitGenerator()
+    with patch("sift.evals.generator.call_claude", return_value='["probe", "probe2"]'):
+        probes = gen.generate_trigger_probes(_skill(tmp_path))
+    assert probes == []
+
+
 # ---------------------------------------------------------------------------
 # 共享内核:定向补题(_supplement_directive)
 # 有现有题(init --append / coverage --augment)→ 硬化 focus + 喂现有题清单做语义去重;
