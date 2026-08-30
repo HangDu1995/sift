@@ -165,6 +165,30 @@ class TestInstructionExtractor:
         )
         assert "本任务" in must.source_excerpt  # 散文回退仍带回主语
 
+    def test_source_excerpt_points_to_own_bullet_not_previous(self):
+        """HEADING_STEP 的 source_excerpt 指向**所在** bullet,不是前一条。
+
+        回归钉:_bullet_excerpt 的列表项匹配窗口曾截到 anchor+1,而 anchor 恒为行首
+        (列表标记字符)——本行标记被切掉、本条起始匹配不到,第 2/3 条步骤的 excerpt
+        系统性取到前一条 bullet(coverage 的 source_section 回填与控制流检测都吃
+        excerpt,指错条会连环指错)。窗口须含 anchor 所在整行。
+        """
+        ext = InstructionExtractor()
+        body = (
+            "## 执行步骤\n\n"
+            "- 检查 cache 目录的配额状态\n"
+            "- 执行 prune.sh 清理过期缓存\n"
+            "- 复核配额释放后的余量\n"
+        )
+        checks = ext.extract(body)
+        steps = {c.instruction_text: c for c in checks if c.source == InstructionSource.HEADING_STEP}
+        prune = steps["执行 prune.sh 清理过期缓存"]
+        assert "prune.sh" in prune.source_excerpt   # 所在 bullet 原文
+        assert "cache" not in prune.source_excerpt  # 不是前一条
+        review = steps["复核配额释放后的余量"]
+        assert "复核" in review.source_excerpt
+        assert "prune.sh" not in review.source_excerpt
+
     def test_extracts_anti_fabrication(self):
         ext = InstructionExtractor()
         checks = ext.extract(SAMPLE_BODY)
