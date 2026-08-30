@@ -155,17 +155,31 @@ def _params_satisfied(required_params, tc) -> bool:
     return all(p.lower() in cmd for p in params)
 
 
-def _tc_tool_hit(tc, tool_name: str, cmd_re) -> tuple[bool, bool]:
+def _tc_tool_hit(tc, tool_name: str, cmd_re, *, full_input_for_cmd: bool = False) -> tuple[bool, bool]:
     """单条 tool call 的工具命中判定(match_tool_call 条件 1/3,per-record 谓词)。
 
     返回 ``(name_hit, cmd_hit)``:工具名子串命中 / 命令词词边界命中。提取为独立谓词
     供 ``match_tool_call``(是否存在)与 ``count_tool_calls``(数几次,数量判定的
     程序路)共用,两函数语义互不影响。``tc`` 支持 attr / dict 风格。
+
+    ``full_input_for_cmd``(默认 False):命令词匹配除 ``input_summary`` 外再搜完整
+    结构化 ``tc.input``。存在性判定(match_tool_call)开——``input_summary`` 是 200 字
+    截断的显示串,Task 派发类调用的 prompt 里交代的命令(mkdir/grep…)常被截掉;
+    root 对账对的是「派发里有没有交代这件事」,全文可见才算数。**频次判定
+    (count_tool_calls)不开**——派发里**提到**命令 ≠ 执行了命令,计数拓宽会虚增。
     """
     tc_name = tc.name if hasattr(tc, "name") else tc.get("name", "")
     tc_input = tc.input_summary if hasattr(tc, "input_summary") else tc.get("input_summary", "")
     name_hit = bool(tool_name) and tool_name.lower() in tc_name.lower()
-    cmd_hit = bool(cmd_re) and bool(cmd_re.search(tc_input))
+    cmd_target = tc_input
+    if full_input_for_cmd:
+        full_input = tc.get("input") if isinstance(tc, dict) else getattr(tc, "input", None)
+        if isinstance(full_input, dict):
+            try:
+                cmd_target = f"{tc_input} {json.dumps(full_input, ensure_ascii=False)}"
+            except (TypeError, ValueError):
+                pass  # 不可序列化的 input → 退回 summary(不因此报错)
+    cmd_hit = bool(cmd_re) and bool(cmd_re.search(cmd_target))
     return name_hit, cmd_hit
 
 
@@ -196,7 +210,10 @@ def match_tool_call(tool_name: str, script_path: str, tool_trace, required_param
        ``webReader`` ∈ ``mcp__web_reader__webReader``)。
     2. ``script_path`` 匹配某 ``tc`` 的路径(``_path_matches``:优先结构化 ``tc.input`` 的
        file_path/path 字段,规范化 + 分隔符边界;无结构化 input → 回退子串)。
-    3. ``tool_name`` 作为**命令词**出现在某 ``tc.input_summary``(**词边界**,Bash 子命令场景)。
+    3. ``tool_name`` 作为**命令词**出现在某 ``tc.input_summary`` 或完整结构化 ``tc.input``
+       (**词边界**,Bash 子命令场景;input_summary 是 200 字截断的显示串,Task 派发 prompt
+       里交代的命令常被截掉——root 对账对的是「派发里有没有交代」,全文可见才算数。
+       频次判定 count_tool_calls 不拓宽:派发里提到 ≠ 执行)。
 
     ``required_params``(可选 list[str]):工具命中后额外断言每个参数 token(如 ``--tb=short``)
     都在 ``command``(优先结构化 ``tc.input["command"]``,无则 input_summary)里出现。全满足才
@@ -211,7 +228,7 @@ def match_tool_call(tool_name: str, script_path: str, tool_trace, required_param
         return False
     cmd_re = _command_word_re(tool_name)
     for tc in tool_trace:
-        name_hit, cmd_hit = _tc_tool_hit(tc, tool_name, cmd_re)
+        name_hit, cmd_hit = _tc_tool_hit(tc, tool_name, cmd_re, full_input_for_cmd=True)
         if required_params:
             # 有参数要求:命中工具(名/命令词)+ 所有参数满足才 True
             if (name_hit or cmd_hit) and _params_satisfied(required_params, tc):

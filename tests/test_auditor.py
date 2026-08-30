@@ -27,6 +27,7 @@ from sift.audit.auditor import (
     _MAX_LLM_IN_BATCH, _LLM_RETRY_MAX, TranscriptAuditor,
     _judge_batch_with_retry, _RetryExhaustedType, _run_batches_concurrent,
 )
+from sift.audit.tool_match import count_tool_calls, match_tool_call
 from sift.models import InstructionCheck, ToolCallRecord
 from sift.models.audit_models import (
     AuditCategory,
@@ -1727,6 +1728,40 @@ class _FakeExtractor:
         return list(self._insts)
 
 
+class TestMatchFullInputForExistence:
+    """存在性匹配拓宽到完整结构化 input(频次不拓宽)——root 对账对的是「派发里有没有交代」。
+
+    input_summary 是 200 字截断的显示串:Task 派发 prompt 里交代的命令(mkdir 等)常被
+    截掉,存在性检查假未命中 → 假 FAIL。存在性(match_tool_call)搜全文;频次
+    (count_tool_calls)不拓宽——派发里**提到**命令 ≠ 执行了命令,计数拓宽会虚增。
+    """
+
+    @staticmethod
+    def _dispatch_tc() -> ToolCallRecord:
+        # 派发调用:summary 只有开头 200 字(无 mkdir),完整 input 的 prompt 深处才有
+        return ToolCallRecord(
+            name="Task",
+            input_summary="派发 developer agent:创建当前算子开发目录,按 STATE.md 的 Task 2 "
+                          "执行环境准备,读取 proto/desc/golden 并初始化工作区,注意基线与目录结构约定"
+                          + ",补充说明文字" * 12,
+            input={"prompt": "…(长 prompt)… 请执行 mkdir -p docs/{OP}/develop/ 创建当前算子开发目录 …"},
+        )
+
+    def test_existence_hits_command_in_full_input(self) -> None:
+        """命令词只在完整 input(超出 200 字摘要)→ 存在性命中(root:派发交代过)。"""
+        assert match_tool_call("mkdir", "", [self._dispatch_tc()]) is True
+
+    def test_count_does_not_count_dispatch_mention(self) -> None:
+        """同一条派发:频次不数它(提到 ≠ 执行)。"""
+        assert count_tool_calls("mkdir", [self._dispatch_tc()]) == 0
+
+    def test_count_still_counts_real_execution(self) -> None:
+        """真执行(Bash command 里)照常:存在性与频次都命中。"""
+        tc = ToolCallRecord(name="Bash", input_summary="mkdir build", input={"command": "mkdir build"})
+        assert count_tool_calls("mkdir", [tc]) == 1
+        assert match_tool_call("mkdir", "", [tc]) is True
+
+
 class TestRefineInstructions:
     """精筛伪指令:extractor 误抽的示例文字 → LLM 判 is_real=False → 砍。
 
@@ -1754,6 +1789,34 @@ class TestRefineInstructions:
         assert len(refined) == 1
         assert refined[0].instruction_text == "Step 1: 真步骤"
         assert any("refine:" in w and "1 条" in w for w in warns)
+
+    def test_refine_prompt_carries_excerpt_and_pseudo_tool_rule(self, monkeypatch) -> None:
+        """refine prompt 喂 source_excerpt + 含「命令行标识符伪工具」类目。
+
+        判「调用 TilingFunc 是不是真指令」必须看到原文上下文(它只活在一条命令行
+        里)——旧 prompt 只喂指令文本,伪工具要求判不出,漏成假 FAIL。摘录进 prompt
+        也进缓存键(v2 bump),摘录变则失效重筛。
+        """
+        prompts: list[str] = []
+
+        def fake(prompt, *a, **k):
+            prompts.append(prompt)
+            return json.dumps([{"index": 0, "is_real": False}])
+
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
+        inst = _tool_inst(text="调用 TilingFunc", tool_name="TilingFunc")
+        inst.source_excerpt = (
+            "验收标准:UT 可编译——cd operators/tests/tiling && cmake .. && make TilingFunc"
+        )
+
+        TranscriptAuditor()._refine_pseudo_instructions(
+            [inst], model=None, timeout=600, on_progress=None
+        )
+
+        assert len(prompts) == 1
+        assert "cmake" in prompts[0]      # 摘录真进了 prompt
+        assert "伪工具" in prompts[0]     # 新类目在
+        assert "TilingFunc" in prompts[0]
 
     def test_output_format_skipped_not_sent_to_llm(self, monkeypatch) -> None:
         """OUTPUT_FORMAT(PATTERN_MATCH,纯程序判定)不进精筛候选 → 直接保留、不发给 LLM。"""

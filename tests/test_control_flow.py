@@ -609,6 +609,23 @@ def one_transcript(tmp_path) -> Path:
 
 
 class TestAuditControlFlowWiring:
+    def test_quantity_prompt_pins_completion_to_record(self, tmp_path, monkeypatch, one_transcript) -> None:
+        """数量判据含「完成度以本执行记录为全集」规则:禁猜切片外继续,完成度主判。
+
+        实锤:「逐一完成 Tasks」被判官读成顺序合规、拿记录内顺序掩盖 32/50 数量不足
+        → PASS 摆动。对账对象就是这份记录,判官不得推测记录之外的事。
+        """
+        fake, prompts = _blanket_fake()
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
+        TranscriptAuditor().audit("cf-skill", CF_SKILL_BODY, [one_transcript])
+
+        cf_prompts = [p for p in prompts if "顺序/数量要求" in p]
+        assert cf_prompts, "控制流判官 prompt 未被调用"
+        p = cf_prompts[0]
+        assert "以本执行记录为全集" in p
+        assert "不得推测「记录之外可能继续」" in p
+        assert "完成度是主判据" in p
+
     def test_end_to_end_order_and_quantity_handoff(self, tmp_path, monkeypatch, one_transcript) -> None:
         fake, prompts = _blanket_fake()
         monkeypatch.setattr("sift.audit.auditor.call_claude", fake)

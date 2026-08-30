@@ -33,7 +33,8 @@ from sift.models import InstructionCheck
 
 
 # bump 当 ``_llm_classify_real`` 的 prompt 改了 → 进键 → 强制失效所有缓存条目。
-REFINE_PROMPT_VERSION = 1
+# v2:prompt 喂 source_excerpt(判「命令行标识符伪工具」要看原文上下文)+ 伪指令类目扩义。
+REFINE_PROMPT_VERSION = 2
 
 # 模块级锁:ThreadPoolExecutor 并发 audit() 时,保证同 key 的 compute_fn 只调一次。
 _REFINE_LOCK = threading.Lock()
@@ -51,8 +52,9 @@ def _cache_dir() -> Path:
 def _cache_key(instructions: list[InstructionCheck], model: str | None) -> str:
     """内容感知缓存键 = refine 实际输入(instructions)+ model + prompt 版本的 sha256[:16]。
 
-    payload 形如 ``"HEADING_STEP|Process|Step 1: 真步骤|<model>|v<REFINE_PROMPT_VERSION>"``
-    (每条指令拼 ``source.value|section|instruction_text``,``|`` 分隔)。直接 hash refine
+    payload 形如 ``"HEADING_STEP|Process|Step 1: 真步骤|摘录…"|<model>|v<REFINE_PROMPT_VERSION>"``
+    (每条指令拼 ``source.value|section|instruction_text|source_excerpt``,``|`` 分隔;
+    excerpt v2 起进 prompt 也进键——摘录变了 refine 结论可能变)。直接 hash refine
     输入——SKILL.md 改了无关部分(指令文本/来源/标题没变)仍命中。``model`` 进键(不同
     模型可能给出不同 refine 结论)。``REFINE_PROMPT_VERSION`` 进键(prompt 改了 → bump →
     强制失效)。
@@ -60,7 +62,7 @@ def _cache_key(instructions: list[InstructionCheck], model: str | None) -> str:
     确定性:同 instructions + model + version → 恒同 key(跨调用、跨进程稳定)。
     """
     payload = "|".join(
-        f"{s.source.value}|{s.section}|{s.instruction_text}"
+        f"{s.source.value}|{s.section}|{s.instruction_text}|{s.source_excerpt}"
         for s in instructions
     ) + f"|{model}|v{REFINE_PROMPT_VERSION}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]

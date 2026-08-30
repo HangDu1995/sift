@@ -1639,6 +1639,11 @@ class TranscriptAuditor:
                 "实测数字与期望(如「3 个错误仅 2 个有引用」)。\n"
                 "  - na:**仅限**无可数对象/场景不涉及(如整场没发现错误 → 无从引用);"
                 "不得把「没做」洗成 na。\n"
+                "  - 完成度要求(「逐一完成/全部完成/完成其中的 Tasks/项」类):**以本执行"
+                "记录为全集**——对账对象就是这份记录,记录结束时未完成的项就是数量不足"
+                "(fail),**不得推测「记录之外可能继续」来洗成 pass/na**;「按顺序」与"
+                "「完成全部」同现时,完成度是主判据,记录内的顺序合规不掩盖数量不足"
+                "(evidence 带实测 N/期望 M)。\n"
                 "- indeterminate(两类通用):证据真的相互矛盾或关键缺失才用,**必须**在"
                 " evidence 写明具体矛盾/缺失;不要用它偷懒回避判断。\n\n"
                 f"{_turn_rule_section(locate_turns)}"
@@ -1907,7 +1912,9 @@ class TranscriptAuditor:
             bn = len(batch)
             k = start // _MAX_LLM_IN_BATCH + 1
             instruction_list = "".join(
-                f"[{i}] (来源 {inst.source.value} / 标题:\"{inst.section}\") {inst.instruction_text}\n"
+                f"[{i}] (来源 {inst.source.value} / 标题:\"{inst.section}\") {inst.instruction_text}"
+                + (f"\n    摘录:{inst.source_excerpt[:200]}" if inst.source_excerpt else "")
+                + "\n"
                 for i, inst in enumerate(batch)
             )
             prompt = (
@@ -1919,7 +1926,10 @@ class TranscriptAuditor:
                 "(如\"Step 1: 读取 X\"、\"NEVER 编造数据\"、\"运行 validate.py\")。\n"
                 "- ❌ is_real=false(非指令):教程示例文字、示例输出结果、说明性描述、"
                 "占位文本(如\"3 agents dispatched in parallel\"是演示结果、"
-                "\"6 failures across 3 files\"是例句)。\n"
+                "\"6 failures across 3 files\"是例句);或**命令行/代码片段里的标识符被抽成的"
+                "伪工具要求**——\"工具名\"其实是编译目标/函数名/脚本参数,只出现在摘录的某条"
+                "命令行/代码里、不是执行者可调用的工具(如\"调用 TilingFunc\"里的 TilingFunc"
+                "是测试目标名)。\n"
                 "- ⚠ indeterminate(分不清):只在真的无法判断时用,**必须**在 reason 写明;"
                 "不要用 indeterminate 偷懒回避。\n\n"
                 f"## 待判候选 ({bn} 条)\n{instruction_list}\n"
