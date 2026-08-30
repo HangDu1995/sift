@@ -626,6 +626,31 @@ class TestAuditControlFlowWiring:
         assert "不得推测「记录之外可能继续」" in p
         assert "完成度是主判据" in p
 
+    def test_quantity_prompt_has_window_and_condition_boundary(self, tmp_path, monkeypatch, one_transcript) -> None:
+        """数量判据含「窗口与条件边界」:阶段从未开始/条件未触发的单条任务级条目判 na。
+
+        实锤:完成度条款落地后,「据 Task 35 失败报告修复」类条件触发型条目(其所属
+        阶段全程未开始、触发条件从未发生)被「应做未做都算 fail/不得把没做洗成 na」
+        压成 FAIL——窗口语义此前只写进步骤判官,CF 判官没拿到。边界须带反向闸
+        (阶段已开始、中途没走仍 fail),且与完成度口径互认:整体缺口由完成度条目
+        兜底,单条条目判 na 不算漏报。
+        """
+        fake, prompts = _blanket_fake()
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
+        TranscriptAuditor().audit("cf-skill", CF_SKILL_BODY, [one_transcript])
+
+        cf_prompts = [p for p in prompts if "顺序/数量要求" in p]
+        assert cf_prompts, "控制流判官 prompt 未被调用"
+        p = cf_prompts[0]
+        assert "窗口与条件边界" in p
+        assert "从未开始" in p
+        assert "条件未触发" in p
+        assert "触发条件在记录里从未发生" in p
+        assert "仍判 fail,不得借本边界洗成 na" in p
+        assert "单条任务级条目按「窗口与条件边界」判 na,不算漏报" in p
+        assert "不得推测「记录之外可能继续」" in p
+        assert "完成度是主判据" in p
+
     def test_end_to_end_order_and_quantity_handoff(self, tmp_path, monkeypatch, one_transcript) -> None:
         fake, prompts = _blanket_fake()
         monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
