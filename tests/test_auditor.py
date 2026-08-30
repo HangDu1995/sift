@@ -1769,6 +1769,31 @@ class TestMatchFullInputForExistence:
         assert count_tool_calls("mkdir", [tc]) == 1
         assert match_tool_call("mkdir", "", [tc]) is True
 
+    def test_placeholder_param_dropped_and_full_input_params(self) -> None:
+        """required_params 的模板占位符 token 不参与字面断言,实参搜完整 input。
+
+        声明写 ``docs/{OP}/develop/``、派发 prompt 里是实值——占位符字面比对永远
+        失败。参数(如 ``-p``)在派发 input 的 prompt 深处、200 字 summary 截不到:
+        存在性路径参数搜全文(d070717 ② 的补全);频次路不搜。
+        """
+        tc = self._dispatch_tc()
+        # 声明原文:执行 `mkdir -p docs/{OP}/develop/` → params=["-p", "docs/{OP}/develop/"]
+        assert match_tool_call(
+            "mkdir", "", [tc], required_params=["-p", "docs/{OP}/develop/"]
+        ) is True
+        # 频次:同 tc 参数不搜全文(summary 无 -p)→ 不计(提到 ≠ 执行)
+        assert count_tool_calls("mkdir", [tc], required_params=["-p"]) == 0
+        # 真执行(Bash command):两条路径都满足(summary=现实的 200 字序列化形)
+        bash = ToolCallRecord(
+            name="Bash",
+            input_summary='{"command": "mkdir -p docs/x/develop/"}',
+            input={"command": "mkdir -p docs/x/develop/"},
+        )
+        assert match_tool_call("mkdir", "", [bash], required_params=["-p", "docs/x/develop/"]) is True
+        assert count_tool_calls("mkdir", [bash], required_params=["-p", "docs/x/develop/"]) == 1
+        # 非占位符参数在全文也找不到 → 不命中(参数级断言不放开)
+        assert match_tool_call("mkdir", "", [tc], required_params=["--parents"]) is False
+
 
 class TestRefineInstructions:
     """精筛伪指令:extractor 误抽的示例文字 → LLM 判 is_real=False → 砍。
@@ -1825,6 +1850,9 @@ class TestRefineInstructions:
         assert "cmake" in prompts[0]      # 摘录真进了 prompt
         assert "伪工具" in prompts[0]     # 新类目在
         assert "TilingFunc" in prompts[0]
+        # v3:任务编号词类目(「`./run.sh` 跑 Task 25 用例」抽出「跑 Task」——Task 不是工具)
+        assert "任务编号词" in prompts[0]
+        assert "跑 Task" in prompts[0]
 
     def test_output_format_skipped_not_sent_to_llm(self, monkeypatch) -> None:
         """OUTPUT_FORMAT(PATTERN_MATCH,纯程序判定)不进精筛候选 → 直接保留、不发给 LLM。"""

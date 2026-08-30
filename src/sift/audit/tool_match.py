@@ -136,23 +136,33 @@ def _path_matches(script_path: str, tc) -> bool:
     return sp in (tc_summary or "").lower()
 
 
-def _params_satisfied(required_params, tc) -> bool:
+def _params_satisfied(required_params, tc, *, full_input_for_cmd: bool = False) -> bool:
     """每个 required_param 都在 tc 的 command(优先结构化 input)或 input_summary 里出现(子串)。
 
     粗召回(宁松):``--tb=short`` 整串、positional token(``tests/``)都算。全满足才 True;
     任一缺 → False(该 tc 不命中,走 LLM 兜底)。空 required_params → True(无要求)。
+
+    含 ``{...}`` 的 token 是**模板占位符**(声明写 ``docs/{OP}/develop/``、派发里是实值
+    ``docs/Bench…/develop/``),字面断言永远失败 → 不参与(全部是占位符 = 只剩工具词门槛,
+    与「粗召回宁松」一致)。``full_input_for_cmd``(存在性路径开,频次不开,同
+    ``_tc_tool_hit``):参数除 command 字段/input_summary 外再搜完整结构化 ``tc.input``
+    ——Task 派发 input 无 ``command`` 键、payload 在 prompt 深处,200 字 summary 常截掉。
     """
-    params = [p for p in (required_params or []) if p]
+    params = [p for p in (required_params or []) if p and "{" not in p and "}" not in p]
     if not params:
         return True
     tc_input = tc.input if hasattr(tc, "input") else tc.get("input")
     cmd = ""
     if isinstance(tc_input, dict):
         cmd = str(tc_input.get("command", "") or "")
-    if not cmd:
-        cmd = tc.input_summary if hasattr(tc, "input_summary") else tc.get("input_summary", "")
-    cmd = (cmd or "").lower()
-    return all(p.lower() in cmd for p in params)
+    summary = tc.input_summary if hasattr(tc, "input_summary") else tc.get("input_summary", "")
+    cmd = f"{cmd} {summary or ''}"
+    if full_input_for_cmd and isinstance(tc_input, dict):
+        try:
+            cmd = f"{cmd} {json.dumps(tc_input, ensure_ascii=False)}"
+        except (TypeError, ValueError):
+            pass  # 不可序列化 → 只用 command+summary
+    return all(p.lower() in cmd.lower() for p in params)
 
 
 def _tc_tool_hit(tc, tool_name: str, cmd_re, *, full_input_for_cmd: bool = False) -> tuple[bool, bool]:
@@ -216,7 +226,9 @@ def match_tool_call(tool_name: str, script_path: str, tool_trace, required_param
        频次判定 count_tool_calls 不拓宽:派发里提到 ≠ 执行)。
 
     ``required_params``(可选 list[str]):工具命中后额外断言每个参数 token(如 ``--tb=short``)
-    都在 ``command``(优先结构化 ``tc.input["command"]``,无则 input_summary)里出现。全满足才
+    都在 ``command``(优先结构化 ``tc.input["command"]``)、input_summary 与**完整结构化
+    input** 里出现(存在性路径拓宽,同条件 3;含 ``{...}`` 的模板占位符 token 不参与字面
+    断言——声明写 ``docs/{OP}/``、trace 里是实值)。全满足才
     True;任一缺 → 该 tc 不命中(走 LLM 兜底,即「工具名对、参数没照做」不放过)。None/空 →
     旧行为(三条件任一命中即 True)。参数级断言只配套工具命中(条件 1/3),不与路径(条件 2,
     REFERENCE_USAGE)同时出现。
@@ -230,8 +242,9 @@ def match_tool_call(tool_name: str, script_path: str, tool_trace, required_param
     for tc in tool_trace:
         name_hit, cmd_hit = _tc_tool_hit(tc, tool_name, cmd_re, full_input_for_cmd=True)
         if required_params:
-            # 有参数要求:命中工具(名/命令词)+ 所有参数满足才 True
-            if (name_hit or cmd_hit) and _params_satisfied(required_params, tc):
+            # 有参数要求:命中工具(名/命令词)+ 所有参数满足才 True(存在性路径参数
+            # 也搜完整 input,同 _tc_tool_hit 的 full_input_for_cmd;频次路不搜)
+            if (name_hit or cmd_hit) and _params_satisfied(required_params, tc, full_input_for_cmd=True):
                 return True
             continue
         if name_hit:

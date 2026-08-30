@@ -34,7 +34,8 @@ from sift.models import InstructionCheck
 
 # bump 当 ``_llm_classify_real`` 的 prompt 改了 → 进键 → 强制失效所有缓存条目。
 # v2:prompt 喂 source_excerpt(判「命令行标识符伪工具」要看原文上下文)+ 伪指令类目扩义。
-REFINE_PROMPT_VERSION = 2
+# v3:伪工具类目再补「任务编号词」(「`./run.sh` 跑 Task 25 用例」抽出的「跑 Task」——Task 不是工具)。
+REFINE_PROMPT_VERSION = 3
 
 # 模块级锁:ThreadPoolExecutor 并发 audit() 时,保证同 key 的 compute_fn 只调一次。
 _REFINE_LOCK = threading.Lock()
