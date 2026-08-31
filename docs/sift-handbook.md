@@ -385,17 +385,26 @@ sift init path/to/skill/ --trigger-probes --num-evals 8   # 每方向上限 8（
 
 LLM 读 skill 的 description 生成两方向探题，追加到 evals.json 的 `trigger_probes` 段（新 id 接续已有 `max+1`）。**不重生成已有 scoring evals**——载入已有 evals.json、只加 trigger 探题（`--trigger-probes` 单用、不加 `--append` 也保留原 scoring 题）。
 
-**anti-leakage（防词面命中）**：生成 prompt 强制探题 paraphrase description、不照抄措辞；生成后还做一道校验——should-trigger 探题若含 description 的 ≥15 字符连续子串，init 打「⚠ N/M 道该触发探题为词面命中」（M = 该触发探题数；should-not 不在风险面）让用户复核。词面命中的探题测的是 cc 字面匹配（抄了词就触发），不是语义触发 → recall 虚高、诊断失真。**只标记、不 retry**（词面命中探题仍有诊断价值：它告诉你 cc 对字面重叠敏感），报告里按 `phrase_type` 分层体现。
+**anti-leakage（防词面命中）**：生成 prompt 强制探题 paraphrase description、不照抄措辞；生成后还做一道校验——should-trigger 探题若含 description 的 ≥15 字符连续子串，init 打「⚠ N/M 道该触发探题为词面命中」（M 是该触发探题的数量；should-not 方向没这个问题——它本来就不该触发，抄不抄词都无所谓）让用户复核。词面命中的探题测的是 cc 字面匹配（抄了词就触发），不是语义触发 → recall 虚高、诊断失真。**只标记、不 retry**（词面命中探题仍有诊断价值：它告诉你 cc 对字面重叠敏感），报告里按 `phrase_type` 分层体现。
 
 **`--num-evals` 是每方向上限、不是下限**（关键）：LLM 生成的探题多于这个数会被 trim，少于这个数**原样保留**、不强行凑满——硬凑会出重复 / 充数题，反而劣化信号质量。这是有意的「欠交付」：宁可少几道真信号，不要凑数的噪声。所以实际跑出来某方向可能少于你给的 `--num-evals`，别当成 bug。
 
-**trace-mined 负例（真题挖掘）**：配 `--from-transcript` 时附带挖 should-not 真题——
+**trace-mined 负例（从真实会话挖 should-not 真题）**：配 `--from-transcript` 时，除了 LLM 编的探题，还从你给的真实会话记录（transcript——agent 干活的完整过程，含工具调用，不是纯文字聊天）里**挖**现成的负例——
 
 ```bash
 sift init path/to/skill/ --trigger-probes --from-transcript path/to/session.jsonl
 ```
 
-生成负例的信号源只有 description 本身，出的题系统性偏「出题人想象」；真实会话里「领域相邻但没触发本 skill」的用户 query 才是真实分布的 near-miss。两层收题：**事实层**（零 LLM）程序判定每条用户 query 之后有没有本 skill 的调用（跳过过短 / slash 命令 / 点名本 skill 的 query）；**语义层** LLM 过滤领域相邻——**只喂 description 不喂 skill 正文**（触发本来就只看 description，喂正文等于泄题），分批 ≤10 条、每条独立 verdict。域外未触发不收（不构成对 description 的压力测试）；LLM 失败仍收、rationale 标 `unverified`（事实层的「未触发」依然成立，人审可删）。挖出的探题 `source: trace-mined`（报告明细「来源」列可见），与既有探题按 prompt（lower+strip）去重、id 接续，不受 `--num-evals` trim 约束。
+**为什么要挖**：LLM 凭 description 编负例，措辞终究是「出题人想象出来的假用户」；而真实会话里那些「用户问了、但 agent 没动用本 skill」的问题，才是真用户嘴里会说出的原话——拿它们去测「这种问题该不该唤醒 skill」，最接近实战。
+
+**怎么挖**（两层，先程序筛、再 LLM 拣）：
+
+1. **程序筛**（零 LLM，不花钱）：把会话里的用户提问逐条过一遍——这句问完到下一句提问之间，agent 有没有调过本 skill？没调 = 确实没触发，收作候选。三类直接跳过：太短的碎话（「ok」）、斜杠命令（`/clear`）、点名本 skill 的提问（用户明确要它上场，拿去当「不该触发」的题必冤枉）。
+2. **LLM 拣**：候选里把跟 skill 领域**八竿子打不着**的扔掉——「帮我写周报」没触发日志分析 skill，这不算 description 的失误（本来就不该触发，测了也白测）；只留**领域相近**的——比如用户问「这个报错是什么意思」而错误分诊 skill 没上场，人类都可能觉得「这不该触发吗？」，这才是有压力的测试题。候选多时分批（每批 ≤10 条）、每条单独判，防互相带偏。
+
+两个设计细节：**LLM 拣的时候只给它 description、不给 skill 全文**——cc 决定触不触发时也只能看到 description，给全文等于泄题；**LLM 这步挂了不丢题**——照收，但 rationale 标 `unverified` 让人过目（第 1 步查明的「确实没触发」是程序事实，不受影响）。
+
+挖出的探题带 `source: trace-mined`（报告明细「来源」列可见），跟已有探题按问题原文去重、id 接着排；也不受 `--num-evals` 上限影响——真题有多少收多少，不 trim。
 
 ### 3.6 边界：诊断定位，无门禁
 
@@ -682,13 +691,13 @@ sift eval path/to/skill/ --changed-from v1/             # 改 skill 后只跑受
 
 **这些阶段哪些调 LLM**
 
-上面 7 步按「调不调模型、调的是哪种模型」分一下——这跟 §12.7「audit 的阶段流水线」是同一种看法：把流程拆成阶段、标清每个是程序还是 LLM。步骤 1–2（搭工作区、拼 prompt）是纯程序、不展开；从步骤 3 起：
+上面 7 步按「调不调模型、调的是哪种模型」分一下——这跟 §12.9「audit 的阶段流水线」是同一种看法：把流程拆成阶段、标清每个是程序还是 LLM。步骤 1–2（搭工作区、拼 prompt）是纯程序、不展开；从步骤 3 起：
 
 | 阶段 | 类型 | 干什么 |
 |---|---|---|
 | 执行 executor（步骤 3 spawn） | 被测 LLM | `claude -p` 跑题干活的那个 Claude——**是被测对象，不是判分模型**；token 单列、不计入评分成本 |
 | 评分 grading | 混合 | expectations[LLM] + Tier 1 断言[程序] + Tier 3 断言[LLM]，产 `grading.json` 双率（§7） |
-| 遵循性 compliance | 混合 | 6 阶段流水线：extract[程序] / refine[LLM] / headline[LLM] / rebuild[程序] / judge[LLM] / postprocess[程序]（§12.7） |
+| 遵循性 compliance | 混合 | 6 阶段流水线：extract[程序] / refine[LLM] / headline[LLM] / rebuild[程序] / judge[LLM] / postprocess[程序]（§12.9） |
 | 校准 calibration | 程序 | 评分 × 遵循性交叉的**纯算术**，产 `calibration.json`，不调 LLM（§9） |
 | 聚合 aggregate | 混合 | 主体读各 run 的 JSON 算统计[程序] + **尾部还挂两个 LLM 步骤**：盲比较 comparator[LLM] + 深度分析 analyzer[LLM]（§8） |
 
@@ -826,7 +835,8 @@ spawn claude -p
 | `summary` | 计数 `{total, pass, fail, na, unresolved, indeterminate}` |
 | `findings[]` | 每条指令的对账结果（见下） |
 | `by_instruction[]` | 按指令跨 transcript 聚合：`pass_count`/`fail_count`/`na_count`/`unresolved_count`/`indeterminate_count`/`total`/`fail_rate`/`fail_in_transcripts[]`/`section`（声明分组标题，first-wins）（单 transcript 也有，每指令 1 条） |
-| `coverage` | 声明覆盖视图（旧 report 无 → 默认空）：`{total, covered, uncovered, unknown, coverage_rate, sections[]}`——covered=任一 transcript PASS/FAIL、uncovered=全 N/A、unknown=只有没判成/判不准；反推（derived）指令不计入分母 |
+| `coverage` | 声明覆盖视图（§12.6；旧 report 无 → 默认空）：`{total, covered, uncovered, unknown, coverage_rate, sections[]}`——covered=任一 transcript PASS/FAIL、uncovered=全 N/A、unknown=只有没判成/判不准；反推（derived）指令不计入分母 |
+| `boundary` | 工具对账视图（§12.7；旧 report 无 → 默认空）：`{total_tools, declared, undeclared, tools[]}`——会话里调过的领域工具 × 声明工具要求，只陈列、不进判决 |
 | `warnings[]` | 顶部警告（没判成建议重跑、判不准占比偏高等） |
 | `token_usage` | 本次所有 **LLM 判定调用**（refine + 条件/禁令/步骤判官 × 批）的 token 用量合计：`{input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, total_cost_usd, calls}`。空 `{}` = 无 LLM 调用或旧 report。**注意是判官 token**——与 eval 侧 `RunResultMetrics.tokens`（executor 跑任务的 token，走 stream-json）不同；eval 的 grader/comparator/analyzer token 已计入 `benchmark.json.llm_token_usage`（Phase 2：`scoring` 段含 grader+comparator+analyzer；本 audit token rollup 进 `audit` 段） |
 
@@ -1387,14 +1397,14 @@ CI 脚本只读 exit code 分不清「N/A」和「UNCLEAR」，得读 gate.json 
 
 | 类别 | 来自哪些指令 | 怎么判 |
 |------|------------|--------|
-| 条件性 CONDITIONAL | TOOL_REQUIREMENT / REFERENCE_USAGE | 命中 tool_trace（**含参数级断言**——声明要求的 CLI 参数也得对，否则不命中走 LLM；路径规范化比对）→ PASS（**程序判定**）；未命中 → LLM 判该不该触发 |
+| 条件性 CONDITIONAL | TOOL_REQUIREMENT / REFERENCE_USAGE | 命中 tool_trace（**含参数级断言**——声明点名的 CLI 参数也得对）→ PASS（**程序判定**）；未命中 → LLM 判该不该触发 |
 | 禁令 PROHIBITION | CONSTRAINT / ANTI_FABRICATION | LLM **主动检测这次有没有违规**（不是判「遵守没」） |
 | 步骤 STEP | HEADING_STEP | LLM 判走过 / 该走没走 / 不涉及 |
 | 输出格式 OUTPUT | OUTPUT_FORMAT | **确定性子串匹配**（程序判定，不调 LLM） |
 
 > **为什么 audit 用正则抽指令，评测却用 LLM 出题**：两者源头都是声明，但产物不同——extractor 抽的是声明里**已有的指令**（步骤 / 禁令 / 工具要求，逐条对账用），init 生成的是**新评测题**（input + expectations，测能力用）。审计要确定性、可重复（同一份声明每次抽出同样的指令，对账才稳），所以用正则静态抽；评测要语义和创造性，所以 init 用 LLM 生成。正则的代价是抽不准——教程型声明的示例文字会被误抽成指令，后面「地基瓶颈」展开。
 
-> **条件性的「程序判定」现在看参数**：TOOL_REQUIREMENT 命中工具名只是第一步——声明点名的 CLI 参数（如要求跑 `pytest --tb=short`，参数就是 `--tb=short`）也得出现在 agent 实际命令里，才算程序判定 PASS。漏参数不算 PASS，**也不直接 FAIL**，而是走 LLM 判「这场景到底该不该要这个参数」。所以你会看到「agent 明明跑了 pytest、条件性却没给程序 PASS」——多半是它漏了声明点名的参数，交给 LLM 定夺了。匹配口径：工具名、路径、CLI 参数都**大小写不敏感**（双侧 lower）；路径另做规范化比对（解相对/绝对差异 + 分隔符边界），参数走子串匹配（粗召回宁松，`--tb=short` 整串、`tests/` 这类 token 都算命中）。抽不到参数的指令（指令里没点名具体参数）行为不变。
+> **条件性的「程序判定」现在看参数**：TOOL_REQUIREMENT 命中工具名只是第一步——声明点名的 CLI 参数（如要求跑 `pytest --tb=short`，参数就是 `--tb=short`）也得出现在 agent 实际命令里，才算程序判定 PASS。漏参数不算 PASS，**也不直接 FAIL**，而是走 LLM 判「这场景到底该不该要这个参数」。所以你会看到「agent 明明跑了 pytest、条件性却没给程序 PASS」——多半是它漏了声明点名的参数，交给 LLM 定夺了。匹配口径：工具名、路径、CLI 参数都**大小写不敏感**（双侧 lower）；路径另做规范化比对（解相对/绝对差异 + 分隔符边界），参数走子串匹配（粗召回宁松，`--tb=short` 整串、`tests/` 这类 token 都算命中）。参数上哪找也有讲究：agent 的命令常不是自己敲的，而是写在派给子 agent 的任务描述里——200 字的调用摘要常把这些命令截掉，所以「工具/参数出现过吗」这道检查除了摘要、还搜这条调用的**完整 input**，不然明明派发了却搜不到。另一头，声明写 `docs/{OP}/` 这种**模板占位符的参数不参与比对**——trace 里记的是真实值（如 `docs/conv/`），拿模板对实值必然比不过。抽不到参数的指令（指令里没点名具体参数）行为不变。
 
 > **输出格式（OUTPUT_FORMAT）怎么知道匹配什么**：extractor 从声明抽出输出格式要求（比如规定产物要含某个标题 / 标记 / 模板），audit 拿它去和实际输出做**子串匹配**——命中 → PASS，未命中 → FAIL（这类没有 N/A / 没判成 / 判不准，因为是纯字符串判定）。所以声明里把输出格式写得越具体（点名某个 marker），越容易被抽到、查得越准。
 
@@ -1428,6 +1438,8 @@ CI 脚本只读 exit code 分不清「N/A」和「UNCLEAR」，得读 gate.json 
 - **INDETERMINATE（判不准）** = LLM 出了判定但本身是「证据模糊判不了」（语义失败）→ 重跑无益，必须带具体 reason；
 - **N/A（不适用）** = 规则存在但本次场景不触发（如声明写「读 references/foo.md」，但本次任务根本不涉及该条件）→ 已解决的有效结论，不进警告。
 
+> **N/A 还有一个来源：记录窗口外**（步骤/条件/数量类都会用到）。给的执行记录是有尽头的——记录止于某处、其后排着的计划任务从未开始，这些指令不是「该走没走」，是「证据根本不覆盖」，判 N/A。两条边界别越：任务/阶段**开了头**、中途漏掉的步骤仍是 FAIL，不得借这条洗成 N/A；记录**中间**的空洞——工具记录从某条直接跳到后面、中间没有这一步的任何痕迹——就是没走，判官不得猜「中间的调用没抄进来、应该做了」。只有记录**末尾之后**的步骤，才轮得到窗口 N/A。
+
 > 注意：审计这套**遵循性五态**（`PASS`/`FAIL`/`N/A`/`UNRESOLVED`/`INDETERMINATE`）和评分侧的**评分五态**（`PASS`/`FAIL`/`UNEVAL`/`TIMEOUT`/`ERROR`，见 §7.4）是两套不同的状态集，别混。
 
 每条 `AuditFinding`（两个正交维度 `verdict` × `method`）的字段：
@@ -1443,24 +1455,29 @@ CI 脚本只读 exit code 分不清「N/A」和「UNCLEAR」，得读 gate.json 
 | `evidence` | 判定理由（INDETERMINATE 时即判不准的理由） |
 | `transcript` | 对应 transcript 文件名 |
 | `derived_from_transcript` | 是否反推声明来的（见 §13.6） |
-| `synthetic` | 审计器**合成**的关系声明标 True（ORDER 的 `(顺序)…` 文案，见 §11.5）——不进覆盖视图/by_instruction 聚合、噪声判别豁免；旧产物恒 False |
+| `synthetic` | 这条 finding 不是声明里抽出来的原文指令、是 audit 自己**拼出来的关系描述**（ORDER 的 `(顺序)…` 文案，见 §11.5）时为 True——不算真实指令，不进覆盖视图 / by_instruction 汇总，也不参与噪声判别；旧报告恒 False |
 | `control_flow` | 控制流判官标记（纯显示）：`quantity` = 数量指令移交控制流判官判（程序计数或 LLM 数量判定），CLI/HTML 据此挂「数量」记号；判定/聚合都不读；缺省空（旧产物） |
 | `seq` | `#N` 序号（去重后编排，供 `related` 引用 + 报告定位） |
 | `sources[]` | 同文去重合并的全部来源（单条 = `[source]`） |
 | `related[]` | 同行为跨类关联的其它 finding 序号（如 `["#9"]`） |
+| `conflict_with[]` | 同源矛盾对端序号：同一声明行（同 `source_excerpt`）被判出一 PASS 一 FAIL 时互标（如 `["#10"]`），HTML 挂「⊘ 判定矛盾」徽章、warnings 报组数；标注不仲裁——谁对谁错人工看两端 evidence；无矛盾留空 |
 
 ### 11.4 eval 内的遵循性 = audit 命令
 
 重要：**eval 里的遵循性判定和独立的 `audit` 命令是同一套引擎**。eval 直接调它喂单条 transcript.jsonl，产出的 `compliance.json` 就是 AuditReport，schema 和 audit 命令的 `audit-report.json` 一致。所以第十一章–第十三章讲的判法对 eval 内 compliance 和独立 audit 都成立——eval 是「执行后顺手查一遍」，audit 是「把这套对账独立深化、能审任意会话」。
 
-### 11.5 控制流判官：顺序遵循（ORDER）+ 数量期望（QUANTITY）
+### 11.5 控制流判官：顺序（ORDER）+ 数量（QUANTITY）
 
-三类判官各自逐条判「这步做了没」，判不了两件**跨条**的事：步骤间的**顺序**（声明写「先 A 再 B」，执行却 B 先 A 后）和**数量**（「每个错误都要引用原文」，3 个错误只引了 2 个）。第 4 个判官——**控制流判官**——补这两个维度，只在声明里真有相应信号时才跑（无信号零调用、零行为变化）：
+条件性、禁令、步骤这三个判官（第四类指令「输出格式」不走 LLM，是程序比对）都是**逐条**判「这一条做了没」。有两件事这么判天生覆盖不到，因为看的不是单条指令、是**指令之间的关系**：一是**顺序**——声明写「先备份再迁移」，执行却先迁移后备份，每一步单看都做了、顺序是反的；二是**数量**——声明说「每个错误都要引用原文」，3 个错误只引了 2 个。于是加了第 4 个 LLM 判官（**控制流判官**）补这两块。注意：它**不新增指令类别**——声明抽出来的指令还是条件性 / 禁令 / 步骤 / 输出那几类，变的只是谁来判：ORDER 把两条相邻的步骤**配成对**、审它们之间的先后关系；QUANTITY 把原有指令里带数量词的那些**从原判官手里接过来**判（指令本身一字不变）。声明里没有这类信号时它根本不出场（零 LLM 调用，行为跟没有这个功能一样）：
 
-- **顺序（ORDER）**：同节**相邻**两条步骤 bullet，任一含**显式**顺序连词（先/然后/再/接着/随后/之后/其次/下一步/最后…；负向排除「优先/预先/不再」）才配对（纯程序检测）；判定交给判官（看执行记录 + 工具调用序列）。宁少报的口径：只有 B 的**全部**证据都先于 A 才算违序——交错、部分重排算过；A 或 B 压根没发生算 N/A。**数字编号列表（1. 2. 3.）不算顺序声明**（编号是排版惯例，倒序执行常常无害，当顺序声明误报面极大）。
-- **数量（QUANTITY）**：带数量词的指令（每个/所有/逐个… = 逐项分布；至少 N 次/不超过 N 次… = 阈值）从原判官桶**移交**给控制流判官——每条指令仍只有一个 verdict，避免两个判官打架。判定口径的另一半（错误理由的少报也是乱报）：**应做未做、数量不足一律 FAIL**，N/A 只给无可数对象的场景（整场没发现错误 → 无从引用）；count 型且带工具名的少数场景由**程序**数 tool_trace 调用次数（零 LLM，evidence 带实测数）。
+- **顺序（ORDER）**：同一个小节里**紧挨着**的两条步骤，文字里带**明说的**顺序词（先 / 然后 / 再 / 接着 / 随后 / 之后 / 其次 / 下一步 / 最后……；「优先」「预先」「不再」这类不算）才当成一对「A 必须在 B 前面」。配对是程序做的，判给 LLM（看执行记录 + 工具调用的先后）。判得保守：只有 B 的证据**全部**都在 A 之前才算违序——A、B 交错着做算过；A 或 B 压根没做算 N/A。**步骤写成 1. 2. 3. 编号列表不算顺序声明**——编号只是排版习惯，倒着做常常也无害，把编号当顺序会大量冤枉人。
+- **数量（QUANTITY）**：指令里带数量词的（「每个 / 所有 / 逐个」是一类，逐项检查；「至少 N 次 / 不超过 N 次」是一类，带具体数字）不再交给原来的判官，改由控制流判官一起判——每条指令照样只有一个结论，不会两个判官各判各的打起来。判的口径：该做的没做、数量不够，一律 FAIL；N/A 只留给「没有可数的东西」的场景（比如整场就没发现错误，谈不上「每个错误都引用」）。三条细则：
 
-两条下游纪律：ORDER 的 finding 是审计器**合成**的关系文案（`(顺序)「A」须先于「B」`，`synthetic` 标记）——**不进**声明覆盖视图、by_instruction 聚合表，也不参与噪声判别（「LLM+related」启发式在它身上语义是 pair 两端，不是稳定性存疑），其 `related` 链两端可点跳到真实 finding；数量 finding 沿用原指令全文与原桶类别，对聚合透明，但带 `control_flow="quantity"` 纯显示标记——CLI 违规表在指令前显 `(数量)`、HTML 挂「数量」徽章（不挂记号它在报告里长得跟普通 conditional/step 判定一模一样，认不出）。turn_refs 同受 `--turn-refs` 整链开关（§13.7），批级失败/判官整体异常的兜底与三判官同款（全部 UNRESOLVED，不击穿 audit）。
+  - **没开始的算 N/A，不算漏做**：所属任务/阶段在记录里从未开始（记录止于某处、它排在后面），或「据 X 的失败报告修复」这类**前置发生了才轮得到做的活儿、前置从头到尾没发生**——都判 N/A。「整体没做完」这件事由完成度条目兜底报出（见下一条），逐条再 FAIL 是重复报。但阶段开了头、中途漏掉这条的躲不掉，仍 FAIL。
+  - **完成度以这份记录为全集**：「逐一完成 / 全部完成其中的 Tasks/项」这类条目，记录结束时没做完就是数量不足——判官不得猜「记录之外可能还会继续」（对账对象就是给的这份记录，它是不是切片不是判官该猜的）；「按顺序」与「完成全部」同现时，完成度是主判据。
+  - **少数情况走捷径**：带具体次数、又写了工具名的，由**程序**直接数 tool_trace 里的调用次数（不走 LLM，evidence 里给实测数字）。
+
+报告里怎么认它们：ORDER 的 finding 不是声明里的原文，是 audit **自己拼出来**的一句关系描述（`(顺序)「A」须先于「B」`，带 `synthetic` 标记）——它不是真实指令，所以不进覆盖视图、不进 by_instruction 汇总，也不参与噪声判别；它的 `related` 指向 A、B 两条真实 finding，点得过去。数量 finding 正相反，用的就是原指令原文，聚合一切照常；唯一差别是带 `control_flow="quantity"` 纯显示标记——CLI 违规表在指令前显 `(数量)`、HTML 挂「数量」徽章，不然它长得跟普通 conditional/step 判定一模一样，在报告里认不出来。turn 定位跟别的判官一样受 `--turn-refs` 开关控制（§13.7）；判官调用失败也不会让 audit 崩——相关条目标 UNRESOLVED，报告照常出。
 
 ---
 
@@ -1524,7 +1541,7 @@ CI 脚本只读 exit code 分不清「N/A」和「UNCLEAR」，得读 gate.json 
 
 ### 12.5 逐条判别：某条 FAIL 是工具噪声还是声明问题
 
-fixture 下审计的 FAIL 混着工具噪声和真声明问题。报告现在给每条 FAIL **自动标**一个启发式判别（per-run findings、整体汇总 by_instruction、单次 audit-report 的违规表都带徽章 + hover 理由）。声明覆盖视图（audit-report 的 coverage 区块）是这判别的姊妹诊断：uncovered 集中的分组多为「场景没触发」（fixture 下常源于 extractor 误抽，见 §12.2），先别急着改声明：
+fixture 下审计的 FAIL 混着工具噪声和真声明问题。报告现在给每条 FAIL **自动标**一个启发式判别（per-run findings、整体汇总 by_instruction、单次 audit-report 的违规表都带徽章 + hover 理由）：
 
 | `noise_label` | 含义 | 典型信号（命中即标）|
 |---|---|---|
@@ -1534,11 +1551,35 @@ fixture 下审计的 FAIL 混着工具噪声和真声明问题。报告现在给
 
 **怎么用**：看到 FAIL 先看徽章 + 理由（hover）。`tool_noise` → 别急着改声明，先想 extractor/判定/evidence 是不是工具的洞（典型：声明「详细资源」段的链接描述被抽成步骤）；`skill_issue` → 这才是改声明的信号；`uncertain` → 人工看 evidence。优先级 `tool_noise > skill_issue > uncertain`（取最严：有一条噪声信号就归 tool_noise，**避免据噪声误改声明**）。
 
-**诚实说**：这是**启发式 + 疑似 + 理由，不是权威判决**（可能假阳/假阴）。它**治标**（帮解读现有噪声），没让审计更准 —— 治本仍 `--refine-instructions`（判定前 LLM 砍伪指令，默认开，§12.2）/ 结构化声明（frontmatter 声明 required_*）/ 真实 transcript audit。**别以为「标了 tool_noise = 审计可信了」**。判别规则源码：`audit/noise.py`（纯函数，不调 LLM/不读 transcript）。
+**诚实说**：这是**启发式 + 疑似 + 理由，不是权威判决**（可能假阳/假阴）。它**治标**（帮解读现有噪声），没让审计更准 —— 治本仍 `--refine-instructions`（判定前 LLM 砍伪指令，默认开，§12.2）/ 结构化声明（frontmatter 声明 required_*）/ 真实 transcript audit。**别以为「标了 tool_noise = 审计可信了」**。打标本身也不调 LLM——纯程序按每条 finding 上已有的信号（来源 / 类别 / evidence 特征）算出来的（源码 `audit/noise.py`，不重新读 transcript），不花 token、跑多少遍结果都一样，别担心判别自己又添一层抖动。
 
-**工具对账视图（audit-report 的 boundary 区块）是这对账面的对偶**：覆盖视图问「声明的指令被触达了吗」，它问「轨迹里的动作都有声明对应吗」——把会话里调过的**领域工具**（内置 read/bash/grep 等原语不算）逐个列出、标哪些命中声明工具要求（domain）、哪些没有（undeclared-domain）。一期**纯信息性**：不产 finding、不进 verdict——「未声明 ≠ 违规」，skill 声明通常不穷举工具，基线未成熟前判罚必乱（宁少报不乱报）。用途：一眼看出会话调了哪些声明之外的 MCP/领域工具；同时它是二期 per-skill 行为基线（声明工具要求 ∪ 零 FAIL 会话观测双源交叉后，才升级成判罚 finding）的数据采集面。声明侧工具名四源抽取：工具要求指令的 `tool_name` 参数 / 指令文本里的 `mcp__server__tool` 全名 / 反引号代码字 / **声明 frontmatter 的工具白名单**（agent 声明的 `tools:`（cc 强制生效）、skill 的 `allowed-tools:`——对 agent 尤其关键：工具白名单常只写在 frontmatter、正文一字不提，不读它会把声明过的工具全标「未声明」；CLI 与 run 内 compliance 都自动从声明文件抽好传入，`declared_by` 显 `frontmatter: tools`）。源码：`audit/boundary.py`（纯聚合，零 LLM 零缓存）。
+### 12.6 声明覆盖视图（coverage）：这批会话碰到了声明的多少
 
-### 12.6 这一层的边界：fixture 下边际价值低，真实 transcript 下价值高
+audit 的判决只对「碰到的指令」负责；覆盖视图退一步看全貌：**声明的全部指令里，这批会话真实碰到了多少**。报告（audit-report 的 coverage 区块 + CLI 摘要一行）按声明的章节分组数给你：每组指令多少条、覆盖几条、没触达几条。它回答「skill 内容被实际用到什么程度」这个问题，是独立于违规判定的诊断面，不参与判罚。
+
+每条指令三态：
+
+| 状态 | 意思 |
+|---|---|
+| covered（触达）| 任一 transcript 判过 PASS 或 FAIL——会话碰到了这条规则，不管过没过 |
+| uncovered（未触达）| 全部 N/A——规则在、场景没触发，这批会话压根没锻炼到它 |
+| unknown（未知）| 只剩 UNRESOLVED / INDETERMINATE——先治「建议重跑」（§12.4） |
+
+`coverage_rate = covered / total`（unknown 计入分母——没判成的不装成已覆盖，诚实低估）；从 transcript 反推出来的指令（derived）不是声明原文，不进分母。
+
+**怎么读**：低覆盖 ≠ 声明差——条件式指令（「遇到 X 才做 Y」）场景没触发很正常；它真正告诉你的是，上面的 PASS / FAIL 结论只覆盖了触达的那部分，没触达的指令这批会话没说话。uncovered 集中在某个分组，就是这个声明面没被这批会话锻炼到（fixture 下常源于 extractor 误抽，见 §12.2——先想工具的洞，再想声明）；想验证就补跑对口场景的 transcript 再对账。
+
+**独立取用**：coverage 的汇总在 audit-report.json 里是独立字段（`coverage`，自带 sections 分组），机器直接读这一块就能回答覆盖情况，不用解析 findings、不用管违规明细。比如攒一批真实会话定期跑 audit、只取 coverage：长期没被触达的声明段，就是「写了但没人用」的清理候选——将来 CI 里的周期性 skill 清理任务接这里就够了。
+
+### 12.7 工具对账视图（boundary）：会话动的工具，声明里提没提
+
+工具对账视图回答一个反方向的问题：**会话里真调过的领域工具，声明里提没提**。报告（audit-report 的 boundary 区块 + CLI 摘要一行）把会话里出现过的领域工具一个个列出来：声明里写了的标「已声明」（domain，附声明出处），没写的标「未声明」（undeclared-domain）。read / bash / grep 这类 agent 自带的内置原语（builtin）不进表——列了全是噪声。
+
+它和 §12.6 的覆盖视图正好一正一反（声明→执行 / 执行→声明），但各答各的问题、各自独立成块，数据也各自独立取用。和覆盖视图一样**只陈列、不定罪**：不产生 finding、不影响判定。因为「用了声明没提的工具」不等于违规——skill 的声明一般不会把工具列全——积累够基线之前就判罚一定乱判。它的用处：一眼看出这次会话动了哪些声明之外的 MCP / 领域工具；表里的会话数 / 调用数列就是在攒 per-skill 行为基线数据，将来基线够了才升级成判定。
+
+声明里认「已声明」看四个地方：工具要求指令的 `tool_name` 参数 / 指令文本里的 `mcp__server__tool` 全名 / 反引号代码字 / **声明 frontmatter 的工具白名单**（agent 的 `tools:`、skill 的 `allowed-tools:`——agent 常把工具只写在 frontmatter、正文一个字不提，不读它会把声明过的工具全标成「未声明」；CLI 和 run 内 compliance 都会自动从声明文件取好，报告「声明出处」列显 `frontmatter: tools`;带权限限定的写法 `Tool(…)` 也认——取括号前的裸名比对，trace 里记的就是裸名）。这块也不像 refine / 判官那样调 LLM——纯程序数出来的（源码 `audit/boundary.py`）：数工具调用、跟声明文本对表都是死规则，不花 token、跑多少遍结果都一样，将来拿它攒行为基线，基线本身也不会抖。
+
+### 12.8 这一层的边界：fixture 下边际价值低，真实 transcript 下价值高
 
 诚实说，审计在不同来源下价值差别很大：
 
@@ -1547,7 +1588,7 @@ fixture 下审计的 FAIL 混着工具噪声和真声明问题。报告现在给
 
 所以：做 fixture A/B 评测，别对 compliance 的数字过度解读（尤其 N/A 多时，先想 extractor 误抽）；要评估声明的真实遵循质量，拿真实会话跑 audit。
 
-### 12.7 audit 的阶段流水线（对应报告的「阶段耗时 / token」表）
+### 12.9 audit 的阶段流水线（对应报告的「阶段耗时 / token」表）
 
 audit 跑一次声明 × transcript 对账，内部是一条 **6 阶段顺序流水线**（各阶段非重叠，秒数加总 ≈ 总墙钟）。报告里的「阶段耗时 / token」表就是这 6 行（末尾多一行 `合计` = 各阶段 token/秒数之和，**不是阶段**）。每阶段：
 
@@ -1557,8 +1598,8 @@ audit 跑一次声明 × transcript 对账，内部是一条 **6 阶段顺序流
 | 精筛（refine） | LLM | 判定前用 LLM 砍掉 extractor 误抽的示例/占位伪指令，精度 > 召回、per-声明缓存（§12.2） |
 | 标题（headline） | LLM | 把指令改写成人话标题，**仅显示、判定不读**，per-声明缓存（§12.3） |
 | 切片（rebuild） | 程序 | 把 transcript 重建为 SessionDigest + 按作用域（`--kind`）切执行段（§13.8） |
-| 判定（judge） | LLM | 三类判官（条件性 / 禁令 / 步骤）逐批调 LLM 判指令遵循性；声明含顺序对/数量指令时另有控制流判官搭车（§11.5） |
-| 聚合（postprocess） | 程序 | **判定后的汇总**：跨 transcript 按指令聚合 findings（`by_instruction` 的 fail%）+ 噪声判别标注 + 声明覆盖视图（`coverage`：按声明分组统计指令被触达多少）+ 工具对账视图（`boundary`：轨迹里的领域工具 × 声明工具要求，信息性） |
+| 判定（judge） | LLM | 三类判官（条件性 / 禁令 / 步骤）逐批调 LLM 判指令遵循性；声明里有顺序对 / 数量指令时，控制流判官跟着一起跑（§11.5） |
+| 聚合（postprocess） | 程序 | **判定后的汇总**：跨 transcript 按指令聚合 findings（`by_instruction` 的 fail%）+ 噪声判别标注 + 声明覆盖视图（`coverage`：按声明分组统计指令被触达多少，§12.6）+ 工具对账视图（`boundary`：会话里调过的领域工具 × 声明，只陈列不判罚，§12.7） |
 
 要点：
 
@@ -1566,9 +1607,9 @@ audit 跑一次声明 × transcript 对账，内部是一条 **6 阶段顺序流
 - **判定是性能主战场**：三类判官并发跑（全局在飞 LLM 调用由 AIMD 自适应限制器动态调，适配不同后端容量；`--max-concurrent` 固定向后兼容），墙钟主要花在这；精筛 / 标题有 per-声明缓存（命中秒回），只有首次才花时间。
 - **聚合（postprocess）就是「判定之后那个汇总阶段」**：它不调 LLM（程序阶段），所以 token=0、秒数极小，但产出 `by_instruction` 跨会话聚合表 + 每条 FAIL 的噪声判别徽章——别把它和表末的 `合计` 行混（`合计` 是算出来的和、`聚合` 是真阶段）。
 
-### 12.8 这些 LLM 调用怎么发出去：HTTP 直连 + 自适应并发
+### 12.10 这些 LLM 调用怎么发出去：HTTP 直连 + 自适应并发
 
-§12.7 表里标「LLM」的三个阶段（精筛 / 标题 / 判定）一次 audit 要调很多次模型（十几次起）。这节讲这十几次调用**怎么发出去**——它直接决定 audit 跑一遍要多久。
+§12.9 表里标「LLM」的三个阶段（精筛 / 标题 / 判定）一次 audit 要调很多次模型（十几次起）。这节讲这十几次调用**怎么发出去**——它直接决定 audit 跑一遍要多久。
 
 **以前慢在哪：每次调用都「开一次机」。** 早先每调一次 LLM 就启动一个 claude 命令行子进程，等它跑完再读结果。这好比每问一句话都得重新开机：光启动就好几秒，进程内部还要多轮对话才吐出结构化结果，单次就要十几到三十秒。十几次叠一起，跑一遍十几分钟不奇怪。
 
@@ -1608,7 +1649,7 @@ sift audit path/to/decl/ --transcript a.jsonl --transcript b.jsonl            # 
 sift audit path/to/decl/ --transcript opencode-session.json                   # opencode session(.json)
 ```
 
-判定要逐批调 LLM（每批约 40–257s），跑期间实时打印进度（`[条件性/禁令/步骤] 判定 N 条…`），三个 LLM 类别判定器（条件性 / 禁令 / 步骤；输出格式走程序判定不调 LLM）并发跑（约 2× 提速）；声明含顺序对/数量指令时控制流判官作第 4 个搭车跑（§11.5）；全局并发由 AIMD 自适应限制器动态调（机制见 §12.8）。看到 `[类别] …` 滚动就是在跑，别误以为卡死。
+判定要逐批调 LLM（每批约 40–257s），跑期间实时打印进度（`[条件性/禁令/步骤] 判定 N 条…`），三个 LLM 类别判定器（条件性 / 禁令 / 步骤；输出格式走程序判定不调 LLM）并发跑（约 2× 提速）；声明里有顺序对 / 数量指令时，控制流判官作为第 4 个跟着一起跑（§11.5）；全局并发由 AIMD 自适应限制器动态调（机制见 §12.10）。看到 `[类别] …` 滚动就是在跑，别误以为卡死。
 
 **对账作用域（两层，skill/agent/root 一视同仁）**：
 
@@ -1800,7 +1841,7 @@ opencode 的转换器（`_records_from_opencode`）做三件事抹平格式差�
 
 audit 不 re-run cc、只对账已有 transcript，所以「transcript 从哪来」是关键。三个来源：
 
-- **历史会话**（最常见）：直接拿真实会话的 transcript——cc 的 `.jsonl`（`~/.claude/projects/...` 里）、或 opencode 导出的 `.json`（`opencode export <sessionID>`）。这是审计最有价值的来源：真实使用里的违规是诊断资产，反映声明在实际中被遵循成什么样（见 §12.6）。
+- **历史会话**（最常见）：直接拿真实会话的 transcript——cc 的 `.jsonl`（`~/.claude/projects/...` 里）、或 opencode 导出的 `.json`（`opencode export <sessionID>`）。这是审计最有价值的来源：真实使用里的违规是诊断资产，反映声明在实际中被遵循成什么样（见 §12.8）。
 - **`run --task` 真任务模式产的 trace**（见 §5.5）：真任务模式 spawn 执行器在真实代码库/数据目录跑一个真任务，产 `run-*/transcript.jsonl`（cc）或 `run-*/transcript.json`（opencode）。这份 trace 直接喂 audit——这就是评测和审计的产→审闭环：run 产真任务 trace，audit 审这份 trace 有没有照声明做。`--task` 必须对口被审声明（不对口 → audit 假 FAIL）。
 - **结构化输入**（外部 producer）：观测平台 / 自建 harness / 别的会话存储把会话归一成 `sift-records` 格式直喂，不必绑 cc 或 opencode 的原生格式。
 
@@ -1808,15 +1849,23 @@ audit 不 re-run cc、只对账已有 transcript，所以「transcript 从哪来
 
 ---
 
-### 13.10 改进建议（`--suggest`，可选）：三类归因 + 保留账本
+### 13.10 改进建议（`--suggest`，可选）：FAIL 分三类 + 起草修改建议
 
-审计报出 FAIL 之后，「哪条该改 skill / 哪条其实是声明写得不合实际」的归因靠人脑。`audit --suggest` 加一个 **CLI 层**的 LLM 后处理做这层归因并起草建议——**默认关**：审计的默认姿态是纯判决，建议是显式要的可选视图（这是与「把审计嵌进优化链」的产品在定位上的差别：我们建议消费审计，判决不为建议变形；建议也不进任何 gate、不影响 exit code）。
+audit 报出 FAIL 之后，「哪些该回去改 skill、哪些其实是声明本身写得脱离实际」要靠人自己琢磨。`audit --suggest` 让 LLM 帮你做这一步：把 FAIL 归因、起草对应的修改建议。**默认不开**——audit 的本分是判对错，建议是你明确要了才给的附加品（建议不进任何 gate、不影响 exit code）。agent / 编排（`--kind agent` / `--kind root`）审计同样可用——`--kind` 只切 transcript 侧的执行段，建议归因吃的是被审的那份声明正文（.md）；归因枚举名 `skill_fix` 是 skill 时代起的，对 agent 语义就是「改 agent 正文」。
 
-- **三类归因纪律**（归因决定出不出建议）：`skill_fix`（声明写了、执行系统性没做到——多会话重复失败 / 程序判定确定 → 改 skill 正文的建议）；`declaration_fix`（执行做了更合理的事、声明过时或过严 → 改声明的建议，把正确实践写回声明）；模型/环境（单发失败 / 工具噪声 → **不出建议别硬凑**，只透明计数）。单 transcript 下「单发」信号退化（每条都是 1/1），该信号退出归因依据——不写明这条，全部 FAIL 会被「仅 1/1」规则误归模型/环境。
-- **归因信号都在输入里**：每条 FAIL 的 #N + evidence + method + 噪声判别标注；指令级概要（失败 k/n · 失败于哪些会话 · 未判成数 + transcript 总数）；PASS 指令清单（排除反推指令）。**不喂全 trace**——evidence 已是浓缩执行事实（注意力纪律）。
-- **保留账本（轻量版）**：输入附 PASS 清单，要求每条建议自检「建议改的段落不与任何 PASS 指令撞车」（`keeps_pass`；能查的是段落撞车这一最常见冲突形态，不夸大自检能力），`keeps_pass=false` 的建议在报告里带 ⚠ 徽章（prompt 纪律不自纠，展示层诚实）。
-- **省钱与健壮**：有 FAIL 才跑（全 PASS 不跑不落盘）；UNRESOLVED 占比 > 30% 不跑（证据残缺时建议必乱，先重跑）；归因粒度 = 逐指令簇、分批 ≤10 簇/批（输出上限按批内簇数弹性给足：6000+2500×簇数——深度归因的思考量就在这个量级且 run-to-run 有方差，给窄了撞方差就是浪费一整趟截断；批间并行，几十簇墙钟 ≈ 最慢一批）；**永不外抛**（挂点在报告落盘前，抛了毁整份报告）——失败留 `skipped_reason`，报告照常。
-- **明确不做**：自动改写声明（只出建议文本，改不改人拍板——审计产品的信任边界）；建议进任何 gate；逐 transcript 建议（聚合视角才有系统性/单发信号）。
+建议按归因分三类（归哪类决定给不给建议）。前两类的名字容易读成「改两个不同的文件」——对 skill 来说声明就是 SKILL.md，两类建议最后都落在**同一份正文**上；分两类的不是改哪里，是**「谁的错」的判决相反**，修法方向跟着相反：
+
+- **改 skill**（`skill_fix`）：判决「错在执行」——声明要求的事本身是对的，但执行端一直做不到（多个会话反复栽在同一条、或程序判定钉死）→ 修法是把这段写法改得**更容易被照做**：措辞更硬、加显式约束、把容易漏的拆成步骤。该做的事不变，变的是正文的「操纵力」。
+- **改声明**（`declaration_fix`）：判决「错在声明」——执行做的才是更合理的事，声明过时或太死板（字面违反了、行为其实对，如跳过了冗余步骤）→ 修法是**把正确实践写回声明**：改写、放宽或删掉那条过时的要求，让声明跟现实对齐。
+- **模型 / 环境问题**：偶发失败、工具噪声 → **不给建议也别硬编**，只报一个数（「另有 N 条 FAIL 归因模型/环境」），让你知道有这么些条不属于前两类。
+
+「反复失败」还是「偶发失败」要多个会话才分得出来；只审一条 transcript 时每条失败都是 1/1，这个信号用不了——这种情况就明确告诉 LLM「别按偶发归类」，不然所有 FAIL 都会被一句「仅出现 1 次」推给「模型问题」。
+
+给 LLM 看什么：一次调用、一个 prompt——全部待归因的 FAIL（每条带编号 + evidence + 判定方式 + 噪声标注）放在一起，旁边附**一份**「哪些指令全 PASS」的清单（整个 prompt 只有一份，所有 FAIL 共用，不是每条 FAIL 挂一份）。这份清单是给建议上保险用的：LLM 起草「改 skill 正文」的建议时，要对着它自查一句「我要改的这段，会不会正好是现在执行得不错的部分」（`keeps_pass`）——撞上了就说明这段写得没问题、是别的会话都遵循的，改它可能把好的改坏。可能撞车的建议在报告里带 ⚠ 标出来，提醒你改之前多看一眼。**不给完整会话记录**——evidence 已经是把执行事实提炼过的版本，喂原文又贵又把注意力冲散。
+
+省着跑、跑挂不伤人：全 PASS 就不跑（没有 FAIL，没什么可建议）；「没判成」占比超过 30% 不跑（证据残缺时建议必然瞎说，先重跑 audit）；一次最多喂 10 簇，输出上限按簇数从宽给够（6000 + 每簇 2500——这类深度归因的思考量就在这个量级，给死小帽必截断），批与批并行跑（几十个失败的墙钟 ≈ 最慢一批，不随批数翻倍）。这一步出任何错都不把异常抛出去——它跑在报告落盘之前，一炸会把整份报告一起带走；失败就留一句 `skipped_reason`，报告照常写。
+
+明确不做：自动改写声明（只出建议文本，改不改你拍板）；建议进任何 gate；按单条 transcript 给建议（要跨会话才看得出「反复」还是「偶发」）。
 
 ## 附录
 
