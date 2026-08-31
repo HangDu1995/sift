@@ -119,6 +119,7 @@ class AuditFinding(BaseModel):
     seq: int = 0  # #1..#N:去重后编排的序号(供 related 引用 + 报告里 #N 可读定位)
     sources: list[str] = Field(default_factory=list)  # 同文去重后合并的所有来源;单条=[source]
     related: list[str] = Field(default_factory=list)  # 同行为跨类(Case B)关联的其它 finding 序号,如 ["#9"]
+    conflict_with: list[str] = Field(default_factory=list)  # 同源矛盾(Case C)对端序号:同 source_excerpt 声明行被判出 PASS 与 FAIL,互指对端;无矛盾留空
     # FAIL 噪声判别(audit.noise.annotate_noise)填,只对 FAIL 标;None/[] 向后兼容旧 JSON
     noise_label: str | None = None  # "tool_noise" / "skill_issue" / "uncertain";非 FAIL 为 None
     noise_reasons: list[str] = Field(default_factory=list)  # 命中理由(中文);非 FAIL 为空

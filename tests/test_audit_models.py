@@ -123,6 +123,19 @@ class TestAuditFinding:
         assert f.control_flow == "quantity"
         assert f.model_dump()["control_flow"] == "quantity"
 
+    def test_conflict_with_legacy_default_and_roundtrip(self) -> None:
+        # 旧 finding JSON 无 conflict_with 字段 → [](渲染端不显矛盾徽章)
+        base = {
+            "instruction_text": "x", "source": "CONSTRAINT",
+            "verdict": "PASS", "method": "PROGRAMMATIC",
+            "category": "prohibition", "evidence": "e", "transcript": "t.jsonl",
+        }
+        assert AuditFinding.model_validate(base).conflict_with == []
+        # 新产物往返保真(同源矛盾对端序号)
+        f = AuditFinding.model_validate({**base, "conflict_with": ["#10"]})
+        assert f.conflict_with == ["#10"]
+        assert f.model_dump()["conflict_with"] == ["#10"]
+
 
 class TestAuditReportUnresolvedBreakdown:
     def test_default_empty(self) -> None:

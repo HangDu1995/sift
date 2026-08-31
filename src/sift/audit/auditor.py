@@ -74,7 +74,7 @@ from sift.audit.tool_match import (
 )
 from sift.audit.aggregate import aggregate_by_instruction, aggregate_coverage
 from sift.audit.boundary import aggregate_boundary
-from sift.audit.dedup import post_process_findings
+from sift.audit.dedup import annotate_conflicts, post_process_findings
 from sift.audit import headline_cache, refine_cache
 from sift.concurrency import (
     AdaptiveConcurrencyLimiter,
@@ -839,6 +839,11 @@ class TranscriptAuditor:
         # 在 dedup 后、汇总前做:基于去重后的 findings,related 已就位(LLM+related 信号要用)。
         all_findings = annotate_noise(all_findings)
 
+        # Case C 同源矛盾标注(同声明行跨镜头判出 PASS 与 FAIL → 互标 conflict_with)。
+        # 纯确定性、标注不仲裁;摘要在 warnings 里报组数 + 例对(实测每份真跑报告 3-4 组,
+        # 裸奔的矛盾对最伤报告可信度——不标,读者无从取舍)。
+        conflict_groups = annotate_conflicts(all_findings)
+
         # 没判成(UNRESOLVED)vs 判不准(INDETERMINATE)分开汇总、不同警告:
         # - 没判成是操作性失败(LLM 调用/解析失败/未提及),**可重跑**救回 → 提示重跑。
         # - 判不准是语义模糊(LLM 看了证据真判不了),重跑无益 → 不提示重跑;
@@ -857,6 +862,12 @@ class TranscriptAuditor:
             warnings.append(
                 f"{indeterminate} 条指令判不准(INDETERMINATE,占 {indeterminate * 100 // total}%),"
                 "占比偏高,请人工复核是否 LLM 滥用判不准逃逸口"
+            )
+        if conflict_groups:
+            shown = "; ".join(conflict_groups[:3]) + ("…" if len(conflict_groups) > 3 else "")
+            warnings.append(
+                f"同源矛盾 {len(conflict_groups)} 组:同一声明行被判出 PASS 与 FAIL"
+                f"({shown}),建议人工复核对端证据"
             )
 
         summary = {

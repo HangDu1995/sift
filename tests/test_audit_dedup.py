@@ -5,9 +5,12 @@ audit 的 findings 平铺里有两类"看着多个、其实是一个"的情况:
   (prohibition)、同 verdict → 合并成一条,sources 记两个来源。
 - Case B 同行为跨类:同一行为(如没读 error-codes.md)同时违反 条件性 + 步骤 两条
   *不同* 规则 → 不合并(确实是两条规则),但互标 related=["#N"],报告里 #N 可定位。
+- Case C 同源矛盾:同一声明行被禁令/步骤两镜头同 excerpt 双抽,两判官判出 PASS 与
+  FAIL → 互标 conflict_with=["#N"](标注不仲裁),warnings 报矛盾组数。
 
-去重后给每条编 #1..#N(related 引用序号、报告可读)。post_process_findings 串三步,
-audit() 在 transcript 循环后调它(unverified/summary/by_instruction 都基于去重后 findings)。
+去重后给每条编 #1..#N(related/conflict_with 引用序号、报告可读)。post_process_findings
+串三步,audit() 在 transcript 循环后调它(unverified/summary/by_instruction 都基于去重后
+findings);annotate_conflicts 在 noise 标注旁单独调(返摘要供 warnings)。
 """
 from __future__ import annotations
 
@@ -15,6 +18,7 @@ import json
 
 from sift.audit.auditor import TranscriptAuditor
 from sift.audit.dedup import (
+    annotate_conflicts,
     assign_sequence,
     dedup_exact_duplicates,
     link_related,
@@ -32,11 +36,13 @@ def _f(
     method: AuditMethod = AuditMethod.PROGRAMMATIC,
     evidence: str = "e",
     derived: bool = False,
+    excerpt: str = "",
+    synthetic: bool = False,
 ) -> AuditFinding:
     return AuditFinding(
         instruction_text=text, source=source, verdict=verdict, category=category,
         evidence=evidence, method=method, transcript=transcript,
-        derived_from_transcript=derived,
+        derived_from_transcript=derived, source_excerpt=excerpt, synthetic=synthetic,
     )
 
 
@@ -163,6 +169,79 @@ class TestPostProcess:
         assert step.related == [f"#{cond.seq}"]
 
 
+class TestCaseCConflicts:
+    """同源矛盾配对:同 (transcript, source_excerpt) 组内 PASS 与 FAIL 并存 → 互标
+    conflict_with。标注不仲裁——不翻判、不合并(Case A 有意保留矛盾 verdict 的信号,
+    Case C 只负责让矛盾可见)。摘要是 warnings 的例对来源。"""
+
+    def test_mutual_annotation_cross_category(self) -> None:
+        a = _f("禁止用 Bash 探查目录**", "CONSTRAINT", AuditVerdict.PASS,
+               AuditCategory.PROHIBITION, excerpt="禁止用 Bash 探查目录。")
+        b = _f("禁止用 Bash 探查目录", "HEADING_STEP", AuditVerdict.FAIL,
+               AuditCategory.STEP, excerpt="禁止用 Bash 探查目录。")
+        assign_sequence([a, b])
+        summaries = annotate_conflicts([a, b])
+        assert summaries == ["#1↔#2"]
+        assert a.conflict_with == ["#2"]  # PASS 侧指 FAIL 侧
+        assert b.conflict_with == ["#1"]
+
+    def test_same_category_opposition_also_annotated(self) -> None:
+        # 同类别内的 verdict 相反同样矛盾(不限跨镜头)
+        a = _f("读 STATE", "HEADING_STEP", AuditVerdict.PASS,
+               AuditCategory.STEP, excerpt="读 STATE")
+        b = _f("必须读 STATE", "CONSTRAINT", AuditVerdict.FAIL,
+               AuditCategory.STEP, excerpt="读 STATE")
+        assign_sequence([a, b])
+        assert annotate_conflicts([a, b]) == ["#1↔#2"]
+
+    def test_multi_member_group_summary_and_links(self) -> None:
+        p1 = _f("a", verdict=AuditVerdict.PASS, excerpt="同源行")
+        p2 = _f("b", verdict=AuditVerdict.PASS, excerpt="同源行")
+        f1 = _f("c", verdict=AuditVerdict.FAIL, excerpt="同源行")
+        assign_sequence([p1, p2, f1])
+        assert annotate_conflicts([p1, p2, f1]) == ["#1/#2↔#3"]
+        assert p1.conflict_with == ["#3"] and p2.conflict_with == ["#3"]
+        assert f1.conflict_with == ["#1", "#2"]
+
+    def test_no_opposition_no_annotation(self) -> None:
+        # PASS+PASS / FAIL+N/A / FAIL+UNRESOLVED / FAIL+INDETERMINATE 都不是对立面
+        cases = [
+            (AuditVerdict.PASS, AuditVerdict.PASS),
+            (AuditVerdict.FAIL, AuditVerdict.NA),
+            (AuditVerdict.FAIL, AuditVerdict.UNRESOLVED),
+            (AuditVerdict.FAIL, AuditVerdict.INDETERMINATE),
+        ]
+        for v1, v2 in cases:
+            a = _f("x", verdict=v1, excerpt="同源行")
+            b = _f("y", verdict=v2, excerpt="同源行")
+            assign_sequence([a, b])
+            assert annotate_conflicts([a, b]) == []
+            assert a.conflict_with == [] and b.conflict_with == []
+
+    def test_isolated_across_transcripts(self) -> None:
+        # 同 excerpt 不同会话:各自成立,不算矛盾
+        a = _f("x", verdict=AuditVerdict.PASS, excerpt="同源行", transcript="t1")
+        b = _f("y", verdict=AuditVerdict.FAIL, excerpt="同源行", transcript="t2")
+        assign_sequence([a, b])
+        assert annotate_conflicts([a, b]) == []
+
+    def test_skips_empty_excerpt_and_synthetic(self) -> None:
+        a = _f("x", verdict=AuditVerdict.PASS)  # excerpt 空
+        b = _f("y", verdict=AuditVerdict.FAIL)
+        s = _f("z", verdict=AuditVerdict.FAIL, excerpt="同源行", synthetic=True)
+        c = _f("w", verdict=AuditVerdict.PASS, excerpt="同源行")
+        assign_sequence([a, b, s, c])
+        assert annotate_conflicts([a, b, s, c]) == []
+        assert c.conflict_with == []  # 对端是 synthetic → 不参与,无对立面
+
+    def test_excerpt_whitespace_normalized(self) -> None:
+        # excerpt 首尾空白剥离后同组(source_excerpt 是归一引文,尾空白不该拆组)
+        a = _f("x", verdict=AuditVerdict.PASS, excerpt="同源行")
+        b = _f("y", verdict=AuditVerdict.FAIL, excerpt="  同源行  ")
+        assign_sequence([a, b])
+        assert annotate_conflicts([a, b]) == ["#1↔#2"]
+
+
 class TestWiringThroughAuditor:
     def test_audit_dedups_numbers_and_links(self, tmp_path, monkeypatch) -> None:
         """audit() 真的调了 post_process:用 _ok_json(all pass)让"NEVER fabricate"
@@ -201,3 +280,50 @@ class TestWiringThroughAuditor:
         # 无 (text, category, transcript, verdict) 完全重复(exact dup 全去重)
         keys = [(f.instruction_text, f.category, f.transcript, f.verdict) for f in report.findings]
         assert len(keys) == len(set(keys))
+
+    def test_audit_flags_same_source_conflict(self, tmp_path, monkeypatch) -> None:
+        """audit() 接线 Case C:同一声明行被禁令镜头(CONSTRAINT)与步骤镜头
+        (HEADING_STEP)双抽、同 source_excerpt,两判官判出 PASS 与 FAIL →
+        findings 互标 conflict_with + warnings 报「同源矛盾」(裸奔矛盾对最伤报告可信度)。
+        fake 按各判官 prompt 的独有响应键区分:条件性问 applicable、禁令问 violated、
+        步骤问 verdict。禁令全 PASS、步骤全 FAIL → 唯一同 excerpt 双抽的行成矛盾对。"""
+        def fake(prompt, *a, **k):
+            n = 20
+            if "applicable" in prompt:  # 条件性批:全不适用
+                rows = [{"index": i, "applicable": False, "reason": "不涉及"}
+                        for i in range(n)]
+            elif "violated" in prompt:  # 禁令批:全未违反(PASS)
+                rows = [{"index": i, "violated": False, "evidence": "ok"}
+                        for i in range(n)]
+            else:  # 步骤批(及 refine/headline 等,非判定路径容忍废响应):全 fail
+                rows = [{"index": i, "verdict": "fail", "evidence": "没走这一步"}
+                        for i in range(n)]
+            return json.dumps(rows)
+
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
+        body = (
+            "NEVER fabricate error codes or messages that do not appear in the log.\n\n"
+            "## 执行规约\n\n"
+            "1. 禁止 direct Bash execution for any real operation。\n"
+            "2. Analyze the input carefully and read references/error-codes.md.\n"
+        )
+        tp = tmp_path / "u.jsonl"
+        tp.write_text(
+            json.dumps({"message": {"role": "user", "content": "x"}}) + "\n",
+            encoding="utf-8",
+        )
+        report = TranscriptAuditor().audit("s", body, [tp])
+
+        # 同一行的两条:禁令 PASS + 步骤 FAIL,互标 conflict_with
+        pair = [f for f in report.findings if "direct Bash" in f.instruction_text]
+        assert len(pair) == 2, [(f.category, f.verdict) for f in pair]
+        by_verdict = {f.verdict: f for f in pair}
+        assert by_verdict[AuditVerdict.FAIL].conflict_with == [
+            f"#{by_verdict[AuditVerdict.PASS].seq}"
+        ]
+        assert by_verdict[AuditVerdict.PASS].conflict_with == [
+            f"#{by_verdict[AuditVerdict.FAIL].seq}"
+        ]
+
+        # warnings 报矛盾组数 + 例对
+        assert any("同源矛盾 1 组" in w for w in report.warnings), report.warnings

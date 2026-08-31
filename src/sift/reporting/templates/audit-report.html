@@ -259,6 +259,13 @@
           return '<a class="ref-link" href="#finding-' + n + '">' + escapeHtml(r) + '</a>';
         }).join('');
         var related = relLinks ? '<span class="related">↔ 同源</span>' + relLinks : '';
+        // Case C 同源矛盾对端:⊘ 判定矛盾 #X(同一声明行被判出 PASS 与 FAIL;与 related 的
+        // 「同行为跨规则」正交——这个是「同一规则判定相反」;可点跳对端,建议人工复核)
+        var cfLinks = (f.conflict_with || []).map(function (r) {
+          var n = escapeHtml(String(r).replace('#', ''));
+          return '<a class="ref-link" href="#finding-' + n + '">' + escapeHtml(r) + '</a>';
+        }).join('');
+        var conflict = cfLinks ? '<span class="related" title="同一声明行被判出 PASS 与 FAIL,建议人工复核">⊘ 判定矛盾</span>' + cfLinks : '';
         // FAIL 噪声判别徽章(仅 FAIL 且 noise_label 才显);放 method 前,留在徽章簇里(不跟 method 跑到右侧)
         var noise = (f.verdict === 'FAIL' && f.noise_label) ? noiseBadge(f.noise_label, f.noise_reasons) : '';
         // 数量判官徽章:qtyBadge(两处共用:finding 头 + 概要表行)
@@ -270,7 +277,7 @@
         return '<div class="finding-head">' + verdictHtml +
           seqTag +
           '<span class="cat">' + escapeHtml(f.category || '') + '</span>' +
-          srcTag + derived + related + quantity + noise + turn + unresolvedCause +
+          srcTag + derived + related + conflict + quantity + noise + turn + unresolvedCause +
           methodTag(f.method) + '</div>' +
           renderInstruction(f) +
           '<div class="evidence">' + escapeHtml(f.evidence || '') + '</div>' +

@@ -250,6 +250,40 @@ def test_audit_html_quantity_badge_on_control_flow_findings(tmp_path):
     assert m["qtyInstr"] is True
 
 
+def test_audit_html_conflict_badge_on_findings(tmp_path):
+    """conflict_with 非空的 finding 挂「⊘ 判定矛盾」徽章 + 可点跳对端——同一声明行
+    被判出 PASS 与 FAIL 的矛盾对在报告里必须可见(裸奔矛盾对最伤可信度;与 related
+    的「同行为跨规则」正交)。RED 锚点:模板读 f.conflict_with、label 字面量。
+    运行时正确性靠 node --check(test_audit_cli);pytest 验模板 JS 源引用 + 数据流。"""
+    report = AuditReport(
+        skill_name="s",
+        transcripts=["t1.jsonl"],
+        summary={"total": 2, "pass": 1, "fail": 1, "na": 0},
+        findings=[
+            AuditFinding(
+                instruction_text="禁止用 Bash 探查目录", source="CONSTRAINT",
+                verdict=AuditVerdict.PASS, category=AuditCategory.PROHIBITION,
+                evidence="未见违规", method=AuditMethod.LLM, transcript="t1.jsonl",
+                conflict_with=["#2"],
+            ),
+            AuditFinding(
+                instruction_text="禁止用 Bash 探查目录", source="HEADING_STEP",
+                verdict=AuditVerdict.FAIL, category=AuditCategory.STEP,
+                evidence="T2 用 Bash ls 探查了目录", method=AuditMethod.LLM,
+                transcript="t1.jsonl", conflict_with=["#1"],
+            ),
+        ],
+        warnings=["同源矛盾 1 组:同一声明行被判出 PASS 与 FAIL(#1↔#2),建议人工复核对端证据"],
+    )
+    html = AuditReportGenerator().generate_html(report)
+    # RED 锚点:模板判断 + 徽章 label(改前无)
+    assert "f.conflict_with" in html
+    assert "⊘ 判定矛盾" in html
+    # 数据流:conflict_with 随 model_dump 嵌入(徽章的读数来源)
+    assert '"conflict_with"' in html
+    assert '"#2"' in html
+
+
 def test_audit_html_quantity_badge_on_by_instruction_fail_rows(tmp_path):
     """概要表(③ 违规 FAIL 行)同样挂「数量」徽章——数量 finding 沿用原指令原文,
     概览表不挂记号认不出是控制流判定(与 CLI 终端违规表的 (数量) 前缀同一信息)。
