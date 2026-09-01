@@ -733,7 +733,7 @@ def test_collect_unknown_field_warnings_flags_typo():
     """LLM 把 expected_output 写成 expected、assertions 写成 assertion → 抓出来。
 
     pydantic extra=ignore 会静默丢这些字段,考卷看着生成成功实则缺字段;在 validate
-    前扫 raw dict 才能抓到(Waza KnownFields 思路,我们 warn 不拒)。
+    前扫 raw dict 才能抓到(只 warn 不拒,保住其余合法字段)。
     """
     data = {"skill_name": "s", "evals": [
         {"id": 1, "prompt": "p", "expected": "x",

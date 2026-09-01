@@ -3,8 +3,6 @@
 Integrates with external scanners (aguara, skill-scanner) via subprocess
 and implements native Python scanners (secrets-scan, structure-check) for
 zero-dependency baseline coverage.
-
-Inspired by: https://github.com/app-incubator-xyz/skill-vetter
 """
 
 from __future__ import annotations
@@ -71,7 +69,7 @@ class SecurityVetter:
         )
 
     def vet_url(self, url: str) -> SecurityReport:
-        tmpdir = tempfile.mkdtemp(prefix="skill-vetter-")
+        tmpdir = tempfile.mkdtemp(prefix="sift-vet-")
         try:
             skill_name = url.rstrip("/").split("/")[-1].replace(".git", "")
             subprocess.run(

@@ -139,3 +139,7 @@ sift 相对 skill-creator 等工具的根本差异是**两面原创**——**评
 - Wiggins, A. *The Twelve-Factor App* (2011), Factor III: Config
 - Anthropic: [Evals Best Practices](https://docs.anthropic.com/en/docs/build-with-claude/evaluations)
 - Anthropic: [skill-creator skill](https://github.com/anthropics/skills/tree/main/skills/skill-creator) — 盲比较 comparator / rubric 评分设计来源（`agents/comparator.md`）
+- SkillLens — critique 正文质量 rubric ①②③ 的设计来源（论文报告每维 65–66% 预测 downstream utility，有数据验证）；④ 示例驱动为经验自加（无数据）
+- DeepEval — `load_json_lenient` 尾逗号容错的两阶段防御策略参考其 `trimAndLoadJson`（先直读、失败后才正则重试）；其余方面调研过、无可借鉴
+- Agent Insight（openEuler）— boundary 视图 non_business 过渡性操作白名单（grep/读文件等不算越界信号）的思路来源
+- Waza — evals 校验严格度的设计对照：缺 rationale / 未知字段它直接拒，sift 取 flag/warn 不拒（拒绝会连合法产物一起作废）

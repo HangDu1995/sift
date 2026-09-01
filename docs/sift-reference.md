@@ -25,7 +25,6 @@
 - [评测体系](#评测体系)
 - [JSON 输出格式](#json-输出格式)
 - [项目结构](#项目结构)
-- [与 Skill-Creator 的关系](#与-skill-creator-的关系)
 - [Exit Code](#exit-code)
 - [常见问题](#常见问题)
 
@@ -558,7 +557,6 @@ Written to path/to/skill/evals/coverage-report.json · path/to/skill/evals/cover
 
 > **诊断定位、无门禁**（同 [`trigger`](#trigger--触发准确度第-4-维) / [`coverage`](#coverage--出题漏测诊断)）：**无 gate / 不出 exit-code 判决**，`content-quality-report.json` 是独立 artifact，**不并入 `benchmark.json`**。LLM 调用失败降级为空报告（exit 0，不炸）。
 
-> **rubric 来源（诚实标注）**：①②③ 来自 SkillLens（论文报告每维 65–66% 预测 downstream utility，有数据验证）；④ 示例驱动是经验自加（无数据验证）。
 
 > **linter 降姿态**：给的是"读者反馈"不是"打分"——LLM 是外行评内行领域，rubric 判定会漂（同一份正文 partial / missing 边界会抖），故只标三态提示哪里薄弱、不进任何 gate。当 linter 提示读，别当权威判决。
 
@@ -749,8 +747,6 @@ sift report output/ --open # 生成并打开
 ---
 
 ## JSON 输出格式
-
-所有 JSON 输出与 skill-creator 的 schema 兼容。
 
 ### evals.json（输入）
 
@@ -1077,33 +1073,6 @@ sift/
 ├── tests/
 └── docs/
 ```
-
----
-
-## 与 Skill-Creator 的关系
-
-Sift 从 skill-creator 移植并改造了以下核心代码：
-
-| 源文件 | 移植到 | 改造内容 |
-|--------|--------|----------|
-| `scripts/utils.py` | `parser.py` | 扩展为 5-tuple 返回值 |
-| `scripts/aggregate_benchmark.py` | `execution/benchmark.py` | 迁移到 Pydantic 模型 |
-| `eval-viewer/generate_review.py` | `reporting/viewer.py` | 整合为 ReportGenerator |
-| `eval-viewer/viewer.html` | `reporting/templates/viewer.html` | 直接复制 |
-| `agents/grader.md` | `agents/grader.md` | 直接复制 |
-| `agents/comparator.md` | `scoring/comparator.py` | 实现为 BlindComparator |
-| `agents/analyzer.md` | `scoring/analyzer.py` | 实现为 PosthocAnalyzer |
-| `references/schemas.md` | `models/` | 转为 Pydantic 数据模型 |
-| `scripts/quick_validate.py` | `static_analysis/checks.py` | 融入 11 项检查 |
-
-新增模块（无对应源码）：
-
-- `security/` — 安全审查引擎
-- `compliance/` — `InstructionExtractor`(SKILL.md → 指令;audit/run 共用的出题地基)。判定引擎在 `audit/`(transcript 对账,run 的遵循性也走它)
-- `calibration/` — 评分校准
-- `audit/` — 真实 transcript 对账
-- `gating/` — post-hoc 通过/失败判决
-- `config/` — 配置系统
 
 ---
 

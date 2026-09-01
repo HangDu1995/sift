@@ -4,7 +4,7 @@
 
 评测 [Claude Code Skill](https://github.com/anthropics/skills) / agent 的能力、并审计 skill / agent / 编排者执行遵循性的 CLI——一个工具的两面：**评测**（能力行不行，入口 `eval`）+ **审计**（过程照声明走没走，入口 `audit`）；三层质量保障（评分 / 遵循性 / 校准）+ 盲比较 + post-hoc 门禁，CI 就绪。
 
-评测部分脱胎于 [skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator)——交互式 meta-skill，Claude 加载它对话式建/测 skill。两者**共享评测血脉**（A/B 对照、LLM grader、盲比较、benchmark、review UI 都源自那里），**互补而非替代**：skill-creator 适合探索期人盯着迭代，sift 把它延展到成熟期的工程化 CI。sift 独有：
+与 [skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator)（Anthropic 官方的交互式 meta-skill，Claude 加载后对话式建 / 测 skill）**互补而非替代**：评测面两者有重叠——A/B 对照、LLM grader、盲比较、benchmark、review 报告；分岔在形态与阶段——skill-creator 适合探索期人盯着对话式迭代，sift 是成熟期工程化 CI 的结构化 CLI。sift 独有：
 
 - **确定性 programmatic 断言 + 双率** — 文件存在 / 内容匹配等零 LLM、不可作弊的客观判定，与 LLM 判定分开报，干净信号不被阅卷噪声污染
 - **agent 评测（`--kind agent`）** — 评测对象从 skill 扩到 agent（绝对质量模式，无 A/B 对照）；skill-creator 只评 skill
@@ -16,9 +16,9 @@
 - **基准题集冻结** — `freeze` 不可变签名 + skill_name 校验，跨 run / CI 复用同一份题
 - **触发准确度 trigger（第 4 维）** — 测 cc 仅凭 description 会不会自然触发 skill（前三层都 force-inject body、测不到的触发面）；纯诊断、不出 gate
 - **出题漏测诊断 coverage** — SKILL.md 内容点 × evals 覆盖映射，亮出 `eval` 够不到的漏测盲区，`--augment` 复用 init 生成器自动补题；纯诊断、不出 gate
-- **正文内容质量诊断 critique** — LLM 按 4 维 rubric（失败机制编码 / 可执行具体性 / 高风险黑名单 / 示例驱动）给 SKILL.md 正文读者反馈（met/partial/missing + evidence），补 `analyze` 只查格式、不查内容质量的空白；纯诊断、不出 gate。rubric ①②③ 来自 SkillLens（有数据验证）/ ④ 经验自加
+- **正文内容质量诊断 critique** — LLM 按 4 维 rubric（失败机制编码 / 可执行具体性 / 高风险黑名单 / 示例驱动）给 SKILL.md 正文读者反馈（met/partial/missing + evidence），补 `analyze` 只查格式、不查内容质量的空白；纯诊断、不出 gate
 
-> 第一次接触想系统了解每个功能的设计与用法，读 [使用手册](docs/sift-handbook.md)（深入浅出，概念优先）；完整命令参数、字段定义、JSON schema 查 [参考手册](docs/sift-reference.md)；方法论依据见 [方法论溯源](docs/sift-principles.md)。
+> 第一次接触想系统了解每个功能的设计与用法，读 [使用手册](docs/sift-handbook.md)（深入浅出，概念优先）；完整命令参数、字段定义、JSON schema 查 [参考手册](docs/sift-reference.md)。
 
 ---
 
@@ -239,7 +239,7 @@ sift coverage path/to/skill/ --augment    # 漏测点自动补题(写回 evals.j
 
 ### `critique` — 正文内容质量诊断
 
-诊断 SKILL.md **正文内容质量**——补 `analyze`（11 项格式体检）只查格式、不查正文写得好不好的空白。一次 LLM 调用喂 SKILL.md 正文（不含 frontmatter——description 留给 trigger / analyze），按 4 维 rubric 给**读者反馈**（不是打分）：① 失败机制编码 ② 可执行具体性 ③ 高风险黑名单 ④ 示例驱动，每维 `met` / `partial` / `missing` + `evidence`（**每处引用一条**的数组，分属不同段落拆多条）+ `feedback`（✓ 认可 / 已做到）+ `gap`（✗ 缺口 + 方向），**大白话短句、不整段重写原文**。诊断定位、无门禁、独立 artifact（同 trigger / coverage，不并入 benchmark）；不依赖 evals.json（纯读 body）。rubric ①②③ 来自 SkillLens（论文每维 65–66% 预测 downstream utility，有数据验证）/ ④ 示例驱动是经验自加（无数据）。`--kind agent` 可审 **agent 定义正文**（system prompt）——4 维 rubric 与 skill 共用（agent 正文也是指令），只换 prompt 措辞。
+诊断 SKILL.md **正文内容质量**——补 `analyze`（11 项格式体检）只查格式、不查正文写得好不好的空白。一次 LLM 调用喂 SKILL.md 正文（不含 frontmatter——description 留给 trigger / analyze），按 4 维 rubric 给**读者反馈**（不是打分）：① 失败机制编码 ② 可执行具体性 ③ 高风险黑名单 ④ 示例驱动，每维 `met` / `partial` / `missing` + `evidence`（**每处引用一条**的数组，分属不同段落拆多条）+ `feedback`（✓ 认可 / 已做到）+ `gap`（✗ 缺口 + 方向），**大白话短句、不整段重写原文**。诊断定位、无门禁、独立 artifact（同 trigger / coverage，不并入 benchmark）；不依赖 evals.json（纯读 body）。`--kind agent` 可审 **agent 定义正文**（system prompt）——4 维 rubric 与 skill 共用（agent 正文也是指令），只换 prompt 措辞。
 
 > **linter 降姿态**：给的是「读者反馈」不是「打分」——LLM 是外行评内行领域，rubric 判定会漂（同一份正文跑几次，界限分明的维度稳、边界维度只在相邻档抖），故只标 met/partial/missing 提示哪里薄弱、不进任何 gate。当 linter 提示读，别当权威判决。想稳就 `--runs N` 多数投票（每维显 `X/N` 可信度）。
 

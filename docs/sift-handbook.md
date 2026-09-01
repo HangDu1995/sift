@@ -2,7 +2,7 @@
 
 > 本手册面向第一次接触 sift 的读者，从「为什么需要它」讲起，逐层展开每个功能的设计思路与使用方法。读完能够：理解 sift 的整体架构、独立跑通**评测**和**审计**两件事、看懂每一份产物、在 CI 里用它做门禁。
 >
-> 命令的完整参数表、JSON schema、字段级定义请查 [参考手册](sift-reference.md)；评测方法论的理论依据见 [方法论溯源](sift-principles.md)。本手册负责把「为什么这么设计 + 怎么用 + 怎么看结果」讲透，需要查具体参数时再回参考手册。
+> 命令的完整参数表、JSON schema、字段级定义请查 [参考手册](sift-reference.md)。本手册负责把「为什么这么设计 + 怎么用 + 怎么看结果」讲透，需要查具体参数时再回参考手册。
 
 ---
 
@@ -221,7 +221,7 @@ skill 和 agent 的评分都产这三个率。**agent 评测没有 A/B 对照**�
 
 ### 2.1 analyze：11 项静态体检（skill 专属）
 
-> 11 项检查源自 skill-benchmark 的验证规则，转成了可执行检查函数（出处见 [方法论溯源](sift-principles.md)）。
+> 11 项检查是 11 个确定性检查函数——零 API 成本、逐条可复现，判的是结构质量（描述 / 命名 / 行数 / 示例 / 反捏造等），不是内容质量（内容走 §2.3 的 `critique`）。
 
 ```bash
 sift analyze path/to/skill/                    # 表格输出
@@ -255,7 +255,7 @@ sift analyze path/to/skill/ --format json -o scorecard.json
 
 ### 2.2 vet：安全审查（skill 专属）
 
-> 安全审查源自 skill-vetter 的扫描逻辑（secrets-scan + structure-check），以原生 Python 重实现（出处见 [方法论溯源](sift-principles.md)）。
+> 内置的 secrets-scan（密钥 / Token / Base64）与 structure-check（SKILL.md 结构 + 危险命令）两个扫描器是原生 Python 实现、零外部依赖；另有 aguara / skill-scanner 两个可选外部扫描器（`--skip-external` 跳过）。
 
 ```bash
 sift vet path/to/skill/                # 默认表格，-o 写文件
@@ -305,7 +305,6 @@ sift critique path/to/agent.md --kind agent   # 审 agent 定义,6 维共用,只
 | ⑤ | 意图清晰 | description 有没有清楚说明这个声明干什么、什么场景下该用 | 「用户要重构代码时,审查改动是否引入性能回归」/「帮助用户处理代码」 |
 | ⑥ | 触发具体性 | description 够不够具体,使对的输入触发、错的不触发 | 「仅在提交 git diff 后要求审查时触发」/「和代码有关的时候用」 |
 
-> **rubric 来源(诚实标注)**:正文 ①②③ 来自 SkillLens(论文报告每维 65–66% 预测 downstream utility,有数据验证);④ 示例驱动、⑤⑥ description 两维都是经验自加(无数据验证)。
 
 > **为什么 description 也评、却不和 trigger / audit 冲突**:三者看 description 的不同面——`trigger` 测「cc 凭这行 description 会不会真触发」(行为,需 spawn cc);`audit --kind agent` 测「agent 被派发后执行得对不对」(过程,需 transcript);critique 测「这行 description 本身写得清不清楚、具体不具体」(内容,零 transcript、纯读文本)。手头没 transcript 又想判 description 写得好不好时,critique 是唯一入口。
 
@@ -1000,7 +999,7 @@ UNEVAL / 出错时自动重试（`--max-retries`，默认 2），每次重跑完
 
 判定方式上：assertions 按内容能不能客观查分两档 **tier**——Tier 1 程序判、Tier 3 LLM 判（**tier 只管 assertions**）；expectations 没有 tier、一律 LLM 判。于是 LLM 判两处（expectations + Tier 3）、程序判 Tier 1；判完按判定方式（`programmatic` / `llm`）汇成**双率**。
 
-> **Tier 是断言的能力分级，只有两档**：Tier 1（确定性，程序判定）和 Tier 3（语义，LLM 判定），**没有 Tier 2**。编号沿用 skill-creator（Anthropic 官方的 skill 脚手架工具，sift 沿用了它的一些命名）的分级传统——原体系里 Tier 2 是同属「程序/客观」侧的另一档（sift 的 `grading_models.py` 注释还留着"programmatic(Tier1/2 客观)"字样），sift 把它并进了 Tier 1（`TOOL_CALLED`/`STEP_COUNT` 这种查 tool_trace / 运行时行为的，现在就归在 Tier 1 下）。所以「跳过 2」是历史命名残留——断言的判定方式实际就两类：程序判（Tier 1）和 LLM 判（Tier 3）。
+> **Tier 是断言的能力分级，只有两档**：Tier 1（确定性，程序判定）和 Tier 3（语义，LLM 判定），**没有 Tier 2**。两档对应的是 sift 自己的双率判定体系——断言的判定方式实际就两类：程序判（Tier 1）和 LLM 判（Tier 3），「Tier」只是分级的习惯叫法。「跳过 2」是编号残留：Tier 2 原本指「程序 / 客观」侧再细分出的一档，sift 的体系用不上这个细分（`TOOL_CALLED` / `STEP_COUNT` 这种查 tool_trace / 运行时行为的都归 Tier 1），编号上就空过去了——不代表缺了什么能力档。
 
 ### 7.1 程序化断言（Tier 1，确定性）
 

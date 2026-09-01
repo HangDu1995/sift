@@ -1150,8 +1150,8 @@ Output JSON ONLY:
         """rationale 空 → 标 review:no-rationale(不拒;拒会掉确定性 fallback 更差)。
 
         rationale 是审阅抓手 + 路 B instruction_ref 种子,缺了要让人看见、人工补。
-        (Waza validateTaskMetadata 无 rationale 直接拒;我们 flag 不拒——拒绝会把
-        整批 LLM eval 作废掉进 generate_template 确定性 fallback,反而更差。)
+        只 flag 不拒——拒绝会把整批 LLM eval 作废掉进 generate_template 确定性
+        fallback,反而更差。
         """
         for ev in eval_set.evals:
             if not (ev.rationale or "").strip():

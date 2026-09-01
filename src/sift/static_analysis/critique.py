@@ -1,11 +1,10 @@
 """critique:LLM 判声明的内容质量(正文 4 维 + description 2 维,读者反馈态)。
 
-正文(body_text)按 4 条 rubric 评:rubric ①②③ 来自 SkillLens(论文每维 65-66% 预测
-downstream utility),④ 示例驱动是经验自加(无数据验证)。frontmatter description 单独
-一次 call 按 2 条 rubric 评(意图清晰 / 触发具体性)——description 是触发逻辑判断「该不该
-用」的唯一依据,其内在质量不依赖跑 transcript,补上 critique 原先只查正文、漏 description
-的一面。两边都走 http 裸通道(forced tool_use + inline schema),空响应 / 429 由 caller 层
-有界重试兜。
+正文(body_text)按 4 条 rubric 评(① 失败机制编码 ② 可执行具体性 ③ 高风险黑名单
+④ 示例驱动)。frontmatter description 单独一次 call 按 2 条 rubric 评(意图清晰 /
+触发具体性)——description 是触发逻辑判断「该不该用」的唯一依据,其内在质量不依赖跑
+transcript,补上 critique 原先只查正文、漏 description 的一面。两边都走 http 裸通道
+(forced tool_use + inline schema),空响应 / 429 由 caller 层有界重试兜。
 """
 import json
 import re
@@ -369,7 +368,7 @@ def analyze_content_quality(skill_path: Path, *, model: str | None = None,
                             subject: str = "skill") -> ContentQualityReport:
     """声明内容质量 report:正文(body_text)4 维 + description(frontmatter 描述)2 维。
 
-    正文按 SkillLens 4 维 rubric 评;description 单独一次 call 按 2 维 rubric 评(意图清晰 /
+    正文按 4 维 rubric 评;description 单独一次 call 按 2 维 rubric 评(意图清晰 /
     触发具体性)——补 critique 原先只查正文、漏 description 的一面(description 是触发依据,其内在
     质量不依赖跑 transcript)。两边都走 http 裸通道(forced tool_use + inline schema,省 cc 进程
     spawn + ~25k 系统 prompt);GLM forced tool_use 偶发空响应 / 429 由 ``_critique_call`` 有界重试兜。

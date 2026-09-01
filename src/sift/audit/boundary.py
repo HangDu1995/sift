@@ -11,8 +11,8 @@
 双形:cc 记录原样大写开头、opencode 经 ``_norm_tool`` 归一的未命中名小写透传,
 lower 统一口径,不依赖只覆盖 6 名的 ``transcript._NAME_MAP``):
 
-- ``builtin``:内置工具(cc/opencode 自带的探索/编辑原语 + agent-insight 同思路的
-  non_business 白名单:过渡性操作不构成越界信号),**不进视图**;
+- ``builtin``:内置工具(cc/opencode 自带的探索/编辑原语 + non_business 白名单:
+  过渡性操作不构成越界信号),**不进视图**;
 - ``domain``:内置表外 + 命中声明工具要求 → 「已声明」,列出但不标警;
 - ``undeclared-domain``:内置表外 + 未命中 → **视图主体**(信息性标注,不判 FAIL)。
 
@@ -36,7 +36,7 @@ from sift.models.enums import InstructionSource
 
 # 内置工具表(全小写;cc + opencode 合一初版)。表 = 数据不是逻辑:新增内置工具漏在
 # 表外会被保守列进 undeclared-domain(信息性),补一行即可。
-# 含 agent-insight 同思路的 non_business 白名单(grep/读文件/env init 等过渡操作)。
+# 含 non_business 白名单(grep/读文件/env init 等过渡性操作)。
 BUILTIN_TOOLS: frozenset[str] = frozenset({
     # cc / opencode 通用原语
     "read", "write", "edit", "multiedit", "notebookedit",
