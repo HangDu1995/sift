@@ -1848,7 +1848,123 @@ audit 不 re-run cc、只对账已有 transcript，所以「transcript 从哪来
 
 ---
 
-### 13.10 改进建议（`--suggest`，可选）：FAIL 分三类 + 起草修改建议
+### 13.10 文件归因证据审计
+
+Opsbot 负责将文件归因证据输出为对应的 JSON 文件，Sift 侧负责导入和审计；Sift 的既有 Markdown 指令抽取、四类 Judge、coverage、boundary 和报告体系不变。
+
+设计按证据层、确定性行为分析和语义审计分阶段交付：
+
+| 阶段 | 交付内容 | 当前状态 |
+|---|---|---|
+| 1. 内部证据模型 | v2 reader、blob 校验、capture/effect 归一化、lineage 透传、digest timeline | 当前 PR |
+| 2. 确定性 Analyzer | evidence health、attribution integrity、file churn、actor ownership、verification closure | 后续 PR |
+| 3. 独立 Finding | `ProvenanceFinding` / `ProvenanceAuditResult` 与 `AuditFinding` 分离 | 后续 PR |
+| 4. audit 使用 | v2 自动运行 analyzer；v1/session 保持原行为 | 后续 PR |
+| 5. 报告展示 | Provenance Overview、Behavior Findings、File Timeline | 后续 PR |
+| 6. 语义审计 | 受限 LLM 检查最终回答、变更完整性和替代路径 | 单独评估（TODO） |
+
+#### 内部证据模型
+
+把 Opsbot 提供的文件归因证据（`sift-records` v2）带入现有审计流程，内部模型分成三层：
+
+原始 v2 bundle 在 reader 边界先解析为 `SiftRecordsV2` 及其嵌套 BaseModel。BaseModel 负责协议字段的严格类型校验和跨对象完整性校验；生成 canonical cc-record 之前不会将 v2 证据整体降回普通字典。
+
+| 模型 | 作用 | 关键内容 |
+|---|---|---|
+| `ToolCallRecord` | 现有工具轨迹的扩展 | 原生 tool ID、工具输入/结果、状态、时间、capture ID、agent/session lineage、evidence refs |
+| `FileEffectRecord` | 单个文件 effect | path、before/after blob、增删统计、quality、conflict、actor、工具和有限内容 |
+| `ProvenanceEvent` | capture 级时间线事件 | capture/tool 关联、actor/agent、生命周期、runtime/model、git head、effects 和稳定 sequence |
+
+#### 关键步骤
+
+1. `load_structured_records()` 按 `version` 分派：缺省、`null`、整数 `1` 和字符串 `"1"` 都进入原有 v1 loader；只有真正的整数 `2` 进入 v2 loader。
+2. v2 loader 调用 `SiftRecordsV2.model_validate()`。模型负责 `records`、`captures`、`blobs` 及嵌套字段的严格类型校验，并在 model validator 中检查 capture/blob 引用、capture key 一致性、base64 解码、SHA-256 和 size；失败统一转换为 `InputError`，不生成部分可信输入。
+3. loader 从 bundle session 构建一次 `session_agents`，显式传给 `_build_v2_context()`。context 在已验证的 BaseModel 上计算关联质量：唯一引用为 `association_quality=exact`；多次引用或 capture 自身为 `ambiguous` 为 `ambiguous`；零次引用为 `unmatched`。
+4. 在 canonical record 之前，records、captures、effects 和 blobs 仍是 BaseModel。只有写入现有 canonical record 时才 `model_dump()`：assistant/user 文本进入 `message.content`，工具调用进入 `tool_use`，工具结果进入 `tool_result`，关联 capture 进入 `_sift_evidence`，unmatched capture 进入 standalone record。
+5. `SessionDigest` 会继续填充原有 `user_turns`、`input_files`、`produced_files`、`commands` 和 `transcript_text`，并额外保存 `evidence_refs`、`evidence_warnings`、`evidence_metadata`、`provenance_timeline`。因此 **v1 和普通 session 的字段和判定行为不变**，v2 只是增加可供后续 analyzer/Judge/report 使用的证据。
+
+```text
+sift-records v2 JSON
+        │ load_structured_records()
+        ▼
+临时 canonical JSONL
+        │ slice_transcript(kind=root/skill/agent)
+        ▼
+_digest_from_records()
+        ├─ tool_trace（包含 capture/evidence 元数据）
+        ├─ evidence_refs / evidence_warnings / evidence_metadata
+        └─ provenance_timeline
+```
+
+#### 确定性 Provenance Analyzer
+
+入口为 `analyze_provenance(digest: SessionDigest) -> ProvenanceAuditResult`，输入为已经校验过的 `SessionDigest`，不调用 LLM。五个维度及默认语义如下：
+
+| 维度 | 检查内容 | 默认输出 |
+|---|---|---|
+| Evidence Health | quality 分布、缺失/损坏引用、unmatched、coverage warnings、无法重建文件 | `INFO/WARNING` |
+| Attribution Integrity | 写工具无 effect、错误工具产生 mutation、非写工具产生 mutation、轨迹字段不一致 | `WARNING/INDETERMINATE` |
+| File Churn | 重复修改、恢复旧 hash、后续完全覆盖、多 Agent 交替写入 | `INFO/WARNING` |
+| Actor Ownership | 每个路径的 actor、最终写入者、无交接跨 actor 写入、lineage 断裂 | `INFO/WARNING` |
+| Verification Closure | 修改后测试、测试失败后再次修改、最终修改未验证 | `WARNING/INDETERMINATE` |
+
+#### 独立 Provenance Finding
+
+不复用 `AuditFinding`，以免污染声明覆盖率或改变现有 pass/fail 数量。规划字段为：
+
+```python
+ProvenanceFinding(
+    dimension="verification_closure",
+    severity="warning",
+    code="MODIFIED_AFTER_TEST",
+    summary="测试后又修改了 src/foo.py",
+    explanation="最后一次可信修改发生在测试之后，未发现后续验证。",
+    paths=["src/foo.py"],
+    actors=["developer"],
+    capture_ids=["cap-21"],
+    tool_use_ids=["tool-21"],
+    evidence_refs=["capture:cap-21:src/foo.py"],
+    turn_refs=[25],
+)
+```
+
+`ProvenanceAuditResult` 保存 `available`、coverage、statistics、findings 和 per-file `file_timelines`，v1 或普通 session 返回 `available=false`，不产生行为 finding。
+
+#### audit 使用
+
+```bash
+sift audit path/to/agent.md \
+  --transcript opsbot-audit-<session>.json \
+  -o audit-output
+```
+
+#### 相较原有审计的新增内容
+##### 审计证据增强
+
+原有审计的输入是 Markdown 声明和 agent transcript，重点回答“声明中的条件、禁令和步骤是否被遵守”，并由现有 Judge 产出 `AuditFinding`、coverage 和 PASS/FAIL 等遵循性 verdict。它主要依据消息文本、工具调用和工具结果判断，不直接验证工作树中的实际文件状态。
+
+文件归因审计增加了一层可校验的事实证据：
+
+| 对比项 | 原有审计 | 文件归因增强后 |
+|---|---|---|
+| 输入 | Markdown + transcript | 在原输入之外增加 `sift-records` v2 证据包 |
+| 文件事实 | 主要根据工具文本或结果推断 | 根据 capture、mutation、before/after blob 直接确认 |
+| 关联粒度 | tool call / turn | tool call + `capture_id` + path + actor/agent lineage |
+| 时间信息 | transcript turn 顺序 | 带 timestamp、iteration、event/capture ID 的稳定 provenance timeline |
+| 可信度 | 主要由 Judge 对文本证据判断 | 保留 `observed`、`incomplete`、`conflicted`、`ambiguous`，并校验 blob 引用和 SHA-256 |
+| 输出范围 | 声明遵循性 finding 和 verdict | 在其旁边增加文件 effect、evidence refs，以及后续的 Provenance Finding |
+
+##### 独立 Analyzer 校验报告
+
+Provenance Analyzer 的结果作为报告中的独立 `provenance` 区块输出，不并入原有报告。
+
+报告包含三个层次：
+
+1. **Provenance Overview**：显示 `available`、输入证据 SHA-256、Opsbot session ID、capture/effect 总数、涉及文件和 actor 数量、quality 分布、exact/ambiguous/unmatched 关联数、冲突数、coverage warnings，以及可重建和不可重建的文件数。`available=false` 或证据包校验失败时，报告明确显示“无可用文件归因审计”，不伪造结果。
+2. **Behavior Findings**：每条 finding 展示 `dimension`、`code`、`severity`、摘要和解释，并列出 path、actor、tool use ID、turn、capture ID、`evidence_ref`。`WARNING` 以风险提示呈现，表示事实已确认但不自动等价于声明违规；`INDETERMINATE` 以证据不足呈现，标出缺失/冲突/歧义原因，不给出确定的 PASS/FAIL。
+3. **File Timeline**：按路径展开 `before → capture/effect → after/final`。每个节点标记 timestamp、actor、tool、quality 和 evidence ref；`observed` effect 可作为可信最终状态，其他 quality 标记为 `unreconstructed`，不会覆盖最后一个可信状态。文本文件只展示受预算限制的 unified diff/excerpt，二进制只展示 path、size 和 hash。
+
+### 13.11 改进建议（`--suggest`，可选）：FAIL 分三类 + 起草修改建议
 
 audit 报出 FAIL 之后，「哪些该回去改 skill、哪些其实是声明本身写得脱离实际」要靠人自己琢磨。`audit --suggest` 让 LLM 帮你做这一步：把 FAIL 归因、起草对应的修改建议。**默认不开**——audit 的本分是判对错，建议是你明确要了才给的附加品（建议不进任何 gate、不影响 exit code）。agent / 编排（`--kind agent` / `--kind root`）审计同样可用——`--kind` 只切 transcript 侧的执行段，建议归因吃的是被审的那份声明正文（.md）；归因枚举名 `skill_fix` 是 skill 时代起的，对 agent 语义就是「改 agent 正文」。
 
