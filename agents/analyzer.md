@@ -1,3 +1,4 @@
+<!-- 改编自 Anthropic skill-creator(Apache-2.0);修改说明见仓库根 NOTICE.md -->
 # Post-hoc Analyzer Agent
 
 Analyze benchmark results and comparison outcomes to generate actionable insights.

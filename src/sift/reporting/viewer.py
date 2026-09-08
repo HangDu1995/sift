@@ -1,3 +1,4 @@
+# find_runs/_find_runs_recursive 改编自 Anthropic skill-creator(Apache-2.0);见根目录 NOTICE.md
 """Report generator — produces self-contained HTML from evaluation data."""
 
 from __future__ import annotations

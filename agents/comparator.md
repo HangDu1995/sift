@@ -1,3 +1,4 @@
+<!-- 改编自 Anthropic skill-creator(Apache-2.0);修改说明见仓库根 NOTICE.md -->
 # Blind Comparator Agent
 
 Compare two outputs WITHOUT knowing which skill produced them.
