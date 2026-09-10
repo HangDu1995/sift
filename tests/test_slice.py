@@ -1,7 +1,7 @@
 # tests/test_slice.py
 import json
 from pathlib import Path
-from sift.audit.slice import slice_transcript, scope_signals
+from sift.audit.slice import build_subagent_tool_trace, slice_transcript, scope_signals
 
 # kind='skill'(按 Skill 调用切)与 kind='agent'(按 agent 归属切)各一组薄封装,省得每处传 kind。
 def _slice_skill(path, name):
@@ -398,3 +398,147 @@ def test_scope_signals_unreadable_file_skipped(tmp_path):
     ghost = tmp_path / "ghost.jsonl"   # 不存在
     sig = scope_signals([ghost, good], "nope")
     assert sig == {"root"}
+
+
+# ---- build_subagent_tool_trace: A1 旁路证据源(root 判定的"缺席≠未发生"洗冤通道) ----
+
+def test_build_subagent_tool_trace_agent_attribution_via_dispatch(tmp_path):
+    """cc 原生路径:子代理 record 的角色名从主作用域 Agent/Task tool_use 的
+    id → subagent_type 映射取(其 parent_tool_use_id 指向该 tool_use)。"""
+    a_id = "agent-1"
+    recs = [
+        _agent(a_id),  # input.subagent_type = "general-purpose"(默认 helper)
+        _in_sub(a_id, _tool_use("tu1", "Bash", {"command": "nm -D libdemo_op.so"})),
+        _asst_text("主作用域文本"),  # 非 tool_use,不入 trace
+    ]
+    p = _write(tmp_path, recs)
+    trace = build_subagent_tool_trace(p)
+    assert len(trace) == 1
+    assert trace[0].name == "Bash"
+    assert trace[0].agent == "general-purpose"  # 派发映射归属
+    assert trace[0].turn is not None  # 全局 turnIndex 已 stamp
+
+
+def test_build_subagent_tool_trace_rec_agent_wins(tmp_path):
+    """insight structured 路径:rec.agent(角色名)优先于派发映射
+    (其 parent_tool_use_id 是 subagentSessionId,查映射本就落空)。"""
+    a_id = "ses_sub_123"
+    recs = [
+        # 主作用域有一个 Task 派发(id 与 a_id 无关——insight 路径的 ptid 非 tool_use id)
+        _tool_use("tu_root", "task", {"subagent_type": "verifier", "prompt": "验收"}),
+        {"agent": "code-verifier", "parent_tool_use_id": a_id,
+         "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "id": "tu2", "name": "Read",
+              "input": {"filePath": "docs/x/references/demo-contract.md"}}]}},
+    ]
+    p = _write(tmp_path, recs)
+    trace = build_subagent_tool_trace(p)
+    assert len(trace) == 1
+    assert trace[0].agent == "code-verifier"  # rec.agent 优先
+    assert trace[0].input == {"filePath": "docs/x/references/demo-contract.md"}
+
+
+def test_build_subagent_tool_trace_empty_when_no_subagents(tmp_path):
+    """纯主作用域 transcript(无 parent_tool_use_id 非空 record)→ 空 trace。"""
+    p = _write(tmp_path, [_asst_text("只有主 agent"), _tool_use("tu1", "Bash", {"command": "ls"})])
+    assert build_subagent_tool_trace(p) == []
+
+
+def test_build_subagent_tool_trace_task_lowercase_dispatch(tmp_path):
+    """派发工具名大小写不敏感:cc 代理捕获用小写 task、canonical 用 Task/Agent,全认。"""
+    recs = [
+        _tool_use("d1", "task", {"subagent_type": "developer", "prompt": "干活"}),
+        _in_sub("d1", _tool_use("tu1", "Bash", {"command": "mkdir -p docs/x"})),
+    ]
+    p = _write(tmp_path, recs)
+    trace = build_subagent_tool_trace(p)
+    assert trace and trace[0].agent == "developer"
+
+
+# ---- 层3:派发-回报对(digest 收集 + 段落渲染) ----
+
+def test_digest_collects_dispatch_returns(tmp_path):
+    """task tool_use 与 tool_result 配对收集进 digest.dispatch_returns(层3 证据单元)。"""
+    from sift.evals.transcript import _digest_from_records, stamp_turn_indices
+    records = [
+        _tool_use("tu_1", "task", {"subagent_type": "verifier", "prompt": "验收 Task 47"}),
+        _tool_result("tu_1", "FAILED: 254/275"),
+        _tool_use("tu_2", "task", {"subagent_type": "developer", "prompt": "建目录"}),
+        # tu_2 无 tool_result(回报缺失也收,result_len=0)
+    ]
+    stamp_turn_indices(records)
+    digest = _digest_from_records(records, locate_turns=True)
+    assert len(digest.dispatch_returns) == 2
+    d1, d2 = digest.dispatch_returns
+    assert d1.role == "verifier" and d1.result_head.startswith("FAILED") and d1.result_len == len("FAILED: 254/275")
+    assert d1.dispatch_turn is not None and d1.result_turn is not None
+    assert d2.role == "developer" and d2.result_len == 0 and d2.result_head == ""
+    # 非 dispatch 工具不入
+    recs2 = [_tool_use("tu_3", "Bash", {"command": "ls"}), _tool_result("tu_3", "out")]
+    stamp_turn_indices(recs2)
+    assert _digest_from_records(recs2).dispatch_returns == []
+
+
+def test_dispatch_pairs_section_render_and_truncate():
+    """段落渲染:统计行 + 失败标记计数 + trivial 压缩;超限裁剪保失败行。"""
+    from sift.evals.transcript import DispatchReturn
+    from sift.audit.auditor import _DISPATCH_PAIRS_LIMIT, _dispatch_pairs_section
+
+    def _p(role, prompt, result, dt=1, rt=2):
+        return DispatchReturn(dispatch_turn=dt, result_turn=rt, role=role,
+                              prompt_head=prompt, result_head=result, result_len=len(result))
+
+    # 小规模:全渲染
+    pairs = [_p("verifier", "验收 Task 47", "FAILED: 254/275"),
+             _p("developer", "建目录", "DONE")]
+    sec = _dispatch_pairs_section(pairs)
+    assert "统计:派发 2 次(verifier 1 / developer 1)" in sec
+    assert "回报含失败字样 1 份" in sec
+    assert "[T1→T2] verifier" in sec and "FAILED: 254/275" in sec
+    assert "(子代理产出)" in sec
+
+    # 大规模(超限):失败行保留、trivial 压计数、中段省略
+    many = ([_p("verifier", f"验收 Task {i}", f"FAILED: 用例 {i} 超阈值", dt=i, rt=i + 1)
+             for i in range(5)]
+            + [_p("developer", f"开发任务 {i} 长prompt" * 10, "x" * 150, dt=100 + i, rt=101 + i)
+               for i in range(120)])
+    sec2 = _dispatch_pairs_section(many)
+    assert len(sec2) <= _DISPATCH_PAIRS_LIMIT + 600  # 封顶(允许头部/省略行余量)
+    assert "FAILED: 用例 0 超阈值" in sec2           # 失败行全保
+    assert "省略" in sec2 or "另有" in sec2           # 压缩标记存在
+    assert sec2.count("[T1") >= 1
+
+    # 评审修复①:失败判定只看回报窗口——prompt 含「失败」但回报成功的长文本派发
+    # (修 bug 工作流常态)不算失败行,不绕过预算 → 封顶不被打破(评审实测旧版
+    # 100 条此形态派发可把段落撑到 19295 字符,超限 2.4 倍)。
+    bugfix = [_p("developer", f"修复失败的用例 {i} " * 10, "全部通过 " * 30, dt=i, rt=i + 1)
+              for i in range(100)]
+    sec3 = _dispatch_pairs_section(bugfix)
+    assert "回报含失败字样 0 份" in sec3              # prompt 的「失败」不计入
+    assert len(sec3) <= _DISPATCH_PAIRS_LIMIT + 600  # 封顶守住
+
+    # 评审修复②:失败行也守预算——超量失败回报压「另有 M 份」计数,不无条件全留
+    failed_many = [_p("verifier", f"验收 Task {i}", f"FAILED: 用例 {i} 超阈值 " * 20,
+                      dt=i, rt=i + 1) for i in range(60)]
+    sec4 = _dispatch_pairs_section(failed_many)
+    assert len(sec4) <= _DISPATCH_PAIRS_LIMIT + 600  # 封顶是不变式
+    assert "份含失败字样的回报未展开" in sec4         # 超预算失败行压计数
+    assert "FAILED: 用例 0 超阈值" in sec4           # 预算内失败行仍在(优先保留)
+
+    # 空 → 空段(整段不进 prompt)
+    assert _dispatch_pairs_section(None) == ""
+    assert _dispatch_pairs_section([]) == ""
+
+
+def test_result_windows_head_tail():
+    """层3-改进2:回报头+尾窗口——剥带属性的 <task>/<task_result> 包装,长文本取
+    头+尾(验收结论惯例在尾部),短文本全进 head、tail 为空。"""
+    from sift.evals.transcript import _result_windows
+    long_ret = ('<task id="ses_x" state="completed">\n<task_result>\n准备工作中。'
+                + "过程细节" * 40 + "\n状态:❌失败,7/23 用例达标\n</task_result>\n</task>")
+    h, t = _result_windows(long_ret)
+    assert "task" not in h and "task" not in t          # 包装已剥(含带属性形态)
+    assert h.startswith("准备工作中。")
+    assert "❌失败,7/23" in t                            # 尾部结论必然可见
+    h2, t2 = _result_windows("DONE")
+    assert (h2, t2) == ("DONE", "")                     # 短文本不劈两半

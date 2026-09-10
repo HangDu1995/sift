@@ -59,8 +59,10 @@ def _fake_report() -> AuditReport:
 class _FakeAuditor:
     def __init__(self): self.calls: list[dict] = []
     def audit(self, skill_name, skill_body, transcripts, model=None, timeout=600,
-              on_progress=None, refine_instructions=False, generate_headline=False, locate_turns=False, declared_tools=None):
-        self.calls.append({"skill_name": skill_name, "transcripts": list(transcripts)})
+              on_progress=None, refine_instructions=False, generate_headline=False, locate_turns=False,
+              declared_tools=None, aux_tool_traces=None):
+        self.calls.append({"skill_name": skill_name, "transcripts": list(transcripts),
+                           "aux_tool_traces": aux_tool_traces})
         return _fake_report()
 
 
@@ -91,6 +93,11 @@ def test_kind_root_cc_slices_main_scope(monkeypatch, tmp_path):
     assert "MAIN_TXT" in content and "/tmp/app.log" in content
     assert "SUB_TXT" not in content                  # 子 agent 内部排除
 
+    # A1 旁路:被 root 切片排除的子代理痕迹作为 aux 传入(与 slices 同序;
+    # 本 fixture 的子 agent 段只有文本无 tool_use → aux 为空列表但非 None)
+    aux = fake.calls[0]["aux_tool_traces"]
+    assert aux is not None and len(aux) == 1
+
 
 def test_kind_root_opencode_uses_session_info_agent(monkeypatch, tmp_path):
     """opencode:--kind root 以 session.info.agent 为 target(复用 slice_opencode_by_agent)。"""
@@ -113,6 +120,10 @@ def test_kind_root_opencode_uses_session_info_agent(monkeypatch, tmp_path):
     for seg_path in slices:
         seg = json.loads(Path(seg_path).read_text(encoding="utf-8"))
         assert (seg.get("info") or {}).get("agent") == main_agent
+
+    # A1 旁路:opencode 形不适用 → 每段空列表(非 None,长度与 slices 对齐)
+    aux = fake.calls[0]["aux_tool_traces"]
+    assert aux is not None and len(aux) == len(slices) and all(a == [] for a in aux)
 
 
 def test_kind_root_structured_records_excludes_subagent(monkeypatch, tmp_path):
@@ -153,6 +164,12 @@ def test_kind_root_structured_records_excludes_subagent(monkeypatch, tmp_path):
     assert "MAIN_TXT" in content and "/tmp/main.md" in content
     assert "SUB_TXT" not in content                  # 子 agent 内部排除
 
+    # A1 旁路:被切片排除的子代理工具调用进 aux(角色名透传),供条件类第二遍匹配
+    aux = fake.calls[0]["aux_tool_traces"]
+    assert aux is not None and len(aux) == 1
+    assert len(aux[0]) == 1                          # 子 turn 的 1 个 read
+    assert aux[0][0].name == "Read" and aux[0][0].input == {"file_path": "/tmp/sub.md"}
+
 
 def test_kind_root_opencode_missing_info_agent_exits_2(monkeypatch, tmp_path):
     """opencode session 缺 info.agent → --kind root exit 2(无法定主 agent,不喂 auditor)。"""
@@ -168,3 +185,36 @@ def test_kind_root_opencode_missing_info_agent_exits_2(monkeypatch, tmp_path):
     assert r.exit_code == 2
     assert "info.agent" in r.output
     assert len(fake.calls) == 0                      # 没喂 auditor(提前退出)
+
+
+def test_kind_root_aux_locate_turns_passthrough(monkeypatch, tmp_path):
+    """评审修复:build_subagent_tool_trace 的 locate_turns 随 CLI 透传——
+    默认 --no-turn-refs 时 aux 记录 turn=None(与主 trace 同体系,evidence 不带
+    无锚点可对的 (T{n}) 引用);--turn-refs 时带全局 turnIndex。"""
+
+    def _run(tag, extra):
+        fake = _FakeAuditor()
+        monkeypatch.setattr("sift.cli.commands.audit.TranscriptAuditor", lambda: fake)
+        work = tmp_path / tag                   # 两次调用各用独立子目录
+        work.mkdir()
+        sp = _skill_dir(work, "wf")
+        a_id = "call_A"
+        records = [
+            _asst("MAIN_TXT"),
+            _agent(a_id),
+            _in_sub(a_id, _tool_use("s1", "Bash", {"command": "pytest -q"})),
+            _tool_result(a_id, "ok"),
+        ]
+        tp = _write_jsonl(work / "s.jsonl", records)
+        out = work / "out"
+        r = runner.invoke(app, ["audit", str(sp), "--transcript", str(tp),
+                                "--kind", "root", "-o", str(out)] + extra)
+        assert r.exit_code == 0, r.output
+        aux = fake.calls[0]["aux_tool_traces"]
+        assert aux is not None and len(aux) == 1 and len(aux[0]) == 1
+        return aux[0][0]
+
+    rec_default = _run("default", [])      # 默认 --no-turn-refs
+    assert rec_default.turn is None        # aux 与主 trace 一致:不带 turn 引用
+    rec_turnrefs = _run("turnrefs", ["--turn-refs"])
+    assert rec_turnrefs.turn is not None   # 开启时带全局 turnIndex

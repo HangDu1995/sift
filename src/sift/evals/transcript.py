@@ -45,6 +45,26 @@ _BASH_WRITE_RE = re.compile(
     r"""(?:>>?\s*|tee\s+(?:-a\s+)?)['"]?([^\s'";|&]+)"""
 )
 
+# A3(dispatch prompt 截断):task/Agent 派发类 tool_call 的 input(prompt/要求清单)是
+# 编排会话里主 agent 行为的核心证据,统一 [:200] 会掐掉要求清单 → 判官"看不见"派发
+# 内容(缺席式误判;实测样本里开发日志追加要求位于派发 prompt 第 ~600 字符处,被
+# 判"未要求")。
+# 默认 2000(实验结论:11 会话 5 档位对比——2000 覆盖 92% 派发内容,token 2.2-4.0x、
+# 墙钟不变;A3 型误判 500 档即翻案,"派发指令预置降级理由"类真实问题 ≥1000 才可见)。
+# env SIFT_TASK_SUMMARY_LIMIT 可覆盖(=200 回旧行为,实验消融用);其他工具保持 200。
+_DISPATCH_TOOL_NAMES = {"task", "agent"}
+_DISPATCH_SUMMARY_LIMIT = 2000
+
+
+def _summary_limit_for(tool_name: str) -> int:
+    if tool_name.strip().lower() not in _DISPATCH_TOOL_NAMES:
+        return 200
+    raw = os.environ.get("SIFT_TASK_SUMMARY_LIMIT", "")
+    try:
+        return max(200, int(raw)) if raw else _DISPATCH_SUMMARY_LIMIT
+    except ValueError:
+        return _DISPATCH_SUMMARY_LIMIT
+
 
 class FileContent(BaseModel):
     path: str
@@ -56,11 +76,42 @@ class Command(BaseModel):
     stdout: str
 
 
+_DISPATCH_RESULT_TAG_RE = re.compile(r"</?task(?:_result)?[^>]*>")
+
+
+def _result_windows(text: str, head: int = 80, tail: int = 60) -> tuple[str, str]:
+    """回报文本的头+尾窗口(层3-改进2)。剥 ``<task>``/``<task_result>`` 包装标签,
+    压平空白后取头 ``head`` + 尾 ``tail`` 字。验收类回报的结论惯例在**尾部**
+    ("状态:✅通过"/"FAILED X/Y"收尾),只截头会把结论掐掉 → 判官锚不到验收结论。"""
+    t = _DISPATCH_RESULT_TAG_RE.sub("", text or "")
+    t = " ".join(t.split())
+    if len(t) <= head + tail:
+        return t, ""
+    return t[:head], t[-tail:]
+
+
+class DispatchReturn(BaseModel):
+    """一次派发(task/Agent tool_use)及其回报(tool_result)的对——层3 证据单元。
+
+    cc 原生 transcript 里派发的 tool_result 就是主作用域记录(主 agent 亲眼看到回报
+    才能决策推进/修复),本模型把它从 id2result 里按派发配对拎出来,供 step 判官构建
+    "派发-回报记录"段(A1 step 类缺席误判的洗冤证据 + "传递≠达成"的验收结论依据)。
+    """
+    dispatch_turn: int | None = None  # 派发 tool_use 所属全局 turnIndex
+    result_turn: int | None = None    # 回报 tool_result 所属全局 turnIndex
+    role: str = ""                    # 被派发角色(input.subagent_type / agent)
+    prompt_head: str = ""             # 派发 prompt 头(≤200 字)
+    result_head: str = ""             # 回报头(≤400 字,已剥 <task> 包装)
+    result_tail: str = ""             # 回报尾(≤60 字,验收结论惯例在尾部)
+    result_len: int = 0               # 回报全长(裁剪统计用)
+
+
 class SessionDigest(BaseModel):
     skill_used: str | None = None
     user_turns: list[str] = Field(default_factory=list)
     input_files: list[FileContent] = Field(default_factory=list)
     produced_files: list[FileContent] = Field(default_factory=list)
+    dispatch_returns: list[DispatchReturn] = Field(default_factory=list)
     unreconstructed: list[str] = Field(default_factory=list)
     commands: list[Command] = Field(default_factory=list)
     # 以下两字段为 audit 命令重建(工具指令对账 / 文本回放)预留,默认空,非侵入。
@@ -222,8 +273,9 @@ def _digest_from_records(
     开时给每条 assistant record 的文本加 ``[T{idx}] `` 前缀(per-record)、``turn`` 记所属
     全局 turnIndex。内部 ``_turn_index`` sentinel 总是 stamp(切片往返用),关时只是不渲染。
     """
-    # pass 1: tool_use_id -> result text
+    # pass 1: tool_use_id -> result text(+ 回报所属 turn,层3 派发-回报对用)
     id2result: dict[str, str] = {}
+    id2result_turn: dict[str, int | None] = {}
     for rec in records:
         msg = rec.get("message") or {}
         if msg.get("role") != "user":
@@ -233,6 +285,7 @@ def _digest_from_records(
             for b in content:
                 if isinstance(b, dict) and b.get("type") == "tool_result":
                     id2result[b.get("tool_use_id", "")] = _result_text(b.get("content"))
+                    id2result_turn[b.get("tool_use_id", "")] = rec.get("_turn_index")
 
     # pass 2: walk in order
     user_turns: list[str] = []
@@ -246,6 +299,7 @@ def _digest_from_records(
     commands: list[Command] = []
     all_paths: list[str] = []
     tool_trace: list[ToolCallRecord] = []
+    dispatch_returns: list[DispatchReturn] = []
     transcript_text_parts: list[str] = []
     evidence_refs: dict[str, FileEffectRecord] = {}
     evidence_warnings: list[str] = []
@@ -407,7 +461,10 @@ def _digest_from_records(
             try:
                 tool_trace.append(ToolCallRecord(
                     name=name,
-                    input_summary=json.dumps(b.get("input") or {}, ensure_ascii=False)[:200],
+                    # A3:dispatch 类(task/Agent)的 input_summary 上限放宽(默认 2000,
+                    # env SIFT_TASK_SUMMARY_LIMIT 可覆盖)——派发 prompt 是编排会话里
+                    # 主 agent 行为的核心证据,200 截断会掐掉要求清单(缺席式误判)。
+                    input_summary=json.dumps(b.get("input") or {}, ensure_ascii=False)[:_summary_limit_for(name)],
                     input=inp or None,  # 完整结构化参数(不截断),供参数级匹配/路径规范化;inp 见上(line 274)
                     turn=turn_idx if locate_turns else None,
                     tool_use_id=str(tid) if structured_v2 and tid else None,
@@ -443,6 +500,22 @@ def _digest_from_records(
                 if not structured_v2:
                     raise
                 raise InputError(f"tool call {tid} 字段类型无效: {exc}") from exc
+            # 层3:派发(task/Agent tool_use)与回报(tool_result)配对。回报在 pass 1
+            # 已收进 id2result(无论回报记录在派发之前/之后出现);无回报的派发也收
+            # (result_len=0,判"验收是否发生"时有用)。角色取 input.subagent_type/agent
+            # (rec.agent 在主作用域是任务标题,不是角色名,不用)。
+            if str(name).strip().lower() in ("task", "agent"):
+                _result = id2result.get(tid, "")
+                _rhead, _rtail = _result_windows(_result)
+                dispatch_returns.append(DispatchReturn(
+                    dispatch_turn=turn_idx,
+                    result_turn=id2result_turn.get(tid),
+                    role=str(inp.get("subagent_type") or inp.get("agent") or ""),
+                    prompt_head=str(inp.get("prompt") or inp.get("description") or "")[:200],
+                    result_head=_rhead[:400],
+                    result_tail=_rtail,
+                    result_len=len(_result),
+                ))
             if name == "Skill":
                 if not skill_used:
                     skill_used = inp.get("skill") or inp.get("name")
@@ -537,6 +610,7 @@ def _digest_from_records(
         skill_used=skill_used, user_turns=user_turns,
         input_files=inputs, produced_files=produced,
         unreconstructed=unrecon, commands=commands,
+        dispatch_returns=dispatch_returns,
         tool_trace=tool_trace, transcript_text="\n".join(transcript_text_parts),
         evidence_refs=evidence_refs,
         evidence_warnings=list(dict.fromkeys(evidence_warnings)),
