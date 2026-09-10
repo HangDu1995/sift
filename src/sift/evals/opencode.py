@@ -20,8 +20,9 @@ import json
 from pathlib import Path
 
 from sift.evals.transcript import (
-    SessionDigest, _digest_from_records, _norm_tool, stamp_turn_indices,
+    SessionDigest, _digest_from_records, _norm_tool, stamp_turn_indices, summary_limit_for,
 )
+from sift.models import ToolCallRecord
 
 
 def is_opencode_session(path: Path) -> bool:
@@ -172,3 +173,46 @@ def _records_from_opencode(path: Path) -> list[dict]:
     # 在重建之后 stamp,新建的 dict 直接被标、无字段丢失风险——L157 重建不必显式拷字段)。
     stamp_turn_indices(out)
     return out
+
+
+def build_subagent_tool_trace_opencode(transcript_path: Path) -> list[ToolCallRecord]:
+    """kind=root 的 opencode 形 aux 旁路:**非主 agent** message 的全部工具痕迹。
+
+    opencode 无父子作用域(扁平,per-message ``info.agent``),"子代理半边" = agent ≠
+    ``session.info.agent`` 的全部 message——与 ``slice_opencode_by_agent`` 的 root 切法
+    (主 agent 段)互补,合起来正好是整条 session。**无 agent 标注的 message 保守跳过**
+    (归属不明,宁可不洗冤也不错洗)。工具名归一 / camelCase 字段映射复用
+    ``_records_from_opencode`` 的同一套(``_norm_tool`` + ``_map_opencode_input``),
+    与主 trace 同口径。
+
+    与 cc 形的两个诚实差异(消费方按缺省处理,均有优雅回退):
+
+    - ``turn`` 恒 ``None``:opencode 切片重建后按**段内位置** re-stamp(见
+      ``_records_from_opencode`` 已知限制),aux 若标全量位置则与 root trace 的段内
+      编号是两套体系,(T{n}) 会指错——宁缺毋错。
+    - ``parent_tool_use_id`` 恒空:opencode 的派发(task 工具)与子代理 message 之间
+      无 id 关联 → 派发引用 / pairs 行执行计数自动回退(关联不上的既有兜底路径)。
+    """
+    sess = load_opencode_session(transcript_path)
+    main_agent = (sess.get("info") or {}).get("agent")
+    if not main_agent:
+        return []
+    trace: list[ToolCallRecord] = []
+    for m in sess.get("messages") or []:
+        agent = (m.get("info") or {}).get("agent")
+        if not agent or agent == main_agent:
+            continue
+        for p in m.get("parts") or []:
+            if p.get("type") != "tool":
+                continue
+            state = p.get("state") or {}
+            name = _norm_tool((p.get("tool") or "").lower() or "")
+            inp = _map_opencode_input(name, state.get("input") or {})
+            trace.append(ToolCallRecord(
+                name=name,
+                input_summary=json.dumps(inp, ensure_ascii=False)[:summary_limit_for(name)],
+                input=inp or None,
+                turn=None,
+                agent=str(agent or ""),
+            ))
+    return trace

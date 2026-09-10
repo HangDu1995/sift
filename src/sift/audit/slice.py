@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from sift.evals.opencode import build_subagent_tool_trace_opencode, is_opencode_session
 from sift.evals.transcript import stamp_turn_indices, summary_limit_for
 from sift.models import ToolCallRecord
 
@@ -255,6 +256,11 @@ def _slice_root(records: list[dict]) -> list[list[dict]]:
 def build_subagent_tool_trace(transcript_path: Path, *, locate_turns: bool = True) -> list[ToolCallRecord]:
     """A1 旁路证据源:子代理作用域全部工具调用(root 判定的"缺席≠未发生"洗冤通道)。
 
+    按格式分派(与 rebuild 同款):opencode export JSON(.json + info/messages)走
+    ``build_subagent_tool_trace_opencode``(扁平按 per-message agent 取非主 agent 半边,
+    turn 恒 None / 无派发 id 关联,见该函数 docstring);其余(cc jsonl / structured
+    canonical)按 parent_tool_use_id 非空收集,如下。
+
     只收集**子代理作用域**的 tool_use(parent_tool_use_id 非空),root 作用域已在
     判定主路径(rebuild 的 root trace)里,不重复。消费方:auditor._judge_conditional
     的第二遍确定性匹配——条件类条目 root trace 未命中时在这里再找一遍,命中 →
@@ -271,8 +277,11 @@ def build_subagent_tool_trace(transcript_path: Path, *, locate_turns: bool = Tru
     用 [T{idx}] 对回 insight turnIndex)。``parent_tool_use_id`` 原样保留——cc 路它
     指向主作用域派发 tool_use 的 id,可与 ``DispatchReturn.dispatch_id`` 精确关联
     (洗冤 evidence 引用到具体派发);insight 路它是 subagentSessionId、关联不上,
-    消费方按查不到回退。
+    消费方按查不到回退。opencode 路不适用 ``locate_turns``(段内 re-stamp 的编号
+    体系不同,宁缺毋错,turn 恒 None——见分派函数 docstring)。
     """
+    if is_opencode_session(transcript_path):
+        return build_subagent_tool_trace_opencode(transcript_path)
     records = _records(transcript_path)
     # cc 原生路径的派发映射:主作用域 Agent/Task tool_use 的 id → 角色(subagent_type)。
     # insight structured 路径的 parent_tool_use_id 是 subagentSessionId(非 tool_use id),

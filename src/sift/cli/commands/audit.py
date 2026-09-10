@@ -350,19 +350,22 @@ def audit(
             slice_dir.mkdir(parents=True, exist_ok=True)
             sliced: list[Path] = []
             # A1 旁路(kind=root 专属):被 root 切片排除的子代理全量工具痕迹,
-            # 与 sliced 同序(每个 seg 一份;opencode 形不适用 → 空)。条件类条目
-            # root trace 未命中时在子代理痕迹里做第二遍确定性匹配(auditor),
+            # 与 sliced 同序(每个 seg 一份;cc/structured 按 parent_tool_use_id,
+            # opencode 按非主 agent message——build_subagent_tool_trace 内部按格式分派)。
+            # 条件类条目 root trace 未命中时在子代理痕迹里做第二遍确定性匹配(auditor),
             # 洗"执行类动作全在子代理、主 scope 恒缺席"的缺席式误判。
             # env SIFT_AUX_TRACE=0 显式关闭(A/B 实验与副作用逃生口;默认开)。
             if kind == "root" and os.environ.get("SIFT_AUX_TRACE", "1") != "0":
                 aux_tool_traces = []
+            _aux_by_tp: dict[Path, list] = {}  # 同一 tp 多段只读一次文件
             for tp, ti, i, seg, is_oc in segs:
                 if aux_tool_traces is not None:
                     # locate_turns 透传:与主 trace 同体系——报告关闭 [T{idx}] 渲染时
-                    # aux 命中的 evidence 也不带 (T{n}) 引用,免得出现无锚点可对的序号。
-                    aux_tool_traces.append(
-                        [] if is_oc else build_subagent_tool_trace(tp, locate_turns=locate_turns)
-                    )
+                    # aux 命中的 evidence 也不带 (T{n}) 引用,免得出现无锚点可对的序号
+                    # (opencode 形本就不带 turn,见其构建器 docstring)。
+                    if tp not in _aux_by_tp:
+                        _aux_by_tp[tp] = build_subagent_tool_trace(tp, locate_turns=locate_turns)
+                    aux_tool_traces.append(_aux_by_tp[tp])
                 ext = ".json" if is_oc else ".jsonl"
                 sp = slice_dir / f"{tp.stem}-{name}-{ti}-{i}{ext}"
                 if is_oc:

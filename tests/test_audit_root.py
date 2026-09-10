@@ -121,9 +121,13 @@ def test_kind_root_opencode_uses_session_info_agent(monkeypatch, tmp_path):
         seg = json.loads(Path(seg_path).read_text(encoding="utf-8"))
         assert (seg.get("info") or {}).get("agent") == main_agent
 
-    # A1 旁路:opencode 形不适用 → 每段空列表(非 None,长度与 slices 对齐)
+    # A1 旁路:opencode 形按非主 agent message 提取(fixture 另两个 agent 有
+    # read/write/bash 工具痕迹)→ aux 非空、执行者都是非主 agent;同一 tp 多段共享。
     aux = fake.calls[0]["aux_tool_traces"]
-    assert aux is not None and len(aux) == len(slices) and all(a == [] for a in aux)
+    assert aux is not None and len(aux) == len(slices)
+    assert all(len(a) > 0 for a in aux)
+    assert all(tc.agent != main_agent for tc in aux[0])
+    assert {tc.name for tc in aux[0]} >= {"Read", "Write", "Bash"}  # 工具名与主 trace 同口径归一
 
 
 def test_kind_root_structured_records_excludes_subagent(monkeypatch, tmp_path):

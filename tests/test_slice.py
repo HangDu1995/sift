@@ -565,3 +565,59 @@ def test_result_windows_head_tail():
     assert "❌失败,7/23" in t                            # 尾部结论必然可见
     h2, t2 = _result_windows("DONE")
     assert (h2, t2) == ("DONE", "")                     # 短文本不劈两半
+
+
+# ---- build_subagent_tool_trace:opencode 形(非主 agent 半边) ----
+
+def _oc_msg(agent: str, parts: list[dict], role: str = "assistant") -> dict:
+    return {"info": {"role": role, "agent": agent, "time": {"created": 0}}, "parts": parts}
+
+
+def _oc_session(messages: list[dict], main_agent: str = "build") -> dict:
+    return {"info": {"agent": main_agent}, "messages": messages}
+
+
+def _write_oc(tmp_path, sess: dict, name: str = "oc.json") -> Path:
+    p = tmp_path / name
+    p.write_text(json.dumps(sess, ensure_ascii=False), encoding="utf-8")
+    return p
+
+
+def test_build_subagent_tool_trace_opencode_non_main_agents(tmp_path):
+    """opencode 形 aux:非主 agent message 的 tool parts 全收,工具名归一 +
+    camelCase 字段映射与主 trace 同口径;turn 恒 None(编号体系不同,宁缺毋错)。"""
+    sess = _oc_session([
+        _oc_msg("build", [{"type": "text", "text": "主 agent 只编排"},
+                          {"type": "tool", "tool": "task",
+                           "state": {"input": {"prompt": "验收"}, "output": "DONE"}}]),
+        _oc_msg("code-verifier", [{"type": "tool", "tool": "read",
+                                   "state": {"input": {"filePath": "docs/demo-contract.md"},
+                                             "output": "…"}},
+                                  {"type": "tool", "tool": "bash",
+                                   "state": {"input": {"command": "pytest -q"}, "output": "ok"}}]),
+        _oc_msg("build", [{"type": "text", "text": "收尾"}]),
+        _oc_msg("release-checklist", [{"type": "tool", "tool": "write",
+                                       "state": {"input": {"filePath": "LOG.md", "content": "x"},
+                                                 "output": ""}}]),
+        _oc_msg(None, [{"type": "tool", "tool": "bash", "state": {"input": {"command": "ls"}, "output": ""}}]),
+    ])
+    trace = build_subagent_tool_trace(_write_oc(tmp_path, sess))
+    assert [(t.name, t.agent) for t in trace] == [
+        ("Read", "code-verifier"), ("Bash", "code-verifier"),
+        ("Write", "release-checklist"),
+        # 无 agent 标注的裸 message 被保守跳过(归属不明,宁可不洗)
+    ]
+    # camelCase → snake_case 与主 trace 同口径(Read 的 filePath → file_path)
+    assert trace[0].input == {"file_path": "docs/demo-contract.md"}
+    assert all(t.turn is None for t in trace)          # opencode 不带 turn(两套编号宁缺毋错)
+    assert all(not t.parent_tool_use_id for t in trace)  # 无 id 关联 → 派发引用走回退
+
+
+def test_build_subagent_tool_trace_opencode_no_sub_or_no_main(tmp_path):
+    """纯主 agent session → 空;缺 info.agent(无主可对)→ 空(防御,root 路早 exit 2)。"""
+    only_main = _oc_session([_oc_msg("build", [{"type": "tool", "tool": "bash",
+                                                "state": {"input": {"command": "ls"}, "output": ""}}])])
+    assert build_subagent_tool_trace(_write_oc(tmp_path, only_main, "oc1.json")) == []
+    no_main = _oc_session([_oc_msg("x", [{"type": "text", "text": "hi"}])], main_agent="")
+    no_main["info"] = {}
+    assert build_subagent_tool_trace(_write_oc(tmp_path, no_main, "oc2.json")) == []
