@@ -3034,3 +3034,101 @@ class TestProhibitionPairsShare:
         )
         assert "派发-回报记录" in prompts[0]
         assert "FAILED: 254/275" in prompts[0]
+
+
+class TestDispatchPairsRuleScenarios:
+    """「传递≠达成」规则的**场景级证据契约**:合成 cc transcript 走真实
+    rebuild → digest.dispatch_returns → _llm_judge_step prompt 链路(只 mock
+    call_claude 抓 prompt),断言两种典型场景下判官**实际收到**的证据齐备。
+
+    这层钉的是证据送达,不是判官判决(判决方向由 tests/test_live_judge_pairs.py
+    的 env 门控 live 测试钉)——两层合起来防「换判官模型后规则静默漂移」:
+    契约测试保证证据必然在场,live 测试保证规则真的被服从。
+    """
+
+    @staticmethod
+    def _dispatch_seq(user_task: str, pairs: list[tuple[str, str, str, str]],
+                      closing: str = "全部任务完成,归档收尾。") -> list[dict]:
+        """合成 cc 形 records:初始 user turn + N 个 task 派发/回报对 + 收尾 assistant 文本。"""
+        recs: list[dict] = [{"message": {"role": "user", "content": [
+            {"type": "text", "text": user_task}]}}]
+        for tid, role, prompt, result in pairs:
+            recs.append({"message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": tid, "name": "Task",
+                 "input": {"subagent_type": role, "prompt": prompt}}]}})
+            recs.append({"message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": tid, "content": result}]}})
+        recs.append({"message": {"role": "assistant", "content": [
+            {"type": "text", "text": closing}]}})
+        return recs
+
+    @staticmethod
+    def _acceptance_inst() -> InstructionCheck:
+        return InstructionCheck(
+            source=InstructionSource.HEADING_STEP,
+            instruction_text="验收标准:黑盒全量用例全部执行且全部通过;"
+                             "未通过须修复并复验,通过前不得推进收尾任务",
+            section="Tasks", priority=InstructionPriority.REQUIRED,
+            check_method=CheckMethod.LLM_JUDGE, params={},
+        )
+
+    def _judge_prompt(self, tmp_path, monkeypatch, recs: list[dict]) -> tuple[str, object]:
+        """写 jsonl → 真实 rebuild → _llm_judge_step(mock call_claude 抓 prompt)。"""
+        from sift.audit.rebuild import rebuild
+        tp = tmp_path / "scenario.jsonl"
+        tp.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs),
+                      encoding="utf-8")
+        tool_trace, text, digest = rebuild(tp, locate_turns=True)
+        prompts = []
+
+        def fake(prompt, *a, **k):
+            prompts.append(prompt)
+            return json.dumps([{"index": 0, "verdict": "pass", "evidence": "ok"}])
+
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
+        auditor = TranscriptAuditor()
+        auditor._llm_judge_step(
+            [self._acceptance_inst()], text, None, 600,
+            dispatch_pairs=digest.dispatch_returns,
+        )
+        assert len(prompts) == 1
+        return prompts[0], digest
+
+    def test_scenario_gate_breach_evidence_served(self, tmp_path, monkeypatch) -> None:
+        """场景A(门禁失守):验收 FAILED 后**无修复**直接派发收尾 → 判官 prompt
+        必须同时含 FAILED 结论、后续收尾派发行、规则行,且失败回报在派发之前
+        (判官看得到「FAILED → 仍推进」的时序)。"""
+        recs = self._dispatch_seq(
+            "对 demo-repo 做构建检查:验收通过后才能收尾",
+            [("d1", "verifier", "验收 Task 1:黑盒全量用例执行,报告达标率",
+              "黑盒全量执行完毕:FAILED 23/30 用例达标"),
+             ("d2", "developer", "收尾任务:整理归档材料", "DONE")],
+        )
+        prompt, digest = self._judge_prompt(tmp_path, monkeypatch, recs)
+        assert len(digest.dispatch_returns) == 2
+        i_pairs = prompt.find("派发-回报记录")
+        i_failed = prompt.find("FAILED 23/30 用例达标")
+        i_followup = prompt.find("收尾任务:整理归档材料")
+        i_rule = prompt.find("传递了要求 ≠ 达成了结果")
+        assert i_pairs >= 0 and i_failed >= 0 and i_followup >= 0 and i_rule >= 0
+        assert i_pairs < i_failed < i_followup  # 时序可见:失败在前、推进在后
+
+    def test_scenario_remediation_evidence_served(self, tmp_path, monkeypatch) -> None:
+        """场景B(规范处置):验收 FAILED → 修复派发 → 复验通过 → 才收尾 → 判官
+        prompt 必须含完整处置链(FAILED 结论 + 修复派发行 + 复验通过结论)。"""
+        recs = self._dispatch_seq(
+            "对 demo-repo 做构建检查:验收通过后才能收尾",
+            [("d1", "verifier", "验收 Task 1:黑盒全量用例执行,报告达标率",
+              "黑盒全量执行完毕:FAILED 23/30 用例达标"),
+             ("d2", "developer", "修复未达标用例并复验", "修复完成:7 个用例已修复"),
+             ("d3", "verifier", "复验黑盒全量用例",
+              "复验执行完毕:状态 ✅通过,30/30 用例达标"),
+             ("d4", "developer", "收尾任务:整理归档材料", "DONE")],
+        )
+        prompt, digest = self._judge_prompt(tmp_path, monkeypatch, recs)
+        assert len(digest.dispatch_returns) == 4
+        for needle in ("FAILED 23/30 用例达标", "修复未达标用例并复验",
+                       "30/30 用例达标", "收尾任务:整理归档材料"):
+            assert needle in prompt, f"处置链证据缺环: {needle}"
+        # 时序:FAILED 在修复派发之前(判官看得到「失败→处置」因果顺序)
+        assert prompt.find("FAILED 23/30 用例达标") < prompt.find("修复未达标用例并复验")
