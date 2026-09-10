@@ -391,3 +391,17 @@ Exit code（各命令语义不同）：
 ```bash
 pytest tests/ -v
 ```
+
+## 开发：提交门禁
+
+仓库带一套禁词提交门禁：staged **新增行** 与 commit message 过禁词清单就拦（只查新增行不扫存量——动到哪行修哪行）。
+
+```bash
+# 一次性激活（re-clone 后需重设）：
+git config core.hooksPath scripts/hooks
+```
+
+- **清单**：`scripts/banned-words.txt`（退役词 → 既定写法，模式为 Python 正则）；同目录可放一份**不入库**的 `banned-words-local.txt`（`.gitignore` 已排除）追加组织自定的敏感词，文件在才生效。
+- **查什么**：自造比喻词换成白话（清单头注释写明口径与「新词进清单前」的自查法）；既定术语不进清单，定义见使用手册附录「术语表」。
+- **逃生口**：确认某处用词该保留时 `git commit --no-verify`（注意它会跳过全部检查）。
+- **CI**：PR 的全量改动会再过一遍公开清单（`.github/workflows/ci.yml` 的 `word-gate` job）——本机 hook 只护提交者自己，外部 PR 靠这层兜底。

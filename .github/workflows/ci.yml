@@ -15,6 +15,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 禁词门禁(PR 全量改动 vs main;维护者本机 push 已由 pre-commit/commit-msg
+  # hook 查过——见 README「开发:提交门禁」。本地敏感词清单不入库,CI 只查公开清单)。
+  word-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base
+        run: git fetch origin main
+
+      - name: Banned words
+        run: python3 scripts/word_gate.py gate-diff origin/main
+
   test:
     runs-on: ubuntu-latest
     strategy:

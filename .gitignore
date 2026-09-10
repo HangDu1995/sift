@@ -45,3 +45,6 @@ sift.spec
 /docs/sift-analysis.md
 /docs/superpowers/
 /docs/sift-principles.md
+
+# 本地禁词清单(域内/内部名词,内容不入库;CI 只查公开清单)
+/scripts/banned-words-local.txt

@@ -1,0 +1,13 @@
+#!/bin/sh
+# commit message 过禁词清单（剪刀线之后的 diff 正文与 # 注释行不算）。
+# git commit --fixup / -C 复用历史 message 时会跑本 hook——历史 message 里
+# 的旧用词会被拦，确认无误用 --no-verify。
+set -e
+cd "$(git rev-parse --show-toplevel)"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "commit-msg：没找到 python3，message 检查跑不了——装好再提交（这层不静默放行）。" >&2
+    exit 1
+fi
+
+python3 scripts/word_gate.py message "$1"

@@ -1,0 +1,15 @@
+#!/bin/sh
+# 提交门禁：staged 新增行过禁词清单（清单与用法见 scripts/banned-words.txt）。
+# 有意跳过只有 git commit --no-verify——它会跳过全部检查。
+# 边界：cherry-pick / revert 的内部提交不跑本 hook（git sequencer 传 -n）；
+# fixup / -C 复用旧 message 会跑 commit-msg，旧用词会被拦。
+# 激活（一次性，re-clone 后需重设）：git config core.hooksPath scripts/hooks
+set -e
+cd "$(git rev-parse --show-toplevel)"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "pre-commit：没找到 python3，禁词检查跑不了——装好再提交（这层不静默放行）。" >&2
+    exit 1
+fi
+
+python3 scripts/word_gate.py gate-staged
