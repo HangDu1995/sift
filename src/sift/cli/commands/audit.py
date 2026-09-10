@@ -354,8 +354,7 @@ def audit(
             # root trace 未命中时在子代理痕迹里做第二遍确定性匹配(auditor),
             # 洗"执行类动作全在子代理、主 scope 恒缺席"的缺席式误判。
             # env SIFT_AUX_TRACE=0 显式关闭(A/B 实验与副作用逃生口;默认开)。
-            import os as _os
-            if kind == "root" and _os.environ.get("SIFT_AUX_TRACE", "1") != "0":
+            if kind == "root" and os.environ.get("SIFT_AUX_TRACE", "1") != "0":
                 aux_tool_traces = []
             for tp, ti, i, seg, is_oc in segs:
                 if aux_tool_traces is not None:

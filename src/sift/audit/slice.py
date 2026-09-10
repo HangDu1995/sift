@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sift.evals.transcript import _summary_limit_for, stamp_turn_indices
+from sift.evals.transcript import stamp_turn_indices, summary_limit_for
 from sift.models import ToolCallRecord
 
 
@@ -300,7 +300,7 @@ def build_subagent_tool_trace(transcript_path: Path, *, locate_turns: bool = Tru
             inp = b.get("input") or {}
             trace.append(ToolCallRecord(
                 name=name,
-                input_summary=json.dumps(inp, ensure_ascii=False)[:_summary_limit_for(name)],
+                input_summary=json.dumps(inp, ensure_ascii=False)[:summary_limit_for(name)],
                 input=inp or None,
                 turn=turn_idx if locate_turns else None,
                 agent=str(agent or ""),

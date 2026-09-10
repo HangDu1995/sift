@@ -56,7 +56,12 @@ _DISPATCH_TOOL_NAMES = {"task", "agent"}
 _DISPATCH_SUMMARY_LIMIT = 2000
 
 
-def _summary_limit_for(tool_name: str) -> int:
+def summary_limit_for(tool_name: str) -> int:
+    """该工具 input_summary 的截断上限:dispatch 类(task/Agent)默认 2000,其余 200。
+
+    公共名:slice.build_subagent_tool_trace 跨模块取同一口径(aux 痕迹与主 trace
+    的派发 summary 截断必须一致),私有名跨模块导入别扭。
+    """
     if tool_name.strip().lower() not in _DISPATCH_TOOL_NAMES:
         return 200
     raw = os.environ.get("SIFT_TASK_SUMMARY_LIMIT", "")
@@ -464,7 +469,7 @@ def _digest_from_records(
                     # A3:dispatch 类(task/Agent)的 input_summary 上限放宽(默认 2000,
                     # env SIFT_TASK_SUMMARY_LIMIT 可覆盖)——派发 prompt 是编排会话里
                     # 主 agent 行为的核心证据,200 截断会掐掉要求清单(缺席式误判)。
-                    input_summary=json.dumps(b.get("input") or {}, ensure_ascii=False)[:_summary_limit_for(name)],
+                    input_summary=json.dumps(b.get("input") or {}, ensure_ascii=False)[:summary_limit_for(name)],
                     input=inp or None,  # 完整结构化参数(不截断),供参数级匹配/路径规范化;inp 见上(line 274)
                     turn=turn_idx if locate_turns else None,
                     tool_use_id=str(tid) if structured_v2 and tid else None,
