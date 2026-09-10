@@ -488,7 +488,7 @@ Written to …/trigger-report.json · …/trigger-report.html
 - **expected_output 是给阅卷参考的，绝不喂给被测 Claude**。把它拼进 prompt 等于把答案泄露给考生，A/B 对照会失真。sift 只在评分侧用它。
 - **fixtures** 是前置文件（输入数据等），每条是 `{path, content}`，会被拷进工作区当考场材料（agent 题用 `files` 同理）。
 - **source_dir** 是 eval 自带的额外目录（如 skill 的 `scripts/`、被处理的样例代码），会和 fixtures 一起拷进工作区——skill 依赖、但不在 `references/` 里的东西靠它带进考场（见 5.4 的依赖拷贝坑）。
-- **rationale / confidence**（`init` 生成时自带）：每道题带 `rationale`（对应声明哪段/哪条,审阅溯源抓手）和 `confidence`（0-1,生成器自报把握）。`init` 终端逐条打印这俩,方便审阅「这题到底在考什么、生成器多有把握」。两者都**不入评分 gate**（confidence ≠ audit-finding 的 method,别混淆）;`rationale` 缺失打 `review:no-rationale` flag 提示人工补。
+- **rationale / confidence**（`init` 生成时自带）：每道题带 `rationale`（对应声明哪段/哪条,审阅溯源依据）和 `confidence`（0-1,生成器自报把握）。`init` 终端逐条打印这俩,方便审阅「这题到底在考什么、生成器多有把握」。两者都**不入评分 gate**（confidence ≠ audit-finding 的 method,别混淆）;`rationale` 缺失打 `review:no-rationale` flag 提示人工补。
 - 完整字段（`timeout` / `flags` 等）见参考手册和 [evals-format.md](evals-format.md)。
 
 ### 4.2 init：自动出题
@@ -504,7 +504,7 @@ sift init path/to/agent.md --kind agent                   # 给 agent 出题（�
 
 `init` 有三种生成模式，按优先级自动选择：
 
-1. **`--from-transcript`（从真实会话挖）**：读一段真实 session transcript，重建当时的输入文件/命令/产物，挖出真实场景的 eval。其中有一条是**逐字节真挖**——直接还原会话里真实执行的任务，fixture 就是 agent 当时 Read 的真实文件内容；此外 LLM 还会基于这段会话再生成若干变体题。为防 LLM 臆造文件名，生成结果过一道**反幻觉闭集约束**：允许引用的文件被限定在一个闭集里（transcript 实际出现的输入/产物文件 + 声明产物），引用闭集外文件的断言和 fixture 会被确定性后处理丢弃并打 `review:fixture-not-in-manifest` / `review:dropped-assertions` flag——这样生成的题不会冒出会话里根本不存在的文件。如果 transcript 里涉及多个声明单元（调了多个 skill、或主 agent dispatch 了子 agent），不切分会把全部当本声明挖、串味——加对应的 `--kind skill` / `--kind agent` 只挖本声明被调用 / 被 dispatch 期间的段（终端会警告，两者一视同仁）。
+1. **`--from-transcript`（从真实会话挖）**：读一段真实 session transcript，重建当时的输入文件/命令/产物，挖出真实场景的 eval。其中有一条是**逐字节真挖**——直接还原会话里真实执行的任务，fixture 就是 agent 当时 Read 的真实文件内容；此外 LLM 还会基于这段会话再生成若干变体题。为防 LLM 臆造文件名，生成结果过一道**反幻觉闭集约束**：允许引用的文件被限定在一个闭集里（transcript 实际出现的输入/产物文件 + 声明产物），引用闭集外文件的断言和 fixture 会被确定性后处理丢弃并打 `review:fixture-not-in-manifest` / `review:dropped-assertions` flag——这样生成的题不会冒出会话里根本不存在的文件。如果 transcript 里涉及多个声明单元（调了多个 skill、或主 agent dispatch 了子 agent），不切分会把全部当本声明挖、混进别的单元的内容——加对应的 `--kind skill` / `--kind agent` 只挖本声明被调用 / 被 dispatch 期间的段（终端会警告，两者一视同仁）。
 2. **`--generate-prompts`（LLM 生成，默认开）**：LLM 读声明自动出 L1/L2 题，并尝试推导程序化断言。
 3. **`--no-generate-prompts`（纯模板，不调 LLM）**：不调 LLM，纯规则从声明结构推导——把正文按 `##` 二级标题切成若干段，每段出一道 eval：prompt 由标题 + 描述里检测到的动作词拼成（如 `Convert a task related to <段> — …`），`expectations` 从段里的列表项（`-` / `*` / `1.`）逐条转成预期语句，`expected_output` 形如 `Successfully complete the <段> workflow (N steps)`。**「模板」不是磁盘文件**，而是 `evals/generator.py` 里的一套确定性推导规则（`_derive_prompt` / `_derive_expectations` / `_derive_assertions`）；唯一可配的「模板」是配置文件里按 domain 注入的领域断言（`domain_templates`）。**产出的不全是程序断言**——主体是 `expectations`（LLM 判的文本预期），程序断言（`FILE_EXISTS` / `CONTAINS_PATTERN` 等）只是从代码块 / import / 领域模板**抽得到才补**，纯规则类声明可能零断言。
 
@@ -715,7 +715,7 @@ skill 不是一个运行时加载的模块。sift 做的是：
 
 所以「模型用了 skill」≈「模型读到了这份手册并照着做」。这也是为什么 SKILL.md 的写法直接决定效果——它就是模型看到的全部指令。
 
-> 一个常见坑：**references/ 在 skill 注入时会自动拷进工作区**（无需配置）；但 skill 依赖的 `scripts/` 等其它目录**不会**自动拷——若 SKILL.md 让模型运行 `scripts/foo.py` 或读取 references 以外的文件，得在 eval 里用 `source_dir` 把它拷进来，否则模型反复找不存在的文件直到 timeout，效果从「有增益」掉回「和不开一样」。看到 with/without delta 接近 0 时，先排查依赖目录进没进工作区。（客观 Δ 趋零时 viewer 会主动标 ⚠ 提醒——但 ⚠ 只是「无增益」信号，首选按这里排查依赖这一常见假阳性；排除依赖后，才考虑 skill 是否已被模型原生能力覆盖、该收窄 scope。）
+> 一个常见坑：**references/ 在 skill 注入时会自动拷进工作区**（无需配置）；但 skill 依赖的 `scripts/` 等其它目录**不会**自动拷——若 SKILL.md 让模型运行 `scripts/foo.py` 或读取 references 以外的文件，得在 eval 里用 `source_dir` 把它拷进来，否则模型反复找不存在的文件直到 timeout，效果从「有增益」掉回「和不开一样」。看到 with/without delta 接近 0 时，先排查依赖目录进没进工作区。（客观 Δ 接近零时 viewer 会主动标 ⚠ 提醒——但 ⚠ 只是「无增益」信号，首选按这里排查依赖这一常见假阳性；排除依赖后，才考虑 skill 是否已被模型原生能力覆盖、该收窄 scope。）
 
 > agent 评测（`--kind agent`）不走这套 user prompt 注入——agent 正文经 `--append-system-prompt` 进 cc 的 **system 层**（agent 评测恒走 cc），prompt 原样不包；也没有 references/scripts 拷贝（agent 是单 `.md` 声明，非 skill 目录）。
 
@@ -1156,7 +1156,7 @@ v1/v2 是盲比较的**杀手级应用——CI 回归门禁**：skill 提 PR（v
 
 校准（Calibration）是把前两层（评分 + 遵循性）的矛盾**暴露**出来的那一层——它回答「这次执行的**结果**与**过程**协不协调」。
 
-**产出的前提**：校准依赖遵循性（compliance）——有 compliance 才产 calibration。compliance 在 eval 里**默认开**（注入声明即跑；它审的是 cc 已产出的 transcript、不 re-spawn cc，单 run 本就有效），calibration 跟着出（compliance 一有它就能算）。想跳过用 `--no-compliance`（如快速冒烟测试）。**skill 和 agent 条件相同**——都默认产出校准（per-run 分诊、单 run 有效）。
+**产出的前提**：校准依赖遵循性（compliance）——有 compliance 才产 calibration。compliance 在 eval 里**默认开**（注入声明即跑；它审的是 cc 已产出的 transcript、不 re-spawn cc，单 run 本就有效），calibration 跟着出（compliance 一有它就能算）。想跳过用 `--no-compliance`（如快速冒烟测试）。**skill 和 agent 条件相同**——都默认产出校准（per-run 筛查、单 run 有效）。
 
 ### 9.1 结果×过程 coherence：为什么是这两个轴配一对
 
@@ -1167,7 +1167,7 @@ v1/v2 是盲比较的**杀手级应用——CI 回归门禁**：skill 提 PR（v
 
 它们独立到可以任意组合：你可以**输出对了但过程错了**（抄近路、跳过校验、碰巧蒙对——声明的关键步骤没真执行，答案却对了），也可以**输出错了但过程对了**（声明逻辑没问题，只是执行失败）。**只看结果**会漏掉前者（「蒙对答案」看着像满分，却不能归功于声明）——这正是校准要抓的危险情况。所以把这两个轴交叉，专门把「结果对 + 过程错」这一格标出来（`HIGH_SCORE_SUSPECT`），就是校准存在的理由。换别的组合（比如结果 × 工具调用数）就没这层意义。
 
-矩阵是结果轴（对 / 错）× 过程轴（对 / 错 / 未知），折叠成 5 态。它**不是**凑出来的置信度数，而是分诊信号。
+矩阵是结果轴（对 / 错）× 过程轴（对 / 错 / 未知），折叠成 5 态。它**不是**凑出来的置信度数，而是筛查信号。
 
 **这两个轴怎么「配成一对」——不是逐条对账。** 容易想成「第 N 条期望 ↔ 第 M 条指令」逐条配对，但代码并不这么做（也没有公共键可配：期望来自 eval、规则来自声明，是两份不同文档）。它把结果轴压成一个聚合率（输出达标没），过程轴压成「哪些硬类规则被违反」，两个**聚合信号**在 2×2 矩阵里交叉。所以「结果对了但过程错了」只是观察到**这次执行：输出达标 AND 碰了某条硬规则**这两个事实共存——**因果没建立**（不判断「输出对是*因为*还是*尽管*碰了那条规则」）。这正是那一格叫 `HIGH_SCORE_SUSPECT`（存疑、值得看一眼）而不是「已证矛盾」的原因：它只报「两个面这次没对齐，人来看一下」，不下因果结论。
 
@@ -1194,13 +1194,13 @@ v1/v2 是盲比较的**杀手级应用——CI 回归门禁**：skill 提 PR（v
 
 `calibration.json` 字段：`verdict` / `result_pass` / `process_status`（ok/violated/unknown）/ `hard_violations`（每条 category+instruction+evidence）/ `soft_notes` / `scoring_rate` / `scoring_rate_basis` / `scoring_rate_programmatic` / `scoring_rate_llm` / `compliance_rate`。
 
-**跑出来长啥样——同题多 run，verdict 会摆。** 同一道题跑多个 run，verdict 常在两态间摆：有的 run 结果没过 0.8、过程干净 → `FIXABLE`；有的 run 同样没过 0.8，但那次 cc 碰巧犯了某条 prohibition 硬禁令 → 过程 `violated` → `SKILL_FAILED`。差别**不在结果轴**（几个 run 的客观率都摆不大、都判 `result_pass=False`），**在过程轴**——硬违规在不在，verdict 就跟着翻。这就是「校准是 per-run 分诊、不是稳定声明判决」的活例子，也是它不进 gate **decision** 的直接原因（但 HIGH_SCORE_SUSPECT 会作 soft warning 显出）。
+**跑出来长啥样——同题多 run，verdict 会摆。** 同一道题跑多个 run，verdict 常在两态间摆：有的 run 结果没过 0.8、过程干净 → `FIXABLE`；有的 run 同样没过 0.8，但那次 cc 碰巧犯了某条 prohibition 硬禁令 → 过程 `violated` → `SKILL_FAILED`。差别**不在结果轴**（几个 run 的客观率都摆不大、都判 `result_pass=False`），**在过程轴**——硬违规在不在，verdict 就跟着翻。这就是「校准是 per-run 筛查、不是稳定声明判决」的活例子，也是它不进 gate **decision** 的直接原因（但 HIGH_SCORE_SUSPECT 会作 soft warning 显出）。
 
 ### 9.4 为什么不进 gate 的 decision（只作 soft warning）
 
-校准是 **per-run 分诊**，不是稳定的声明级判决——同一道题，verdict 会跨 run 摆（结果轴相对稳，过程轴的硬违规在不在会摆，verdict 跟着摆）。所以校准**不进 gate 的 decision**（门禁的 PASS/FAIL 走稳定的 `delta.pass_rate_programmatic` + 盲评胜率）；但它的 HIGH_SCORE_SUSPECT 会作 **soft warning** 聚合进 `calibration_summary`、显在 gate.json + viewer（分诊辅助人判断，**不改 decision/exit_code**）。只在注入了声明的 side 产（with/without 模式 = with_skill 侧；v1/v2 模式两边都产）。
+校准是 **per-run 筛查**，不是稳定的声明级判决——同一道题，verdict 会跨 run 摆（结果轴相对稳，过程轴的硬违规在不在会摆，verdict 跟着摆）。所以校准**不进 gate 的 decision**（门禁的 PASS/FAIL 走稳定的 `delta.pass_rate_programmatic` + 盲评胜率）；但它的 HIGH_SCORE_SUSPECT 会作 **soft warning** 聚合进 `calibration_summary`、显在 gate.json + viewer（筛查辅助人判断，**不改 decision/exit_code**）。只在注入了声明的 side 产（with/without 模式 = with_skill 侧；v1/v2 模式两边都产）。
 
-更根本的原因是**校准成立有个前提，而工具不验证它**。结果轴查的是 eval 关心的、过程轴查的是声明要求的——只有当 eval 测的正是声明该干的活，「结果对 + 过程错」才是真矛盾（该守的硬规矩没守、却侥幸输出对了 = 潜在 bug）。但工具**假设**相关、不去检查「这条硬规则和这个 eval 的成功标准相不相关」。毫不相关时（eval 测 SQL 正确性、声明某硬规则却管「输出编码格式」），cc 输出对了 SQL 又没守格式 → 机械落 `HIGH_SCORE_SUSPECT`，但这只是两个独立事实共存、不是 coherence 矛盾，人看一眼 evidence 就能 dismiss。所以校准只能当**分诊**（让人核 evidence、判断那条硬规则和这次输出到底有没有关系），不能当**定罪**——门禁走的客观 delta + 盲评胜率都不依赖这个「相关性未验证」的弱 coherence，故校准再保守/激进都不会让 CI 误绿误红。
+更根本的原因是**校准成立有个前提，而工具不验证它**。结果轴查的是 eval 关心的、过程轴查的是声明要求的——只有当 eval 测的正是声明该干的活，「结果对 + 过程错」才是真矛盾（该守的硬规矩没守、却侥幸输出对了 = 潜在 bug）。但工具**假设**相关、不去检查「这条硬规则和这个 eval 的成功标准相不相关」。毫不相关时（eval 测 SQL 正确性、声明某硬规则却管「输出编码格式」），cc 输出对了 SQL 又没守格式 → 机械落 `HIGH_SCORE_SUSPECT`，但这只是两个独立事实共存、不是 coherence 矛盾，人看一眼 evidence 就能 dismiss。所以校准只能当**筛查**（让人核 evidence、判断那条硬规则和这次输出到底有没有关系），不能当**定罪**——门禁走的客观 delta + 盲评胜率都不依赖这个「相关性未验证」的弱 coherence，故校准再保守/激进都不会让 CI 误绿误红。
 
 ---
 
@@ -1687,7 +1687,7 @@ sift audit path/to/test-runner/ --transcript session.json --kind agent   # 审�
 
 - **锚点不同**：skill 按 `Skill` 工具调用切（scope-aware last-invoked-owns）；agent 按 `agent` 归属字段切（dispatch 锚点，无 `Skill` 调用）。
 - **扁平切、无父子作用域**：agent 切片只看 `record.agent == target`、**不读 `parent_tool_use_id`**。target 的 run 里若嵌套了别的 agent 的 turn（A dispatch B 后 resume A，record 序 A…B…A），A 的 run 被 B 断成两段。这是上游数据模型的被迫选择（`buildStructuredRecords` 不合成 `Agent` tool_use、无「agent 名 → dispatch id」映射，无法像 skill 路那样按作用域归段）。**断段无害**：每段独立喂 auditor，findings 全量 pool 后按指令聚合，verdict 与合成 1 段等价。
-- **dual-nature 同名**：同一个名字既是 skill（被 `Skill` 调用）又是 agent（被 dispatch）时（如某个同名既作 skill 调用、又作 agent dispatch 的名字），`--kind skill` 审 skill 那面、`--kind agent` 审 agent 那面，各切各的、不串味。**kind 选锚点、不并集**——并集会把 agent 执行段塞进 skill 正文对账、对象错位。
+- **dual-nature 同名**：同一个名字既是 skill（被 `Skill` 调用）又是 agent（被 dispatch）时（如某个同名既作 skill 调用、又作 agent dispatch 的名字），`--kind skill` 审 skill 那面、`--kind agent` 审 agent 那面，各切各的、互不混入。**kind 选锚点、不并集**——并集会把 agent 执行段塞进 skill 正文对账、对象错位。
 
 现成示例：`fixtures/example-agents/`（test-runner / lint-reviewer，合成违规 transcript + 期望该抓的违规逐条列明），见 [example-agents/README.md](../fixtures/example-agents/README.md)。
 
@@ -1708,15 +1708,15 @@ sift audit path/to/test-runner/ --transcript session.json --kind agent   # 审�
 
 exit code 不变（root 不引入新 gate）：cc 主作用域在**非空 transcript** 下恒非空（至少起头 user turn 在主），never-invoked 不触发 exit 2；**完全空 transcript 仍触发 exit 2**（无 record → 主作用域也为空，never-invoked）；opencode 缺 `session.info.agent`（无法定主 agent）→ exit 2。
 
-#### 子代理证据旁路：缺席 ≠ 未发生
+#### 子代理补充证据通道：缺席 ≠ 未发生
 
 root 只对账主作用域，这本身是对的——审的就是编排纪律。但有一类会话会让它系统性误判：**编排范式**（主 agent 只负责分派，跑命令 / 写文件 / 加载 skill 全部交给子代理）。这时主作用域里一条执行痕迹都没有，判官只看主记录，就会得出：
 
 > 「nm 从未调用」「issue 文件没创建」「全程没跑测试」
 
-而实际上这些活子代理分别干了 8 次、11~20 次、78~194 次——只是没落在主作用域里。sift 为此加了两条证据旁路：**root 审什么不变（切片语义不动），只是把判官看不见的证据递过去**。
+而实际上这些活子代理分别干了 8 次、11~20 次、78~194 次——只是没落在主作用域里。sift 为此加了两条补充证据通道：**root 审什么不变（切片语义不动），只是把判官看不见的证据递过去**。
 
-**旁路一：主作用域没找到，就到子代理的执行痕迹里再找一遍**（条件性指令用；纯程序匹配，零 LLM 成本）。
+**通道一：主作用域没找到，就到子代理的执行痕迹里再找一遍**（条件性指令用；纯程序匹配，零 LLM 成本）。
 
 条件性指令（该用 X 工具 / 该读 Y 参考）在主作用域 trace 未命中时，再到被 root 切片排除的子代理全量工具痕迹里做第二遍匹配。三种 transcript 来源都支持：cc / 结构化 records 按 `parent_tool_use_id` 收子代理记录；opencode 没有父子作用域，按 message 的 `agent` 字段取非主 agent 的半边（没标 agent 的消息归属不明，保守跳过）。
 
@@ -1730,7 +1730,7 @@ evidence 会尽量引用到**那一次派发**（子代理痕迹能对上派发 
 
 禁令 / 步骤判官不走这条路：「子代理干了」恰恰不违反「主 agent 不许亲自动手」类禁令，它们的视野保持纯主作用域。
 
-**旁路二：把「派发了什么、回报了什么」整理成清单喂给判官**（步骤 / 禁令判官用）。
+**通道二：把「派发了什么、回报了什么」整理成清单喂给判官**（步骤 / 禁令判官用）。
 
 子代理每次干完活交的完工报告（task 派发的 tool_result）本来就是主作用域记录——主 agent 看到回报才决定推进还是修复。audit 把每次派发整理成一行：派发指令开头 + 回报开头结尾各一段（验收结论习惯写在报告末尾，只截开头会漏），全部派发行配成清单段喂给判官，8KB 封顶——失败的回报优先保留，DONE / 空回报压成计数不占预算。每行行尾再挂上这次派发的子代理**实际干了什么**的统计：
 
@@ -1741,13 +1741,13 @@ evidence 会尽量引用到**那一次派发**（子代理痕迹能对上派发 
 - 回报 FAILED，主 agent 仍接着派发后续任务 → FAIL（门禁失守——最严重的真实问题模式，从此可检出）；
 - 声明要求验收、全程却找不到验收派发 → FAIL（免验）。
 
-**开关**。两条旁路都能单独关（默认全开；做消融实验、或怀疑旁路干扰判定时用）：
+**开关**。两条通道都能单独关（默认全开；做消融实验、或怀疑通道干扰判定时用）：
 
 | 环境变量 | 管什么 | 关了会怎样 |
 |---|---|---|
 | `SIFT_TASK_SUMMARY_LIMIT` | 派发指令在工具记录里的保留长度 | 默认 2000；设回 200 会掐掉派发里的要求清单，判官「看不见」派发内容 |
-| `SIFT_AUX_TRACE=0` | 关旁路一 | 条件性回到只看主作用域 |
-| `SIFT_DISPATCH_PAIRS=0` | 关旁路二的清单段 | 判官看不到派发-回报对账 |
+| `SIFT_AUX_TRACE=0` | 关通道一 | 条件性回到只看主作用域 |
+| `SIFT_DISPATCH_PAIRS=0` | 关通道二的清单段 | 判官看不到派发-回报对账 |
 | `SIFT_PROHIBITION_PAIRS=0` | 禁令判官不共享清单段 | 步骤判官仍看得到，禁令判官回纯主作用域 |
 
 **已知残余**（诚实边界）：行尾执行统计只到「工具名 × 次数」粒度，没有参数 / 产物明细；insight 与 opencode 两路关联不上具体派发，evidence 退回简写、统计行缺这两路的痕迹。根治要靠 producer 侧补 session ↔ 派发的映射，sift 单侧做不了。
@@ -1998,7 +1998,7 @@ audit 报出 FAIL 之后，「哪些该回去改 skill、哪些其实是声明�
 
 建议按归因分三类（归哪类决定给不给建议）。前两类的名字容易读成「改两个不同的文件」——对 skill 来说声明就是 SKILL.md，两类建议最后都落在**同一份正文**上；分两类的不是改哪里，是**「谁的错」的判决相反**，修法方向跟着相反：
 
-- **改 skill**（`skill_fix`）：判决「错在执行」——声明要求的事本身是对的，但执行端一直做不到（多个会话反复栽在同一条、或程序判定钉死）→ 修法是把这段写法改得**更容易被照做**：措辞更硬、加显式约束、把容易漏的拆成步骤。该做的事不变，变的是正文的「操纵力」。
+- **改 skill**（`skill_fix`）：判决「错在执行」——声明要求的事本身是对的，但执行端一直做不到（多个会话反复栽在同一条、或程序判定写死）→ 修法是把这段写法改得**更容易被照做**：措辞更硬、加显式约束、把容易漏的拆成步骤。该做的事不变，变的是正文的「操纵力」。
 - **改声明**（`declaration_fix`）：判决「错在声明」——执行做的才是更合理的事，声明过时或太死板（字面违反了、行为其实对，如跳过了冗余步骤）→ 修法是**把正确实践写回声明**：改写、放宽或删掉那条过时的要求，让声明跟现实对齐。
 - **模型 / 环境问题**：偶发失败、工具噪声 → **不给建议也别硬编**，只报一个数（「另有 N 条 FAIL 归因模型/环境」），让你知道有这么些条不属于前两类。
 
@@ -2119,3 +2119,47 @@ sift gate out/benchmark.json --min-win-rate 0.5
 - **改了 references 内容要强制重跑**：cache_key 不检测引用文件内容改动，用新 `-o` 重跑。
 - **门禁 N/A 不是通过**：exit 2 可能是「根本没评上」（配置漏），别当放行。
 - **深度分析栏没出现**：通常是盲比较 tie 或那次 LLM 分析没成功，不一定是 bug。
+
+### F. 术语表
+
+正文反复出现的术语，一句话一条；命令参数与 JSON 字段级的定义查[参考手册](sift-reference.md)。提交门禁（退役词清单）与术语表的分工：清单管「不再用什么词」，这里管「保留的词是什么意思」。
+
+**声明与审计**
+
+| 术语 | 一句话定义 |
+|---|---|
+| 声明 | 被测对象的自述文件：SKILL.md（skill）、agent 定义 .md、workflow / 主 agent 级声明——评测出题、审计提指令都从它出发 |
+| 对账 | audit 的核心动作：把 transcript 里的实际行为与声明指令逐条比对，出遵循性结论 |
+| 判官 | 做语义判定的 LLM（条件性 / 禁令 / 步骤 / 控制流四路）；对照「程序」判定 = 不调 LLM 的确定性匹配 |
+| 五态 | 每条指令的结论：PASS / FAIL / N-A（不适用）/ UNRESOLVED（没判成，可重跑救回）/ INDETERMINATE（判不准，重跑无益）——后两者的中文显示即「没判成 / 判不准」 |
+| 锚点 | 切分 transcript 的依据，`--kind` 三选：skill 按 `Skill` 调用、agent 按 agent 归属、root 按主作用域 |
+| 切片 | 按锚点从整条 transcript 切出的、本声明单元的执行段 |
+| 主作用域 | 顶层主 agent 自己的记录（cc = `parent_tool_use_id` 为空；opencode = `session.info.agent`） |
+| 派发 / 回报 | 主 agent 发起子代理任务（task / Agent 调用）是派发；子代理交回的完工报告（tool_result）是回报 |
+| 补充证据通道 | root 审计下把判官看不见的证据递给它的两条路径（通道一 = 子代理痕迹再匹配；通道二 = 派发-回报清单），root 审什么不变 |
+| 缺席误判 | 判官因主作用域无痕迹而误判「没做」的假 FAIL——活实际由子代理干了；对应口号「缺席 ≠ 未发生」 |
+
+**评测**
+
+| 术语 | 一句话定义 |
+|---|---|
+| 考卷 / 出题 / 补题 / 题集 | evals.json 本身 / init 生成 / `--append --focus` 定向追加 / 全量 eval 的集合 |
+| 阅卷 | 评分（scoring）环节；「阅卷噪声」= LLM 语义判定的方差 |
+| 挖真题 | `init --from-transcript` 从真实会话逐字节还原的 eval（其余是 LLM 生成的变体） |
+| 双率 | 按判定方式分开的通过率：`pass_rate_programmatic`（程序判，稳）/ `pass_rate_llm`（LLM 判，抖）/ `pass_rate`（混算，粗略） |
+| 双主位 | A/B 对照下各信哪个数：客观侧信 delta_programmatic，主观侧信盲比较胜率 |
+| 上场 | skill 被 cc 自动发现并调用（trigger-accuracy 测的就是会不会上场） |
+| 死重量 | 永不触发的 skill——body 再好也发挥不出价值 |
+| 体检 | `analyze` 的 11 项静态检查（零 API、不跑 cc） |
+
+**通用**
+
+| 术语 | 一句话定义 |
+|---|---|
+| 门禁 | 出 PASS / FAIL 判决的关卡（`gate` 命令，exit code 供 CI 消费） |
+| 兜底 | 主路径失败后的降级处理（如 LLM 失败退确定性模板） |
+| 逃生口 | 显式跳过默认行为的开关（如 `--no-verify` 跳过提交门禁） |
+| 收窄 | 把审计范围从宽松全 session 精确到某个执行段（`--kind`） |
+| 口径 | 某个数字 / 判定「按什么定义算」（对比结论前先对齐口径） |
+| 宁少报不乱报 | 审计的取舍原则：判不出就报 UNRESOLVED，不硬编 FAIL——假 FAIL 一多，报告就没人信了 |
+| 分诊 | 按严重度 / 类型初步筛查分流（fixtures 示例域的领域词，正文行文用「筛查」） |

@@ -29,8 +29,8 @@
 | `files` | list[str] | — | 相关文件名 |
 | `timeout` | int\|null | — | per-eval 超时秒(覆盖全局;null 走全局) |
 | `flags` | list[str] | — | 后处理标记(`degraded:`/`review:`,见下) |
-| `rationale` | str | — | 该题对应 SKILL.md 哪段/哪条(`init` 生成器自报,审阅溯源抓手;空 → `review:no-rationale`) |
-| `confidence` | float\|null | — | `init` 生成器自报 0-1(该题切中所指规则的把握);**仅 init 审阅分诊,不入任何 gate**。同名区分:≠ audit-finding 的 confidence,也 ≠ 旧版校准已删的 confidence(grade/agreement 那套)——这是出卷阶段生成器自评 |
+| `rationale` | str | — | 该题对应 SKILL.md 哪段/哪条(`init` 生成器自报,审阅溯源依据;空 → `review:no-rationale`) |
+| `confidence` | float\|null | — | `init` 生成器自报 0-1(该题切中所指规则的把握);**仅 init 审阅筛查,不入任何 gate**。同名区分:≠ audit-finding 的 confidence,也 ≠ 旧版校准已删的 confidence(grade/agreement 那套)——这是出卷阶段生成器自评 |
 | `mode` / `source_dir` / `source_dir_as` | str | — | 高级:源目录注入模式 |
 
 ## expectations vs assertions(最易混)
@@ -129,7 +129,7 @@
       "prompt": "Based on the skill, what steps must you follow to classify errors?",  // 喂给 claude
       "level": "L1",                              // 层级
       "rationale": "Rules「NEVER fabricate error codes or invent error messages that do not appear in the log」",  // 段名 + 逐字引 SKILL.md 原文(生成器自报,审阅溯源)
-      "confidence": 0.85,                         // 生成器自报把握(仅 init 审阅分诊,不入 gate)
+      "confidence": 0.85,                         // 生成器自报把握(仅 init 审阅筛查,不入 gate)
       "expectations": [                           // 主观期望,LLM 判(这道题纯主观)
         "应使用 Read 工具读取输入日志",
         "应读 references/error-codes.md 查错误码表来分类",
@@ -188,7 +188,7 @@
 | `id` | int | ✅ | 题号（唯一） |
 | `prompt` | str | ✅ | 喂给 cc 的中性用户请求。should-trigger：**不点名 skill**（点名就只是测字面匹配）；should-not：看着相关但 skill 不该接 |
 | `expect_trigger` | bool | ✅ | `true`=该触发（贡献 `recall`）/ `false`=不该触发（贡献 `false_trigger_rate`） |
-| `rationale` | str | — | 为何该 / 不该触发（人审抓手）；trace-mined 探题带 `[trace-mined: …]` 前缀，LLM 过滤失败的带 `[unverified: …]` |
+| `rationale` | str | — | 为何该 / 不该触发（人审依据）；trace-mined 探题带 `[trace-mined: …]` 前缀，LLM 过滤失败的带 `[unverified: …]` |
 | `source` | str | — | 来源：`generated`（LLM 生成，默认）/ `trace-mined`（`init --trigger-probes --from-transcript` 从真实会话挖的 should-not 真题）/ `manual`（手写）。旧 JSON 无 → `generated` |
 
 两类探题各测一种失效（详见 [reference · trigger](sift-reference.md#trigger--触发准确度第-4-维)）：should-trigger 测**漏召**（recall），should-not-trigger 测**误触**（false_trigger_rate）——两者是不同失效模式，`trigger` 分开报、不合成一个分。

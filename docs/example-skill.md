@@ -112,13 +112,13 @@ scoring 层印证:with_skill 83% vs without_skill 54%(盲比较 with_skill 胜)�
 
 这 skill 的植入缺陷是 **compliance 类**(过程违规,给 audit 抓,见「合成验证结论」)。scoring 层在 eval-1(log 含 2 个真码 + 1 行无码)上还顺手暴露一个**非植入**的输出问题,演示了双通道评分的价值:
 
-- `SKILL.md` 只说「`total_errors` 整数」「错误总数」,**没钉死 total_errors 数什么**(只数 errors?还是 errors+unclassified?)。
+- `SKILL.md` 只说「`total_errors` 整数」「错误总数」,**没写死 total_errors 数什么**(只数 errors?还是 errors+unclassified?)。
 - with_skill 据此自由发挥,产出 `total_errors=3`(= errors 2 + unclassified 1);eval 的程序化检查 `total_errors=2` 判 **FAIL**(三 run 全 FAIL)。
 - 同一条「total_errors 应为 2」走双通道**结果打架**:客观(programmatic 正则)**FAIL**(3≠2,抓对),主观(LLM 语义)**PASS**(LLM grader 对精确数值不较真,假放行)。
 
-不是 skill 坏了、也不是刻意埋的雷——是 skill 指令本身的含糊。留着它反而演示了 scoring 双通道的意义:**LLM 单判会假绿,程序化锚点兜住真值**,两通道之差(`pass_rate_programmatic` vs `pass_rate_llm`)就是信号。
+不是 skill 坏了、也不是刻意埋的雷——是 skill 指令本身的含糊。留着它反而演示了 scoring 双通道的意义:**LLM 单判会假通过,程序化锚点兜住真值**,两通道之差(`pass_rate_programmatic` vs `pass_rate_llm`)就是信号。
 
-> **已于 2026-07-21 在 SKILL.md 钉死 `total_errors = len(errors)`(不含 unclassified),消除该歧义。** 此 skill 现为干净范本(中英版同步);重跑后 with_skill 会产出 `total_errors=2`、三层信号一致,上述「双通道打架」演示不再复现。本段保留为历史记录,说明双通道如何暴露指令含糊。
+> **已于 2026-07-21 在 SKILL.md 写死 `total_errors = len(errors)`(不含 unclassified),消除该歧义。** 此 skill 现为干净范本(中英版同步);重跑后 with_skill 会产出 `total_errors=2`、三层信号一致,上述「双通道打架」演示不再复现。本段保留为历史记录,说明双通道如何暴露指令含糊。
 
 ## code-review-auditor:`--task` 真任务模式验证
 

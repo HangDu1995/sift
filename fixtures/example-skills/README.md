@@ -214,10 +214,10 @@ sift init fixtures/example-skills/log-error-analyzer/ \
 # 换挖 code-review-auditor / release-checklist-zh,同样加 --kind skill
 ```
 
-> **切分出卷零串味(实测)**:一份 `multi-skill-clean.jsonl`(3 skill 交错 + 子 agent 调 code-review),加 `--kind skill` 各挖各的、断言路径全是本 skill 自己的产物——log-error-analyzer → `error-report.json`(5 eval)、code-review-auditor → `review-report.json` / `src/orders.py`(5 eval)、release-checklist-zh → `CHANGELOG.md`(7 eval);**互不污染**(log 的考卷不提 review-report/CHANGELOG,反之亦然)。不传 `--kind skill` + 检测到多 skill 会警告(防把别 skill 活动当本 skill 挖)。
+> **切分出卷互不混入(实测)**:一份 `multi-skill-clean.jsonl`(3 skill 交错 + 子 agent 调 code-review),加 `--kind skill` 各挖各的、断言路径全是本 skill 自己的产物——log-error-analyzer → `error-report.json`(5 eval)、code-review-auditor → `review-report.json` / `src/orders.py`(5 eval)、release-checklist-zh → `CHANGELOG.md`(7 eval);**互不污染**(log 的考卷不提 review-report/CHANGELOG,反之亦然)。不传 `--kind skill` + 检测到多 skill 会警告(防把别 skill 活动当本 skill 挖)。
 
 > **跑时的进度行 `对账 transcript i/N`**:N = 切片数 = 该 skill 在 transcript 里被调用的次数(log-error-analyzer / code-review-auditor = 2,release-checklist-zh = 1),i 是第几段;每段切片落盘在 `<输出目录>/slices/`(文件名形如 `multi-skill-log-error-analyzer-1-1.jsonl`),想看每段具体切了啥可直接打开。
 
-> **预期(这个 demo 验的是"切分不串味",不是确定性违规)**:每个 skill 的报告**只反映自己被调用那几段**——log-error-analyzer 的报告不提 `src/*.py` / CHANGELOG;code-review-auditor 的不提 `logs/*.log`;**子 agent 里那次 code-review-auditor 调用切到子 agent 返回,不污染主 agent 的 log-error-analyzer 归属**(scope-aware 切分的关键)。transcript 里各 skill 产物刻意不完美,但能否被抓取决于 auditor 判定层(这几个 skill 的输出要求是散文 / OUTPUT 检查对措辞不对文件,故多为 LLM 辅助判定、非确定性)——本 demo 的核心是**切片纯度**,不是"违规必抓"。归段细节(scope-aware / 子 agent 作用域 / 两限制)见 [reference 的 audit 段](../../docs/sift-reference.md)。
+> **预期(这个 demo 验的是"切分互不混入",不是确定性违规)**:每个 skill 的报告**只反映自己被调用那几段**——log-error-analyzer 的报告不提 `src/*.py` / CHANGELOG;code-review-auditor 的不提 `logs/*.log`;**子 agent 里那次 code-review-auditor 调用切到子 agent 返回,不污染主 agent 的 log-error-analyzer 归属**(scope-aware 切分的关键)。transcript 里各 skill 产物刻意不完美,但能否被抓取决于 auditor 判定层(这几个 skill 的输出要求是散文 / OUTPUT 检查对措辞不对文件,故多为 LLM 辅助判定、非确定性)——本 demo 的核心是**切片纯度**,不是"违规必抓"。归段细节(scope-aware / 子 agent 作用域 / 两限制)见 [reference 的 audit 段](../../docs/sift-reference.md)。
 
 > analyze / vet 默认只终端输出(显式 `-o` 才落盘);run 默认产齐 benchmark + scorecard + vet-report 到 `output/iteration-1/`,随后 `sift report output/iteration-1/` 出自包含 HTML 报告。完整命令参考 [sift-guide](../../tools/skills/sift-guide/SKILL.md)。
