@@ -2913,6 +2913,74 @@ class TestAuxSubagentRescue:
         )
         assert findings[0].verdict == AuditVerdict.FAIL  # description 提及不洗
 
+    def test_aux_linked_evidence_cites_dispatch(self, monkeypatch) -> None:
+        """派发关联:命中记录的 parent_tool_use_id 对上 dispatch_returns 里的
+        dispatch_id → evidence 引用到具体派发([T9] 派发 verifier「验收…」的子代理),
+        「经派发执行」成为可查链路;executor 角色/turn 仍保留。"""
+        calls = {"n": 0}
+        monkeypatch.setattr(
+            "sift.audit.auditor.call_claude", lambda *a, **k: calls.__setitem__("n", calls["n"] + 1) or "[]"
+        )
+        from sift.evals.transcript import DispatchReturn
+        auditor = TranscriptAuditor()
+        aux = [self._aux_tc("Bash", {"command": "nm -D libdemo_op.so"},
+                            agent="code-verifier", turn=118)]
+        aux[0].parent_tool_use_id = "d1"
+        dispatches = [DispatchReturn(dispatch_id="d1", dispatch_turn=9, result_turn=10,
+                                     role="verifier", prompt_head="验收 Task 47:黑盒全量")]
+        findings = auditor._judge_conditional(
+            [_tool_inst(text="使用 nm 检查符号", tool_name="nm")], [], "场景", "t.jsonl",
+            aux_tool_trace=aux, dispatch_returns=dispatches,
+        )
+        assert calls["n"] == 0
+        f = findings[0]
+        assert f.verdict == AuditVerdict.PASS
+        ev = f.evidence
+        assert "主 trace 未命中" in ev and "经派发执行" in ev
+        assert "[T9] 派发 verifier「验收 Task 47:黑盒全量」的子代理 code-verifier(T118)" in ev
+
+    def test_aux_unlinked_falls_back_to_plain_form(self, monkeypatch) -> None:
+        """关联不上(insight 路 ptid=subagentSessionId / 不传 dispatch_returns /
+        id 对不上)→ evidence 回退池化形态(与旧版一致),不带派发引用。"""
+        monkeypatch.setattr("sift.audit.auditor.call_claude", lambda *a, **k: "[]")
+        from sift.evals.transcript import DispatchReturn
+        auditor = TranscriptAuditor()
+        aux = [self._aux_tc("Bash", {"command": "nm -D x.so"}, agent="code-verifier", turn=42)]
+        aux[0].parent_tool_use_id = "ses_sub_123"  # insight 形:对不上任何 dispatch_id
+        dispatches = [DispatchReturn(dispatch_id="d1", dispatch_turn=9,
+                                     role="verifier", prompt_head="验收")]
+        # ① 传了 dispatch_returns 但 id 对不上
+        f1 = auditor._judge_conditional(
+            [_tool_inst(tool_name="nm")], [], "场景", "t.jsonl",
+            aux_tool_trace=aux, dispatch_returns=dispatches,
+        )[0]
+        assert f1.verdict == AuditVerdict.PASS
+        # 无派发引用(「派发 <role>」引用形态不出现;「经派发执行」锚语不算)
+        assert "派发 verifier" not in f1.evidence and "子代理 code-verifier(T42)" in f1.evidence
+        # ② 不传 dispatch_returns(None)
+        f2 = auditor._judge_conditional(
+            [_tool_inst(tool_name="nm")], [], "场景", "t.jsonl", aux_tool_trace=aux,
+        )[0]
+        assert f2.verdict == AuditVerdict.PASS
+        assert "派发 verifier" not in f2.evidence
+
+    def test_aux_linked_empty_role_composes_cleanly(self, monkeypatch) -> None:
+        """派发关联命中但派发无角色名 → evidence 不得拼出「子代理的子代理」
+        (空角色省略该段;[T] 派发引用仍保留)。"""
+        monkeypatch.setattr("sift.audit.auditor.call_claude", lambda *a, **k: "[]")
+        from sift.evals.transcript import DispatchReturn
+        auditor = TranscriptAuditor()
+        aux = [self._aux_tc("Bash", {"command": "nm -D x.so"}, agent="code-verifier", turn=7)]
+        aux[0].parent_tool_use_id = "d1"
+        dispatches = [DispatchReturn(dispatch_id="d1", dispatch_turn=3, role="", prompt_head="")]
+        f = auditor._judge_conditional(
+            [_tool_inst(tool_name="nm")], [], "场景", "t.jsonl",
+            aux_tool_trace=aux, dispatch_returns=dispatches,
+        )[0]
+        assert f.verdict == AuditVerdict.PASS
+        assert "子代理的子代理" not in f.evidence
+        assert "[T3] 派发的子代理 code-verifier(T7)" in f.evidence
+
 
 class TestStepDispatchPairs:
     """层3:派发-回报对喂 step 判官——prompt 含"派发-回报记录"段与"传递≠达成"规则;

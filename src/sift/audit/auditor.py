@@ -179,6 +179,9 @@ def _dispatch_pairs_section(pairs, aux_tool_trace=None) -> str:
       层1 已构建;无 aux 时缺省执行计数)——直接杀"全程没有任何实际运行测试"式断言。
     - 每对一行:``[T派发→T回报] 角色「prompt 头」 → 回报: 回报头``。回报头显式标注
       **子代理产出**——回报是子代理的报告,不是主 agent 的行为(防判官张冠李戴)。
+      行尾按派发挂执行计数(``〔子代理执行: bash×3、write×1〕``,aux 记录经
+      ``parent_tool_use_id → dispatch_id`` 归到具体派发)——子代理干了但回报没列的
+      场景有了痕迹证据,治「回报没列 = 没做」的缺席推断。
     - 裁剪(超 _DISPATCH_PAIRS_LIMIT,封顶是不变式——该段随每批 prompt 重复进
       step/prohibition 两判官,超限 token 成本按批次数放大):失败行(只按**回报窗口**
       判定,不含 prompt——修 bug 类工作流的派发 prompt 常含「失败」二字)优先占预算,
@@ -206,6 +209,18 @@ def _dispatch_pairs_section(pairs, aux_tool_trace=None) -> str:
         top = "、".join(f"{n} {c} 次" for n, c in sorted(counts.items(), key=lambda x: -x[1])[:6])
         exec_str = f";子代理实际执行 {top}"
 
+    # 按派发分组的执行计数(cc 路:aux 记录的 parent_tool_use_id == 派发 dispatch_id)。
+    # 挂到对应派发行 → 判官看得见「这次派发的子代理实际干了什么(工具×次数)」,
+    # 直接治「回报没列 = 没做」的缺席推断(子代理干了但报告没写的场景有了痕迹证据)。
+    exec_by_dispatch: dict[str, dict[str, int]] = {}
+    for t in (aux_tool_trace or []):
+        pid = str(_f(t, "parent_tool_use_id") or "").strip()
+        if not pid:
+            continue
+        n = (_f(t, "name") or "").strip().lower() or "(未知)"
+        d_counts = exec_by_dispatch.setdefault(pid, {})
+        d_counts[n] = d_counts.get(n, 0) + 1
+
     def _fmt(p):
         d, r = _f(p, "dispatch_turn"), _f(p, "result_turn")
         rng = f"[T{d}→T{r}]" if (d is not None and r is not None) else (
@@ -219,7 +234,13 @@ def _dispatch_pairs_section(pairs, aux_tool_trace=None) -> str:
             shown = f"{shown} …尾: {rt[:60]}"
         ph = " ".join(str(_f(p, "prompt_head") or "").split())
         role = _f(p, "role") or "子代理"
-        return f"- {rng} {role}「{ph[:80]}」 → 回报(子代理产出): {shown}"
+        exec_cite = ""
+        d_counts = exec_by_dispatch.get(str(_f(p, "dispatch_id") or "").strip())
+        if d_counts:
+            top_d = "、".join(
+                f"{n}×{c}" for n, c in sorted(d_counts.items(), key=lambda x: -x[1])[:4])
+            exec_cite = f" 〔子代理执行: {top_d}〕"
+        return f"- {rng} {role}「{ph[:80]}」 → 回报(子代理产出): {shown}{exec_cite}"
 
     def _is_failed(p):
         # 只看回报窗口(result_head/result_tail)——修 bug 类工作流的派发 prompt 常含
@@ -870,6 +891,7 @@ class TranscriptAuditor:
                     self._judge_conditional, buckets[AuditCategory.CONDITIONAL],
                     tool_trace, scene, tp.name, model, timeout, on_progress=on_progress,
                     on_usage=acc.scoped("judge"), aux_tool_trace=aux_for_tp,
+                    dispatch_returns=digest.dispatch_returns,
                 )
                 # 层3-改进3:prohibition 判官共享 pairs 段(默认开,env
                 # SIFT_PROHIBITION_PAIRS=0 可关)。CONSTRAINT 形态的 Subagent 规约
@@ -1107,13 +1129,19 @@ class TranscriptAuditor:
         on_progress: ProgressFn | None = None,
         on_usage: Callable[[dict], None] | None = None,
         aux_tool_trace: list | None = None,
+        dispatch_returns: list | None = None,
     ) -> list[AuditFinding]:
         """判定条件性指令(TOOL_REQUIREMENT / REFERENCE_USAGE)的三态结论。
 
         每条指令先走确定性 ``match_tool_call``(命中 tool_trace → PASS,不调 LLM);
         root 未命中且有 ``aux_tool_trace`` 时再走第二遍确定性匹配(命中 → PASS,
         evidence 标注"子代理 <role> 经派发执行"——A1 缺席式误判的洗冤通道,
-        命中即事实、不进 LLM);两遍都未命中的批量交 LLM 判"场景是否该触发该
+        命中即事实、不进 LLM;命中记录带 parent_tool_use_id 且能在
+        ``dispatch_returns`` 里对上 ``dispatch_id`` 时,evidence 进一步引用到
+        具体派发([T{turn}] 派发 <role>「prompt 头」的子代理),把"经派发执行"
+        从措辞变成可查链路——人对着 evidence 即可核「派发里到底交没交代这事」;
+        对不上(insight 路 ptid=subagentSessionId / 旧数据无 id)回退不带派发引用。
+        两遍都未命中的批量交 LLM 判"场景是否该触发该
         指令",据此分 FAIL(该做没做) / N/A(场景不涉及);LLM 失败/异常/解析失败
         → 标 N/A(宁少报不乱报)。未命中全量交 LLM,
         >_MAX_LLM_IN_BATCH 由 ``_llm_judge_applicable`` 内部分批循环(无超限兜底 N/A)。
@@ -1127,6 +1155,9 @@ class TranscriptAuditor:
             timeout: LLM 调用超时秒数。
             aux_tool_trace: 子代理作用域全量工具痕迹(slice.build_subagent_tool_trace,
                 仅 kind=root 时 CLI 传入;None/空 = 无旁路,行为与旧版完全一致)。
+            dispatch_returns: 该 transcript 的派发-回报对(digest.dispatch_returns,
+                audit() 主循环透传);命中记录按 ``parent_tool_use_id → dispatch_id``
+                关联到具体派发做 evidence 引用,None/对不上 → 回退无派发引用形态。
 
         Returns:
             每条指令一个 AuditFinding,顺序与输入一致;category 全 CONDITIONAL;
@@ -1137,6 +1168,15 @@ class TranscriptAuditor:
         findings: list[AuditFinding | None] = [None] * len(instructions)
         # 未命中的待 LLM 判定:(原位置 i, 指令)
         unmatched: list[tuple[int, InstructionCheck]] = []
+        # 派发关联表(cc 路:aux 记录的 parent_tool_use_id == 派发的 dispatch_id):
+        # 洗冤 evidence 引用到具体派发,把「经派发执行」做成可查链路。
+        _dispatch_by_id: dict[str, object] = {}
+        for _d in (dispatch_returns or []):
+            _did = getattr(_d, "dispatch_id", None)
+            if _did is None and isinstance(_d, dict):
+                _did = _d.get("dispatch_id")
+            if _did:
+                _dispatch_by_id[str(_did)] = _d
 
         for i, inst in enumerate(instructions):
             tool_name = inst.params.get("tool_name", "")
@@ -1158,7 +1198,8 @@ class TranscriptAuditor:
             )
             if aux_hit is not None:
                 findings[i] = self._make_aux_pass_finding(
-                    inst, tool_name, script_path, transcript_name, aux_hit, required_params
+                    inst, tool_name, script_path, transcript_name, aux_hit, required_params,
+                    dispatch_by_id=_dispatch_by_id,
                 )
             else:
                 unmatched.append((i, inst))
@@ -1628,6 +1669,7 @@ class TranscriptAuditor:
         transcript_name: str,
         tc,
         required_params=None,
+        dispatch_by_id: dict | None = None,
     ) -> AuditFinding:
         """root trace 未命中、**子代理**痕迹命中(aux 旁路)的 PASS finding。
 
@@ -1636,6 +1678,12 @@ class TranscriptAuditor:
         子代理痕迹命中是确定性事实 → PASS;evidence 归属到执行者(子代理角色 + turn),
         与"主 agent 亲自执行"的 PASS(_make_match_pass_finding)在证据上区分开——
         保持诚实:W5 语义("该亲自做的没亲自做")由 prohibition/step 判官把守,不经此路。
+
+        派发引用(关联增强):``tc.parent_tool_use_id`` 在 ``dispatch_by_id`` 里对上
+        ``dispatch_id`` 时(cc 路,aux 记录的 ptid 即派发 tool_use id),evidence 前缀
+        引用具体派发(``[T{turn}] 派发 <role>「prompt 头」的子代理``)——「经派发执行」
+        从措辞变成可查链路,人可对着派发原文核「到底交没交代这事」;对不上
+        (insight 路 ptid=subagentSessionId / 旧数据无 id)回退无派发引用形态。
         ``tc`` 支持 attr / dict 风格(同 match_tool_call 惯例)。
         """
         def _f(attr: str):
@@ -1645,7 +1693,23 @@ class TranscriptAuditor:
         turn = _f("turn")
         what = f"调用了 {tool_name}" if tool_name else f"读取了 {script_path}"
         where = f"(T{turn})" if turn is not None else ""
-        evidence = f"主 trace 未命中;子代理 {agent}{where} 实际{what}(经派发执行)"
+        # 派发引用:能关联就前缀「哪次派发的子代理」,否则维持池化形态。
+        source = f"子代理 {agent}{where}"
+        ptid = str(_f("parent_tool_use_id") or "").strip()
+        disp = (dispatch_by_id or {}).get(ptid) if ptid else None
+        if disp is not None:
+            def _df(attr: str):
+                return getattr(disp, attr, None) if not isinstance(disp, dict) else disp.get(attr)
+            d_turn = _df("dispatch_turn")
+            d_head = f"[T{d_turn}] " if d_turn is not None else ""
+            # 角色缺省不注入兜底词(「子代理」)——固定后缀「的子代理」会拼出
+            # 「派发 子代理的子代理 x」;空角色直接省略该段。
+            d_role = str(_df("role") or "").strip()
+            d_who = f" {d_role}" if d_role else ""
+            d_prompt = " ".join(str(_df("prompt_head") or "").split())[:40]
+            d_cite = f"「{d_prompt}」" if d_prompt else ""
+            source = f"{d_head}派发{d_who}{d_cite}的子代理 {agent}{where}"
+        evidence = f"主 trace 未命中;{source} 实际{what}(经派发执行)"
         params = [p for p in (required_params or []) if p]
         if params and tool_name:
             evidence += f"(含 {' '.join(params)})"

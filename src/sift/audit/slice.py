@@ -268,7 +268,10 @@ def build_subagent_tool_trace(transcript_path: Path, *, locate_turns: bool = Tru
     3. 都无 → 空串(evidence 显示"子代理"不带角色)。
 
     ``turn`` 为全量 stamp 的全局 turnIndex(与 root 切片同一体系,aux 命中证据可
-    用 [T{idx}] 对回 insight turnIndex)。
+    用 [T{idx}] 对回 insight turnIndex)。``parent_tool_use_id`` 原样保留——cc 路它
+    指向主作用域派发 tool_use 的 id,可与 ``DispatchReturn.dispatch_id`` 精确关联
+    (洗冤 evidence 引用到具体派发);insight 路它是 subagentSessionId、关联不上,
+    消费方按查不到回退。
     """
     records = _records(transcript_path)
     # cc 原生路径的派发映射:主作用域 Agent/Task tool_use 的 id → 角色(subagent_type)。
@@ -304,6 +307,7 @@ def build_subagent_tool_trace(transcript_path: Path, *, locate_turns: bool = Tru
                 input=inp or None,
                 turn=turn_idx if locate_turns else None,
                 agent=str(agent or ""),
+                parent_tool_use_id=str(ptid or ""),
             ))
     return trace
 

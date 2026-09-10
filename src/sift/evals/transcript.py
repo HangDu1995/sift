@@ -104,6 +104,8 @@ class DispatchReturn(BaseModel):
     """
     dispatch_turn: int | None = None  # 派发 tool_use 所属全局 turnIndex
     result_turn: int | None = None    # 回报 tool_result 所属全局 turnIndex
+    dispatch_id: str = ""             # 派发 tool_use 的原生 id(cc 路可被子代理记录的
+                                      # parent_tool_use_id 精确关联;insight 路为空/对不上)
     role: str = ""                    # 被派发角色(input.subagent_type / agent)
     prompt_head: str = ""             # 派发 prompt 头(≤200 字)
     result_head: str = ""             # 回报头(≤400 字,已剥 <task> 包装)
@@ -515,6 +517,7 @@ def _digest_from_records(
                 dispatch_returns.append(DispatchReturn(
                     dispatch_turn=turn_idx,
                     result_turn=id2result_turn.get(tid),
+                    dispatch_id=str(tid or ""),
                     role=str(inp.get("subagent_type") or inp.get("agent") or ""),
                     prompt_head=str(inp.get("prompt") or inp.get("description") or "")[:200],
                     result_head=_rhead[:400],

@@ -417,6 +417,7 @@ def test_build_subagent_tool_trace_agent_attribution_via_dispatch(tmp_path):
     assert trace[0].name == "Bash"
     assert trace[0].agent == "general-purpose"  # 派发映射归属
     assert trace[0].turn is not None  # 全局 turnIndex 已 stamp
+    assert trace[0].parent_tool_use_id == a_id  # linkage 原样保留(可关联 DispatchReturn.dispatch_id)
 
 
 def test_build_subagent_tool_trace_rec_agent_wins(tmp_path):
@@ -436,6 +437,7 @@ def test_build_subagent_tool_trace_rec_agent_wins(tmp_path):
     assert len(trace) == 1
     assert trace[0].agent == "code-verifier"  # rec.agent 优先
     assert trace[0].input == {"filePath": "docs/x/references/demo-contract.md"}
+    assert trace[0].parent_tool_use_id == a_id  # ptid 原样保留(对不上 dispatch_id → 消费方回退)
 
 
 def test_build_subagent_tool_trace_empty_when_no_subagents(tmp_path):
@@ -472,6 +474,7 @@ def test_digest_collects_dispatch_returns(tmp_path):
     d1, d2 = digest.dispatch_returns
     assert d1.role == "verifier" and d1.result_head.startswith("FAILED") and d1.result_len == len("FAILED: 254/275")
     assert d1.dispatch_turn is not None and d1.result_turn is not None
+    assert d1.dispatch_id == "tu_1" and d2.dispatch_id == "tu_2"  # 派发 tool_use id(供 aux linkage)
     assert d2.role == "developer" and d2.result_len == 0 and d2.result_head == ""
     # 非 dispatch 工具不入
     recs2 = [_tool_use("tu_3", "Bash", {"command": "ls"}), _tool_result("tu_3", "out")]
@@ -524,6 +527,26 @@ def test_dispatch_pairs_section_render_and_truncate():
     assert len(sec4) <= _DISPATCH_PAIRS_LIMIT + 600  # 封顶是不变式
     assert "份含失败字样的回报未展开" in sec4         # 超预算失败行压计数
     assert "FAILED: 用例 0 超阈值" in sec4           # 预算内失败行仍在(优先保留)
+
+    # 按派发挂执行计数:aux 记录的 parent_tool_use_id 对上 dispatch_id → 行尾带
+    # 〔子代理执行: …〕;对不上(aux 无 id / 派发 id 缺失)→ 行形态不变。
+    from sift.models import ToolCallRecord
+    pair_v = _p("verifier", "验收 Task 47", "FAILED: 254/275")
+    pair_v.dispatch_id = "d1"
+    aux = [ToolCallRecord(name="Bash", input_summary="b", input={"command": "pytest -q"},
+                          parent_tool_use_id="d1"),
+           ToolCallRecord(name="Bash", input_summary="b", input={"command": "pytest -x"},
+                          parent_tool_use_id="d1"),
+           ToolCallRecord(name="Write", input_summary="w", input={"file_path": "LOG.md"},
+                          parent_tool_use_id="d1"),
+           ToolCallRecord(name="Read", input_summary="r", input={"file_path": "a.md"},
+                          parent_tool_use_id="d_other")]  # 别的派发:不计入 d1 行
+    sec5 = _dispatch_pairs_section([pair_v, _p("developer", "建目录", "DONE")], aux)
+    d1_line = [l for l in sec5.splitlines() if "验收 Task 47" in l][0]
+    assert "〔子代理执行: bash×2、write×1〕" in d1_line
+    assert "read" not in d1_line.split("〔")[-1]        # d_other 的 read 不串行
+    d2_line = [l for l in sec5.splitlines() if "建目录" in l][0]
+    assert "〔子代理执行" not in d2_line                # 无关联痕迹 → 行形态不变
 
     # 空 → 空段(整段不进 prompt)
     assert _dispatch_pairs_section(None) == ""
