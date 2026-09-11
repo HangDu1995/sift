@@ -1472,6 +1472,33 @@ def test_audit_attaches_available_provenance_without_changing_findings(tmp_path,
     assert report.findings == []
 
 
+def test_audit_display_names_used_for_all_report_surfaces(tmp_path, monkeypatch) -> None:
+    """display_names:报告里的一切名字(provenance 键 / transcripts)用原始输入名,
+    不透出 CLI 展开结构化输入 / --db 导出产生的随机临时文件名(跑一次变一次、
+    跑完即删,下游无法对回输入);不传时保持 tp.name(行为与旧版一致)。"""
+    tmp_jsonl = tmp_path / "tmpXYZ.jsonl"          # 模拟 CLI 展开出的临时文件
+    tmp_jsonl.write_text("placeholder", encoding="utf-8")
+    digest = SessionDigest(evidence_metadata={"version": 2})
+
+    monkeypatch.setattr("sift.audit.auditor.rebuild", lambda *args, **kwargs: ([], "", digest))
+    monkeypatch.setattr(
+        "sift.audit.auditor.analyze_provenance",
+        lambda value: ProvenanceAuditResult(available=True),
+    )
+
+    # 传 display_names → 用原始输入名
+    report = TranscriptAuditor().audit(
+        "skill", "", [tmp_jsonl], display_names=["opsbot-evidence.json"]
+    )
+    assert list(report.provenance) == ["opsbot-evidence.json"]
+    assert report.transcripts == ["opsbot-evidence.json"]
+
+    # 不传(默认)→ tp.name,与旧版一致
+    report_default = TranscriptAuditor().audit("skill", "", [tmp_jsonl])
+    assert list(report_default.provenance) == ["tmpXYZ.jsonl"]
+    assert report_default.transcripts == ["tmpXYZ.jsonl"]
+
+
 @pytest.mark.parametrize("has_refs", [False, True])
 def test_audit_prechecks_provenance_without_losing_reference_only_evidence(tmp_path, monkeypatch, has_refs):
     transcript = tmp_path / "session.jsonl"

@@ -60,8 +60,9 @@ class _FakeAuditor:
         self.calls: list[dict] = []
 
     def audit(self, skill_name, skill_body, transcripts, model=None, timeout=120,
-              on_progress=None, refine_instructions=False, generate_headline=False, locate_turns=False, declared_tools=None):
-        self.calls.append({"transcripts": list(transcripts)})
+              on_progress=None, refine_instructions=False, generate_headline=False, locate_turns=False, declared_tools=None,
+              display_names=None):
+        self.calls.append({"transcripts": list(transcripts), "display_names": display_names})
         return _fake_report()
 
 
@@ -90,6 +91,8 @@ def test_audit_db_with_session_exports_and_audits(monkeypatch, tmp_path):
     assert len(fake.calls) == 1
     used = fake.calls[0]["transcripts"][0]
     assert used.suffix == ".json"
+    # 显示名 = <session-id>.json:报告侧不透出随机临时名
+    assert fake.calls[0]["display_names"] == ["ses_x.json"]
     # 报告写出
     assert (out / "audit-report.json").exists()
     # 临时 json 已被 finally 清理
@@ -161,3 +164,4 @@ def test_audit_db_single_session_autopicks(monkeypatch, tmp_path):
     # 自动选了唯一 session(无需 --session)
     assert exported["sid"] == "ses_only"
     assert len(fake.calls) == 1
+    assert fake.calls[0]["display_names"] == ["ses_only.json"]

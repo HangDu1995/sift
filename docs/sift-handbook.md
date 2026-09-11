@@ -1954,7 +1954,7 @@ _digest_from_records()
 
 验证闭环只针对通常需要执行测试的代码文件；`.md`、`.markdown` 和 `.mdx` 文档默认视为验证豁免路径，不会因为没有测试调用而产生 `FINAL_MODIFICATION_UNVERIFIED`。工具的 `is_error` 表示结果是否被标记为错误，`succeeded` 表示是否明确报告成功；两者同时存在时，错误标记优先，只有 `succeeded=true` 且 `is_error` 不是 `true` 才视为成功。
 
-实现位于 `src/sift/audit/provenance.py`，结果数据模型位于 `src/sift/models/provenance_audit_models.py`。`TranscriptAuditor.audit()` 现在会对每个成功重建的 transcript 自动运行 Analyzer，并将可用结果按 transcript 文件名写入 `AuditReport.provenance`；该区块独立于既有 findings，不改变 audit 的 exit code、声明 coverage 或 PASS/FAIL 数量。对普通 v1/cc/opencode session，`provenance` 保持为空；对 v2 即使没有 mutation，也会写入 `available=true` 的结果，因为“工具执行但没有文件变化”本身是可审计事实。阶段 5 的 HTML 交互式展示仍单独推进。
+实现位于 `src/sift/audit/provenance.py`，结果数据模型位于 `src/sift/models/provenance_audit_models.py`。`TranscriptAuditor.audit()` 现在会对每个成功重建的 transcript 自动运行 Analyzer，并将可用结果按**原始输入文件名**写入 `AuditReport.provenance`（v2 证据包在 CLI 内部展开成临时 cc-jsonl 处理，报告里的键用原始 bundle 名，临时文件名不透出）；该区块独立于既有 findings，不改变 audit 的 exit code、声明 coverage 或 PASS/FAIL 数量。对普通 v1/cc/opencode session，`provenance` 保持为空；对 v2 即使没有 mutation，也会写入 `available=true` 的结果，因为“工具执行但没有文件变化”本身是可审计事实。阶段 5 的 HTML 交互式展示仍单独推进。
 
 独立 Provenance Finding 不复用 `AuditFinding`，以免污染声明覆盖率或改变现有 pass/fail 数量；`ProvenanceAuditResult.file_timelines` 使用 `ProvenanceTimelineEntry` 表示每次文件 effect。完整类型、默认值和取值约定见 [reference 中的字段定义](sift-reference.md#provenancefinding)。
 

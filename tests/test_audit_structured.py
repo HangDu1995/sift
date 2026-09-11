@@ -73,7 +73,8 @@ class _CapturingAuditor:
         self.calls: list[dict] = []
 
     def audit(self, skill_name, skill_body, transcripts, model=None, timeout=600,
-              on_progress=None, refine_instructions=False, generate_headline=False, locate_turns=False, declared_tools=None):
+              on_progress=None, refine_instructions=False, generate_headline=False, locate_turns=False, declared_tools=None,
+              display_names=None):
         captured = []
         for tp in transcripts:
             try:
@@ -81,7 +82,8 @@ class _CapturingAuditor:
             except OSError:
                 content = ""
             captured.append({"path": str(tp), "content": content})
-        self.calls.append({"skill_name": skill_name, "transcripts": captured})
+        self.calls.append({"skill_name": skill_name, "transcripts": captured,
+                           "display_names": display_names})
         return _fake_report()
 
 
@@ -111,6 +113,9 @@ def test_structured_input_expanded_to_cc_jsonl(monkeypatch, tmp_path):
     assert '"Skill"' in c
     assert '"skill": "skillA"' in c
     assert "sift-records" not in c
+    # 显示名透传:报告侧(findings.transcript / provenance 键 / 进度)用原始输入名,
+    # 不把随机临时名(跑一次变一次、跑完即删)写进 audit-report。
+    assert fake.calls[0]["display_names"] == ["s.json"]
 
 
 def test_structured_input_with_by_skill_slices(monkeypatch, tmp_path):
@@ -139,3 +144,7 @@ def test_structured_input_with_by_skill_slices(monkeypatch, tmp_path):
     assert "/tmp/A.md" in joined
     assert "/tmp/B.md" not in joined
     assert "skillB" not in joined
+    # 切片文件名用原始输入名的 stem(临时文件的随机 stem 不进持久化的 slices/ 文件名,
+    # 该名即 findings.transcript);切片后不再叠 display_names(切片名本身即显示名)。
+    assert Path(ts[0]["path"]).name == "s-skillA-1-1.jsonl"
+    assert fake.calls[0]["display_names"] is None

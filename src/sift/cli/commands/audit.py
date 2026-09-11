@@ -83,10 +83,13 @@ def _fmt_ms(v: object) -> str:
         return str(v)
 
 
-def _audit_from_db(db: Path, session: Optional[str]) -> Path:
-    """``--db`` 解析:list/选 session → export → 写临时 json,返回其 Path(用完由 caller unlink)。
+def _audit_from_db(db: Path, session: Optional[str]) -> tuple[Path, str]:
+    """``--db`` 解析:list/选 session → export → 写临时 json,返回 (临时 json Path, 显示名)。
 
-    - 单 session 或 ``--session`` 命中 → 导出该 session,返回临时 json Path。
+    显示名 = ``<session-id>.json``——报告侧(findings.transcript / 终端进度)用它,
+    不透出随机临时名(临时 json 用完由 caller unlink)。
+
+    - 单 session 或 ``--session`` 命中 → 导出该 session,返回临时 json Path + 显示名。
     - 多 session 且未指定 → 打 rich 表(id/title/updated)+ exit 2(非交互,让用户带 ``--session`` 重跑)。
     - 0 session / id 不匹配 / opencode 缺失 → ``OpencodeDbError``(被上层 except 兜成 exit 3)。
 
@@ -115,7 +118,7 @@ def _audit_from_db(db: Path, session: Optional[str]) -> Path:
         mode="w", suffix=".json", delete=False, encoding="utf-8"
     ) as f:
         f.write(json_str)
-    return Path(f.name)
+    return Path(f.name), f"{sid}.json"
 
 
 def _print_scope_hint(transcript: list[Path], name: str) -> None:
@@ -265,17 +268,24 @@ def audit(
             raise typer.Exit(code=2)
 
         transcript = transcript or []
+        # 显示名(与 transcript 同序):--db 导出 / 结构化输入展开都会产生**临时文件**,
+        # 报告侧(findings.transcript / provenance 键 / 终端进度)一律用原始输入名——
+        # 临时名跑一次变一次、跑完即删,写进 audit-report 下游对不上账(同一次证据包
+        # 跑两遍也无法 diff)。None = 无临时替换,引擎侧直接用 tp.name(行为与旧版一致)。
+        display_names: list[str] | None = None
         if db is not None:
             # --db 解析:list/选 session → export → 临时 json;多 session 在此 exit 2。
             # 解析后 transcript = [临时 json],后续 --kind/引擎照常走(opencode .json 经
             # rebuild 的 is_opencode_session 分派 → build_digest_from_opencode)。
-            export_tmp = _audit_from_db(db, session)
+            export_tmp, export_name = _audit_from_db(db, session)
             transcript = [export_tmp]
+            display_names = [export_name]
 
         # 结构化 records 输入(--transcript 指向 {format:"sift-records"} 的 JSON):
         # 展开成临时 cc-jsonl 替进去,后续 --kind 切分 / rebuild 全按 cc 路径走,零改动。
         # producer(insight 等)因此不必手拼 cc-jsonl(免 tool_use/tool_result 拆分、Skill 大小写)。
         if any(is_structured_records(tp) for tp in transcript):
+            display_names = [tp.name for tp in transcript]  # 先记原始名(同序),再替换成临时文件
             expanded: list[Path] = []
             for tp in transcript:
                 if not is_structured_records(tp):
@@ -367,7 +377,14 @@ def audit(
                         _aux_by_tp[tp] = build_subagent_tool_trace(tp, locate_turns=locate_turns)
                     aux_tool_traces.append(_aux_by_tp[tp])
                 ext = ".json" if is_oc else ".jsonl"
-                sp = slice_dir / f"{tp.stem}-{name}-{ti}-{i}{ext}"
+                # 切片文件名用**原始输入名**的 stem(结构化/--db 展开的临时 stem 不进
+                # 文件名——切片文件持久化在 out/slices/,其名即 findings.transcript)。
+                stem_src = (
+                    display_names[ti - 1]
+                    if display_names is not None and ti - 1 < len(display_names)
+                    else tp.name
+                )
+                sp = slice_dir / f"{Path(stem_src).stem}-{name}-{ti}-{i}{ext}"
                 if is_oc:
                     sp.write_text(
                         json.dumps(seg, ensure_ascii=False, indent=2),
@@ -380,12 +397,17 @@ def audit(
                     )
                 sliced.append(sp)
             transcript = sliced
+            # 切片文件名已含原始输入 stem,本身就是稳定、可回溯的显示名——引擎侧
+            # 直接用切片文件名,不再叠一层 display_names(长度也与切片数对不上)。
+            display_names = None
 
         # on_progress:audit 每批 LLM 判定 40-257s,边跑边报进度(transcript 头 + 每批 [k/总] + 耗时),
         # 否则全程静默、用户不知是否在跑。console.print 即时 flush,长跑也实时可见。
         # aux_tool_traces 只在 kind=root 切片路径填充;None 时不传 kwarg——对
         # TranscriptAuditor 的调用形态与旧版完全一致(测试 fake / 外部调用方零感知)。
+        # display_names 同理:只在「临时文件直接喂引擎」(无 --kind 的展开/--db)时传。
         _aux_kw = {"aux_tool_traces": aux_tool_traces} if aux_tool_traces is not None else {}
+        _names_kw = {"display_names": display_names} if display_names else {}
         report = TranscriptAuditor().audit(
             name, body, transcript, model=model,
             refine_instructions=refine_instructions,
@@ -393,7 +415,7 @@ def audit(
             locate_turns=locate_turns,
             declared_tools=fm_tools,
             on_progress=lambda msg: console.print(msg),
-            **_aux_kw,
+            **_aux_kw, **_names_kw,
         )
     except SiftError as exc:
         console.print(f"[red]Error:[/red] {exc}")

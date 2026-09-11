@@ -678,6 +678,7 @@ class TranscriptAuditor:
         locate_turns: bool = False,
         declared_tools: dict[str, str] | None = None,
         aux_tool_traces: list[list[ToolCallRecord]] | None = None,
+        display_names: list[str] | None = None,
     ) -> AuditReport:
         """聚合主入口:把 skill 声明的指令 + transcript 反推声明逐条对账若干 transcript。
 
@@ -714,8 +715,10 @@ class TranscriptAuditor:
                 行为与旧版完全一致)。仅 ``--kind root`` 时 CLI 传入:条件类
                 (TOOL_REQUIREMENT/REFERENCE_USAGE)root trace 未命中时在对应子代理
                 痕迹里做第二遍确定性匹配,命中 → PASS(evidence 标注执行者)。
-
-        Returns:
+            display_names: 与 ``transcripts`` **同序**的显示名列表。CLI 对结构化输入 /
+                ``--db`` 导出会展开成临时文件,报告里的一切名字(findings.transcript /
+                provenance 键 / transcripts / 进度)用它而非临时文件名;None / 越界时
+                回退 ``tp.name``,行为与旧版完全一致。
 
         Returns:
             ``AuditReport``:findings 为所有**有效** transcript 的平铺结果;坏/空 transcript
@@ -817,7 +820,16 @@ class TranscriptAuditor:
         boundary_traces: list[tuple[str, list]] = []  # 越界视图输入:(transcript 名, rebuild 的 tool_trace)
 
         for ti, tp in enumerate(transcripts, 1):
-            _emit(on_progress, f"对账 transcript {ti}/{len(transcripts)}: {tp.name}")
+            # 显示名:CLI 对结构化输入 / --db 导出会展开成临时文件,报告里的一切
+            # 名字(findings.transcript / provenance 键 / transcripts / 进度)用
+            # **原始输入名**——临时名跑一次变一次、跑完即删,写进报告下游对不上账。
+            # 未提供(默认)时即 tp.name,行为与旧版完全一致。
+            display = (
+                display_names[ti - 1]
+                if display_names is not None and ti - 1 < len(display_names)
+                else tp.name
+            )
+            _emit(on_progress, f"对账 transcript {ti}/{len(transcripts)}: {display}")
             # A1 旁路:与 transcripts 同序的 aux(0-based 索引);None/越界/空 → 无旁路。
             aux_for_tp: list[ToolCallRecord] | None = None
             if aux_tool_traces is not None and ti - 1 < len(aux_tool_traces):
@@ -826,11 +838,11 @@ class TranscriptAuditor:
                 _t = time.perf_counter()
                 tool_trace, transcript_text, digest = rebuild(tp, locate_turns=locate_turns)
                 stage_seconds["rebuild"] += time.perf_counter() - _t
-                boundary_traces.append((tp.name, tool_trace))
+                boundary_traces.append((display, tool_trace))
             except SiftError as e:
                 # 坏/空 transcript:不崩,记 warning 跳过(其余 transcript 照常处理)。
                 # 未能重建有效 digest 时，声明对账与文件归因分析均跳过该记录。
-                warnings.append(f"{tp.name}: {e}")
+                warnings.append(f"{display}: {e}")
                 continue
 
             # v2 证据自动进入独立 provenance 区块。Analyzer 是纯本地确定性逻辑，
@@ -838,7 +850,7 @@ class TranscriptAuditor:
             if has_provenance_evidence(digest):
                 provenance_result = analyze_provenance(digest)
                 if provenance_result.available:
-                    provenance_results[tp.name] = provenance_result
+                    provenance_results[display] = provenance_result
 
             derived = derive_declarations(digest, instructions)
             all_inst = instructions + derived
@@ -889,7 +901,7 @@ class TranscriptAuditor:
                 )
                 fut_cond = pool.submit(
                     self._judge_conditional, buckets[AuditCategory.CONDITIONAL],
-                    tool_trace, scene, tp.name, model, timeout, on_progress=on_progress,
+                    tool_trace, scene, display, model, timeout, on_progress=on_progress,
                     on_usage=acc.scoped("judge"), aux_tool_trace=aux_for_tp,
                     dispatch_returns=digest.dispatch_returns,
                 )
@@ -904,14 +916,14 @@ class TranscriptAuditor:
                 )
                 fut_proh = pool.submit(
                     self._judge_prohibition, buckets[AuditCategory.PROHIBITION],
-                    transcript_text, tp.name, model, timeout, on_progress=on_progress,
+                    transcript_text, display, model, timeout, on_progress=on_progress,
                     on_usage=acc.scoped("judge"),
                     locate_turns=locate_turns,
                     dispatch_pairs=_proh_pairs, aux_tool_trace=aux_for_tp,
                 )
                 fut_step = pool.submit(
                     self._judge_step, buckets[AuditCategory.STEP], transcript_text,
-                    tp.name, model, timeout, tool_trace=tool_trace, on_progress=on_progress,
+                    display, model, timeout, tool_trace=tool_trace, on_progress=on_progress,
                     on_usage=acc.scoped("judge"),
                     locate_turns=locate_turns,
                     dispatch_pairs=_pairs, aux_tool_trace=aux_for_tp,
@@ -922,7 +934,7 @@ class TranscriptAuditor:
                 fut_cf = (
                     pool.submit(
                         self._judge_control_flow, order_pairs, quantity_specs,
-                        transcript_text, tool_trace, tp.name, model, timeout,
+                        transcript_text, tool_trace, display, model, timeout,
                         on_progress=on_progress, on_usage=acc.scoped("judge"),
                         locate_turns=locate_turns,
                     )
@@ -946,7 +958,7 @@ class TranscriptAuditor:
                         )
                         for inst in _bucket:
                             findings.append(self._make_unresolved_finding(
-                                inst, tp.name,
+                                inst, display,
                                 f"{_label}判定器异常,未出判定 → 没判成", _cat,
                                 cause="judge_error",
                             ))
@@ -963,17 +975,17 @@ class TranscriptAuditor:
                         )
                         for p in order_pairs:
                             findings.append(self._make_order_finding(
-                                p, AuditVerdict.UNRESOLVED, tp.name,
+                                p, AuditVerdict.UNRESOLVED, display,
                                 "控制流判定器异常,未出判定 → 没判成", cause="judge_error",
                             ))
                         for inst, _q in quantity_specs:
                             findings.append(self._make_unresolved_finding(
-                                inst, tp.name, "控制流判定器异常,未出判定 → 没判成",
+                                inst, display, "控制流判定器异常,未出判定 → 没判成",
                                 category=self.classify(inst), cause="judge_error",
                                 control_flow="quantity",
                             ))
             findings += self._judge_output(
-                buckets[AuditCategory.OUTPUT], transcript_text, tp.name
+                buckets[AuditCategory.OUTPUT], transcript_text, display
             )
             stage_seconds["judge"] += time.perf_counter() - _t
 
@@ -987,7 +999,7 @@ class TranscriptAuditor:
                     f.derived_from_transcript = True
 
             all_findings.extend(findings)
-            transcript_names.append(tp.name)
+            transcript_names.append(display)
             transcript_sources.append(transcript_source(tp))
 
         # findings 后处理:Case A 同文去重(合并 sources)+ 编 #1..#N + Case B 跨类关联
@@ -1225,7 +1237,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
-            section=inst.source_section or inst.section,
+                    section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.LLM,
@@ -1238,7 +1250,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
-            section=inst.source_section or inst.section,
+                    section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.NA,
                     method=AuditMethod.LLM,
@@ -1253,7 +1265,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
-            section=inst.source_section or inst.section,
+                    section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.INDETERMINATE,
                     method=AuditMethod.LLM,
@@ -1333,7 +1345,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
-            section=inst.source_section or inst.section,
+                    section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.LLM,
@@ -1348,7 +1360,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
-            section=inst.source_section or inst.section,
+                    section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.PASS,
                     method=AuditMethod.LLM,
@@ -1363,7 +1375,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
-            section=inst.source_section or inst.section,
+                    section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.INDETERMINATE,
                     method=AuditMethod.LLM,
@@ -1452,7 +1464,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
-            section=inst.source_section or inst.section,
+                    section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.PASS,
                     method=AuditMethod.LLM,
@@ -1467,7 +1479,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
-            section=inst.source_section or inst.section,
+                    section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.LLM,
@@ -1482,7 +1494,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
-            section=inst.source_section or inst.section,
+                    section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.NA,
                     method=AuditMethod.LLM,
@@ -1497,7 +1509,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
-            section=inst.source_section or inst.section,
+                    section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.INDETERMINATE,
                     method=AuditMethod.LLM,
@@ -1551,7 +1563,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
-            section=inst.source_section or inst.section,
+                    section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.PASS,
                     method=AuditMethod.PROGRAMMATIC,
@@ -1569,7 +1581,7 @@ class TranscriptAuditor:
                     instruction_text=inst.instruction_text,
                     source_excerpt=inst.source_excerpt,
                     headline=inst.headline,
-            section=inst.source_section or inst.section,
+                    section=inst.source_section or inst.section,
                     source=inst.source.value,
                     verdict=AuditVerdict.FAIL,
                     method=AuditMethod.PROGRAMMATIC,

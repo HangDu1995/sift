@@ -108,7 +108,7 @@ class DispatchReturn(BaseModel):
                                       # parent_tool_use_id 精确关联;insight 路为空/对不上)
     role: str = ""                    # 被派发角色(input.subagent_type / agent)
     prompt_head: str = ""             # 派发 prompt 头(≤200 字)
-    result_head: str = ""             # 回报头(≤400 字,已剥 <task> 包装)
+    result_head: str = ""             # 回报头(头窗口 ≤80 字,已剥 <task> 包装;渲染层另有截断)
     result_tail: str = ""             # 回报尾(≤60 字,验收结论惯例在尾部)
     result_len: int = 0               # 回报全长(裁剪统计用)
 
@@ -520,7 +520,7 @@ def _digest_from_records(
                     dispatch_id=str(tid or ""),
                     role=str(inp.get("subagent_type") or inp.get("agent") or ""),
                     prompt_head=str(inp.get("prompt") or inp.get("description") or "")[:200],
-                    result_head=_rhead[:400],
+                    result_head=_rhead,
                     result_tail=_rtail,
                     result_len=len(_result),
                 ))
