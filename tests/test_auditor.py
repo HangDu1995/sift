@@ -848,22 +848,22 @@ class TestJudgeStep:
     def test_over_60_batched_index_mapping(self, monkeypatch) -> None:
         """62 条步骤:分 7 批(10×6+2)处理,7 次 call_claude,全判且 index 不错位。
 
-        回归 Issue 2 + 验证分批易错点(index 映射):mock 按调用次序把全局位置写进
+        回归 Issue 2 + 验证分批易错点(index 映射):mock 根据实际收到的步骤把全局位置写进
         evidence(批 k 的本地 i → 全局 k*10+i),据此验证批间 index 映射——批 2 本地
         [0] 正确落到全局 [10]、批 7 本地 [0]→[60],而非覆盖 [0]。错位会把某批结果
         写回错位置或漏写,被 evidence 的 global# 与原位置不一致抓出。
         """
-        calls: list[int] = []
+        calls: list[list[int]] = []
 
         def fake(prompt, *a, **k):
             m = re.search(r"待判步骤 \((\d+) 条\)", prompt)
             bn = int(m.group(1)) if m else 0
-            call_idx = len(calls)
-            start = call_idx * _MAX_LLM_IN_BATCH
-            calls.append(bn)
+            steps = [int(n) for n in re.findall(r"^\[\d+\] 步骤 #(\d+)$", prompt, re.MULTILINE)]
+            assert len(steps) == bn
+            calls.append(steps)
             return json.dumps([
-                {"index": i, "verdict": "pass", "evidence": f"global#{start + i}"}
-                for i in range(bn)
+                {"index": i, "verdict": "pass", "evidence": f"global#{step}"}
+                for i, step in enumerate(steps)
             ])
 
         monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
@@ -873,7 +873,8 @@ class TestJudgeStep:
         findings = auditor._judge_step(insts, "某执行记录", "big.jsonl")
 
         assert len(findings) == 62
-        assert calls == [10, 10, 10, 10, 10, 10, 2]  # 7 批(10×6+2)
+        assert sorted(calls) == [list(range(start, min(start + 10, 62)))
+                                 for start in range(0, 62, 10)]
         assert all(f.verdict == AuditVerdict.PASS for f in findings)
         assert all("批量超限" not in f.evidence for f in findings)
         # index 映射:evidence 的 global# 与原位置严格一致
