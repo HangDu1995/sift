@@ -543,7 +543,10 @@ def test_audit_shared_agents_dir_hints_pass_specific_file(tmp_path):
     )
     assert r.exit_code == 2
     assert "直接传具体文件路径" in r.output
-    assert "developer.md" in r.output  # 点出真实存在的 .md
+    # Rich 会按终端宽度折行；验证提示内容，不依赖路径恰好落在哪一列。
+    unwrapped = r.output.replace("\r", "").replace("\n", "")
+    assert "developer.md" in unwrapped
+    assert str(agents / "developer.md") in unwrapped
 
 
 class _OneReportAuditor:
