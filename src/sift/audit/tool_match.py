@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 
@@ -45,7 +46,7 @@ def extract_first_balanced(text: str, open_ch: str = "[", close_ch: str = "]") -
         elif c == close_ch:
             depth -= 1
             if depth == 0:
-                return text[start : i + 1]
+                return text[start: i + 1]
     return None
 
 
@@ -130,10 +131,11 @@ def _path_matches(script_path: str, tc) -> bool:
     if isinstance(tc_input, dict):
         for field in _PATH_FIELDS:
             val = tc_input.get(field)
-            if isinstance(val, str) and val:
-                fp = _norm_path(val)
-                if fp == sp or fp.endswith("/" + sp):
-                    return True
+            if not (isinstance(val, str) and val):
+                continue
+            fp = _norm_path(val)
+            if fp == sp or fp.endswith("/" + sp):
+                return True
         return False  # 有结构化 input 但路径字段不匹配 → 精确化(不回退子串歪打正着)
     tc_summary = tc.input_summary if hasattr(tc, "input_summary") else tc.get("input_summary", "")
     return sp in (tc_summary or "").lower()
@@ -164,7 +166,7 @@ def _params_satisfied(required_params, tc, *, full_input_for_cmd: bool = False) 
         try:
             cmd = f"{cmd} {json.dumps(tc_input, ensure_ascii=False)}"
         except (TypeError, ValueError):
-            pass  # 不可序列化 → 只用 command+summary
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
     return all(p.lower() in cmd.lower() for p in params)
 
 
@@ -191,7 +193,7 @@ def _tc_tool_hit(tc, tool_name: str, cmd_re, *, full_input_for_cmd: bool = False
             try:
                 cmd_target = f"{tc_input} {json.dumps(full_input, ensure_ascii=False)}"
             except (TypeError, ValueError):
-                pass  # 不可序列化的 input → 退回 summary(不因此报错)
+                logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
     cmd_hit = bool(cmd_re) and bool(cmd_re.search(cmd_target))
     return name_hit, cmd_hit
 
@@ -210,8 +212,9 @@ def count_tool_calls(tool_name: str, tool_trace, required_params=None) -> int:
     n = 0
     for tc in tool_trace:
         name_hit, cmd_hit = _tc_tool_hit(tc, tool_name, cmd_re)
-        if (name_hit or cmd_hit) and _params_satisfied(required_params, tc):
-            n += 1
+        if not ((name_hit or cmd_hit) and _params_satisfied(required_params, tc)):
+            continue
+        n += 1
     return n
 
 
@@ -240,14 +243,18 @@ def find_execution_hit(tool_name: str, script_path: str, tool_trace, required_pa
         return getattr(tc, attr, None) if not isinstance(tc, dict) else tc.get(attr)
 
     for tc in tool_trace:
-        tc_name = (_get(tc, "name") or "")
+        tc_name = _get(tc, "name") or ""
         tc_input = _get(tc, "input")
         tc_input = tc_input if isinstance(tc_input, dict) else {}
         name_hit = bool(tool_name) and tool_name.lower() in tc_name.lower()
         # Skill 加载:input.skill/input.name 是工具名本体(insight 路径 name → skill 已归一)
-        skill_hit = bool(tool_name) and tc_name.strip().lower() == "skill" and (
-            tool_name.lower() in str(tc_input.get("skill") or "").lower()
-            or tool_name.lower() in str(tc_input.get("name") or "").lower()
+        skill_hit = (
+            bool(tool_name)
+            and tc_name.strip().lower() == "skill"
+            and (
+                tool_name.lower() in str(tc_input.get("skill") or "").lower()
+                or tool_name.lower() in str(tc_input.get("name") or "").lower()
+            )
         )
         # Bash 命令词:只搜 command 字段(文档 content/prompt 文本提及不算执行)
         cmd_field = str(tc_input.get("command") or "")
@@ -287,8 +294,9 @@ def find_tool_call(tool_name: str, script_path: str, tool_trace, required_params
             return tc
         if script_path and _path_matches(script_path, tc):
             return tc
-        if cmd_hit:
-            return tc
+        if not (cmd_hit):
+            continue
+        return tc
     return None
 
 

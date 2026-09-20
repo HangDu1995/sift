@@ -14,6 +14,7 @@ headline 生成的重复 LLM 调用,不碰判定链。
 
 序列化:headline 是 ``list[str]``,JSON 原生无损(无需 pydantic往返)。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -23,7 +24,6 @@ import threading
 from pathlib import Path
 
 from sift.models import InstructionCheck
-
 
 # bump 当 _generate_headlines 的 prompt 改了 → 进键 → 强制失效所有缓存条目。
 HEADLINE_PROMPT_VERSION = 2
@@ -40,17 +40,17 @@ def _cache_dir() -> Path:
     return Path.home() / ".cache" / "sift" / "headline"
 
 
-def _cache_key(instructions: list[InstructionCheck], model: str | None) -> str:
+def cache_key(instructions: list[InstructionCheck], model: str | None) -> str:
     """内容感知缓存键 = headline 实际输入(instructions,含 source_excerpt)+ model + 版本。
 
     payload 每条指令拼 ``source.value|section|instruction_text|source_excerpt``(``|`` 分隔)
     + ``model`` + ``v<HEADLINE_PROMPT_VERSION>``。**source_excerpt 进键**:extract 改了
     bullet 回溯(→ source_excerpt 变)→ headline 应重算,故必须进键。
     """
-    payload = "|".join(
-        f"{s.source.value}|{s.section}|{s.instruction_text}|{s.source_excerpt}"
-        for s in instructions
-    ) + f"|{model}|v{HEADLINE_PROMPT_VERSION}"
+    payload = (
+        "|".join(f"{s.source.value}|{s.section}|{s.instruction_text}|{s.source_excerpt}" for s in instructions)
+        + f"|{model}|v{HEADLINE_PROMPT_VERSION}"
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
@@ -65,7 +65,7 @@ def get(key: str) -> list[str] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         headlines = [str(h) for h in data["headlines"]]
-    except (json.JSONDecodeError, KeyError, ValueError, TypeError, OSError):
+    except (KeyError, ValueError, TypeError, OSError):
         return None
     return headlines
 
@@ -97,3 +97,6 @@ def get_or_compute(key: str, compute_fn) -> list[str]:
         headlines = compute_fn()
         put(key, headlines)
         return headlines
+
+
+# Compatibility for callers importing the former private helper.

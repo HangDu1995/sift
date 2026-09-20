@@ -54,6 +54,7 @@ def index_runs(config_dir: Path, nested: bool) -> dict[tuple[str | None, int], P
             run_n = int(m.group(1))
             key = (eval_name, run_n)
             existing = indexed.get(key)
-            if existing is None or retry_count(run_dir.name) > retry_count(existing.name):
-                indexed[key] = run_dir
+            if not (existing is None or retry_count(run_dir.name) > retry_count(existing.name)):
+                continue
+            indexed[key] = run_dir
     return {k: indexed[k] for k in sorted(indexed)}

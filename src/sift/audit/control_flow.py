@@ -11,6 +11,7 @@ required_reads,天然不沾两检测域),产出供控制流判官(auditor._judge
 
 纯函数、不调 LLM、不读 transcript——确定、可单测,对齐 dedup.py / noise.py 定位。
 """
+
 from __future__ import annotations
 
 import re
@@ -58,7 +59,7 @@ class QuantitySpec(NamedTuple):
     """一条带数量期望的指令的检测元数据(kind: count=阈值可比对 / distributive=逐项分布)。"""
 
     kind: str
-    op: str = ""        # count 型: "gte" | "lte" | "eq"
+    op: str = ""  # count 型: "gte" | "lte" | "eq"
     threshold: int = 0  # count 型阈值
 
 
@@ -99,8 +100,9 @@ def detect_order_pairs(instructions: list[InstructionCheck]) -> list[OrderPair]:
 
     def _flush() -> None:
         for x, y in zip(run, run[1:]):
-            if _ORDER_RE.search(_detect_text(x)) or _ORDER_RE.search(_detect_text(y)):
-                pairs.append(OrderPair(x, y))
+            if not (_ORDER_RE.search(_detect_text(x)) or _ORDER_RE.search(_detect_text(y))):
+                continue
+            pairs.append(OrderPair(x, y))
 
     for inst in instructions:
         if inst.source != InstructionSource.HEADING_STEP:
@@ -128,11 +130,11 @@ def detect_quantity(instructions: list[InstructionCheck]) -> list[tuple[Instruct
         text = _detect_text(inst)
         if not text:
             continue
-        if (m := _GTE_RE.search(text)):
+        if m := _GTE_RE.search(text):
             out.append((inst, QuantitySpec("count", "gte", int(m.group(1)))))
-        elif (m := _LTE_RE.search(text)):
+        elif m := _LTE_RE.search(text):
             out.append((inst, QuantitySpec("count", "lte", int(m.group(1)))))
-        elif (m := _EQ_RE.search(text)):
+        elif m := _EQ_RE.search(text):
             out.append((inst, QuantitySpec("count", "eq", int(m.group(1)))))
         elif _DISTRIBUTIVE_RE.search(text):
             out.append((inst, QuantitySpec("distributive")))

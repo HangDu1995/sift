@@ -1,4 +1,5 @@
 """gate 判决逻辑纯函数测试(块 C)。"""
+
 from sift.gating.verdict import evaluate_gate, parse_delta
 
 
@@ -21,6 +22,7 @@ def test_parse_delta():
 def test_gate_result_calibration_defaults_none():
     """GateResult.calibration 默认 None(soft warning 容器,无 calibration_summary 时)。"""
     from sift.gating.models import GateResult
+
     gr = GateResult(decision="PASS", exit_code=0, reason="ok")
     assert gr.calibration is None
 
@@ -40,7 +42,7 @@ def test_programmatic_fail_regression():
     assert r.axes["programmatic"].verdict == "FAIL"
 
 
-def test_programmatic_null_no_comparison_is_NA():
+def test_programmatic_null_no_comparison_is_na():
     """纯主观题(programmatic null)+ 未请求 comparison → 无适用轴 → N/A。"""
     r = evaluate_gate(_bench(None))
     assert r.decision == "N/A"
@@ -63,9 +65,16 @@ def test_programmatic_guard_disabled_makes_axis_not_applicable():
 
 
 def _cs(a_wins, b_wins, ties=0, label_a="v1", label_b="v2"):
-    return {"a_wins": a_wins, "b_wins": b_wins, "ties": ties, "failed": 0,
-            "valid": a_wins + b_wins + ties, "win_rate": None,
-            "label_a": label_a, "label_b": label_b}
+    return {
+        "a_wins": a_wins,
+        "b_wins": b_wins,
+        "ties": ties,
+        "failed": 0,
+        "valid": a_wins + b_wins + ties,
+        "win_rate": None,
+        "label_a": label_a,
+        "label_b": label_b,
+    }
 
 
 def test_comparison_pass():
@@ -94,7 +103,7 @@ def test_comparison_unclear_insufficient_sample():
     assert r.decision == "UNCLEAR"  # 客观 PASS 但主观样本不足 → 判不准(UNCLEAR,非不适用 N/A)
 
 
-def test_comparison_NA_all_ties():
+def test_comparison_na_all_ties():
     r = evaluate_gate(_bench("+0.27", _cs(0, 0, ties=5)), min_win_rate=0.5, min_valid=3)
     assert r.axes["comparison"].verdict == "N/A"  # decisive 0
 
@@ -121,21 +130,19 @@ def test_programmatic_fail_overrides_comparison_pass():
 
 
 def test_no_programmatic_guard_only_comparison():
-    r = evaluate_gate(_bench("-0.10", _cs(6, 2)),
-                      min_win_rate=0.5, programmatic_guard=False)
+    r = evaluate_gate(_bench("-0.10", _cs(6, 2)), min_win_rate=0.5, programmatic_guard=False)
     assert r.axes["programmatic"].applicable is False
     assert r.decision == "PASS"  # 只看主观,客观回归被关
 
 
-def test_no_engaged_axis_is_NA():
+def test_no_engaged_axis_is_na():
     """客观 null + 守卫关 + 无主观请求 → 无适用轴 → N/A。"""
     r = evaluate_gate(_bench(None), programmatic_guard=False)
     assert r.decision == "N/A" and r.exit_code == 2
 
 
 def test_candidate_override():
-    r = evaluate_gate(_bench("+0.27", _cs(6, 2, label_a="v1", label_b="v2")),
-                      min_win_rate=0.5, candidate="custom-cand")
+    r = evaluate_gate(_bench("+0.27", _cs(6, 2, label_a="v1", label_b="v2")), min_win_rate=0.5, candidate="custom-cand")
     assert r.candidate == "custom-cand"
     assert r.baseline == "v2"  # label_b 仍取 comparison_summary
 
@@ -148,30 +155,50 @@ def test_candidate_resolution_from_side_keys():
 
 def test_thresholds_recorded():
     r = evaluate_gate(_bench("+0.27", _cs(6, 2)), min_win_rate=0.6, min_valid=5)
-    assert r.thresholds == {"min_win_rate": 0.6, "min_valid": 5, "programmatic_guard": True,
-                            "must_pass_ids": None, "baseline_ids": None, "strict_drift": False}
+    assert r.thresholds == {
+        "min_win_rate": 0.6,
+        "min_valid": 5,
+        "programmatic_guard": True,
+        "must_pass_ids": None,
+        "baseline_ids": None,
+        "strict_drift": False,
+    }
 
 
 # ---- _eval_calibration:HIGH_SCORE_SUSPECT soft warning ----
+
 
 def _bench_with_cal(suspects_with):
     """造 benchmark dict:客观轴 PASS(delta=0)+ calibration_summary(with 侧 suspects)。"""
     return {
         "run_summary": {"delta": {"pass_rate_programmatic": 0.0}, "with_skill": {}, "without_skill": {}},
         "comparison_summary": {"label_a": "with_skill", "label_b": "without_skill"},
-        "calibration_summary": {"sides": {
-            "with_skill": {"total": 2, "verdict_counts": {"HIGH_SCORE_SUSPECT": len(suspects_with)},
-                           "high_score_suspects": suspects_with},
-            "without_skill": None,
-        }},
+        "calibration_summary": {
+            "sides": {
+                "with_skill": {
+                    "total": 2,
+                    "verdict_counts": {"HIGH_SCORE_SUSPECT": len(suspects_with)},
+                    "high_score_suspects": suspects_with,
+                },
+                "without_skill": None,
+            }
+        },
     }
 
 
 def test_calibration_warning_triggered_for_high_score_suspect():
-    suspects = [{"eval": 1, "run": 2, "category": "prohibition",
-                 "instruction_text": "引用日志原文行", "evidence": "未引用", "compliance_rate": 0.875}]
+    suspects = [
+        {
+            "eval": 1,
+            "run": 2,
+            "category": "prohibition",
+            "instruction_text": "引用日志原文行",
+            "evidence": "未引用",
+            "compliance_rate": 0.875,
+        }
+    ]
     res = evaluate_gate(_bench_with_cal(suspects), programmatic_guard=True)
-    assert res.decision == "PASS"           # 不改 decision
+    assert res.decision == "PASS"  # 不改 decision
     assert res.exit_code == 0
     assert res.calibration is not None
     assert res.calibration["sides"]["with_skill"]["triggered"] is True
@@ -189,7 +216,7 @@ def test_calibration_warning_not_triggered_when_clean():
 def test_calibration_missing_summary_is_none():
     bench = {"run_summary": {"delta": {"pass_rate_programmatic": 0.0}, "with_skill": {}}}
     res = evaluate_gate(bench, programmatic_guard=True)
-    assert res.calibration is None   # 旧 benchmark 无 calibration_summary → 降级 None
+    assert res.calibration is None  # 旧 benchmark 无 calibration_summary → 降级 None
 
 
 def test_calibration_without_skill_side_is_none():
@@ -201,11 +228,20 @@ def test_calibration_without_skill_side_is_none():
 
 # ---- _eval_must_pass(必过题)+ _eval_drift(题集漂移)----
 
+
 def _run(eval_id, config, passed, total, run_number=1):
     """造 RunResultEntry dict(某 eval 某 config 某 run 的结果)。"""
-    return {"eval_id": eval_id, "configuration": config, "run_number": run_number,
-            "result": {"pass_rate": passed / total if total else 0.0,
-                       "passed": passed, "failed": total - passed, "total": total}}
+    return {
+        "eval_id": eval_id,
+        "configuration": config,
+        "run_number": run_number,
+        "result": {
+            "pass_rate": passed / total if total else 0.0,
+            "passed": passed,
+            "failed": total - passed,
+            "total": total,
+        },
+    }
 
 
 def _bench_runs(runs, delta_prog="+0.27"):

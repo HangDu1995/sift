@@ -19,8 +19,11 @@ kind 对它无意义(CLI 的 ``--kind`` 对 opencode transcript 是 no-op,照常
 
 判定层(rebuild/judge/aggregate)不 import 本模块——本模块只产 record 段列表。
 """
+
 from __future__ import annotations
+
 import json
+import logging
 from pathlib import Path
 
 from sift.evals.opencode import build_subagent_tool_trace_opencode, is_opencode_session
@@ -37,6 +40,7 @@ def _records(path: Path) -> list[dict]:
         try:
             records.append(json.loads(l))
         except json.JSONDecodeError:
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
             continue
     # stamp 全局 _turn_index:切片产出 dict 子集会被 JSON 序列化进 slice 文件,
     # rebuild 读回时 _turn_index 经 JSON 往返保留 → 保住原全局位置(后续 [T{idx}] 引用关键)。
@@ -53,9 +57,10 @@ def _content_blocks(rec: dict) -> list:
 def _skill_name_of(rec: dict) -> str | None:
     """若 rec 含 Skill tool_use,返回 input.skill(剥命名空间前缀),否则 None。"""
     for b in _content_blocks(rec):
-        if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Skill":
-            full = (b.get("input") or {}).get("skill") or ""
-            return full.rsplit(":", 1)[-1]  # "superpowers:writing-skills" → "writing-skills"
+        if not (isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Skill"):
+            continue
+        full = (b.get("input") or {}).get("skill") or ""
+        return full.rsplit(":", 1)[-1]  # "superpowers:writing-skills" → "writing-skills"
     return None
 
 
@@ -73,10 +78,11 @@ def _find_agent_ids(records: list[dict]) -> set[str]:
     ids: set[str] = set()
     for rec in records:
         for b in _content_blocks(rec):
-            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Agent":
-                tid = b.get("id", "")
-                if tid:
-                    ids.add(tid)
+            if not (isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Agent"):
+                continue
+            tid = b.get("id", "")
+            if tid:
+                ids.add(tid)
     return ids
 
 
@@ -95,8 +101,9 @@ def invoked_skills(transcript_path: Path) -> list[str]:
     seen: list[str] = []
     for rec in _records(transcript_path):
         name = _skill_name_of(rec)
-        if name and name not in seen:
-            seen.append(name)
+        if not (name and name not in seen):
+            continue
+        seen.append(name)
     return seen
 
 
@@ -110,8 +117,9 @@ def invoked_agents(transcript_path: Path) -> list[str]:
     seen: list[str] = []
     for rec in _records(transcript_path):
         name = rec.get("agent")
-        if name and name not in seen:
-            seen.append(name)
+        if not (name and name not in seen):
+            continue
+        seen.append(name)
     return seen
 
 
@@ -135,14 +143,16 @@ def scope_signals(transcript_paths: list[Path], name: str) -> set[str]:
         try:
             records = _records(tp)
         except OSError:
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
             continue
         for rec in records:
             if name and _skill_name_of(rec) == name:
                 signals.add("skill")
             if name and rec.get("agent") == name:
                 signals.add("agent")
-            if _scope_of(rec) is not None:
-                signals.add("root")
+            if not (_scope_of(rec) is not None):
+                continue
+            signals.add("root")
     return signals
 
 
@@ -188,14 +198,16 @@ def _slice_skill_invoke(records: list[dict], target: str) -> list[list[dict]]:
         # 嵌套子 agent(深度≥2)的 Agent tool_result 出现在父作用域(scope≠None),不在此
         # 触发;它们在 transcript 末统一 flush——无害,因为已返回 agent 的 scope 下不再
         # 出现 record(后续 record 归父作用域)。
-        if scope is None:
-            for tid in _tool_result_ids(rec):
-                if tid in agent_ids:
-                    sub = scope_state.get(tid)
-                    if sub:
-                        _flush(sub)
-                        sub["active"] = None
-                        sub["cur"] = []
+        if not (scope is None):
+            continue
+        for tid in _tool_result_ids(rec):
+            if not (tid in agent_ids):
+                continue
+            sub = scope_state.get(tid)
+            if sub:
+                _flush(sub)
+                sub["active"] = None
+                sub["cur"] = []
 
     # transcript 末:刷掉所有仍活跃的 skill 段
     for state in scope_state.values():
@@ -291,13 +303,16 @@ def build_subagent_tool_trace(transcript_path: Path, *, locate_turns: bool = Tru
         if _scope_of(rec) is not None:
             continue
         for b in _content_blocks(rec):
-            if (isinstance(b, dict) and b.get("type") == "tool_use"
-                    and str(b.get("name") or "").lower() in ("agent", "task")):
-                tid = b.get("id", "")
-                role = ((b.get("input") or {}).get("subagent_type")
-                        or (b.get("input") or {}).get("agent") or "")
-                if tid and role:
-                    role_by_id[tid] = str(role)
+            if not (
+                isinstance(b, dict)
+                and b.get("type") == "tool_use"
+                and str(b.get("name") or "").lower() in ("agent", "task")
+            ):
+                continue
+            tid = b.get("id", "")
+            role = (b.get("input") or {}).get("subagent_type") or (b.get("input") or {}).get("agent") or ""
+            if tid and role:
+                role_by_id[tid] = str(role)
     trace: list[ToolCallRecord] = []
     for rec in records:
         ptid = _scope_of(rec)
@@ -310,14 +325,16 @@ def build_subagent_tool_trace(transcript_path: Path, *, locate_turns: bool = Tru
                 continue
             name = b.get("name", "")
             inp = b.get("input") or {}
-            trace.append(ToolCallRecord(
-                name=name,
-                input_summary=json.dumps(inp, ensure_ascii=False)[:summary_limit_for(name)],
-                input=inp or None,
-                turn=turn_idx if locate_turns else None,
-                agent=str(agent or ""),
-                parent_tool_use_id=str(ptid or ""),
-            ))
+            trace.append(
+                ToolCallRecord(
+                    name=name,
+                    input_summary=json.dumps(inp, ensure_ascii=False)[: summary_limit_for(name)],
+                    input=inp or None,
+                    turn=turn_idx if locate_turns else None,
+                    agent=str(agent or ""),
+                    parent_tool_use_id=str(ptid or ""),
+                )
+            )
     return trace
 
 
@@ -354,6 +371,7 @@ def slice_transcript(transcript_path: Path, target: str, kind: str) -> list[list
     )
     if bundle_meta:
         for segment in segments:
-            if segment:
-                segment[0]["_sift_bundle_meta"] = bundle_meta
+            if not (segment):
+                continue
+            segment[0]["_sift_bundle_meta"] = bundle_meta
     return segments

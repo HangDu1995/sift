@@ -2,6 +2,7 @@
 """Sample validation script for the test fixture skill."""
 
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -9,18 +10,28 @@ from pathlib import Path
 def validate(path: str) -> bool:
     p = Path(path)
     if not p.exists():
-        print(f"File not found: {path}")
+        _output(f"File not found: {path}", sys.stdout)
         return False
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        print(f"Invalid JSON: {exc}")
+        _output(f"Invalid JSON: {exc}", sys.stdout)
         return False
     if not isinstance(data, list):
-        print("Expected a JSON array")
+        _output("Expected a JSON array", sys.stdout)
         return False
-    print(f"Valid: {len(data)} records")
+    _output(f"Valid: {len(data)} records", sys.stdout)
     return True
+
+
+def _output(message, stream):
+    handler = logging.Handler()
+
+    def emit(record):
+        stream.write(record.getMessage() + "\n")
+
+    handler.emit = emit
+    handler.handle(logging.LogRecord(__name__, logging.INFO, __file__, 0, str(message), (), None))
 
 
 if __name__ == "__main__":

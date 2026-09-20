@@ -17,6 +17,7 @@ def inline_schema(schema: dict) -> dict:
     返回的新 schema 不含 ``$ref`` / ``$defs``。环引用断开成 ``{}``(这些模型无环,
     纯防御)。其他键(含 ``title`` 等)原样保留。
     """
+
     def _deref(node, seen: frozenset):
         if isinstance(node, dict):
             if "$ref" in node:

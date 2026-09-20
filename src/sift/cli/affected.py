@@ -5,16 +5,16 @@ id 不存在)抛 SiftError;空集返 [](合法:改的是与所有题无关的措
 
 详见 docs/superpowers/specs/2026-07-28-changed-from-selective-rerun-design.md。
 """
+
 from __future__ import annotations
 
 import json
 import re
-
-from sift.errors import SiftError
-
 from pathlib import Path
 
 from sift.compliance.extractor import InstructionExtractor
+from sift.errors import SiftError
+from sift.llm_transport import LLMCallConfig
 from sift.parser import parse_skill_md
 from sift.utils import call_claude
 
@@ -32,36 +32,31 @@ def _parse_ids(response: str, valid: set[int]) -> list[int]:
         raise SiftError(f"--changed-from 判定失败:LLM 返回空。{_RECOVER}")
     try:
         data = json.loads(response)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as _caught_error:
         m = re.search(r"\{.*\}", response, re.DOTALL)
         if not m:
-            raise SiftError(f"--changed-from 判定失败:LLM 回答解析不出 JSON。{_RECOVER}")
+            raise SiftError(f"--changed-from 判定失败:LLM 回答解析不出 JSON。{_RECOVER}") from _caught_error
         try:
             data = json.loads(m.group())
         except json.JSONDecodeError as exc:
-            raise SiftError(
-                f"--changed-from 判定失败:LLM 回答 JSON 解析失败({exc})。{_RECOVER}"
-            ) from exc
+            raise SiftError(f"--changed-from 判定失败:LLM 回答 JSON 解析失败({exc})。{_RECOVER}") from exc
     raw = data.get("affected_ids") if isinstance(data, dict) else None
     if not isinstance(raw, list):
         raise SiftError(f"--changed-from 判定失败:LLM 未返回 affected_ids 列表。{_RECOVER}")
     try:
         ids = [int(x) for x in raw]
     except (TypeError, ValueError) as exc:
-        raise SiftError(
-            f"--changed-from 判定失败:affected_ids 含非整数({exc})。{_RECOVER}"
-        ) from exc
+        raise SiftError(f"--changed-from 判定失败:affected_ids 含非整数({exc})。{_RECOVER}") from exc
     bad = [i for i in ids if i not in valid]
     if bad:
-        raise SiftError(
-            f"--changed-from 判定失败:LLM 返回不存在的 eval id {bad}(可用: {sorted(valid)})。{_RECOVER}"
-        )
+        raise SiftError(f"--changed-from 判定失败:LLM 返回不存在的 eval id {bad}(可用: {sorted(valid)})。{_RECOVER}")
     seen: set[int] = set()
     out: list[int] = []
     for i in ids:
-        if i not in seen:
-            seen.add(i)
-            out.append(i)
+        if not (i not in seen):
+            continue
+        seen.add(i)
+        out.append(i)
     return out
 
 
@@ -75,16 +70,12 @@ def _skill_body(skill_dir: Path, label: str) -> str:
 
 def _build_prompt(baseline_inst, current_inst, evals) -> str:
     """喂给 LLM 的选题 prompt。偏过召(拿不准就带)。"""
-    b = "\n".join(
-        f"- [{i.source.value}|{i.section}] {i.instruction_text}" for i in baseline_inst
-    ) or "(无)"
-    c = "\n".join(
-        f"- [{i.source.value}|{i.section}] {i.instruction_text}" for i in current_inst
-    ) or "(无)"
-    e = "\n".join(
-        f"- id={ev.id} | {ev.prompt} | expects: {'; '.join(ev.expectations) or '(无)'}"
-        for ev in evals
-    ) or "(无)"
+    b = "\n".join(f"- [{i.source.value}|{i.section}] {i.instruction_text}" for i in baseline_inst) or "(无)"
+    c = "\n".join(f"- [{i.source.value}|{i.section}] {i.instruction_text}" for i in current_inst) or "(无)"
+    e = (
+        "\n".join(f"- id={ev.id} | {ev.prompt} | expects: {'; '.join(ev.expectations) or '(无)'}" for ev in evals)
+        or "(无)"
+    )
     return f"""你是 sift 的回归选题器。当前 skill 相对基线改了一些指令,判断哪些 eval 受这些改动影响。
 
 判断原则——**偏过召**:拿不准某道 eval 是否受影响就带上(宁多跑不漏跑);与改动明确无关的不带。
@@ -122,9 +113,7 @@ def compute_affected_evals(
     current_inst = InstructionExtractor().extract(current_body)
     prompt = _build_prompt(baseline_inst, current_inst, eval_set.evals)
     try:
-        response = call_claude(prompt, model=model, timeout=timeout, max_turns=1)
+        response = call_claude(prompt=prompt, config=LLMCallConfig(model=model, timeout=timeout, max_turns=1))
     except RuntimeError as exc:
-        raise SiftError(
-            f"--changed-from 判定失败:LLM 调用出错({exc})。{_RECOVER}"
-        ) from exc
+        raise SiftError(f"--changed-from 判定失败:LLM 调用出错({exc})。{_RECOVER}") from exc
     return _parse_ids(response, valid={e.id for e in eval_set.evals})

@@ -32,10 +32,19 @@ def _effect(capture: str, path: str, *, quality: str = "observed", after: str | 
     )
 
 
-def _event(capture: str, *, at: str | None, tool: str = "Write", agent: str = "developer",
-           quality: str = "observed", association: str = "exact", effects=None,
-           is_error: bool | None = False, succeeded: bool | None = True,
-           tool_id: str | None = None):
+def _event(
+    capture: str,
+    *,
+    at: str | None,
+    tool: str = "Write",
+    agent: str = "developer",
+    quality: str = "observed",
+    association: str = "exact",
+    effects=None,
+    is_error: bool | None = False,
+    succeeded: bool | None = True,
+    tool_id: str | None = None,
+):
     return ProvenanceEvent(
         sequence=1,
         timestamp=at,
@@ -78,7 +87,10 @@ def test_observed_effect_builds_timeline_and_final_writer():
 
 def test_unmatched_and_untrusted_effects_are_not_deterministic():
     event = _event(
-        "c1", at="2026-09-01T10:00:00Z", quality="incomplete", association="unmatched",
+        "c1",
+        at="2026-09-01T10:00:00Z",
+        quality="incomplete",
+        association="unmatched",
         effects=[_effect("c1", "src/a.py", quality="incomplete")],
     )
     result = analyze_provenance(_digest([event]))
@@ -97,35 +109,22 @@ def test_trusted_and_untrusted_effects_partition_all_effects():
     ]
     result = analyze_provenance(_digest(events))
     assert result.statistics["effect_count"] == (
-        result.statistics["trusted_effect_count"]
-        + result.statistics["untrusted_effect_count"]
+        result.statistics["trusted_effect_count"] + result.statistics["untrusted_effect_count"]
     )
 
 
 def test_evidence_health_covers_all_quality_and_reference_findings():
-    unmatched = _event(
-        "unmatched", at="2026-09-01T10:00:00Z", association="unmatched",
-        effects=[_effect("unmatched", "src/unmatched.py")],
-    )
-    ambiguous = _event(
-        "ambiguous", at="2026-09-01T10:01:00Z", quality="ambiguous",
-        effects=[_effect("ambiguous", "src/ambiguous.py", quality="ambiguous")],
-    )
-    conflicted = _event(
-        "conflicted", at="2026-09-01T10:02:00Z", quality="conflicted",
-        effects=[_effect("conflicted", "src/conflicted.py", quality="conflicted")],
-    )
-    conflicted.conflicted = True
-    incomplete = _event(
-        "incomplete", at="2026-09-01T10:03:00Z", quality="incomplete",
-        effects=[_effect("incomplete", "src/incomplete.py", quality="incomplete")],
-    )
+    unmatched, ambiguous, conflicted, incomplete = _evidence_health_events()
     untrusted_effect_event = _event(
-        "untrusted-effect", at="2026-09-01T10:04:00Z",
+        "untrusted-effect",
+        at="2026-09-01T10:04:00Z",
         effects=[_effect("untrusted-effect", "src/untrusted.py", quality="incomplete")],
     )
     missing_call = ToolCallRecord(
-        name="Write", capture_id="missing", tool_use_id="missing-tool", turn=7,
+        name="Write",
+        capture_id="missing",
+        tool_use_id="missing-tool",
+        turn=7,
     )
     digest = _digest(
         [unmatched, ambiguous, conflicted, incomplete, untrusted_effect_event],
@@ -138,17 +137,49 @@ def test_evidence_health_covers_all_quality_and_reference_findings():
     untrusted_result = analyze_provenance(_digest([untrusted_effect_event]))
     codes.update(finding.code for finding in untrusted_result.findings)
     assert {
-        "EVIDENCE_WARNINGS", "UNMATCHED_CAPTURE", "MISSING_CAPTURE_EVENT",
-        "AMBIGUOUS_CAPTURE", "CONFLICTED_CAPTURE", "INCOMPLETE_CAPTURE",
-        "UNTRUSTED_EFFECT", "UNRECONSTRUCTED_FILE",
+        "EVIDENCE_WARNINGS",
+        "UNMATCHED_CAPTURE",
+        "MISSING_CAPTURE_EVENT",
+        "AMBIGUOUS_CAPTURE",
+        "CONFLICTED_CAPTURE",
+        "INCOMPLETE_CAPTURE",
+        "UNTRUSTED_EFFECT",
+        "UNRECONSTRUCTED_FILE",
     } <= codes
 
 
+def _evidence_health_events():
+    unmatched = _event(
+        "unmatched",
+        at="2026-09-01T10:00:00Z",
+        association="unmatched",
+        effects=[_effect("unmatched", "src/unmatched.py")],
+    )
+    ambiguous = _event(
+        "ambiguous",
+        at="2026-09-01T10:01:00Z",
+        quality="ambiguous",
+        effects=[_effect("ambiguous", "src/ambiguous.py", quality="ambiguous")],
+    )
+    conflicted = _event(
+        "conflicted",
+        at="2026-09-01T10:02:00Z",
+        quality="conflicted",
+        effects=[_effect("conflicted", "src/conflicted.py", quality="conflicted")],
+    )
+    conflicted.conflicted = True
+    incomplete = _event(
+        "incomplete",
+        at="2026-09-01T10:03:00Z",
+        quality="incomplete",
+        effects=[_effect("incomplete", "src/incomplete.py", quality="incomplete")],
+    )
+    return unmatched, ambiguous, conflicted, incomplete
+
+
 def test_attribution_integrity_detects_error_and_read_mutation_and_empty_write():
-    error = _event("err", at="2026-09-01T10:00:00Z", is_error=True,
-                   effects=[_effect("err", "src/a.py")])
-    read = _event("read", at="2026-09-01T10:01:00Z", tool="Read",
-                  effects=[_effect("read", "src/b.py")])
+    error = _event("err", at="2026-09-01T10:00:00Z", is_error=True, effects=[_effect("err", "src/a.py")])
+    read = _event("read", at="2026-09-01T10:01:00Z", tool="Read", effects=[_effect("read", "src/b.py")])
     empty = _event("empty", at="2026-09-01T10:02:00Z", effects=[])
     result = analyze_provenance(_digest([error, read, empty]))
     codes = {f.code for f in result.findings}
@@ -174,11 +205,13 @@ def test_read_and_non_mutating_bash_are_normal():
 
 def test_churn_detects_revert_and_actor_handoff_gap():
     first = _event("one", at="2026-09-01T10:00:00Z", effects=[_effect("one", "src/a.py", after="state-a")])
-    second = _event("two", at="2026-09-01T10:01:00Z", agent="other",
-                    effects=[_effect("two", "src/a.py", after="state-b")])
+    second = _event(
+        "two", at="2026-09-01T10:01:00Z", agent="other", effects=[_effect("two", "src/a.py", after="state-b")]
+    )
     second.parent_agent = "unrelated"
-    third = _event("three", at="2026-09-01T10:02:00Z", agent="developer",
-                   effects=[_effect("three", "src/a.py", after="state-a")])
+    third = _event(
+        "three", at="2026-09-01T10:02:00Z", agent="developer", effects=[_effect("three", "src/a.py", after="state-a")]
+    )
     result = analyze_provenance(_digest([first, second, third]))
     codes = {f.code for f in result.findings}
     assert "REPEATED_FILE_MODIFICATION" in codes
@@ -203,8 +236,9 @@ def test_verification_closure_detects_unverified_change_after_failed_test():
     test_event.is_error = True
     change = _event("change", at="2026-09-01T10:02:00Z", effects=[_effect("change", "src/a.py")])
     calls = [
-        ToolCallRecord(name="Bash", input={"command": "pytest -q"}, capture_id="test",
-                       tool_use_id="test-tool", is_error=True),
+        ToolCallRecord(
+            name="Bash", input={"command": "pytest -q"}, capture_id="test", tool_use_id="test-tool", is_error=True
+        ),
     ]
     result = analyze_provenance(_digest([test_event, change], calls))
     codes = {f.code for f in result.findings}

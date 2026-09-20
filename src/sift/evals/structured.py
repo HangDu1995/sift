@@ -26,6 +26,7 @@ producer 不必拼 cc-jsonl 的 tool_use / tool_result 拆分、不必管 ``Skil
 识别:顶层 dict ``format == "sift-records"``(与 opencode 的 ``{info,messages}`` 区分)。
 设计动机见 transcript-driven / 结构化输入;此处只做纯展开,无 LLM。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -76,7 +77,8 @@ def is_structured_records(path: Path) -> bool:
 
 def _rec(base: dict, agent) -> dict:
     """cc-record 带可选 ``agent``:有则挂上(切片器按 agent 归属切 agent 段),无则不挂(免每条都
-    带个 null)。``agent`` = 该 turn 归属的 agent 名(insight 的 agentName),producer 吐、reader 透传。"""
+    带个 null)。``agent`` = 该 turn 归属的 agent 名(insight 的 agentName),producer 吐、reader 透传。
+    """
     if agent:
         base["agent"] = agent
     return base
@@ -86,23 +88,18 @@ def load_structured_records(path: Path) -> list[dict]:
     """结构化 JSON → canonical cc records，按协议版本分派 loader。"""
     data = json.loads(path.read_text(encoding="utf-8"))
     version = data.get("version", 1)
-    if (
-        version is None
-        or version == "1"
-        or (type(version) is int and version == 1)
-    ):
+    if version is None or version == "1":
         return _load_v1_records(data)
-    if type(version) is int and version == 2:
-        return _load_v2_records(data, path)
+    if type(version) is int:
+        if version == 1:
+            return _load_v1_records(data)
+        if version == 2:
+            return _load_v2_records(data, path)
     raise InputError(f"{path}: 不支持 sift-records version {version}")
 
 
 def _build_native_session_agent_map(session: SiftRecordsV2Session) -> dict[str, str]:
-    return {
-        item.id: item.agent
-        for item in session.native_sessions
-        if item.id and item.agent
-    }
+    return {item.id: item.agent for item in session.native_sessions if item.id and item.agent}
 
 
 def _blob_details(blob: SiftRecordsV2Blob | None) -> dict[str, object]:
@@ -152,35 +149,28 @@ def _normalize_capture(
     if association_quality != "exact" and association_quality not in reasons:
         reasons.append(association_quality)
     normalized = capture.model_dump(mode="python", exclude_unset=True)
-    normalized.update({
-        "capture_id": capture_id,
-        "association_quality": association_quality,
-        "actor": _capture_actor(capture),
-        "agent": capture.agent_name or capture.agent,
-        "parent_agent": session_agents.get(str(parent_native_session_id))
-            if parent_native_session_id else None,
-        "iteration": capture.iteration if capture.iteration is not None
-            else attributes.get("iteration"),
-        "parent_tool_use_id": capture.parent_tool_use_id
+    normalized.update(
+        {
+            "capture_id": capture_id,
+            "association_quality": association_quality,
+            "actor": _capture_actor(capture),
+            "agent": capture.agent_name or capture.agent,
+            "parent_agent": session_agents.get(str(parent_native_session_id)) if parent_native_session_id else None,
+            "iteration": capture.iteration if capture.iteration is not None else attributes.get("iteration"),
+            "parent_tool_use_id": capture.parent_tool_use_id
             if capture.parent_tool_use_id is not None
             else attributes.get("parent_tool_use_id"),
-        "mutation_reasons": reasons,
-        "attributes": attributes,
-        "effects": _build_capture_effects(capture_id, capture, blobs),
-    })
+            "mutation_reasons": reasons,
+            "attributes": attributes,
+            "effects": _build_capture_effects(capture_id, capture, blobs),
+        }
+    )
     return SiftRecordsV2Capture.model_validate(normalized)
 
 
 def _capture_actor(capture: SiftRecordsV2Capture, fallback: str | None = None) -> str:
     """按统一优先级归一 capture actor，避免 reader/digest 各自回退漂移。"""
-    return str(
-        capture.actor
-        or capture.agent_name
-        or capture.agent
-        or capture.actor_kind
-        or fallback
-        or ""
-    )
+    return str(capture.actor or capture.agent_name or capture.agent or capture.actor_kind or fallback or "")
 
 
 def _build_v2_context(
@@ -194,21 +184,18 @@ def _build_v2_context(
     for rec in records:
         for tool_call in rec.tool_calls:
             capture_id = tool_call.capture_id
-            if capture_id is not None:
-                references[capture_id] += 1
+            if not (capture_id is not None):
+                continue
+            references[capture_id] += 1
 
     session = bundle.session
     normalized: dict[str, SiftRecordsV2Capture] = {}
     for capture_id, capture in captures.items():
         count = references[capture_id]
         association = (
-            "unmatched" if count == 0
-            else "ambiguous" if count > 1 or capture.quality == "ambiguous"
-            else "exact"
+            "unmatched" if count == 0 else "ambiguous" if count > 1 or capture.quality == "ambiguous" else "exact"
         )
-        normalized[capture_id] = _normalize_capture(
-            capture_id, capture, blobs, session_agents, association
-        )
+        normalized[capture_id] = _normalize_capture(capture_id, capture, blobs, session_agents, association)
 
     raw = path.read_bytes()
     meta = {
@@ -224,8 +211,7 @@ def _build_v2_context(
         "coverage": bundle.coverage,
         "warnings": list(bundle.warnings),
         "unmatched_captures": [
-            capture for capture in normalized.values()
-            if capture.association_quality == "unmatched"
+            capture for capture in normalized.values() if capture.association_quality == "unmatched"
         ],
     }
     return normalized, meta
@@ -249,30 +235,7 @@ def _load_v1_records(data: dict) -> list[dict]:
     out: list[dict] = []
     counter = 0
     for rec in data.get("records") or []:
-        role = rec.get("role") or "assistant"
-        ptid = rec.get("parent_tool_use_id")
-        agent = rec.get("agent")
-        blocks: list[dict] = []
-        results: list[tuple[str, object]] = []
-        text = rec.get("text")
-        if text:
-            blocks.append({"type": "text", "text": text})
-        for tc in rec.get("tool_calls") or []:
-            counter += 1
-            tid = f"tu_{counter}"
-            name = _norm_tool(tc.get("name") or "")
-            inp = dict(tc.get("input") or {})
-            if name == "Skill" and "skill" not in inp:
-                # producer 用 input.name(insight 形)→ 归一到 input.skill(cc slicer 认)
-                if inp.get("name"):
-                    inp["skill"] = inp["name"]
-            blocks.append({"type": "tool_use", "id": tid, "name": name, "input": inp})
-            if tc.get("result") is not None:
-                results.append((tid, tc.get("result")))
-        out.append(_rec({"message": {"role": role, "content": blocks}, "parent_tool_use_id": ptid}, agent))
-        if results:
-            rblocks = [{"type": "tool_result", "tool_use_id": tid, "content": r} for tid, r in results]
-            out.append(_rec({"message": {"role": "user", "content": rblocks}, "parent_tool_use_id": ptid}, agent))
+        counter = _append_v1_record(rec, out, counter)
     stamp_turn_indices(out)
     return out
 
@@ -291,10 +254,10 @@ def _extract_v2_record_metadata(rec: SiftRecordsV2Record, session_agents: dict[s
     }
 
 
-def _load_v2_records(data: dict, path: Path) -> list[dict]:
-    """展开 v2 records，并附加 evidence、lineage 和 bundle metadata。"""
+def _validate_v2_bundle(data: dict, path: Path) -> SiftRecordsV2:
+    """校验 bundle，并将字段错误转换为带原始异常的输入错误。"""
     try:
-        bundle = SiftRecordsV2.model_validate(data)
+        return SiftRecordsV2.model_validate(data)
     except ValidationError as exc:
         details_list: list[str] = []
         for error in exc.errors():
@@ -305,14 +268,50 @@ def _load_v2_records(data: dict, path: Path) -> list[dict]:
             elif ".effects." in location and location.endswith((".additions", ".deletions")):
                 message = "文件 effect 字段类型无效"
             details_list.append(f"{location}: {message}")
-        raise InputError(
-            f"{path}: sift-records v2 schema 校验失败: {'; '.join(details_list)}"
-        ) from exc
+        raise InputError(f"{path}: sift-records v2 schema 校验失败: {'; '.join(details_list)}") from exc
+
+
+def _v2_tool_block(tc, tid: str, captures: dict) -> dict:
+    """归一一条工具调用及其 capture 证据，保留时间和错误信息。"""
+    name, inp = _normalize_tool_input(tc.name, tc.input)
+    capture_id = tc.capture_id
+    evidence = captures.get(str(capture_id)) if capture_id else None
+    return {
+        "type": "tool_use",
+        "id": tid,
+        "name": name,
+        "input": inp,
+        "_sift_evidence": (evidence.model_dump(mode="python", exclude_unset=True) if evidence else None),
+        "_sift_timestamp": tc.timestamp,
+        "_sift_is_error": tc.is_error,
+        "_sift_result": tc.result,
+    }
+
+
+def _standalone_capture_record(capture: SiftRecordsV2Capture) -> dict:
+    """保存未匹配的 capture，一份证据只生成一条独立记录。"""
+    return _rec(
+        {
+            "message": {"role": "assistant", "content": []},
+            "parent_tool_use_id": capture.parent_tool_use_id,
+            "session_id": capture.session_id,
+            "native_session_id": capture.native_session_id,
+            "parent_native_session_id": capture.parent_native_session_id,
+            "parent_agent": capture.parent_agent,
+            "iteration": capture.iteration,
+            "timestamp": capture.started_at,
+            "_sift_standalone_capture": capture.model_dump(mode="python", exclude_unset=True),
+        },
+        capture.agent,
+    )
+
+
+def _load_v2_records(data: dict, path: Path) -> list[dict]:
+    """展开 v2 records，并附加 evidence、lineage 和 bundle metadata。"""
+    bundle = _validate_v2_bundle(data, path)
     session_agents = _build_native_session_agent_map(bundle.session)
     try:
         captures, meta = _build_v2_context(bundle, path, session_agents)
-    except InputError:
-        raise
     except (KeyError, TypeError, ValueError) as exc:
         raise InputError(f"{path}: sift-records v2 字段类型无效: {exc}") from exc
     out: list[dict] = []
@@ -328,61 +327,82 @@ def _load_v2_records(data: dict, path: Path) -> list[dict]:
         for tc in rec.tool_calls:
             counter += 1
             tid = str(tc.id or f"tu_{counter}")
-            name, inp = _normalize_tool_input(tc.name, tc.input)
-            capture_id = tc.capture_id
-            evidence = captures.get(str(capture_id)) if capture_id else None
-            blocks.append({
-                "type": "tool_use",
-                "id": tid,
-                "name": name,
-                "input": inp,
-                "_sift_evidence": (
-                    evidence.model_dump(mode="python", exclude_unset=True)
-                    if evidence else None
-                ),
-                "_sift_timestamp": tc.timestamp,
-                "_sift_is_error": tc.is_error,
-                "_sift_result": tc.result,
-            })
-            if tc.result is not None:
-                results.append((tid, tc.result))
+            blocks.append(_v2_tool_block(tc, tid, captures))
+            if not (tc.result is not None):
+                continue
+            results.append((tid, tc.result))
         metadata = _extract_v2_record_metadata(rec, session_agents)
-        base = {"message": {"role": role, "content": blocks}, "parent_tool_use_id": ptid}
+        base = {
+            "message": {"role": role, "content": blocks},
+            "parent_tool_use_id": ptid,
+        }
         base.update(metadata)
         out.append(_rec(base, rec.agent))
-        if results:
-            result_base = {
-                "message": {
-                    "role": "user",
-                    "content": [
-                        {"type": "tool_result", "tool_use_id": tid, "content": result}
-                        for tid, result in results
-                    ],
-                },
-                "parent_tool_use_id": ptid,
-            }
-            result_base.update(metadata)
-            out.append(_rec(result_base, rec.agent))
+        if not (results):
+            continue
+        result_base = {
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": tid, "content": result} for tid, result in results],
+            },
+            "parent_tool_use_id": ptid,
+        }
+        result_base.update(metadata)
+        out.append(_rec(result_base, rec.agent))
 
     # Keep the full unmatched capture payload only as standalone canonical
     # records.  Do not put it in bundle metadata: slice_transcript copies that
     # metadata to every emitted segment, which would multiply large snapshots.
     unmatched_captures = meta.pop("unmatched_captures", [])
     for capture in unmatched_captures:
-        out.append(_rec({
-            "message": {"role": "assistant", "content": []},
-            "parent_tool_use_id": capture.parent_tool_use_id,
-            "session_id": capture.session_id,
-            "native_session_id": capture.native_session_id,
-            "parent_native_session_id": capture.parent_native_session_id,
-            "parent_agent": capture.parent_agent,
-            "iteration": capture.iteration,
-            "timestamp": capture.started_at,
-            "_sift_standalone_capture": capture.model_dump(
-                mode="python", exclude_unset=True
-            ),
-        }, capture.agent))
+        out.append(_standalone_capture_record(capture))
     if out:
         out[0]["_sift_bundle_meta"] = meta
     stamp_turn_indices(out)
     return out
+
+
+def _append_v1_record(rec, out, counter):
+    role = rec.get("role") or "assistant"
+    ptid = rec.get("parent_tool_use_id")
+    agent = rec.get("agent")
+    blocks: list[dict] = []
+    results: list[tuple[str, object]] = []
+    text = rec.get("text")
+    if text:
+        blocks.append({"type": "text", "text": text})
+    for tc in rec.get("tool_calls") or []:
+        counter += 1
+        tid = f"tu_{counter}"
+        name = _norm_tool(tc.get("name") or "")
+        inp = dict(tc.get("input") or {})
+        if name == "Skill" and "skill" not in inp:
+            # producer 用 input.name(insight 形)→ 归一到 input.skill(cc slicer 认)
+            if inp.get("name"):
+                inp["skill"] = inp["name"]
+        blocks.append({"type": "tool_use", "id": tid, "name": name, "input": inp})
+        if not (tc.get("result") is not None):
+            continue
+        results.append((tid, tc.get("result")))
+    out.append(
+        _rec(
+            {
+                "message": {"role": role, "content": blocks},
+                "parent_tool_use_id": ptid,
+            },
+            agent,
+        )
+    )
+    if not (results):
+        return counter
+    rblocks = [{"type": "tool_result", "tool_use_id": tid, "content": r} for tid, r in results]
+    out.append(
+        _rec(
+            {
+                "message": {"role": "user", "content": rblocks},
+                "parent_tool_use_id": ptid,
+            },
+            agent,
+        )
+    )
+    return counter

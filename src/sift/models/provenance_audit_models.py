@@ -11,7 +11,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 ProvenanceDimension = Literal[
     "evidence_health",
     "attribution_integrity",

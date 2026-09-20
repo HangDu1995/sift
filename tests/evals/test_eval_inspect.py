@@ -1,0 +1,99 @@
+from sift.evals.inspect import inspect_evals
+from sift.models import Assertion, EvalCase, EvalSet
+from sift.models.enums import AssertionType
+
+
+def _set(evals):
+    return EvalSet(skill_name="sk", evals=evals)
+
+
+def test_completeness_and_stability_counts():
+    e = EvalCase(
+        id=1,
+        prompt="p",
+        expectations=["exp1", "exp2"],
+        assertions=[
+            Assertion(name="a", type=AssertionType.FILE_EXISTS),
+            Assertion(name="b", type=AssertionType.CONTAINS_PATTERN),
+            Assertion(name="c", type=AssertionType.LLM_GRADE),
+        ],
+        level="L1",
+    )
+    r = inspect_evals(_set([e]))
+    assert r["completeness"] == {"evals": 1, "assertions": 3, "expectations": 2, "levels": {"L1": 1}}
+    assert r["stability"]["programmatic"] == 2
+    assert r["stability"]["llm"] == 1
+    assert r["stability"]["programmatic_ratio"] == 2 / 3
+    assert r["stability"]["expectations"] == 2
+    assert r["problems"] == {"degraded": [], "zero_validation": [], "zero_programmatic": []}
+
+
+def test_programmatic_ratio_none_when_no_assertions():
+    e = EvalCase(id=1, prompt="p", expectations=["x"])  # 无 assertion
+    r = inspect_evals(_set([e]))
+    assert r["stability"]["programmatic_ratio"] is None
+
+
+def test_flags_degraded_zero_validation_zero_programmatic():
+    degraded = EvalCase(
+        id=1,
+        prompt="p",
+        expectations=["e"],
+        assertions=[Assertion(name="a", type=AssertionType.FILE_EXISTS)],
+        flags=["degraded:no-llm"],
+    )
+    zero_val = EvalCase(id=2, prompt="p")  # 无 assertion 无 expectation
+    only_llm = EvalCase(
+        id=3, prompt="p", expectations=["e"], assertions=[Assertion(name="a", type=AssertionType.LLM_FACT)]
+    )  # 纯主观
+    only_exp = EvalCase(id=4, prompt="p", expectations=["e"])  # 仅 expectation → 零程序化
+    r = inspect_evals(_set([degraded, zero_val, only_llm, only_exp]))
+    assert r["problems"]["degraded"] == ["eval-1 (id=1)"]
+    assert r["problems"]["zero_validation"] == ["eval-2 (id=2)"]
+    assert set(r["problems"]["zero_programmatic"]) == {"eval-3 (id=3)", "eval-4 (id=4)"}  # label 带 id 便于定位
+
+
+def test_problem_label_includes_name_and_id():
+    # 有 name 的 eval:problem label = "name (id=N)",兼顾可读 + 精确定位
+    e = EvalCase(id=5, name="L1-概念题", prompt="p", expectations=["e"])  # 仅 expectation → 零程序化
+    r = inspect_evals(_set([e]))
+    assert r["problems"]["zero_programmatic"] == ["L1-概念题 (id=5)"]
+
+
+def test_empty_set():
+    r = inspect_evals(_set([]))
+    assert r["completeness"]["evals"] == 0
+    assert r["stability"]["programmatic_ratio"] is None
+    assert r["problems"] == {"degraded": [], "zero_validation": [], "zero_programmatic": []}
+
+
+def test_same_prompt_groups_detected():
+    """同 prompt 多道 → same_prompt_groups 列出组(count/ids/split_flag)。
+    防读者把同 prompt 多 scenario 误读成重复 bug(复现 log-error-analyzer-zh 那次误读)。
+    """
+    a = EvalCase(id=1, name="happy", prompt="分析 logs/app.log", flags=["split:3-evals-conflict"])
+    b = EvalCase(id=2, name="empty", prompt="分析 logs/app.log", flags=["split:3-evals-conflict"])
+    c = EvalCase(id=3, name="injection", prompt="分析 logs/app.log", flags=["split:3-evals-conflict"])
+    d = EvalCase(id=4, name="other", prompt="另一道独立题")
+    r = inspect_evals(_set([a, b, c, d]))
+    assert len(r["same_prompt_groups"]) == 1
+    g = r["same_prompt_groups"][0]
+    assert g["prompt"] == "分析 logs/app.log"
+    assert g["count"] == 3
+    assert g["ids"] == [1, 2, 3]
+    assert g["split_flag"] == "split:3-evals-conflict"
+
+
+def test_same_prompt_groups_empty_when_all_unique():
+    r = inspect_evals(_set([EvalCase(id=1, prompt="p1"), EvalCase(id=2, prompt="p2")]))
+    assert r["same_prompt_groups"] == []
+
+
+def test_same_prompt_groups_split_flag_none_when_absent():
+    """同 prompt 但无 split flag(手写 / 未过合并门)→ split_flag=None,组仍列出。"""
+    a = EvalCase(id=1, prompt="p")
+    b = EvalCase(id=2, prompt="p")
+    r = inspect_evals(_set([a, b]))
+    g = r["same_prompt_groups"][0]
+    assert g["count"] == 2
+    assert g["split_flag"] is None

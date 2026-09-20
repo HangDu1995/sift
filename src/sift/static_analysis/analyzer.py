@@ -12,7 +12,8 @@ from sift.static_analysis.classifier import classify_skill
 
 
 class StaticAnalyzer:
-    def analyze(self, skill_path: Path) -> AnalysisReport:
+    @staticmethod
+    def analyze(skill_path: Path) -> AnalysisReport:
         skill_path = resolve_skill_dir(skill_path)
         name, description, content, frontmatter, body = parse_skill_md(skill_path)
 

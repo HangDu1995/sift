@@ -17,7 +17,7 @@ from sift.static_analysis.analyzer import StaticAnalyzer
 @app.command(rich_help_panel="静态体检(不跑 cc)")
 def analyze(
     skill_path: Path = typer.Argument(..., help="Path to skill directory containing SKILL.md", exists=True),
-    format: str = typer.Option("table", "--format", help="Output format: table or json"),
+    output_format: str = typer.Option("table", "--format", help="Output format: table or json"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path"),
 ):
     """11 项静态体检,产 scorecard(skill)。"""
@@ -27,11 +27,11 @@ def analyze(
         report: AnalysisReport = analyzer.analyze(skill_path)
     except SiftError as exc:
         console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(code=exc.exit_code)
+        raise typer.Exit(code=exc.exit_code) from exc
 
     data = report.model_dump(mode="json")
 
-    if format == "json":
+    if output_format == "json":
         text = json.dumps(data, indent=2, ensure_ascii=False)
         if output:
             output.parent.mkdir(parents=True, exist_ok=True)
@@ -56,7 +56,7 @@ def analyze(
         console.print(table)
 
     # 落盘:仅当显式 -o(默认不写文件,避免污染 skill 目录)
-    if output and format != "json":
+    if output and output_format != "json":
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         console.print(f"Written to {output}")

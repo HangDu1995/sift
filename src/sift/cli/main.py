@@ -19,8 +19,6 @@ def _version(value: bool):
 
 @app.callback()
 def main(
-    version: bool = typer.Option(
-        None, "--version", callback=_version, is_eager=True, help="Show version."
-    ),
+    version: bool = typer.Option(None, "--version", callback=_version, is_eager=True, help="Show version."),
 ):
     pass

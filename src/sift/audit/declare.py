@@ -15,6 +15,7 @@ v1 反推范围(聚焦能干净映射的):
 去重键:``(source, params.script_path)``。existing 已有同 source + 同 script_path
 的 REFERENCE_USAGE → 该 path 不重复加。
 """
+
 from __future__ import annotations
 
 from sift.evals.transcript import SessionDigest
@@ -63,12 +64,13 @@ def derive_declarations(
     required_tools / required_outputs 不反推,理由见模块 docstring。
     """
     # existing 里 REFERENCE_USAGE 的 script_path 集合(去重键的右半边)
-    existing_read_paths: set[str] = {
-        c.params.get("script_path")
-        for c in existing
-        if c.source == InstructionSource.REFERENCE_USAGE
-        and c.params.get("script_path")
-    }
+    existing_read_paths: set[str] = set()
+    for instruction in existing:
+        if instruction.source != InstructionSource.REFERENCE_USAGE:
+            continue
+        script_path = instruction.params.get("script_path")
+        if script_path:
+            existing_read_paths.add(script_path)
 
     derived: list[InstructionCheck] = []
     seen: set[str] = set()  # 同一 input_files 内重复 path 也去重(防御性)
@@ -77,12 +79,14 @@ def derive_declarations(
         if not path or path in existing_read_paths or path in seen:
             continue
         seen.add(path)
-        derived.append(InstructionCheck(
-            source=InstructionSource.REFERENCE_USAGE,
-            instruction_text=f"读取 {path}",
-            section="transcript-derived",
-            priority=InstructionPriority.RECOMMENDED,
-            check_method=CheckMethod.TOOL_CALL_CHECK,
-            params={"script_path": path},
-        ))
+        derived.append(
+            InstructionCheck(
+                source=InstructionSource.REFERENCE_USAGE,
+                instruction_text=f"读取 {path}",
+                section="transcript-derived",
+                priority=InstructionPriority.RECOMMENDED,
+                check_method=CheckMethod.TOOL_CALL_CHECK,
+                params={"script_path": path},
+            )
+        )
     return derived

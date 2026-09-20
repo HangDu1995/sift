@@ -9,14 +9,22 @@ from sift.models.enums import AssertionType
 
 # 程序化(稳)断言类型;LLM_GRADE/LLM_FACT/LLM_NOT_DELEGATE 是语义(漂)。
 # expectations(free-text)另算 LLM 判,不进 assertion 占比分母。
-PROGRAMMATIC_TYPES = frozenset({
-    AssertionType.FILE_EXISTS, AssertionType.FILE_CONTAINS,
-    AssertionType.CONTAINS_PATTERN, AssertionType.JSON_HAS_FIELD,
-    AssertionType.LINE_COUNT, AssertionType.NOT_CONTAINS,
-    AssertionType.CUSTOM_SCRIPT, AssertionType.CROSS_FILE_CONSISTENCY,
-    AssertionType.CODE_COMPILES, AssertionType.CUSTOM_PLUGIN,
-    AssertionType.TOOL_CALLED, AssertionType.STEP_COUNT,
-})
+PROGRAMMATIC_TYPES = frozenset(
+    {
+        AssertionType.FILE_EXISTS,
+        AssertionType.FILE_CONTAINS,
+        AssertionType.CONTAINS_PATTERN,
+        AssertionType.JSON_HAS_FIELD,
+        AssertionType.LINE_COUNT,
+        AssertionType.NOT_CONTAINS,
+        AssertionType.CUSTOM_SCRIPT,
+        AssertionType.CROSS_FILE_CONSISTENCY,
+        AssertionType.CODE_COMPILES,
+        AssertionType.CUSTOM_PLUGIN,
+        AssertionType.TOOL_CALLED,
+        AssertionType.STEP_COUNT,
+    }
+)
 
 
 def same_prompt_groups(eval_set: EvalSet) -> list[dict[str, Any]]:
@@ -38,14 +46,15 @@ def same_prompt_groups(eval_set: EvalSet) -> list[dict[str, Any]]:
     for prompt, members in groups.items():
         if len(members) < 2:
             continue
-        split = next((str(f) for e in members for f in (e.flags or [])
-                      if str(f).startswith("split:") and str(f).endswith("-evals-conflict")), None)
-        out.append({
-            "prompt": prompt,
-            "count": len(members),
-            "ids": [e.id for e in members],
-            "split_flag": split,
-        })
+        split = _find_split_flag(members)
+        out.append(
+            {
+                "prompt": prompt,
+                "count": len(members),
+                "ids": [e.id for e in members],
+                "split_flag": split,
+            }
+        )
     out.sort(key=lambda g: (-g["count"], g["prompt"]))
     return out
 
@@ -55,7 +64,7 @@ def inspect_evals(eval_set: EvalSet) -> dict[str, Any]:
     evals = eval_set.evals
     total_assertions = sum(len(e.assertions) for e in evals)
     total_expectations = sum(len(e.expectations) for e in evals)
-    prog = sum(1 for e in evals for a in e.assertions if a.type in PROGRAMMATIC_TYPES)
+    prog = _count_programmatic_assertions(evals)
     llm_assert = total_assertions - prog
 
     levels: dict[str, int] = {}
@@ -66,13 +75,10 @@ def inspect_evals(eval_set: EvalSet) -> dict[str, Any]:
     def _label(e):
         return f"{e.get_name()} (id={e.id})"  # name + id,problem 定位用
 
-    degraded = [_label(e) for e in evals
-                if any(str(f).startswith("degraded:") for f in (e.flags or []))]
+    degraded = [_label(e) for e in evals if any(str(f).startswith("degraded:") for f in (e.flags or []))]
     zero_validation = [_label(e) for e in evals if not e.assertions and not e.expectations]
     # 零程序化:有校验(assertion 或 expectation)但无任何程序化断言 → 纯主观
-    zero_programmatic = [_label(e) for e in evals
-                         if (e.assertions or e.expectations)
-                         and not any(a.type in PROGRAMMATIC_TYPES for a in e.assertions)]
+    zero_programmatic = [_label(e) for e in evals if _has_only_subjective_validation(e)]
 
     return {
         "skill_name": eval_set.skill_name,
@@ -95,3 +101,28 @@ def inspect_evals(eval_set: EvalSet) -> dict[str, Any]:
         },
         "same_prompt_groups": same_prompt_groups(eval_set),
     }
+
+
+def _find_split_flag(members) -> str | None:
+    """Return the first explicit split flag in member and flag order."""
+    for member in members:
+        for flag in member.flags or []:
+            text = str(flag)
+            if text.startswith("split:") and text.endswith("-evals-conflict"):
+                return text
+    return None
+
+
+def _count_programmatic_assertions(evals) -> int:
+    """Count programmatic assertions across all cases."""
+    count = 0
+    for eval_case in evals:
+        count += sum(assertion.type in PROGRAMMATIC_TYPES for assertion in eval_case.assertions)
+    return count
+
+
+def _has_only_subjective_validation(eval_case) -> bool:
+    """Distinguish subjective-only cases from cases without validation."""
+    if not eval_case.assertions and not eval_case.expectations:
+        return False
+    return not any(assertion.type in PROGRAMMATIC_TYPES for assertion in eval_case.assertions)

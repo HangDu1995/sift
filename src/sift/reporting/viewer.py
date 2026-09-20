@@ -1,4 +1,8 @@
-# find_runs/_find_runs_recursive 改编自 Anthropic skill-creator(Apache-2.0);见根目录 NOTICE.md
+# Portions adapted from Anthropic skill-creator: Copyright 2026 Anthropic, PBC.
+# These third-party portions remain licensed under the Apache License, Version 2.0.
+# See LICENSES/Apache-2.0.txt and NOTICE.md for scope and modifications.
+# Historical skill-creator derivation is recorded in NOTICE.md.
+# Run discovery and preview encoding were subsequently reimplemented for Sift.
 """Report generator — produces self-contained HTML from evaluation data."""
 
 from __future__ import annotations
@@ -6,47 +10,62 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import logging
 import mimetypes
 import os
 import signal
 import subprocess
 import sys
 import webbrowser
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+from sift.executables import resolve_executable
 from sift.execution.error_triage import classify_error
+from sift.text_output import print_text
 
 METADATA_FILES = {"transcript.md", "user_notes.md", "metrics.json"}
 
-TEXT_EXTENSIONS = {
-    ".txt", ".md", ".json", ".csv", ".py", ".js", ".ts", ".tsx", ".jsx",
-    ".yaml", ".yml", ".xml", ".html", ".css", ".sh", ".rb", ".go", ".rs",
-    ".java", ".c", ".cpp", ".h", ".hpp", ".sql", ".r", ".toml",
+# Preview kinds are an output schema contract with viewer.html. Unknown suffixes
+# remain downloadable binary attachments, including PDF files.
+_PREVIEW_SUFFIXES = {
+    "text": frozenset(
+        ".c .cpp .css .csv .go .h .hpp .html .java .js .json .jsx .md .py "
+        ".r .rb .rs .sh .sql .toml .ts .tsx .txt .xml .yaml .yml".split()
+    ),
+    "image": frozenset(".gif .jpeg .jpg .png .svg .webp".split()),
+    "xlsx": frozenset({".xlsx"}),
 }
 
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
-
-MIME_OVERRIDES = {
-    ".svg": "image/svg+xml",
+_MIME_BY_SUFFIX = {
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".svg": "image/svg+xml",
 }
+
+_IGNORED_RUN_FOLDERS = frozenset({"inputs", "skill", "previous", "__pycache__", "node_modules"})
 
 
 def get_mime_type(path: Path) -> str:
-    ext = path.suffix.lower()
-    if ext in MIME_OVERRIDES:
-        return MIME_OVERRIDES[ext]
-    mime, _ = mimetypes.guess_type(str(path))
-    return mime or "application/octet-stream"
+    """Resolve explicit preview formats before the platform MIME registry."""
+    override = _MIME_BY_SUFFIX.get(path.suffix.lower())
+    if override is not None:
+        return override
+    guessed, _encoding = mimetypes.guess_type(str(path))
+    return guessed or "application/octet-stream"
 
 
 def find_runs(workspace: Path) -> list[dict]:
-    runs: list[dict] = []
-    _find_runs_recursive(workspace, workspace, runs)
-    runs = _dedup_retries(runs)
-    runs.sort(key=lambda r: (r.get("eval_id", float("inf")), r["id"]))
-    return runs
+    """Collect terminal run directories, then retain final retries and sort them."""
+    records = []
+    for directory in _run_directories(workspace):
+        record = _build_run(workspace, directory)
+        if record:
+            records.append(record)
+    return sorted(_dedup_retries(records), key=_report_run_order)
+
+
+def _report_run_order(record: dict) -> tuple:
+    return record.get("eval_id", float("inf")), record["id"]
 
 
 def _dedup_retries(runs: list[dict]) -> list[dict]:
@@ -64,29 +83,32 @@ def _dedup_retries(runs: list[dict]) -> list[dict]:
         key = (r.get("config"), r.get("eval_id"), r.get("run_number"))
         rc = retry_count(r.get("id", "").rsplit("/", 1)[-1])
         prev = best.get(key)
-        if prev is None or rc > prev[0]:
-            best[key] = (rc, r)
+        if not (prev is None or rc > prev[0]):
+            continue
+        best[key] = (rc, r)
     return [v[1] for v in best.values()]
 
 
-def _find_runs_recursive(root: Path, current: Path, runs: list[dict]) -> None:
-    if not current.is_dir():
-        return
-    outputs_dir = current / "outputs"
-    if outputs_dir.is_dir():
-        run = _build_run(root, current)
-        if run:
-            runs.append(run)
-        return
-    # previous/ 是 fresh 重跑归档的上次 run 树,其 run 不属于"本次单次执行"——
-    # 误收会把它当独立 run 渲染,且解析错乱(路径 4 段:config="previous"、eval_id 塌成 0),
-    # 用户看到的就是"eval 0 的 run 1/2/3 previous"幽灵页面。previous 的对照走 per-run
-    # 「上次输出」栏(_build_run 内直接拼 root/previous/...)+ 聚合「vs 上次」卡,不在此列。
-    skip = {"node_modules", ".git", "__pycache__", "skill", "inputs", "previous"}
-    for child in sorted(current.iterdir()):
-        if child.name.startswith(".") or child.name in skip:
+def _run_directories(workspace: Path):
+    """Depth-first walk with a stack; an outputs folder terminates that branch.
+
+    Reverse insertion preserves the old alphabetical visitation order, including
+    which equal-numbered retry wins. Archived and hidden children are excluded.
+    """
+    pending = [workspace]
+    while pending:
+        directory = pending.pop()
+        if not directory.is_dir():
             continue
-        _find_runs_recursive(root, child, runs)
+        if directory.joinpath("outputs").is_dir():
+            yield directory
+            continue
+        children = sorted(directory.iterdir(), reverse=True)
+        pending.extend(child for child in children if _visit_run_child(child))
+
+
+def _visit_run_child(path: Path) -> bool:
+    return not path.name.startswith(".") and path.name not in _IGNORED_RUN_FOLDERS
 
 
 def _build_run(root: Path, run_dir: Path) -> dict | None:
@@ -94,6 +116,31 @@ def _build_run(root: Path, run_dir: Path) -> dict | None:
     if not outputs_dir.is_dir():
         return None
 
+    eval_id, config, run_number = _run_location(run_dir, root)
+    eval_id, prompt = _run_prompt(root, eval_id, run_dir)
+    record = {
+        "id": str(run_dir.relative_to(root)),
+        "eval_id": eval_id,
+        "config": config,
+        "run_number": run_number,
+        "prompt": prompt,
+        "outputs": _embed_run_outputs(outputs_dir),
+    }
+    for artifact in ("grading", "compliance", "calibration"):
+        record[artifact] = _read_optional_run_json(run_dir / f"{artifact}.json")
+    record["previous_output"] = _previous_run_output(root, run_dir)
+
+    error = (record.get("grading") or {}).get("error", "") or ""
+    triage = classify_error(error) if error else None
+    record.update(
+        error_root_cause=triage.root_cause if triage else None,
+        error_suggestion=triage.suggestion if triage else None,
+    )
+    return record
+
+
+def _run_location(run_dir: Path, root: Path) -> tuple[int, str, int]:
+    """Read config and numeric identifiers from either supported run layout."""
     parts = run_dir.relative_to(root).parts
     config = "unknown"
     eval_id = 0
@@ -104,134 +151,101 @@ def _build_run(root: Path, run_dir: Path) -> dict | None:
         try:
             eval_id = int(parts[1].split("-")[1])
         except (ValueError, IndexError):
-            pass
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
         try:
             run_number = int(parts[-1].split("-")[1])
         except (ValueError, IndexError):
-            pass
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
     elif len(parts) >= 2:
         config = parts[0]
         try:
             eval_id = int(parts[0].split("-")[1])
         except (ValueError, IndexError):
-            pass
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
         try:
             run_number = int(parts[-1].split("-")[1])
         except (ValueError, IndexError):
-            pass
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
     elif len(parts) >= 1:
         try:
             run_number = int(parts[-1].split("-")[1])
         except (ValueError, IndexError):
-            pass
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
+    return eval_id, config, run_number
 
+
+def _run_prompt(root: Path, eval_id: int, run_dir: Path) -> tuple[int, str]:
+    """Prefer evaluation metadata, falling back to the individual run prompt."""
+    sources = ((root / "eval_metadata.json", True), (run_dir / "run_debug.json", False))
     prompt = ""
-    eval_metadata_path = root / "eval_metadata.json"
-    if eval_metadata_path.exists():
-        try:
-            meta = json.loads(eval_metadata_path.read_text(encoding="utf-8"))
-            prompt = meta.get("prompt", "")
-            eval_id = meta.get("eval_id", eval_id)
-        except Exception:
-            pass
-
-    if not prompt:
-        debug_path = run_dir / "run_debug.json"
-        if debug_path.exists():
-            try:
-                debug = json.loads(debug_path.read_text(encoding="utf-8"))
-                prompt = debug.get("prompt", "")
-            except Exception:
-                pass
-
-    embedded_files: list[dict] = []
-    for f in sorted(outputs_dir.rglob("*")):
-        if not f.is_file():
+    for source, supplies_eval_id in sources:
+        if prompt:
+            break
+        metadata = _read_optional_run_json(source)
+        if metadata is None:
             continue
-        if f.name.startswith(".") or f.name in METADATA_FILES:
-            continue
-        embedded_files.append(_embed_file(f))
-
-    grading = None
-    grading_path = run_dir / "grading.json"
-    if grading_path.exists():
         try:
-            grading = json.loads(grading_path.read_text(encoding="utf-8"))
+            prompt = metadata.get("prompt", "")
+            if supplies_eval_id:
+                eval_id = metadata.get("eval_id", eval_id)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
+    return eval_id, prompt
 
-    compliance = None
-    compliance_path = run_dir / "compliance.json"
-    if compliance_path.exists():
-        try:
-            compliance = json.loads(compliance_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
 
-    calibration = None
-    calibration_path = run_dir / "calibration.json"
-    if calibration_path.exists():
-        try:
-            calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+def _embed_run_outputs(outputs_dir: Path) -> list[dict]:
+    """Apply the report's visibility policy before embedding sorted artifacts."""
+    visible = filter(_is_report_artifact, sorted(outputs_dir.rglob("*")))
+    return [_embed_file(artifact) for artifact in visible]
 
+
+def _is_report_artifact(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    return not (path.name.startswith(".") or path.name in METADATA_FILES)
+
+
+def _previous_run_output(root: Path, run_dir: Path) -> dict | None:
+    """Find the first output from the previous matching run."""
     previous_output = None
     prev_dir = root / "previous" / str(run_dir.relative_to(root))
     if prev_dir.is_dir() and (prev_dir / "outputs").is_dir():
         prev_outputs = sorted((prev_dir / "outputs").iterdir())
         if prev_outputs:
             previous_output = _embed_file(prev_outputs[0])
-
-    error_str = (grading or {}).get("error", "") or ""
-    triage = classify_error(error_str) if error_str else None
-
-    return {
-        "id": str(run_dir.relative_to(root)),
-        "eval_id": eval_id,
-        "config": config,
-        "run_number": run_number,
-        "prompt": prompt,
-        "outputs": embedded_files,
-        "grading": grading,
-        "compliance": compliance,
-        "calibration": calibration,
-        "previous_output": previous_output,
-        "error_root_cause": triage.root_cause if triage else None,
-        "error_suggestion": triage.suggestion if triage else None,
-    }
+    return previous_output
 
 
 def _embed_file(path: Path) -> dict:
-    ext = path.suffix.lower()
+    """Try the preferred preview, then a binary download if preview reading fails."""
+    preferred = _preview_kind(path.suffix.lower())
+    attempts = (preferred, "binary") if preferred != "binary" else ("binary",)
     mime = get_mime_type(path)
-
-    if ext in TEXT_EXTENSIONS:
+    for kind in attempts:
         try:
-            content = path.read_text(encoding="utf-8", errors="replace")
-            return {"name": path.name, "type": "text", "content": content}
+            return _read_preview(path, kind, mime)
         except Exception:
-            pass
+            if kind != "binary":
+                logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
+    return {"name": path.name, "type": "error", "content": "Could not read file"}
 
-    if ext in IMAGE_EXTENSIONS:
-        try:
-            data = base64.b64encode(path.read_bytes()).decode("ascii")
-            return {"name": path.name, "type": "image", "data_uri": f"data:{mime};base64,{data}"}
-        except Exception:
-            pass
 
-    if ext == ".xlsx":
-        try:
-            data = base64.b64encode(path.read_bytes()).decode("ascii")
-            return {"name": path.name, "type": "xlsx", "data_b64": data}
-        except Exception:
-            pass
+def _preview_kind(suffix: str) -> str:
+    for kind, extensions in _PREVIEW_SUFFIXES.items():
+        if suffix in extensions:
+            return kind
+    return "binary"
 
-    try:
-        data = base64.b64encode(path.read_bytes()).decode("ascii")
-        return {"name": path.name, "type": "binary", "data_uri": f"data:{mime};base64,{data}"}
-    except Exception:
-        return {"name": path.name, "type": "error", "content": "Could not read file"}
+
+def _read_preview(path: Path, kind: str, mime: str) -> dict:
+    preview = {"name": path.name, "type": kind}
+    if kind == "text":
+        preview["content"] = path.read_text(encoding="utf-8", errors="replace")
+    else:
+        encoded = base64.standard_b64encode(path.read_bytes()).decode("ascii")
+        field = "data_b64" if kind == "xlsx" else "data_uri"
+        preview[field] = encoded if kind == "xlsx" else f"data:{mime};base64,{encoded}"
+    return preview
 
 
 def _load_vet_report(workspace: Path) -> dict | None:
@@ -240,7 +254,7 @@ def _load_vet_report(workspace: Path) -> dict | None:
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
     return None
 
 
@@ -252,15 +266,16 @@ def _load_gate_verdict(root: Path) -> dict | None:
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
     return None
 
 
 def load_previous_iteration(workspace: Path) -> dict | None:
     for name in ("previous", "previous_iteration"):
         prev_dir = workspace / name
-        if prev_dir.is_dir():
-            return {"runs": find_runs(prev_dir)}
+        if not (prev_dir.is_dir()):
+            continue
+        return {"runs": find_runs(prev_dir)}
     return None
 
 
@@ -272,12 +287,13 @@ def _aggregate_compliance(runs: list[dict]) -> list[dict]:
     复用 audit.aggregate_by_instruction。全空 digest 的 side(L1 理解题 cc 纯推理无工具)贡献 0 findings → 不产空聚合。
     """
     from collections import defaultdict
+
     from sift.audit.aggregate import aggregate_by_instruction, aggregate_coverage
     from sift.audit.noise import annotate_aggregate_noise
     from sift.models import AuditFinding, AuditVerdict
 
-    by_side: dict[str, list[dict]] = defaultdict(list)   # side -> findings(dict)
-    side_runs: dict[str, int] = defaultdict(int)        # side -> 贡献了非空 findings 的 run 数
+    by_side: dict[str, list[dict]] = defaultdict(list)  # side -> findings(dict)
+    side_runs: dict[str, int] = defaultdict(int)  # side -> 贡献了非空 findings 的 run 数
     for r in runs:
         comp = r.get("compliance")
         if not comp:
@@ -285,8 +301,9 @@ def _aggregate_compliance(runs: list[dict]) -> list[dict]:
         side = r.get("config") or "?"
         findings = comp.get("findings") or []
         by_side[side].extend(findings)
-        if findings:  # 只数真贡献了判定的 run(空 digest 的 L1 题不计)
-            side_runs[side] += 1
+        if not (findings):
+            continue
+        side_runs[side] += 1
 
     out: list[dict] = []
     for side, findings in by_side.items():
@@ -299,30 +316,33 @@ def _aggregate_compliance(runs: list[dict]) -> list[dict]:
         # 聚合级噪声判别(每 side 各跑一次:fail_count>0 的行标 noise_label / noise_reasons)。
         # 在 model_dump 前做,使 by_instruction 字段携带标注——与 audit() 产出的 report 对齐。
         ai = annotate_aggregate_noise(ai)
-        out.append({
-            "side": side,
-            "summary": {
-                "total": len(validated),
-                "pass": sum(1 for f in validated if f.verdict == AuditVerdict.PASS),
-                "fail": sum(1 for f in validated if f.verdict == AuditVerdict.FAIL),
-                "na": sum(1 for f in validated if f.verdict == AuditVerdict.NA),
-                "unresolved": sum(1 for f in validated if f.verdict == AuditVerdict.UNRESOLVED),
-                "indeterminate": sum(1 for f in validated if f.verdict == AuditVerdict.INDETERMINATE),
-            },
-            "by_instruction": [a.model_dump(mode="json") for a in ai],
-            # 声明覆盖视图(同一 findings 池的姊妹聚合):这批考卷实测触达了声明的多大
-            # 比例(covered=任一 run PASS/FAIL;uncovered=全 N/A——所有考卷都没触发该场景;
-            # derived 反推指令不计)。旧 compliance.json findings 无 section → 分组落
-            # "(未分节)",聚合照常可算。
-            "coverage": aggregate_coverage(validated).model_dump(mode="json"),
-            "runs_contributed": side_runs[side],
-        })
+        out.append(
+            {
+                "side": side,
+                "summary": {
+                    "total": len(validated),
+                    "pass": sum(1 for f in validated if f.verdict == AuditVerdict.PASS),
+                    "fail": sum(1 for f in validated if f.verdict == AuditVerdict.FAIL),
+                    "na": sum(1 for f in validated if f.verdict == AuditVerdict.NA),
+                    "unresolved": sum(1 for f in validated if f.verdict == AuditVerdict.UNRESOLVED),
+                    "indeterminate": sum(1 for f in validated if f.verdict == AuditVerdict.INDETERMINATE),
+                },
+                "by_instruction": [a.model_dump(mode="json") for a in ai],
+                # 声明覆盖视图(同一 findings 池的姊妹聚合):这批考卷实测触达了声明的多大
+                # 比例(covered=任一 run PASS/FAIL;uncovered=全 N/A——所有考卷都没触发该场景;
+                # derived 反推指令不计)。旧 compliance.json findings 无 section → 分组落
+                # "(未分节)",聚合照常可算。
+                "coverage": aggregate_coverage(validated).model_dump(mode="json"),
+                "runs_contributed": side_runs[side],
+            }
+        )
     return out
 
 
 def _load_previous_benchmark(workspace: Path) -> dict | None:
     """读 workspace/previous/benchmark.json(run 端 fresh 重跑时 MOVE 进去的旧聚合)。
-    与 load_previous_iteration(读 run 树,供文件级面板)互补:这里读的是聚合数字,供「vs 上次」纵向 delta。"""
+    与 load_previous_iteration(读 run 树,供文件级面板)互补:这里读的是聚合数字,供「vs 上次」纵向 delta。
+    """
     path = workspace / "previous" / "benchmark.json"
     if path.exists():
         try:
@@ -349,7 +369,8 @@ def _compute_previous_delta(current: dict | None, previous: dict | None) -> dict
 
     预算成百分比/百分点(模板直接插,免 JS 算术)。双率(客观 programmatic / 主观 llm,
     与 dashboard Δ 卡同源)+ 盲评胜率 + 样本数(不同样本数时模板显式标出,提醒可比性)。
-    None / 缺字段 → 该指标省略(不报假 0)。无 run_summary 可比 → 整体返 None(模板不显卡)。"""
+    None / 缺字段 → 该指标省略(不报假 0)。无 run_summary 可比 → 整体返 None(模板不显卡)。
+    """
     if not isinstance(current, dict) or not isinstance(previous, dict):
         return None
     cur_summary = current.get("run_summary") or {}
@@ -367,18 +388,26 @@ def _compute_previous_delta(current: dict | None, previous: dict | None) -> dict
     for side in [k for k in cur_summary if k != "delta"]:
         cur_prog, cur_llm = _rates(cur_summary, side)
         prev_prog, prev_llm = _rates(prev_summary, side) if side in prev_summary else (None, None)
-        sides.append({
-            "label": side,
-            "cur_prog": _pct(cur_prog), "prev_prog": _pct(prev_prog), "d_prog": _pp(cur_prog, prev_prog),
-            "cur_llm": _pct(cur_llm), "prev_llm": _pct(prev_llm), "d_llm": _pp(cur_llm, prev_llm),
-        })
+        sides.append(
+            {
+                "label": side,
+                "cur_prog": _pct(cur_prog),
+                "prev_prog": _pct(prev_prog),
+                "d_prog": _pp(cur_prog, prev_prog),
+                "cur_llm": _pct(cur_llm),
+                "prev_llm": _pct(prev_llm),
+                "d_llm": _pp(cur_llm, prev_llm),
+            }
+        )
 
     cur_wr = (current.get("comparison_summary") or {}).get("win_rate")
     prev_wr = (previous.get("comparison_summary") or {}).get("win_rate")
 
     return {
         "sides": sides,
-        "cur_win": _pct(cur_wr), "prev_win": _pct(prev_wr), "d_win": _pp(cur_wr, prev_wr),
+        "cur_win": _pct(cur_wr),
+        "prev_win": _pct(prev_wr),
+        "d_win": _pp(cur_wr, prev_wr),
         "cur_runs": (current.get("metadata") or {}).get("runs_per_configuration"),
         "prev_runs": (previous.get("metadata") or {}).get("runs_per_configuration"),
     }
@@ -425,7 +454,7 @@ class ReportGenerator:
     ) -> str:
         template_path = self.template_dir / "viewer.html"
         if not template_path.exists():
-            return f"<html><body><h1>Error: viewer.html not found</h1></body></html>"
+            return "<html><body><h1>Error: viewer.html not found</h1></body></html>"
 
         template = template_path.read_text(encoding="utf-8")
 
@@ -450,8 +479,9 @@ class ReportGenerator:
             for prev_run in previous.get("runs", []):
                 rid = prev_run.get("id", "")
                 po = prev_run.get("outputs")
-                if po:
-                    prev_outputs[rid] = po
+                if not (po):
+                    continue
+                prev_outputs[rid] = po
 
         data = {
             "skill_name": skill_name,
@@ -471,32 +501,40 @@ class ReportGenerator:
 
         return html
 
-    def write_static(self, workspace: Path, output_path: Path, benchmark: dict | None = None, previous: dict | None = None, scorecard: dict | None = None) -> None:
+    def write_static(
+        self,
+        workspace: Path,
+        output_path: Path,
+        benchmark: dict | None = None,
+        previous: dict | None = None,
+        scorecard: dict | None = None,
+    ) -> None:
         html = self.generate_html(workspace, benchmark, previous=previous, scorecard=scorecard)
         output_path.write_text(html, encoding="utf-8")
 
-    def serve(self, workspace: Path, port: int = 8080, benchmark: dict | None = None, open_browser: bool = False) -> None:
+    def serve(
+        self, workspace: Path, port: int = 8080, benchmark: dict | None = None, open_browser: bool = False
+    ) -> None:
         gen = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                html = gen.generate_html(workspace, benchmark)
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(html.encode("utf-8"))
+            def handle_get(self):
+                _write_http_response(self, 200, gen.generate_html(workspace, benchmark))
 
-            def do_POST(self):
-                self.send_response(404)
-                self.end_headers()
+            def handle_post(self):
+                _write_http_response(self, 404)
 
-            def log_message(self, format, *args):
+            # BaseHTTPRequestHandler dispatches through these protocol names.
+            do_GET = handle_get
+            do_POST = handle_post
+
+            def log_message(self, message_format, *args):
                 pass
 
         _kill_port(port)
         server = HTTPServer(("", port), Handler)
         url = f"http://localhost:{port}"
-        print(f"Serving report at {url}")
+        print_text(f"Serving report at {url}")
         if open_browser:
             webbrowser.open(url)
         try:
@@ -505,19 +543,51 @@ class ReportGenerator:
             server.server_close()
 
 
+def _write_http_response(handler: BaseHTTPRequestHandler, status: int, html: str | None = None) -> None:
+    handler.send_response(status)
+    headers = {} if html is None else {"Content-Type": "text/html; charset=utf-8"}
+    for name, value in headers.items():
+        handler.send_header(name, value)
+    handler.end_headers()
+    if html is not None:
+        handler.wfile.write(html.encode("utf-8"))
+
+
 def _kill_port(port: int) -> None:
     if sys.platform == "win32":
         return
     try:
-        result = subprocess.run(
-            ["lsof", "-ti", f":{port}"],
-            capture_output=True, text=True,
-        )
-        if result.stdout.strip():
-            for pid in result.stdout.strip().split("\n"):
-                try:
-                    os.kill(int(pid), signal.SIGTERM)
-                except (ProcessLookupError, ValueError):
-                    pass
+        for pid in _listening_processes(port):
+            _terminate_port_process(pid)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
+
+
+def _listening_processes(port: int) -> list[str]:
+    command = [resolve_executable("lsof"), "-ti", f":{port}"]
+    completed = subprocess.run(command, capture_output=True, text=True)
+    listing = completed.stdout.strip()
+    return listing.split("\n") if listing else []
+
+
+def _terminate_port_process(pid):
+    try:
+        process_id = int(pid)
+    except ValueError:
+        logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
+        return
+    try:
+        os.kill(process_id, signal.SIGTERM)
+    except ProcessLookupError:
+        logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
+
+
+def _read_optional_run_json(path: Path):
+    """Read an optional run artifact; unreadable artifacts remain absent."""
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logging.getLogger(__name__).debug("Could not read optional run artifact %s", path, exc_info=True)
+        return None

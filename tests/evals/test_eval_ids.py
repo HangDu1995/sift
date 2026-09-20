@@ -1,0 +1,111 @@
+"""tests/test_eval_ids.py — eval --eval-ids:按 id 指定某几道题跑 AB(精确选题)。
+
+补 --eval-samples 的随机抽样——开发迭代常只需验证某几道(调试/回归/重现某道 fail)。
+按 id 选(eval.id,int),逗号分隔;和 --eval-samples 互斥;id 不存在报错(列可用)。
+"""
+
+from __future__ import annotations
+
+import pytest
+import typer
+
+from sift.cli.helpers import _parse_eval_ids
+from sift.cli.pipeline import EvaluationOptions
+from sift.errors import SiftError
+from sift.execution.runner import ABTestRunner, select_evals
+from sift.models import EvalCase, RunConfig, ScoringConfig
+
+
+def _evals(*ids: int) -> list[EvalCase]:
+    return [EvalCase(id=i, prompt=f"task {i}") for i in ids]
+
+
+def _runner(eval_ids=None, eval_samples=None) -> ABTestRunner:
+    config = RunConfig(
+        eval_ids=eval_ids,
+        eval_samples=eval_samples,
+        skip_compliance=True,
+        skip_calibration=True,
+    )
+    return ABTestRunner(
+        config=config,
+        scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False),
+    )
+
+
+class TestParseEvalIds:
+    @staticmethod
+    def test_basic():
+        assert _parse_eval_ids("3,5,7") == [3, 5, 7]
+
+    @staticmethod
+    def test_spaces():
+        assert _parse_eval_ids("3, 5, 7") == [3, 5, 7]
+
+    @staticmethod
+    def test_empty_and_none():
+        assert _parse_eval_ids("") is None
+        assert _parse_eval_ids(None) is None
+
+    @staticmethod
+    def test_bad_format_raises():
+        with pytest.raises(typer.BadParameter):
+            _parse_eval_ids("3,a")
+
+
+class TestSampleEvalsById:
+    @staticmethod
+    def test_select_by_id_preserves_given_order():
+        # 按 --eval-ids 给的顺序(3,1),非 evals 原序(1,2,3)
+        result = select_evals(_runner(eval_ids=[3, 1]).config, _evals(1, 2, 3))
+        assert [e.id for e in result] == [3, 1]
+
+    @staticmethod
+    def test_missing_id_raises_with_available():
+        with pytest.raises(SiftError) as exc:
+            select_evals(_runner(eval_ids=[99]).config, _evals(1, 2))
+        msg = str(exc.value)
+        assert "99" in msg
+        assert "1" in msg and "2" in msg  # 报错要列出可用 id
+
+    @staticmethod
+    def test_dedup_preserves_order():
+        result = select_evals(_runner(eval_ids=[3, 3, 1]).config, _evals(1, 2, 3))
+        assert [e.id for e in result] == [3, 1]
+
+    @staticmethod
+    def test_no_filter_returns_all():
+        result = select_evals(_runner().config, _evals(1, 2, 3))
+        assert [e.id for e in result] == [1, 2, 3]
+
+    @staticmethod
+    def test_eval_ids_takes_priority_in_runner():
+        # runner 层:eval_ids 指定就走 id(防御,不校验互斥——互斥在 pipeline 层)
+        result = select_evals(_runner(eval_ids=[2], eval_samples=10).config, _evals(1, 2, 3))
+        assert [e.id for e in result] == [2]
+
+
+class TestEvalIdsSamplesMutex:
+    @staticmethod
+    def test_pipeline_rejects_both(tmp_path):
+        from sift.cli.pipeline import _run_ab_eval
+        from sift.models import EvalSet
+
+        eval_set = EvalSet(skill_name="s", evals=[EvalCase(id=1, prompt="x")])
+        with pytest.raises(SiftError):
+            _run_ab_eval(
+                skill_path=tmp_path / "skill",
+                eval_set=eval_set,
+                scoring="hybrid",
+                run_config=RunConfig(
+                    runs_per_config=1,
+                    model=None,
+                    max_workers=1,
+                    timeout_seconds=10,
+                    max_turns=1,
+                    skip_calibration=True,
+                    eval_ids=[1],
+                    eval_samples=2,
+                ),
+                options=EvaluationOptions(),
+            )

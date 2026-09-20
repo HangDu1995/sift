@@ -63,9 +63,10 @@ def parse_skill_md(
 
     end_idx: int | None = None
     for i, line in enumerate(lines[1:], start=1):
-        if line.strip() == "---":
-            end_idx = i
-            break
+        if not (line.strip() == "---"):
+            continue
+        end_idx = i
+        break
 
     if end_idx is None:
         raise SkillParseError("SKILL.md missing frontmatter (no closing ---)")
@@ -83,6 +84,6 @@ def parse_skill_md(
     name = str(frontmatter.get("name", "")).strip()
     description = str(frontmatter.get("description", "")).strip()
 
-    body_text = "\n".join(lines[end_idx + 1 :]).strip()
+    body_text = "\n".join(lines[end_idx + 1:]).strip()
 
     return name, description, content, frontmatter, body_text

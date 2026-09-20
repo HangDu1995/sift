@@ -16,7 +16,9 @@ def freeze(
     evals_path: Path = typer.Argument(..., help="Path to source evals.json"),
     name: str = typer.Option("baseline", "--name", help="Baseline name (-> <name>.json + <name>.meta.json)"),
     out: Optional[Path] = typer.Option(None, "--out", help="Output dir (default: beside evals.json)"),
-    skill_version: Optional[str] = typer.Option(None, "--skill-version", help="Target skill version (recorded in meta)"),
+    skill_version: Optional[str] = typer.Option(
+        None, "--skill-version", help="Target skill version (recorded in meta)"
+    ),
 ):
     """把 evals.json 冻结成命名基线快照 + 出处元数据。
 
@@ -29,10 +31,13 @@ def freeze(
         raise typer.Exit(code=2)
     try:
         baseline_path, meta_path = freeze_baseline(
-            evals_path, name=name, out_dir=out, target_skill_version=skill_version,
+            evals_path,
+            name=name,
+            out_dir=out,
+            target_skill_version=skill_version,
         )
     except Exception as exc:
         console.print(f"[red]Error:[/red] failed to freeze: {exc}")
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=2) from exc
     console.print(f"[green]Frozen[/green] → {baseline_path}")
     console.print(f"          + {meta_path}")

@@ -6,6 +6,7 @@ per-SKILL hash 缓存:同 instructions + model + prompt 版本只调一次 compu
 缓存目录隔离由 ``conftest._isolate_refine_cache_dir`` 提供(全局 autouse),
 绝不污染 ``~/.cache``。每个测试从空缓存开始(function-scoped tmp_path)。
 """
+
 from __future__ import annotations
 
 import threading
@@ -39,11 +40,13 @@ def _inst(
 
 
 class TestCacheMissAndHit:
-    def test_get_miss_returns_none(self):
+    @staticmethod
+    def test_get_miss_returns_none():
         """空缓存:get 任意 key 返 None。"""
         assert refine_cache.get("nonexistent_key") is None
 
-    def test_put_then_get_hit(self):
+    @staticmethod
+    def test_put_then_get_hit():
         """put 后 get 命中,返等价 refined + dropped_count(对象不同、字段同)。"""
         refined = [_inst("Step 1: 真步骤"), _inst("Step 2: 又一步")]
         refine_cache.put("k1", refined, dropped_count=3)
@@ -61,19 +64,20 @@ class TestCacheMissAndHit:
             assert got.check_method == orig.check_method
             assert got.params == orig.params
 
-    def test_get_corrupt_json_returns_none(self, tmp_path):
+    @staticmethod
+    def test_get_corrupt_json_returns_none(tmp_path):
         """文件存在但 JSON 解析失败 → None(容错,调用方重算)。"""
         (tmp_path / "bad.json").write_text("{not json", encoding="utf-8")
         assert refine_cache.get("bad") is None
 
-    def test_get_missing_dropped_count_returns_none(self, tmp_path):
+    @staticmethod
+    def test_get_missing_dropped_count_returns_none(tmp_path):
         """JSON 缺 dropped_count 键 → None(键缺失视为坏文件)。"""
-        (tmp_path / "incomplete.json").write_text(
-            '{"refined": []}', encoding="utf-8"
-        )
+        (tmp_path / "incomplete.json").write_text('{"refined": []}', encoding="utf-8")
         assert refine_cache.get("incomplete") is None
 
-    def test_put_atomic_uses_tmp_then_replace(self, tmp_path):
+    @staticmethod
+    def test_put_atomic_uses_tmp_then_replace(tmp_path):
         """put 后 .tmp 文件不留(原子写:写 .tmp 再 os.replace)。"""
         refine_cache.put("atomic_key", [_inst("a")], 0)
         assert (tmp_path / "atomic_key.json").exists()
@@ -81,60 +85,65 @@ class TestCacheMissAndHit:
 
 
 class TestCacheKey:
-    def test_deterministic(self):
+    @staticmethod
+    def test_deterministic():
         """同 instructions + model + version → 同 key(进程间、跨调用稳定)。"""
         insts = [_inst("a"), _inst("b")]
-        k1 = refine_cache._cache_key(insts, None)
-        k2 = refine_cache._cache_key(list(insts), None)  # 不同 list 实例
+        k1 = refine_cache.cache_key(insts, None)
+        k2 = refine_cache.cache_key(list(insts), None)  # 不同 list 实例
         assert k1 == k2
 
-    def test_changes_with_model(self):
+    @staticmethod
+    def test_changes_with_model():
         """model 变 → key 变(None vs "sonnet")。"""
         insts = [_inst("a")]
-        assert refine_cache._cache_key(insts, None) != refine_cache._cache_key(insts, "sonnet")
+        assert refine_cache.cache_key(insts, None) != refine_cache.cache_key(insts, "sonnet")
 
-    def test_changes_with_prompt_version(self, monkeypatch):
+    @staticmethod
+    def test_changes_with_prompt_version(monkeypatch):
         """REFINE_PROMPT_VERSION bump → key 变(强制失效所有旧条目)。"""
         insts = [_inst("a")]
-        k1 = refine_cache._cache_key(insts, None)
-        monkeypatch.setattr(
-            refine_cache, "REFINE_PROMPT_VERSION", refine_cache.REFINE_PROMPT_VERSION + 1
-        )
-        k2 = refine_cache._cache_key(insts, None)
+        k1 = refine_cache.cache_key(insts, None)
+        monkeypatch.setattr(refine_cache, "REFINE_PROMPT_VERSION", refine_cache.REFINE_PROMPT_VERSION + 1)
+        k2 = refine_cache.cache_key(insts, None)
         assert k1 != k2
 
-    def test_changes_with_instruction_text(self):
+    @staticmethod
+    def test_changes_with_instruction_text():
         """任一 instruction_text 变 → key 变。"""
-        assert refine_cache._cache_key([_inst("a")], None) != refine_cache._cache_key([_inst("b")], None)
+        assert refine_cache.cache_key([_inst("a")], None) != refine_cache.cache_key([_inst("b")], None)
 
-    def test_changes_with_instruction_source(self):
+    @staticmethod
+    def test_changes_with_instruction_source():
         """任一 source 变 → key 变。"""
         a = _inst("a", source=InstructionSource.HEADING_STEP)
         b = _inst("a", source=InstructionSource.CONSTRAINT)
-        assert refine_cache._cache_key([a], None) != refine_cache._cache_key([b], None)
+        assert refine_cache.cache_key([a], None) != refine_cache.cache_key([b], None)
 
-    def test_changes_with_instruction_section(self):
+    @staticmethod
+    def test_changes_with_instruction_section():
         """任一 section 变 → key 变。"""
         a = _inst("a", section="Process")
         b = _inst("a", section="Other")
-        assert refine_cache._cache_key([a], None) != refine_cache._cache_key([b], None)
+        assert refine_cache.cache_key([a], None) != refine_cache.cache_key([b], None)
 
 
 class TestCacheDir:
-    def test_put_writes_to_patched_dir(self, tmp_path):
+    @staticmethod
+    def test_put_writes_to_patched_dir(tmp_path):
         """put 写到 _cache_dir()(不污染 ~/.cache。"""
         refine_cache.put("mykey", [_inst("a")], 0)
         assert (tmp_path / "mykey.json").exists()
 
-    def test_get_reads_from_patched_dir(self, tmp_path):
+    @staticmethod
+    def test_get_reads_from_patched_dir(tmp_path):
         """get 从 _cache_dir() 读。"""
-        (tmp_path / "readkey.json").write_text(
-            '{"refined": [], "dropped_count": 0}', encoding="utf-8"
-        )
+        (tmp_path / "readkey.json").write_text('{"refined": [], "dropped_count": 0}', encoding="utf-8")
         result = refine_cache.get("readkey")
         assert result == ([], 0)
 
-    def test_put_creates_nested_cache_dir(self, tmp_path, monkeypatch):
+    @staticmethod
+    def test_put_creates_nested_cache_dir(tmp_path, monkeypatch):
         """_cache_dir() 不存在时 put 自动 mkdir(parents=True)。"""
         nested = tmp_path / "nested" / "deep"
         monkeypatch.setattr(refine_cache, "_cache_dir", lambda: nested)
@@ -143,7 +152,8 @@ class TestCacheDir:
 
 
 class TestGetOrCompute:
-    def test_miss_then_computes_and_caches(self):
+    @staticmethod
+    def test_miss_then_computes_and_caches():
         """首次 miss → 调 compute_fn + put;二次同 key → hit,不调 compute_fn。"""
         calls = {"n": 0}
 
@@ -161,7 +171,8 @@ class TestGetOrCompute:
         assert len(refined2) == 1
         assert dropped2 == 0
 
-    def test_returns_cached_equivalent_to_computed(self):
+    @staticmethod
+    def test_returns_cached_equivalent_to_computed():
         """hit 返回的 instructions 必须等价于直接 compute 的结果(无损序列化)。"""
         original = [
             _inst("Step 1: 真步骤"),
@@ -182,7 +193,8 @@ class TestGetOrCompute:
             assert got.check_method == orig.check_method
             assert got.params == orig.params
 
-    def test_concurrent_same_key_compute_fn_once(self):
+    @staticmethod
+    def test_concurrent_same_key_compute_fn_once():
         """两线程同 key 并发调 get_or_compute → compute_fn 只调一次(double-check locking)。
 
         用拉长 compute_fn 时延(0.1s sleep)+ 两个线程同时启动,模拟 ThreadPoolExecutor
@@ -213,7 +225,8 @@ class TestGetOrCompute:
         assert len(results[0][0]) == 1 and len(results[1][0]) == 1
         assert results[0][1] == 0 and results[1][1] == 0
 
-    def test_distinct_keys_both_compute(self):
+    @staticmethod
+    def test_distinct_keys_both_compute():
         """不同 key → 都算(无相互命中)。"""
         calls = {"a": 0, "b": 0}
 
@@ -221,6 +234,7 @@ class TestGetOrCompute:
             def compute():
                 calls[label] += 1
                 return [_inst(label)], 0
+
             return compute
 
         refine_cache.get_or_compute("key_a", make_compute("a"))

@@ -15,10 +15,10 @@ unknown 三态,按声明分组——本次对账的证据面铺了声明的多�
 - **纯函数**:不调 LLM、不读 transcript,只对已有 findings 后处理 → 单元可测、确定。
 - 判定层一行不动,只重组输出。
 """
+
 from __future__ import annotations
 
 from sift.models.audit_models import (
-    AuditCategory,
     AuditFinding,
     AuditVerdict,
     CoverageSummary,
@@ -48,6 +48,44 @@ def aggregate_by_instruction(
     if not findings:
         return []
 
+    groups = _group_instruction_findings(findings)
+
+    rows = _instruction_summary_rows(groups)
+    return rows
+
+
+def _instruction_summary_rows(groups):
+    rows: list[InstructionAggregate] = []
+    for g in groups.values():
+        total = g["pass"] + g["fail"] + g["na"] + g["unresolved"] + g["indeterminate"]
+        rows.append(
+            InstructionAggregate(
+                instruction_text=g["instruction_text"],
+                source_excerpt=g["source_excerpt"],
+                headline=g["headline"],
+                section=g["section"],
+                control_flow=g["control_flow"],
+                source=g["source"],
+                category=g["category"],
+                pass_count=g["pass"],
+                fail_count=g["fail"],
+                na_count=g["na"],
+                unresolved_count=g["unresolved"],
+                indeterminate_count=g["indeterminate"],
+                total=total,
+                fail_rate=g["fail"] / total if total else 0.0,
+                fail_in_transcripts=g["fail_in_transcripts"],
+                na_in_transcripts=g["na_in_transcripts"],
+                fail_seqs=g["fail_seqs"],
+                na_seqs=g["na_seqs"],
+            )
+        )
+
+    rows.sort(key=lambda r: (-r.fail_rate, -r.fail_count, r.instruction_text))
+    return rows
+
+
+def _group_instruction_findings(findings):
     groups: dict[str, dict] = {}
     for f in findings:
         if f.synthetic:
@@ -94,35 +132,7 @@ def aggregate_by_instruction(
             g["na"] += 1
             g["na_in_transcripts"].append(f.transcript)
             g["na_seqs"].append(f.seq)
-
-    rows: list[InstructionAggregate] = []
-    for g in groups.values():
-        total = g["pass"] + g["fail"] + g["na"] + g["unresolved"] + g["indeterminate"]
-        rows.append(
-            InstructionAggregate(
-                instruction_text=g["instruction_text"],
-                source_excerpt=g["source_excerpt"],
-                headline=g["headline"],
-                section=g["section"],
-                control_flow=g["control_flow"],
-                source=g["source"],
-                category=g["category"],
-                pass_count=g["pass"],
-                fail_count=g["fail"],
-                na_count=g["na"],
-                unresolved_count=g["unresolved"],
-                indeterminate_count=g["indeterminate"],
-                total=total,
-                fail_rate=g["fail"] / total if total else 0.0,
-                fail_in_transcripts=g["fail_in_transcripts"],
-                na_in_transcripts=g["na_in_transcripts"],
-                fail_seqs=g["fail_seqs"],
-                na_seqs=g["na_seqs"],
-            )
-        )
-
-    rows.sort(key=lambda r: (-r.fail_rate, -r.fail_count, r.instruction_text))
-    return rows
+    return groups
 
 
 def aggregate_coverage(findings: list[AuditFinding]) -> CoverageSummary:
@@ -144,6 +154,72 @@ def aggregate_coverage(findings: list[AuditFinding]) -> CoverageSummary:
     组内 uncovered → unknown → covered(covered 行保留在模型里供下游,模板只渲染非
     covered),组内再按 instruction_text 升序。空输入 → 全 0 的 CoverageSummary。
     """
+    groups = _group_coverage_findings(findings)
+
+    sections = _build_coverage_sections(groups)
+
+    coverage_order = {"uncovered": 0, "unknown": 1, "covered": 2}
+    summary = CoverageSummary()
+    for sec in sections.values():
+        sec_total = len(sec["instructions"])
+        instructions = sorted(sec["instructions"], key=lambda i: (coverage_order.get(i.status), i.instruction_text))
+        summary.sections.append(
+            SectionCoverage(
+                section=sec["section"],
+                total=sec_total,
+                covered=sec["covered"],
+                uncovered=sec["uncovered"],
+                unknown=sec["unknown"],
+                coverage_rate=sec["covered"] / sec_total if sec_total else 0.0,
+                instructions=instructions,
+            )
+        )
+        summary.total += sec_total
+        summary.covered += sec["covered"]
+        summary.uncovered += sec["uncovered"]
+        summary.unknown += sec["unknown"]
+    summary.sections.sort(key=lambda s: (-s.uncovered, -s.total, s.section))
+    summary.coverage_rate = summary.covered / summary.total if summary.total else 0.0
+    return summary
+
+
+def _build_coverage_sections(groups):
+    sections: dict[str, dict] = {}
+    for g in groups.values():
+        total = g["pass"] + g["fail"] + g["na"] + g["unresolved"] + g["indeterminate"]
+        if g["pass"] or g["fail"]:
+            status = "covered"
+        elif g["na"] and not (g["unresolved"] or g["indeterminate"]):
+            status = "uncovered"
+        else:
+            status = "unknown"
+        sec = sections.setdefault(
+            g["section"],
+            {"section": g["section"], "covered": 0, "uncovered": 0, "unknown": 0, "instructions": []},
+        )
+        sec[status] += 1
+        sec["instructions"].append(
+            InstructionCoverage(
+                instruction_text=g["instruction_text"],
+                source_excerpt=g["source_excerpt"],
+                headline=g["headline"],
+                section=g["section"],
+                source=g["source"],
+                category=g["category"],
+                status=status,
+                pass_count=g["pass"],
+                fail_count=g["fail"],
+                na_count=g["na"],
+                unresolved_count=g["unresolved"],
+                indeterminate_count=g["indeterminate"],
+                total=total,
+                seqs=sorted(set(g["seqs"])),
+            )
+        )
+    return sections
+
+
+def _group_coverage_findings(findings):
     groups: dict[str, dict] = {}
     for f in findings:
         if f.derived_from_transcript or f.synthetic:
@@ -178,60 +254,4 @@ def aggregate_coverage(findings: list[AuditFinding]) -> CoverageSummary:
             g["indeterminate"] += 1
         else:  # AuditVerdict.NA(不适用)
             g["na"] += 1
-
-    sections: dict[str, dict] = {}
-    for g in groups.values():
-        total = g["pass"] + g["fail"] + g["na"] + g["unresolved"] + g["indeterminate"]
-        if g["pass"] or g["fail"]:
-            status = "covered"
-        elif g["na"] and not (g["unresolved"] or g["indeterminate"]):
-            status = "uncovered"
-        else:
-            status = "unknown"
-        sec = sections.setdefault(
-            g["section"],
-            {"section": g["section"], "covered": 0, "uncovered": 0, "unknown": 0, "instructions": []},
-        )
-        sec[status] += 1
-        sec["instructions"].append(
-            InstructionCoverage(
-                instruction_text=g["instruction_text"],
-                source_excerpt=g["source_excerpt"],
-                headline=g["headline"],
-                section=g["section"],
-                source=g["source"],
-                category=g["category"],
-                status=status,
-                pass_count=g["pass"],
-                fail_count=g["fail"],
-                na_count=g["na"],
-                unresolved_count=g["unresolved"],
-                indeterminate_count=g["indeterminate"],
-                total=total,
-                seqs=sorted(set(g["seqs"])),
-            )
-        )
-
-    _ORDER = {"uncovered": 0, "unknown": 1, "covered": 2}
-    summary = CoverageSummary()
-    for sec in sections.values():
-        sec_total = len(sec["instructions"])
-        instructions = sorted(sec["instructions"], key=lambda i: (_ORDER[i.status], i.instruction_text))
-        summary.sections.append(
-            SectionCoverage(
-                section=sec["section"],
-                total=sec_total,
-                covered=sec["covered"],
-                uncovered=sec["uncovered"],
-                unknown=sec["unknown"],
-                coverage_rate=sec["covered"] / sec_total if sec_total else 0.0,
-                instructions=instructions,
-            )
-        )
-        summary.total += sec_total
-        summary.covered += sec["covered"]
-        summary.uncovered += sec["uncovered"]
-        summary.unknown += sec["unknown"]
-    summary.sections.sort(key=lambda s: (-s.uncovered, -s.total, s.section))
-    summary.coverage_rate = summary.covered / summary.total if summary.total else 0.0
-    return summary
+    return groups

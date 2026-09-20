@@ -10,12 +10,14 @@ from sift.i18n import ANTI_FABRICATION_CN
 
 
 class TestI18nKeywords:
-    def test_anti_fabrication_cn_contents(self):
+    @staticmethod
+    def test_anti_fabrication_cn_contents():
         # 反捏造词 —— extractor(提取指令)+ checks(静态检查)共用
         for w in ("捏造", "编造", "虚构", "伪造", "臆造"):
             assert w in ANTI_FABRICATION_CN
 
-    def test_anti_fabrication_cn_well_formed(self):
+    @staticmethod
+    def test_anti_fabrication_cn_well_formed():
         assert isinstance(ANTI_FABRICATION_CN, tuple)
         assert len(ANTI_FABRICATION_CN) >= 5
         assert all(isinstance(w, str) and w for w in ANTI_FABRICATION_CN)

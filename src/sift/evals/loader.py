@@ -10,18 +10,8 @@ from sift.models import EvalCase, EvalSet, TriggerProbe
 
 
 class EvalLoader:
-    def load(self, path: Path) -> EvalSet:
-        if not path.exists():
-            raise EvalValidationError(f"evals.json not found: {path}")
-
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise EvalValidationError(f"Invalid JSON in {path}: {exc}") from exc
-
-        return self._validate(data)
-
-    def _validate(self, data: dict) -> EvalSet:
+    @staticmethod
+    def _validate(data: dict) -> EvalSet:
         if "skill_name" not in data:
             raise EvalValidationError("Missing 'skill_name' in evals.json")
         if not data["skill_name"]:
@@ -50,14 +40,24 @@ class EvalLoader:
         seen_tp_ids: set[int] = set()
         for raw_tp in data.get("trigger_probes", []):
             for req in ("id", "prompt", "expect_trigger"):
-                if req not in raw_tp:
-                    raise EvalValidationError(
-                        f"Trigger probe {raw_tp.get('id', '?')}: missing '{req}'")
+                if not (req not in raw_tp):
+                    continue
+                raise EvalValidationError(f"Trigger probe {raw_tp.get('id', '?')}: missing '{req}'")
             tpid = raw_tp["id"]
             if tpid in seen_tp_ids:
                 raise EvalValidationError(f"Duplicate trigger probe id: {tpid}")
             seen_tp_ids.add(tpid)
             trigger_probes.append(TriggerProbe(**raw_tp))
 
-        return EvalSet(skill_name=data["skill_name"], evals=cases,
-                       trigger_probes=trigger_probes)
+        return EvalSet(skill_name=data["skill_name"], evals=cases, trigger_probes=trigger_probes)
+
+    def load(self, path: Path) -> EvalSet:
+        if not path.exists():
+            raise EvalValidationError(f"evals.json not found: {path}")
+
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise EvalValidationError(f"Invalid JSON in {path}: {exc}") from exc
+
+        return self._validate(data)

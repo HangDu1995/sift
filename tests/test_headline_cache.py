@@ -3,6 +3,7 @@
 纯函数(monkeypatch _cache_dir → tmp_path,绝不污染 ~/.cache)。镜像 refine_cache 的
 测试口径:键含 source_excerpt(headline 依赖它)、put/get 往返、get_or_compute 命中不重算。
 """
+
 from __future__ import annotations
 
 from sift.audit import headline_cache
@@ -28,11 +29,11 @@ def _inst(excerpt: str = "design_doc_cases.json 必须存在") -> InstructionChe
 def test_cache_key_includes_source_excerpt(monkeypatch, tmp_path):
     """source_excerpt 进键:excerpt 变 → key 变(headline 依赖 excerpt,改了应重算)。"""
     monkeypatch.setattr(headline_cache, "_cache_dir", lambda: tmp_path)
-    a = headline_cache._cache_key([_inst(excerpt="A 必须存在")], None)
-    b = headline_cache._cache_key([_inst(excerpt="B 必须存在")], None)
+    a = headline_cache.cache_key([_inst(excerpt="A 必须存在")], None)
+    b = headline_cache.cache_key([_inst(excerpt="B 必须存在")], None)
     assert a != b
     # 同 excerpt → 同 key(稳定、确定性)
-    assert a == headline_cache._cache_key([_inst(excerpt="A 必须存在")], None)
+    assert a == headline_cache.cache_key([_inst(excerpt="A 必须存在")], None)
 
 
 def test_put_get_roundtrip(monkeypatch, tmp_path):
@@ -52,7 +53,7 @@ def test_get_or_compute_caches_and_skips_on_hit(monkeypatch, tmp_path):
         calls["n"] += 1
         return ["h1"]
 
-    key = headline_cache._cache_key([_inst()], None)
+    key = headline_cache.cache_key([_inst()], None)
     assert headline_cache.get_or_compute(key, compute) == ["h1"]
     assert headline_cache.get_or_compute(key, compute) == ["h1"]  # 命中,不重算
     assert calls["n"] == 1

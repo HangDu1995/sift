@@ -121,7 +121,9 @@ class AuditFinding(BaseModel):
     seq: int = 0  # #1..#N:去重后编排的序号(供 related 引用 + 报告里 #N 可读定位)
     sources: list[str] = Field(default_factory=list)  # 同文去重后合并的所有来源;单条=[source]
     related: list[str] = Field(default_factory=list)  # 同行为跨类(Case B)关联的其它 finding 序号,如 ["#9"]
-    conflict_with: list[str] = Field(default_factory=list)  # 同源矛盾(Case C)对端序号:同 source_excerpt 声明行被判出 PASS 与 FAIL,互指对端;无矛盾留空
+    conflict_with: list[str] = Field(
+        default_factory=list
+    )  # 同源矛盾(Case C)对端序号:同 source_excerpt 声明行被判出 PASS 与 FAIL,互指对端;无矛盾留空
     # FAIL 噪声判别(audit.noise.annotate_noise)填,只对 FAIL 标;None/[] 向后兼容旧 JSON
     noise_label: str | None = None  # "tool_noise" / "skill_issue" / "uncertain";非 FAIL 为 None
     noise_reasons: list[str] = Field(default_factory=list)  # 命中理由(中文);非 FAIL 为空
@@ -153,9 +155,7 @@ class AuditFinding(BaseModel):
                 data["verdict"] = "UNRESOLVED"
             if "method" not in data and "confidence" in data:
                 try:
-                    data["method"] = (
-                        AuditMethod.PROGRAMMATIC if float(data["confidence"]) >= 1.0 else AuditMethod.LLM
-                    )
+                    data["method"] = AuditMethod.PROGRAMMATIC if float(data["confidence"]) >= 1.0 else AuditMethod.LLM
                 except (TypeError, ValueError):
                     data["method"] = AuditMethod.LLM
         return data
@@ -183,7 +183,9 @@ class InstructionAggregate(BaseModel):
     total: int
     fail_rate: float  # fail_count / total(total=0 时 0.0)
     fail_in_transcripts: list[str]  # 哪些 transcript 里判 FAIL(定位用)
-    na_in_transcripts: list[str] = Field(default_factory=list)  # 哪些 transcript 判 N/A(场景不适用,定位用);默认空兼容旧 report
+    na_in_transcripts: list[str] = Field(
+        default_factory=list
+    )  # 哪些 transcript 判 N/A(场景不适用,定位用);默认空兼容旧 report
     fail_seqs: list[int] = Field(default_factory=list)  # FAIL findings 的明细 #N(汇总表交叉引用到明细用)
     na_seqs: list[int] = Field(default_factory=list)  # N/A findings 的明细 #N
     # FAIL 噪声判别(audit.noise.annotate_aggregate_noise)填,只对 fail_count>0 标;None/[] 向后兼容
@@ -247,11 +249,11 @@ class ToolUsageEntry(BaseModel):
     信息性标注、**不判 FAIL**)。
     """
 
-    name: str                     # 规范名(首次观测到的原样形态;cc 大写开头 / opencode 归一形)
-    classification: str           # "domain" | "undeclared-domain"
-    declared_by: str = ""         # 命中的声明指令显示文本(headline/instruction_text;未命中空)
-    sessions: int = 0             # 出现于几个 transcript
-    calls: int = 0                # 总调用次数
+    name: str  # 规范名(首次观测到的原样形态;cc 大写开头 / opencode 归一形)
+    classification: str  # "domain" | "undeclared-domain"
+    declared_by: str = ""  # 命中的声明指令显示文本(headline/instruction_text;未命中空)
+    sessions: int = 0  # 出现于几个 transcript
+    calls: int = 0  # 总调用次数
     transcripts: list[str] = Field(default_factory=list)  # 文件名(交叉定位)
 
 
@@ -275,11 +277,11 @@ class AuditSuggestion(BaseModel):
     ``target_seqs`` 列其全部 FAIL 的 finding #N(渲染复用 seq-link → #finding-N)。
     """
 
-    category: str            # skill_fix(改 skill 正文) / declaration_fix(改声明)
-    target_seqs: list[int]   # 关联 FAIL finding 的 #N(可点跳)
-    suggestion: str          # 可直接照做的修改建议(含改哪段、怎么改)
-    rationale: str           # 归因理由(为何属这类)
-    keeps_pass: bool         # 自检:建议改的段落不与任何 PASS 指令撞车(可查面有限,见 note)
+    category: str  # skill_fix(改 skill 正文) / declaration_fix(改声明)
+    target_seqs: list[int]  # 关联 FAIL finding 的 #N(可点跳)
+    suggestion: str  # 可直接照做的修改建议(含改哪段、怎么改)
+    rationale: str  # 归因理由(为何属这类)
+    keeps_pass: bool  # 自检:建议改的段落不与任何 PASS 指令撞车(可查面有限,见 note)
     keeps_pass_note: str = ""
 
 
@@ -292,9 +294,9 @@ class AuditSuggestResult(BaseModel):
     """
 
     suggestions: list[AuditSuggestion] = Field(default_factory=list)
-    model_env_count: int = 0   # 归因 model_env 的 FAIL 条数 = Σ target_seqs 去重,与文案单位一致
-    dropped_count: int = 0     # wire 不合规整条丢弃计数(fix 类缺 suggestion / target_seqs 全无效 / 整批解析失败)
-    skipped_reason: str = ""   # 未跑/失败原因(UNRESOLVED 过高 / LLM 失败);空 = 跑成
+    model_env_count: int = 0  # 归因 model_env 的 FAIL 条数 = Σ target_seqs 去重,与文案单位一致
+    dropped_count: int = 0  # wire 不合规整条丢弃计数(fix 类缺 suggestion / target_seqs 全无效 / 整批解析失败)
+    skipped_reason: str = ""  # 未跑/失败原因(UNRESOLVED 过高 / LLM 失败);空 = 跑成
     tokens: int = 0
     # 消耗分项(CLI 把 suggest 行并入报告阶段表用;旧 JSON 默认 0):in/out 拆分 +
     # 实际响应次数(含截断/升档重试,与判官阶段 calls 同口径)。tokens = in + out 之和不变。
@@ -309,8 +311,12 @@ class AuditReport(BaseModel):
 
     skill_name: str
     transcripts: list[str]
-    transcript_sources: list[str] = Field(default_factory=list)  # 与 transcripts 同序并行;"cc"/"opencode"/...(未来扩)。标每个 transcript 来自哪侧;旧 report 无此字段 → 空(向后兼容)
-    summary: dict  # {"total": N, "pass": X, "fail": Y, "na": Z(不适用), "unresolved": U(没判成), "indeterminate": I(判不准)}
+    transcript_sources: list[str] = Field(
+        default_factory=list
+    )  # 与 transcripts 同序标记来源（cc/opencode）；旧报告默认为空
+    summary: (
+        dict  # {"total": N, "pass": X, "fail": Y, "na": Z(不适用), "unresolved": U(没判成), "indeterminate": I(判不准)}
+    )
     findings: list[AuditFinding]
     # 多 transcript 对账的指令级聚合(按 fail_rate 降序);单 transcript 也有(每指令 1 verdict)。
     by_instruction: list[InstructionAggregate] = Field(default_factory=list)

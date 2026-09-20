@@ -36,9 +36,7 @@ def _parse_eval_ids(val: str | None) -> list[int] | None:
     try:
         ids = [int(x) for x in parts]
     except ValueError as e:
-        raise typer.BadParameter(
-            f"--eval-ids 必须是逗号分隔的整数(如 3,5,7): {e}"
-        )
+        raise typer.BadParameter(f"--eval-ids 必须是逗号分隔的整数(如 3,5,7): {e}") from e
     return ids or None
 
 
@@ -55,7 +53,8 @@ def _check_claude_or_exit() -> None:
 
 def _discover_evals(skill_path: Path) -> Path:
     for candidate in [skill_path / "evals" / "evals.json", skill_path / "evals.json"]:
-        if candidate.exists():
-            return candidate
+        if not (candidate.exists()):
+            continue
+        return candidate
     console.print("[red]Error:[/red] No evals.json found. Use --evals to specify path.")
     raise typer.Exit(code=2)

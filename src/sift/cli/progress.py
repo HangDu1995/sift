@@ -6,6 +6,9 @@ import time
 
 from rich.panel import Panel
 
+from sift.execution.progress import ProgressUpdate as ProgressUpdate
+from sift.text_output import write_text
+
 
 def _config_label(config_name: str) -> str:
     """side 名 → 短标签(进度行用)。默认模式 with/without;v1/v2 用各自 side key。"""
@@ -20,7 +23,8 @@ class _ProgressState:
     """run 进度渲染:顶部 live bar(原地更新)+ 每次执行完成追加持久日志行。
 
     设计:每次 spawn(cc 跑一条 eval 的一个 side)= 一次「执行」,共
-    ``num_sides * runs * num_evals`` 次(默认 2 侧(A/B)/ agent 评测 1 侧)。每次执行的 config(with/BASE/side)、题名、判卷结果
+    ``num_sides * runs * num_evals`` 次(默认 2 侧(A/B)/ agent 评测 1 侧)。
+    每次执行的 config(with/BASE/side)、题名、判卷结果
     (通过率 + 失败项,失败项标客观/主观)单独占一行、**持久保留**(不再被覆写),
     滚动累积成一条条执行记录;顶部一行原地更新的进度条给整体 % / ETA / 当前在跑的执行。
 
@@ -51,74 +55,73 @@ class _ProgressState:
         self.total_elapsed = 0.0
         self._timed_count = 0
         # 渲染簿记
-        self._logged_completed = 0   # 已打印持久行的最高 completed 值
-        self._last_live_lines = 0    # 当前 live 块占几行(擦写用)
+        self._logged_completed = 0  # 已打印持久行的最高 completed 值
+        self._last_live_lines = 0  # 当前 live 块占几行(擦写用)
         self._lock = threading.Lock()
 
-    def update(self, eval_name, config_name, eval_idx, total_evals, completed, total,
-               grading, run_duration=0.0, run_output=None, phase="", substep=""):
-        with self._lock:
-            persistent = self._apply(
-                eval_name, config_name, eval_idx, completed, total,
-                grading, run_duration, phase, substep,
-            )
-            self._render(persistent)
-
-    def _apply(self, eval_name, config_name, eval_idx, completed, total,
-               grading, run_duration, phase, substep):
-        """更新计数/状态,返回本次新增的持久行(完成时)或 []。须持锁调。"""
-        if phase == "skipped":
-            self.skipped += 1
-        elif phase == "failed":
-            self.failed += 1
-        elif phase == "retrying":
-            self.retried += 1
-
-        if completed > self._logged_completed:
-            # 一次执行完成(skipped/failed/done;retrying 不自增 completed 故不进这)
-            self._logged_completed = completed
-            self.completed = completed
-            persistent = []
-            if grading is not None:
-                persistent = self._completion_lines(
-                    eval_name, config_name, completed, total, grading, run_duration, phase, substep,
-                )
-            if run_duration:
-                self.total_elapsed += run_duration
-                self._timed_count += 1
-            self.run_start_time = None
-            self.phase = ""
-            return persistent
-
-        # in-flight(executing/scoring/compliance/retrying):只更新 live 状态
-        self.current_eval = eval_name
-        self.current_config = config_name
-        self.eval_idx = eval_idx
-        self.phase = phase
-        self.substep = substep
-        if phase == "executing":
-            self.run_start_time = time.time()  # 新执行起算;scoring/compliance 不重置(保留 executing 起算)
-        return []
-
-    def _completion_lines(self, eval_name, config_name, idx, total,
-                          grading, dur, phase, substep):
+    @staticmethod
+    def _completion_lines(event: ProgressUpdate):
         """一次执行完成的持久行:config/题名/通过率/耗时 + 失败项(标客观/主观)。"""
-        label = _config_label(config_name)
-        name = (eval_name or "")[:28]
-        if phase == "failed":
-            extra = f"({substep}) " if substep else ""
-            return [f"✗ {idx}/{total} {name} · {label} · 执行失败 {extra}· {dur:.0f}s"]
-        s = grading.summary
+        label = _config_label(event.config_name)
+        name = (event.eval_name or "")[:28]
+        if event.phase == "failed":
+            extra = f"({event.substep}) " if event.substep else ""
+            return [
+                (f"✗ {event.completed}/{event.total} {name} · {label} · 执行失败 {extra}· {event.run_duration:.0f}s")
+            ]
+        s = event.grading.summary
         icon = "✓" if s.pass_rate >= 0.5 else "✗"
-        lines = [f"{icon} {idx}/{total} {name} · {label} · "
-                 f"{int(s.pass_rate * 100)}% ({s.passed}/{s.total}) · {dur:.0f}s"]
-        failed = [e for e in (grading.expectations or []) if not e.passed]
+        lines = [
+            (
+                f"{icon} {event.completed}/{event.total} {name} · {label} · "
+                f"{int(s.pass_rate * 100)}% ({s.passed}/{s.total}) · {event.run_duration:.0f}s"
+            )
+        ]
+        failed = [e for e in (event.grading.expectations or []) if not e.passed]
         for fe in failed[:3]:
             tag = "客观" if getattr(fe, "source", "") == "programmatic" else "主观"
             lines.append(f"     ✗ [{tag}] {(fe.text or '')[:56]}")
         if len(failed) > 3:
             lines.append(f"     …还有 {len(failed) - 3} 条未通过")
         return lines
+
+    def update(self, event: ProgressUpdate):
+        with self._lock:
+            persistent = self._apply(event)
+            self._render(persistent)
+
+    def _apply(self, event: ProgressUpdate):
+        """更新计数/状态,返回本次新增的持久行(完成时)或 []。须持锁调。"""
+        if event.phase == "skipped":
+            self.skipped += 1
+        elif event.phase == "failed":
+            self.failed += 1
+        elif event.phase == "retrying":
+            self.retried += 1
+
+        if event.completed > self._logged_completed:
+            # 一次执行完成(skipped/failed/done;retrying 不自增 completed 故不进这)
+            self._logged_completed = event.completed
+            self.completed = event.completed
+            persistent = []
+            if event.grading is not None:
+                persistent = self._completion_lines(event)
+            if event.run_duration:
+                self.total_elapsed += event.run_duration
+                self._timed_count += 1
+            self.run_start_time = None
+            self.phase = ""
+            return persistent
+
+        # in-flight(executing/scoring/compliance/retrying):只更新 live 状态
+        self.current_eval = event.eval_name
+        self.current_config = event.config_name
+        self.eval_idx = event.eval_idx
+        self.phase = event.phase
+        self.substep = event.substep
+        if event.phase == "executing":
+            self.run_start_time = time.time()  # 新执行起算;scoring/compliance 不重置(保留 executing 起算)
+        return []
 
     def _format_live(self):
         """顶部 live 块:bar 行 + (有执行在跑时)当前执行行。返回不含尾换行的多行串。"""
@@ -127,7 +130,7 @@ class _ProgressState:
         pct = self.completed / self.total_runs * 100
         filled = int(20 * pct / 100)
         bar = "█" * filled + "░" * (20 - filled)
-        parts = [f"[{bar}] {pct:.0f}% ({self.completed}/{self.total_runs})"]
+        parts = [(f"[{bar}] {pct:.0f}% ({self.completed}/{self.total_runs})")]
         counters = []
         if self.skipped:
             counters.append(f"skip:{self.skipped}")
@@ -140,7 +143,7 @@ class _ProgressState:
         if self._timed_count > 0:
             avg = self.total_elapsed / self._timed_count
             eta = (self.total_runs - self.completed) * avg
-            parts.append(f"avg {avg:.0f}s ETA {eta / 60:.0f}m{eta % 60:02.0f}s")
+            parts.append((f"avg {avg:.0f}s ETA {eta / 60:.0f}m{eta % 60:02.0f}s"))
         lines = [" · ".join(parts)]
         if self.run_start_time is not None and self.current_eval:
             elapsed = time.time() - self.run_start_time
@@ -148,7 +151,7 @@ class _ProgressState:
             ph = f"({self.phase})" if self.phase and self.phase != "executing" else ""
             sub = f" {self.substep}" if self.substep else ""
             tail = f"{ph}{sub}".rstrip()
-            lines.append(f"  ⏳ {label} · {self.current_eval[:24]} · {elapsed:.0f}s{(' ' + tail) if tail else ''}")
+            lines.append((f"  ⏳ {label} · {self.current_eval[:24]} · {elapsed:.0f}s{(' ' + tail) if tail else ''}"))
         return "\n".join(lines)
 
     def _render(self, persistent):
@@ -156,18 +159,18 @@ class _ProgressState:
         is_tty = sys.stderr.isatty()
         if is_tty:
             if self._last_live_lines:
-                sys.stderr.write(f"\033[{self._last_live_lines}A\033[J")
+                write_text(f"\033[{self._last_live_lines}A\033[J", stream=sys.stderr)
             for ln in persistent:
-                sys.stderr.write(ln + "\n")
+                write_text(ln + "\n", stream=sys.stderr)
             live = self._format_live()
             if live:
-                sys.stderr.write(live + "\n")
+                write_text(live + "\n", stream=sys.stderr)
             sys.stderr.flush()
             self._last_live_lines = (live.count("\n") + 1) if live else 0
         else:
             # 非 tty(管道/日志):原地 bar 会把 ANSI 转义码灌进去,只流式打持久行。
             for ln in persistent:
-                sys.stderr.write(ln + "\n")
+                write_text(ln + "\n", stream=sys.stderr)
             sys.stderr.flush()
             self._last_live_lines = 0
 
@@ -187,26 +190,32 @@ class _BatchProgressState:
         self.live = None
         self.run_start_time: float | None = None
 
-    def update(self, skill_name, skill_idx, total_skills,
-               eval_name, config_name, eval_idx, total_evals,
-               completed, total, grading, run_duration=0.0):
+    def rich_renderable(self):
+        return self.render()
+
+    # Rich discovers this adapter by its protocol name.
+    __rich__ = rich_renderable
+
+    def update(self, skill_name: str, skill_idx: int, event: ProgressUpdate):
         self.current_skill = skill_name
         self.skill_idx = skill_idx
-        self.current_eval = eval_name
-        self.current_config = config_name
-        self.eval_idx = eval_idx
-        self.completed_runs = completed
-        self.total_runs = total
-        if grading is not None:
-            self.recent.append({
-                "skill": skill_name,
-                "eval": eval_name,
-                "config": config_name,
-                "pass_rate": grading.summary.pass_rate,
-                "passed": grading.summary.passed,
-                "total": grading.summary.total,
-                "duration": run_duration,
-            })
+        self.current_eval = event.eval_name
+        self.current_config = event.config_name
+        self.eval_idx = event.eval_idx
+        self.completed_runs = event.completed
+        self.total_runs = event.total
+        if event.grading is not None:
+            self.recent.append(
+                {
+                    "skill": skill_name,
+                    "eval": event.eval_name,
+                    "config": event.config_name,
+                    "pass_rate": event.grading.summary.pass_rate,
+                    "passed": event.grading.summary.passed,
+                    "total": event.grading.summary.total,
+                    "duration": event.run_duration,
+                }
+            )
             self.run_start_time = None
         else:
             self.run_start_time = time.time()
@@ -222,10 +231,7 @@ class _BatchProgressState:
         lines = []
 
         lines.append(f"[bold cyan]{'━' * 55}[/bold cyan]")
-        lines.append(
-            f"  [bold]Skill:[/bold] [{self.skill_idx}/{self.total_skills}] "
-            f"{self.current_skill[:45]}"
-        )
+        lines.append((f"  [bold]Skill:[/bold] [{self.skill_idx}/{self.total_skills}] {self.current_skill[:45]}"))
 
         tag = "[green]with_skill[/green]" if self.current_config == "with_skill" else "[yellow]without[/yellow]"
 
@@ -235,9 +241,7 @@ class _BatchProgressState:
         else:
             status = "[dim]starting...[/dim]"
 
-        lines.append(
-            f"  [dim]Eval:[/dim]   [{self.eval_idx}] {self.current_eval[:35]}  {tag}  {status}"
-        )
+        lines.append((f"  [dim]Eval:[/dim]   [{self.eval_idx}] {self.current_eval[:35]}  {tag}  {status}"))
         lines.append("")
 
         done = len(self.skill_results)
@@ -248,10 +252,10 @@ class _BatchProgressState:
                 icon, color = "✗", "red"
             else:
                 icon, color = "○", "dim"
-            lines.append(f"  [{color}]{icon}[/{color}] {name[:50]:50s}  [{color}]{status_val}[/{color}]")
+            lines.append((f"  [{color}]{icon}[/{color}] {name[:50]:50s}  [{color}]{status_val}[/{color}]"))
 
         if done < self.total_skills:
-            lines.append(f"  [dim]{'·' * 3} {self.total_skills - done} skill(s) remaining[/dim]")
+            lines.append((f"  [dim]{'·' * 3} {self.total_skills - done} skill(s) remaining[/dim]"))
 
         if self.recent:
             lines.append(f"  [dim]Latest runs (last 4):[/dim]")
@@ -261,12 +265,11 @@ class _BatchProgressState:
                 cfg = "skill" if r["config"] == "with_skill" else "base"
                 dur = f"{r.get('duration', 0):.0f}s"
                 lines.append(
-                    f"    [{color}]{icon}[/{color}] {r['eval'][:25]:25s} {cfg} "
-                    f"{r['pass_rate']:.0%} ({r['passed']}/{r['total']}) [{dur}]"
+                    (
+                        f"    [{color}]{icon}[/{color}] {r['eval'][:25]:25s} {cfg} "
+                        f"{r['pass_rate']:.0%} ({r['passed']}/{r['total']}) [{dur}]"
+                    )
                 )
 
         lines.append(f"[bold cyan]{'━' * 55}[/bold cyan]")
         return Panel("\n".join(lines), title="Batch A/B Test", border_style="magenta")
-
-    def __rich__(self):
-        return self.render()

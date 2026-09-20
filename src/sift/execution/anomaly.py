@@ -16,6 +16,7 @@ def detect_outliers(
         return []
 
     import statistics
+
     values = [d["duration_seconds"] for d in durations]
     median = statistics.median(values)
     deviations = [abs(v - median) for v in values]
@@ -26,12 +27,25 @@ def detect_outliers(
 
     anomalies = []
     for d in durations:
-        if d["duration_seconds"] > median + threshold_multiplier * mad:
-            anomalies.append({
+        if not (d["duration_seconds"] > median + threshold_multiplier * mad):
+            continue
+        anomalies.append(
+            {
                 **d,
                 "anomaly_type": "outlier",
-                "detail": f"Duration {d['duration_seconds']:.1f}s > median {median:.1f}s + {threshold_multiplier}×MAD {threshold_multiplier * mad:.1f}s",
-            })
+                "detail": (
+                    "Duration "
+                    f"{d['duration_seconds']:.1f}"
+                    "s > median "
+                    f"{median:.1f}"
+                    "s + "
+                    f"{threshold_multiplier}"
+                    "×MAD "
+                    f"{threshold_multiplier * mad:.1f}"
+                    "s"
+                ),
+            }
+        )
     return anomalies
 
 
@@ -42,10 +56,13 @@ def detect_timeout(
     """Detect runs that exceeded the per-eval timeout."""
     anomalies = []
     for d in durations:
-        if d["duration_seconds"] > timeout_seconds:
-            anomalies.append({
+        if not (d["duration_seconds"] > timeout_seconds):
+            continue
+        anomalies.append(
+            {
                 **d,
                 "anomaly_type": "timeout",
-                "detail": f"Duration {d['duration_seconds']:.1f}s > timeout {timeout_seconds}s",
-            })
+                "detail": (f"Duration {d['duration_seconds']:.1f}s > timeout {timeout_seconds}s"),
+            }
+        )
     return anomalies

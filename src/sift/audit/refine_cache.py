@@ -19,6 +19,7 @@
 
 纯函数模块、中文 docstring(镜像 ``audit/dedup.py`` / ``audit/aggregate.py`` 的组织)。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -30,7 +31,6 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from sift.models import InstructionCheck
-
 
 # bump 当 ``_llm_classify_real`` 的 prompt 改了 → 进键 → 强制失效所有缓存条目。
 # v2:prompt 喂 source_excerpt(判「命令行标识符伪工具」要看原文上下文)+ 伪指令类目扩义。
@@ -52,7 +52,7 @@ def _cache_dir() -> Path:
     return Path.home() / ".cache" / "sift" / "refine"
 
 
-def _cache_key(instructions: list[InstructionCheck], model: str | None) -> str:
+def cache_key(instructions: list[InstructionCheck], model: str | None) -> str:
     """内容感知缓存键 = refine 实际输入(instructions)+ model + prompt 版本的 sha256[:16]。
 
     payload 形如 ``"HEADING_STEP|Process|Step 1: 真步骤|摘录…"|<model>|v<REFINE_PROMPT_VERSION>"``
@@ -64,10 +64,10 @@ def _cache_key(instructions: list[InstructionCheck], model: str | None) -> str:
 
     确定性:同 instructions + model + version → 恒同 key(跨调用、跨进程稳定)。
     """
-    payload = "|".join(
-        f"{s.source.value}|{s.section}|{s.instruction_text}|{s.source_excerpt}"
-        for s in instructions
-    ) + f"|{model}|v{REFINE_PROMPT_VERSION}"
+    payload = (
+        "|".join(f"{s.source.value}|{s.section}|{s.instruction_text}|{s.source_excerpt}" for s in instructions)
+        + f"|{model}|v{REFINE_PROMPT_VERSION}"
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
@@ -85,7 +85,6 @@ def get(key: str) -> tuple[list[InstructionCheck], int] | None:
         refined = [InstructionCheck.model_validate(item) for item in data["refined"]]
         dropped_count = int(data["dropped_count"])
     except (
-        json.JSONDecodeError,
         KeyError,
         ValueError,
         TypeError,
@@ -146,3 +145,6 @@ def get_or_compute(
         refined, dropped_count = compute_fn()
         put(key, refined, dropped_count)
         return refined, dropped_count
+
+
+# Compatibility for callers importing the former private helper.

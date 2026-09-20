@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 
-from sift.parser import parse_skill_md, resolve_skill_dir
+import pytest
+
 from sift.errors import SkillParseError
+from sift.parser import parse_skill_md, resolve_skill_dir
 
 
 def test_resolve_skill_dir_directory(tmp_path: Path):
@@ -28,49 +29,48 @@ def test_resolve_skill_dir_nonexistent_passthrough(tmp_path: Path):
 
 def test_resolve_skill_dir_non_skill_md_file_kept(tmp_path: Path):
     """非 SKILL.md 的 .md 文件(agent/workflow 声明)→ 原样保留,不转父目录。
-    resolve_skill_dir 只规范化"误传 SKILL.md"这一种;agent 声明文件是故意的输入,不动它。"""
+    resolve_skill_dir 只规范化"误传 SKILL.md"这一种;agent 声明文件是故意的输入,不动它。
+    """
     agents = tmp_path / "agents"
     agents.mkdir()
     dev = agents / "developer.md"
     dev.write_text("---\nname: developer\ndescription: d\n---\nbody", encoding="utf-8")
-    assert resolve_skill_dir(dev) == dev              # 不转成 agents/
+    assert resolve_skill_dir(dev) == dev  # 不转成 agents/
 
 
 def test_parse_skill_md_accepts_arbitrary_md_file(tmp_path: Path):
     """parse_skill_md 接受任意 .md 文件(agent/workflow 声明),直读其 frontmatter+body。
-    身份靠 frontmatter name(--kind 拿它当切片 target),不靠文件名。"""
+    身份靠 frontmatter name(--kind 拿它当切片 target),不靠文件名。
+    """
     agents = tmp_path / "agents"
     agents.mkdir()
     dev = agents / "developer.md"
-    dev.write_text("---\nname: developer\ndescription: 开发执行器\n---\n# developer\n角色声明\n",
-                   encoding="utf-8")
+    dev.write_text("---\nname: developer\ndescription: 开发执行器\n---\n# developer\n角色声明\n", encoding="utf-8")
     name, desc, _content, _fm, body = parse_skill_md(dev)
-    assert name == "developer"                        # frontmatter name = 切片身份
+    assert name == "developer"  # frontmatter name = 切片身份
     assert "角色声明" in body
-    assert "developer.md" not in body                 # 读的是 developer.md 本身
+    assert "developer.md" not in body  # 读的是 developer.md 本身
 
 
 def test_parse_skill_md_agent_md_equals_materialized_skill_md(tmp_path: Path):
     """直接读 agent .md == 物化成 <dir>/SKILL.md 再读(audit 对账零影响的根)。
-    audit 只吃 name(切片 target)+ body(声明);两者全等 → 切段相同、声明相同 → 对账逐字节相同。"""
+    audit 只吃 name(切片 target)+ body(声明);两者全等 → 切段相同、声明相同 → 对账逐字节相同。
+    """
     agents = tmp_path / "agents"
     agents.mkdir()
     dev_md = agents / "developer.md"
-    dev_md.write_text("---\nname: developer\ndescription: 角色\n---\n# developer\n声明正文\n",
-                      encoding="utf-8")
-    name_y, desc_y, _c, fm_y, body_y = parse_skill_md(dev_md)             # 路径Y:直接读
+    dev_md.write_text("---\nname: developer\ndescription: 角色\n---\n# developer\n声明正文\n", encoding="utf-8")
+    name_y, desc_y, _c, fm_y, body_y = parse_skill_md(dev_md)  # 路径Y:直接读
     devdir = tmp_path / "dev"
     devdir.mkdir()
     (devdir / "SKILL.md").write_text(dev_md.read_text(encoding="utf-8"), encoding="utf-8")
-    name_x, desc_x, _c, fm_x, body_x = parse_skill_md(devdir)             # 路径X:物化 SKILL.md
+    name_x, desc_x, _c, fm_x, body_x = parse_skill_md(devdir)  # 路径X:物化 SKILL.md
     assert (name_y, desc_y, body_y, fm_y) == (name_x, desc_x, body_x, fm_x)
 
 
 def test_parse_skill_md_accepts_skill_md_file(tmp_path: Path):
     """parse_skill_md 接受 SKILL.md 文件路径(内部规范化取父目录),不只目录。"""
-    (tmp_path / "SKILL.md").write_text(
-        "---\nname: filearg\ndescription: does thing\n---\nbody", encoding="utf-8"
-    )
+    (tmp_path / "SKILL.md").write_text("---\nname: filearg\ndescription: does thing\n---\nbody", encoding="utf-8")
     name, *_ = parse_skill_md(tmp_path / "SKILL.md")
     assert name == "filearg"
 

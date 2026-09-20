@@ -16,22 +16,23 @@ from __future__ import annotations
 import json
 import time
 
-from sift.concurrency import _LLMRetryExhausted, call_llm_with_retry
+from sift.concurrency import LLMRetryExhausted, call_llm_with_retry
 from sift.models.trigger_report import Suggestion
 from sift.scoring._jsonschema import inline_schema
 
-
-_SUGGEST_SCHEMA = inline_schema({
-    "type": "object",
-    "properties": {
-        "suggestion": {
-            "type": "string",
-            "description": "修订后的 description 文本(可直接照用,不要 markdown 标题/「以下是」开场);"
-            "末尾可附一行「理由:」简述改了什么(≤2 句)",
-        }
-    },
-    "required": ["suggestion"],
-})
+_SUGGEST_SCHEMA = inline_schema(
+    {
+        "type": "object",
+        "properties": {
+            "suggestion": {
+                "type": "string",
+                "description": "修订后的 description 文本(可直接照用,不要 markdown 标题/「以下是」开场);"
+                "末尾可附一行「理由:」简述改了什么(≤2 句)",
+            }
+        },
+        "required": ["suggestion"],
+    }
+)
 
 
 def _bullets(probes: list[dict]) -> str:
@@ -53,43 +54,62 @@ def build_rule_suggestions(probes: list[dict]) -> list[Suggestion]:
     out: list[Suggestion] = []
 
     if failed_recall:
-        out.append(Suggestion(
-            category="recall", source="rule", probe_ids=[p["id"] for p in failed_recall],
-            message=(
-                f"漏召:{len(failed_recall)} 条该触发的任务 cc 没触发,说明 description "
-                f"没够到这类措辞。考虑在 description 里补与这些请求匹配的触发关键词 / "
-                f"动作动词:{_bullets(failed_recall)}"
-            ),
-        ))
+        out.append(
+            Suggestion(
+                category="recall",
+                source="rule",
+                probe_ids=[p["id"] for p in failed_recall],
+                message=(
+                    f"漏召:{len(failed_recall)} 条该触发的任务 cc 没触发,说明 description "
+                    f"没够到这类措辞。考虑在 description 里补与这些请求匹配的触发关键词 / "
+                    f"动作动词:{_bullets(failed_recall)}"
+                ),
+            )
+        )
 
     if failed_ftr:
-        out.append(Suggestion(
-            category="false_trigger", source="rule", probe_ids=[p["id"] for p in failed_ftr],
-            message=(
-                f"误触:{len(failed_ftr)} 条不该触发的任务 cc 却触发了,说明 description "
-                f"过宽。考虑收窄 scope / 加边界排除语(明确写「不处理这类」):{_bullets(failed_ftr)}"
-            ),
-        ))
+        out.append(
+            Suggestion(
+                category="false_trigger",
+                source="rule",
+                probe_ids=[p["id"] for p in failed_ftr],
+                message=(
+                    f"误触:{len(failed_ftr)} 条不该触发的任务 cc 却触发了,说明 description "
+                    f"过宽。考虑收窄 scope / 加边界排除语(明确写「不处理这类」):{_bullets(failed_ftr)}"
+                ),
+            )
+        )
 
-    if unresolved:
-        out.append(Suggestion(
-            category="unresolved", source="rule", probe_ids=[p["id"] for p in unresolved],
-            message=(
-                f"{len(unresolved)} 条探题没判成(cc 异常 / 限流),结果可能不完整。"
-                f"建议加大 --runs 重跑确认,别据未判成的条下结论。"
-            ),
-        ))
-
-    if not failed_recall and not failed_ftr and not unresolved:
-        out.append(Suggestion(
-            category="all_good", source="rule", probe_ids=[],
-            message=(
-                "触发准确度良好:该触发的都触发、不该的没误触、无未判成。"
-                "description 的触发边界当前够精准,无需改动。"
-            ),
-        ))
+    _append_unresolved_or_success_suggestions(unresolved, out, failed_recall, failed_ftr)
 
     return out
+
+
+def _append_unresolved_or_success_suggestions(unresolved, out, failed_recall, failed_ftr):
+    if unresolved:
+        out.append(
+            Suggestion(
+                category="unresolved",
+                source="rule",
+                probe_ids=[p["id"] for p in unresolved],
+                message=(
+                    f"{len(unresolved)} 条探题没判成(cc 异常 / 限流),结果可能不完整。"
+                    f"建议加大 --runs 重跑确认,别据未判成的条下结论。"
+                ),
+            )
+        )
+
+    if not failed_recall and not failed_ftr and not unresolved:
+        out.append(
+            Suggestion(
+                category="all_good",
+                source="rule",
+                probe_ids=[],
+                message=(
+                    "触发准确度良好:该触发的都触发、不该的没误触、无未判成。description 的触发边界当前够精准,无需改动。"
+                ),
+            )
+        )
 
 
 def build_llm_suggestion(
@@ -119,7 +139,7 @@ def build_llm_suggestion(
     prompt = (
         "你在帮一个 Claude Code skill 作者改进 skill frontmatter 的 description 字段"
         "(cc 据这个 description 决定是否自动触发本 skill)。\n\n"
-        f"当前 description:\n\"\"\"\n{description}\n\"\"\"\n\n"
+        f'当前 description:\n"""\n{description}\n"""\n\n'
         "问题:\n"
         "- 这些任务本 skill【应该】处理,但 cc 没触发它(description 没够到):\n"
         f"{should_lines}\n"
@@ -134,10 +154,14 @@ def build_llm_suggestion(
     start = time.perf_counter()
     try:
         resp = call_llm_with_retry(
-            prompt, model=model, timeout=timeout,
-            schema=_SUGGEST_SCHEMA, on_usage=usage.update, transport="http",
+            prompt,
+            model=model,
+            timeout=timeout,
+            schema=_SUGGEST_SCHEMA,
+            on_usage=usage.update,
+            transport="http",
         )
-    except _LLMRetryExhausted:
+    except LLMRetryExhausted:
         return None, usage, "LLM 调用重试耗尽(疑似限流)"
     resp = (resp or "").strip()
     if not resp:
@@ -148,13 +172,26 @@ def build_llm_suggestion(
         text = resp  # tool_use 偶发非 JSON:整段当文本(诊断文案,不丢)
     if not text.strip():
         return None, usage, "LLM 返回空内容"
+    return _description_suggestion_result(failed_should_trigger, failed_should_not, usage, text, start)
+
+
+def _description_suggestion_result(failed_should_trigger, failed_should_not, usage, text, start):
     failed_ids = [p["id"] for p in failed_should_trigger] + [p["id"] for p in failed_should_not]
     toks = 0
     for _k in ("input_tokens", "output_tokens"):
         v = usage.get(_k, 0)
-        if isinstance(v, (int, float)):
-            toks += v
-    return Suggestion(
-        category="llm_rewrite", source="llm", probe_ids=failed_ids,
-        message=text, tokens=toks, duration_seconds=time.perf_counter() - start,
-    ), usage, None
+        if not (isinstance(v, (int, float))):
+            continue
+        toks += v
+    return (
+        Suggestion(
+            category="llm_rewrite",
+            source="llm",
+            probe_ids=failed_ids,
+            message=text,
+            tokens=toks,
+            duration_seconds=time.perf_counter() - start,
+        ),
+        usage,
+        None,
+    )

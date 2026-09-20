@@ -1,10 +1,12 @@
 """gate 判决纯函数(块 C)。读 benchmark dict → GateResult,无 IO。"""
+
 from __future__ import annotations
+
 from .models import AxisVerdict, GateResult
 
 
 def parse_delta(value) -> float | None:
-    """"+0.27" → 0.27;None/无法解析 → None。"""
+    """ "+0.27" → 0.27;None/无法解析 → None。"""
     if value is None:
         return None
     try:
@@ -25,27 +27,27 @@ def _resolve_sides(benchmark: dict, candidate: str | None) -> tuple[str, str]:
 
 def _eval_programmatic(benchmark: dict, guard_on: bool) -> AxisVerdict:
     if not guard_on:
-        return AxisVerdict(verdict="N/A", applicable=False,
-                           reason="客观守卫已关(--no-programmatic-guard)")
+        return AxisVerdict(verdict="N/A", applicable=False, reason="客观守卫已关(--no-programmatic-guard)")
     raw = (benchmark.get("run_summary", {}) or {}).get("delta", {}).get("pass_rate_programmatic")
     delta = parse_delta(raw)
     if delta is None:
-        return AxisVerdict(verdict="N/A", applicable=False,
-                           reason="delta.pass_rate_programmatic 无值(纯主观题 / 无 programmatic expectation)")
+        return AxisVerdict(
+            verdict="N/A",
+            applicable=False,
+            reason="delta.pass_rate_programmatic 无值(纯主观题 / 无 programmatic expectation)",
+        )
     if delta < 0:
         return AxisVerdict(verdict="FAIL", delta=delta, reason=f"客观侧回归({delta:+.2f})")
     return AxisVerdict(verdict="PASS", delta=delta, reason=f"客观侧无回归({delta:+.2f})")
 
 
-def _eval_comparison(benchmark: dict, min_win_rate: float | None, min_valid: int,
-                     warnings: list[str]) -> AxisVerdict:
+def _eval_comparison(benchmark: dict, min_win_rate: float | None, min_valid: int, warnings: list[str]) -> AxisVerdict:
     if min_win_rate is None:
         return AxisVerdict(verdict="N/A", applicable=False, reason="主观 gate 未请求(未给 --min-win-rate)")
     cs = benchmark.get("comparison_summary")
     if not cs:
         warnings.append("主观 gate 已请求但 comparison_summary 缺失(纯客观题 / 旧数据 / 比较失败)——落回客观侧")
-        return AxisVerdict(verdict="N/A", applicable=False,
-                           reason="主观 gate 已请求但 comparison_summary 缺失")
+        return AxisVerdict(verdict="N/A", applicable=False, reason="主观 gate 已请求但 comparison_summary 缺失")
     a_wins = int(cs.get("a_wins") or 0)
     b_wins = int(cs.get("b_wins") or 0)
     ties = int(cs.get("ties") or 0)
@@ -56,13 +58,19 @@ def _eval_comparison(benchmark: dict, min_win_rate: float | None, min_valid: int
     wr = a_wins / decisive
     common["win_rate"] = wr
     if decisive < min_valid:
-        return AxisVerdict(verdict="N/A", applicable=True,
-                           reason=f"样本不足({decisive} 决定性 < --min-valid {min_valid})", **common)
+        return AxisVerdict(
+            verdict="N/A", applicable=True, reason=f"样本不足({decisive} 决定性 < --min-valid {min_valid})", **common
+        )
     if wr < min_win_rate:
-        return AxisVerdict(verdict="FAIL", applicable=True,
-                           reason=f"主观胜率 {wr:.2f} < {min_win_rate:.2f}({decisive} 决定性)", **common)
-    return AxisVerdict(verdict="PASS", applicable=True,
-                       reason=f"主观胜率 {wr:.2f} >= {min_win_rate:.2f}({decisive} 决定性)", **common)
+        return AxisVerdict(
+            verdict="FAIL",
+            applicable=True,
+            reason=f"主观胜率 {wr:.2f} < {min_win_rate:.2f}({decisive} 决定性)",
+            **common,
+        )
+    return AxisVerdict(
+        verdict="PASS", applicable=True, reason=f"主观胜率 {wr:.2f} >= {min_win_rate:.2f}({decisive} 决定性)", **common
+    )
 
 
 def _eval_calibration(benchmark: dict, candidate: str, warnings: list[str]) -> dict | None:
@@ -80,14 +88,14 @@ def _eval_calibration(benchmark: dict, candidate: str, warnings: list[str]) -> d
             continue
         suspects = per.get("high_score_suspects") or []
         triggered = len(suspects) > 0
-        out[side] = {"triggered": triggered, "count": len(suspects),
-                     "total": per.get("total", 0), "evidence": suspects}
-        if triggered:
-            tag = f"[candidate {side}]" if side == candidate else f"[{side}]"
-            warnings.append(
-                f"⚠️ {tag} 高分低遵循 {len(suspects)} 个 HIGH_SCORE_SUSPECT"
-                f"(结果对但过程硬违规,evidence 见 calibration.sides.{side}.evidence)"
-            )
+        out[side] = {"triggered": triggered, "count": len(suspects), "total": per.get("total", 0), "evidence": suspects}
+        if not (triggered):
+            continue
+        tag = f"[candidate {side}]" if side == candidate else f"[{side}]"
+        warnings.append(
+            f"⚠️ {tag} 高分低遵循 {len(suspects)} 个 HIGH_SCORE_SUSPECT"
+            f"(结果对但过程硬违规,evidence 见 calibration.sides.{side}.evidence)"
+        )
     return {"sides": out}
 
 
@@ -99,16 +107,16 @@ def _run_failed(run: dict) -> bool:
     return not (total > 0 and passed == total)
 
 
-def _eval_must_pass(benchmark: dict, candidate: str, ids: list[int],
-                    warnings: list[str]) -> AxisVerdict:
+def _eval_must_pass(benchmark: dict, candidate: str, ids: list[int], warnings: list[str]) -> AxisVerdict:
     """必过题:candidate 侧这些 eval 的所有 run 都得全过,任一挂 → FAIL。"""
     if not ids:
         return AxisVerdict(verdict="N/A", applicable=False, reason="必过题未指定(--must-pass)")
     runs = benchmark.get("runs") or []
     by_eval: dict[int, list[dict]] = {}
     for r in runs:
-        if r.get("configuration") == candidate:
-            by_eval.setdefault(r.get("eval_id"), []).append(r)
+        if not (r.get("configuration") == candidate):
+            continue
+        by_eval.setdefault(r.get("eval_id"), []).append(r)
     failed: list[int] = []
     for eid in ids:
         ev_runs = by_eval.get(eid)
@@ -116,25 +124,25 @@ def _eval_must_pass(benchmark: dict, candidate: str, ids: list[int],
             warnings.append(f"必过题 eval {eid} 在 candidate 侧({candidate})无 run —— 视为未通过")
             failed.append(eid)
             continue
-        if any(_run_failed(r) for r in ev_runs):
-            failed.append(eid)
+        if not (any(_run_failed(r) for r in ev_runs)):
+            continue
+        failed.append(eid)
     if failed:
-        return AxisVerdict(verdict="FAIL", applicable=True,
-                           reason=f"必过题未通过 {failed}(candidate={candidate})",
-                           failed_ids=failed)
-    return AxisVerdict(verdict="PASS", applicable=True,
-                       reason=f"必过题 {len(ids)} 道全过(candidate={candidate})")
+        return AxisVerdict(
+            verdict="FAIL", applicable=True, reason=f"必过题未通过 {failed}(candidate={candidate})", failed_ids=failed
+        )
+    return AxisVerdict(verdict="PASS", applicable=True, reason=f"必过题 {len(ids)} 道全过(candidate={candidate})")
 
 
-def _eval_drift(benchmark: dict, baseline_ids: set[int] | None, strict: bool,
-                warnings: list[str]) -> AxisVerdict | None:
+def _eval_drift(
+    benchmark: dict, baseline_ids: set[int] | None, strict: bool, warnings: list[str]
+) -> AxisVerdict | None:
     """题集漂移:benchmark.runs 的 eval_id 集合 vs baseline 基线集合,增删 → 报告。
     baseline_ids=None → 不启用(返回 None,不加进 axes)。
     非 strict:有漂移只 warning(返回 None);strict 且有漂移 → FAIL 轴。"""
     if baseline_ids is None:
         return None
-    run_ids = {r.get("eval_id") for r in (benchmark.get("runs") or [])
-               if r.get("eval_id") is not None}
+    run_ids = {r.get("eval_id") for r in (benchmark.get("runs") or []) if r.get("eval_id") is not None}
     added = sorted(run_ids - baseline_ids)
     removed = sorted(baseline_ids - run_ids)
     if not added and not removed:
@@ -188,12 +196,20 @@ def evaluate_gate(
 
     calibration = _eval_calibration(benchmark, cand, warnings)
     return GateResult(
-        decision=decision, exit_code=exit_code, reason=reason,
-        candidate=cand, baseline=base,
-        thresholds={"min_win_rate": min_win_rate, "min_valid": min_valid,
-                    "programmatic_guard": programmatic_guard,
-                    "must_pass_ids": must_pass_ids,
-                    "baseline_ids": sorted(baseline_ids) if baseline_ids else None,
-                    "strict_drift": strict_drift},
-        axes=axes, warnings=warnings, calibration=calibration,
+        decision=decision,
+        exit_code=exit_code,
+        reason=reason,
+        candidate=cand,
+        baseline=base,
+        thresholds={
+            "min_win_rate": min_win_rate,
+            "min_valid": min_valid,
+            "programmatic_guard": programmatic_guard,
+            "must_pass_ids": must_pass_ids,
+            "baseline_ids": sorted(baseline_ids) if baseline_ids else None,
+            "strict_drift": strict_drift,
+        },
+        axes=axes,
+        warnings=warnings,
+        calibration=calibration,
     )

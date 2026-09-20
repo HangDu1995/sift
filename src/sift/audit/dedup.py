@@ -26,6 +26,7 @@ audit 的 findings 平铺里有两类"看着多个、其实是一个",都在本�
 **纯函数、不调 LLM**——对已有 findings 后处理,确定、可单测。auditor 在 transcript 循环后
 调 :func:`post_process_findings`,使 unverified/summary/by_instruction 都基于去重后 findings。
 """
+
 from __future__ import annotations
 
 import re
@@ -97,12 +98,7 @@ def link_related(findings: list[AuditFinding]) -> list[AuditFinding]:
     for f in findings:
         if f.synthetic:
             continue  # 同上:不参与 Case B 关联,留给 audit() 回填
-        related: set[int] = set()
-        for tok in _ref_tokens(f.instruction_text):
-            for other in by_token.get((f.transcript, tok), ()):
-                if other != f.seq:
-                    related.add(other)
-        f.related = [f"#{s}" for s in sorted(related)]
+        _link_finding_tokens(f, by_token)
     return findings
 
 
@@ -149,3 +145,13 @@ def post_process_findings(findings: list[AuditFinding]) -> list[AuditFinding]:
     assign_sequence(out)
     link_related(out)
     return out
+
+
+def _link_finding_tokens(f, by_token):
+    related: set[int] = set()
+    for tok in _ref_tokens(f.instruction_text):
+        for other in by_token.get((f.transcript, tok), ()):
+            if not (other != f.seq):
+                continue
+            related.add(other)
+    f.related = [f"#{s}" for s in sorted(related)]

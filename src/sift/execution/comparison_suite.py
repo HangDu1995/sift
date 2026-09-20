@@ -1,10 +1,23 @@
 from __future__ import annotations
+
 import json
+import logging
 import time
 from pathlib import Path
+from typing import Callable, NamedTuple
+
+from sift.execution.run_paths import index_runs, is_nested
 from sift.models import ComparisonResult
 from sift.scoring.comparator import BlindComparator
-from sift.execution.run_paths import index_runs, is_nested
+from sift.scoring.prompts import ComparisonInputs
+from sift.text_output import write_text
+
+
+class ScoringCallbacks(NamedTuple):
+    """一次模型评分需回灌的用量和耗时。"""
+
+    on_usage: Callable[[dict], None] | None = None
+    on_duration: Callable[[float], None] | None = None
 
 
 def _load_grading(run_dir: Path) -> dict | None:
@@ -13,7 +26,7 @@ def _load_grading(run_dir: Path) -> dict | None:
         try:
             return json.loads(grading_path.read_text(encoding="utf-8"))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
     return None
 
 
@@ -26,14 +39,15 @@ def _collect_run_output(run_dir: Path) -> str:
         return ""
     parts = []
     for f in sorted(outputs_dir.rglob("*")):
-        if f.is_file() and not f.name.startswith("."):
-            try:
-                content = f.read_text(encoding="utf-8", errors="replace")
-                if len(content) > 2000:
-                    content = content[:2000] + "\n... (truncated)"
-                parts.append(f"=== {f.name} ===\n{content}")
-            except Exception:
-                parts.append(f"=== {f.name} === (binary)")
+        if not (f.is_file() and not f.name.startswith(".")):
+            continue
+        try:
+            content = f.read_text(encoding="utf-8", errors="replace")
+            if len(content) > 2000:
+                content = content[:2000] + "\n... (truncated)"
+            parts.append(f"=== {f.name} ===\n{content}")
+        except Exception:
+            parts.append(f"=== {f.name} === (binary)")
     return "\n\n".join(parts) if parts else ""
 
 
@@ -48,10 +62,12 @@ def _progress_bar(current, total, width) -> str:
     pct = min(current / total, 1.0) if total else 0
     filled = int(width * pct)
     bar = "\u2588" * filled + "\u2591" * (width - filled)
-    return f" {bar} {pct*100:.0f}%"
+    return f" {bar} {pct * 100:.0f}%"
 
 
-def _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectations, label_a="with", label_b="without", max_retries=3, on_usage=None, on_duration=None):
+def _compare_with_retry(
+    comparator, comparison: ComparisonInputs, max_retries=3, callbacks: ScoringCallbacks = ScoringCallbacks()
+):
     """盲比较带重试:compare() 返回 failed=True(调用/解析失败)时重试,成功即返回。
 
     失败判定靠 ComparisonResult.failed 标志(_parse 在调用/解析失败时设 True)。
@@ -59,35 +75,51 @@ def _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectat
     死代码(实测 30% 失败率里无一条触发过重试,reasoning 全是 _parse 的降级串)。
     耗尽 max_retries 返回 None,由调用方降级 tie。
     """
+    ws_output = comparison.output_a
+    wos_output = comparison.output_b
+    eval_prompt = comparison.eval_prompt
+    expectations = comparison.expectations
+    label_a = comparison.label_a
+    label_b = comparison.label_b
+    on_usage = callbacks.on_usage
+    on_duration = callbacks.on_duration
     for attempt in range(max_retries):
         _t0 = time.perf_counter()
         result = comparator.compare(
-            output_a=ws_output,
-            output_b=wos_output,
-            eval_prompt=eval_prompt,
-            expectations=expectations if expectations else None,
-            label_a=label_a,
-            label_b=label_b,
             on_usage=on_usage,
+            comparison=ComparisonInputs(
+                output_a=ws_output,
+                output_b=wos_output,
+                eval_prompt=eval_prompt,
+                expectations=expectations if expectations else None,
+                label_a=label_a,
+                label_b=label_b,
+            ),
         )
         if on_duration:
             on_duration(time.perf_counter() - _t0)
         if not getattr(result, "failed", False):
             return result
-        if attempt < max_retries - 1:
-            time.sleep(2 ** attempt)
+        if not (attempt < max_retries - 1):
+            continue
+        time.sleep(2**attempt)
     return None
 
 
-def run_comparisons(aggregator, iteration_dir: Path, sides: list | None = None, on_usage=None, on_duration=None) -> list:
+def run_comparisons(
+    aggregator,
+    iteration_dir: Path,
+    sides: list | None = None,
+    on_usage=None,
+    on_duration=None,
+) -> list:
     import sys
-    import time
     import threading
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     # 盲比较只服务于主观题(LLM 打分);programmatic-only 无主观输出,跳过省 LLM 调用
     if not getattr(aggregator, "enable_llm", True):
-        sys.stderr.write("comparison skipped: programmatic-only scoring (enable_llm=False)\n")
+        write_text("comparison skipped: programmatic-only scoring (enable_llm=False)\n", stream=sys.stderr)
         sys.stderr.flush()
         return []
 
@@ -129,7 +161,7 @@ def run_comparisons(aggregator, iteration_dir: Path, sides: list | None = None, 
         eta_str = ""
         if c > 0:
             eta_s = (elapsed / c) * (total - c)
-            eta_str = f" ETA {eta_s/60:.0f}m{eta_s%60:02.0f}s"
+            eta_str = f" ETA {eta_s / 60:.0f}m{eta_s % 60:02.0f}s"
         return f"\r[{c}/{total}] comparison {bar} {pct:.0f}%{eta_str}"
 
     def _do_comparison(idx, ws_run, wos_run):
@@ -145,41 +177,49 @@ def run_comparisons(aggregator, iteration_dir: Path, sides: list | None = None, 
             if ws_grading:
                 expectations = [e.get("text", "") for e in ws_grading.get("expectations", []) if e.get("text")]
 
-            result = _compare_with_retry(comparator, ws_output, wos_output, eval_prompt, expectations, label_a, label_b, on_usage=on_usage, on_duration=on_duration)
+            result = _compare_with_retry(
+                comparator=comparator,
+                comparison=ComparisonInputs(
+                    output_a=ws_output,
+                    output_b=wos_output,
+                    eval_prompt=eval_prompt,
+                    expectations=expectations,
+                    label_a=label_a,
+                    label_b=label_b,
+                ),
+                callbacks=ScoringCallbacks(on_usage=on_usage, on_duration=on_duration),
+            )
             if result is None:
-                result = ComparisonResult(winner="tie", reasoning="comparison failed after retries", failed=True)
+                result = ComparisonResult(
+                    winner="tie",
+                    reasoning="comparison failed after retries",
+                    failed=True,
+                )
 
             _comp_path_for(ws_run).write_text(
                 json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
         except Exception as exc:
-            result = ComparisonResult(winner="tie",
-                                      reasoning=f"comparison crashed: {type(exc).__name__}",
-                                      failed=True)
-            sys.stderr.write(f"\r comparison crashed [{ws_run.parent.name}/{ws_run.name}]: "
-                             f"{type(exc).__name__}: {exc}\n")
-            sys.stderr.flush()
-            try:  # 写盘失败则跳过(stderr 已报错,fs 上无该对产物)
-                _comp_path_for(ws_run).write_text(
-                    json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-            except Exception:
-                pass
-        if getattr(result, "failed", False):   # 单点计数:None 耗尽 / 异常降级 各只计一次
+            result = ComparisonResult(
+                winner="tie",
+                reasoning=f"comparison crashed: {type(exc).__name__}",
+                failed=True,
+            )
+            _record_comparison_failure(ws_run, result, exc)
+        if getattr(result, "failed", False):  # 单点计数:None 耗尽 / 异常降级 各只计一次
             with lock:
                 failures[0] += 1
         with lock:
             completed_count[0] += 1
-        sys.stderr.write(_progress_line())
+        write_text(_progress_line(), stream=sys.stderr)
         sys.stderr.flush()
         return (idx, result)
 
     comparisons_dict: dict[int, ComparisonResult] = {}
     max_workers = min(total, 4)
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        sys.stderr.write(_progress_line())
+        write_text(_progress_line(), stream=sys.stderr)
         sys.stderr.flush()
         futures = {pool.submit(_do_comparison, i, ws, wos): i for i, (ws, wos) in enumerate(pairs)}
         for future in as_completed(futures):
@@ -187,9 +227,26 @@ def run_comparisons(aggregator, iteration_dir: Path, sides: list | None = None, 
             comparisons_dict[idx] = result
 
     comparisons = [comparisons_dict[i] for i in sorted(comparisons_dict)]
-    status = f"\r[{total}/{total}] comparison done ({time.time()-start_time:.0f}s)"
+    status = f"\r[{total}/{total}] comparison done ({time.time() - start_time:.0f}s)"
     if failures[0]:
         status += f", {failures[0]} failed"
-    sys.stderr.write(status + "\n")
+    write_text(status + "\n", stream=sys.stderr)
     sys.stderr.flush()
     return comparisons
+
+
+def _record_comparison_failure(ws_run, result, exc):
+    logging.getLogger(__name__).exception(
+        "comparison crashed [%s/%s]: %s: %s",
+        ws_run.parent.name,
+        ws_run.name,
+        type(exc).__name__,
+        exc,
+    )
+    try:  # 写盘失败则跳过(日志已报错,fs 上无该对产物)
+        _comp_path_for(ws_run).write_text(
+            json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)

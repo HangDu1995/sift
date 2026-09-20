@@ -24,6 +24,7 @@ cwd 必须是**非仓库目录** —— 这里用隔离临时目录本身作 cwd
 本模块纯逻辑(无 CLI/IO:不打表、不 ``typer.Exit``)。失败统一抛 ``OpencodeDbError``
 (exit_code=3,被 audit 的 ``except SiftError`` 兜住)。
 """
+
 from __future__ import annotations
 
 import json
@@ -37,7 +38,7 @@ from pathlib import Path
 from sift.errors import OpencodeDbError
 
 
-def _run_opencode(xdg_dir: Path, args: list[str], timeout: int = 120) -> str:
+def run_opencode(xdg_dir: Path, args: list[str], timeout: int = 120) -> str:
     """在 ``XDG_DATA_HOME=xdg_dir``、``cwd=xdg_dir`` 下跑 ``opencode <args>``,返回 stdout。
 
     cwd 用隔离目录(非仓库)规避 ``session list`` 的 cwd-scoping 过滤。失败
@@ -56,24 +57,17 @@ def _run_opencode(xdg_dir: Path, args: list[str], timeout: int = 120) -> str:
             check=False,
         )
     except FileNotFoundError as exc:
-        raise OpencodeDbError(
-            "opencode CLI 未找到;--db 需先装 opencode 并确保在 PATH"
-            "(https://opencode.ai)"
-        ) from exc
+        raise OpencodeDbError("opencode CLI 未找到;--db 需先装 opencode 并确保在 PATH(https://opencode.ai)") from exc
     except subprocess.TimeoutExpired as exc:
-        raise OpencodeDbError(
-            f"opencode {' '.join(args)} 超时({timeout}s)"
-        ) from exc
+        raise OpencodeDbError(f"opencode {' '.join(args)} 超时({timeout}s)") from exc
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()
-        raise OpencodeDbError(
-            f"opencode {' '.join(args)} 失败(exit {proc.returncode}): {detail[:500]}"
-        )
+        raise OpencodeDbError(f"opencode {' '.join(args)} 失败(exit {proc.returncode}): {detail[:500]}")
     return proc.stdout
 
 
 @contextmanager
-def _isolated_xdg_env(db_path: Path):
+def isolated_xdg_env(db_path: Path):
     """搭隔离 XDG 环境:``mkdtemp`` → cp db_path 到 ``<tmp>/opencode/opencode.db`` → yield tmp。
 
     yield 的目录即作 ``XDG_DATA_HOME`` 和子进程 cwd(opencode 在此找到 db、且 cwd 非仓库
@@ -91,11 +85,11 @@ def _isolated_xdg_env(db_path: Path):
 
 
 @contextmanager
-def _isolated_xdg_env_empty():
+def isolated_xdg_env_empty():
     """空隔离 XDG(写侧):mkdtemp → mkdir opencode/ → yield → rmtree。
 
     给 ``opencode run`` 用:会话落一次性 ``<tmp>/opencode/opencode.db``、不碰真库。
-    与 ``_isolated_xdg_env(db_path)``(拷贝版,audit --db 读侧)对偶 —— 那个拷一个已有
+    与 ``isolated_xdg_env(db_path)``(拷贝版,audit --db 读侧)对偶 —— 那个拷一个已有
     db 进去,这个建空目录让 opencode 自己写。
     """
     tmp = Path(tempfile.mkdtemp(prefix="sift-opencode-run-"))
@@ -112,21 +106,17 @@ def list_sessions(db_path: Path) -> list[dict]:
     返回 ``opencode session list --format json`` 解析后的列表,每项形如
     ``{id, title, updated, created, projectId, directory}``。
     """
-    with _isolated_xdg_env(db_path) as xdg:
-        out = _run_opencode(xdg, ["session", "list", "--format", "json"])
+    with isolated_xdg_env(db_path) as xdg:
+        out = run_opencode(xdg, ["session", "list", "--format", "json"])
     stripped = out.strip()
     if not stripped:
         return []
     try:
         data = json.loads(stripped)
     except json.JSONDecodeError as exc:
-        raise OpencodeDbError(
-            f"opencode session list 输出无法解析为 JSON: {stripped[:200]!r}"
-        ) from exc
+        raise OpencodeDbError(f"opencode session list 输出无法解析为 JSON: {stripped[:200]!r}") from exc
     if not isinstance(data, list):
-        raise OpencodeDbError(
-            f"opencode session list 输出非数组: {str(data)[:200]}"
-        )
+        raise OpencodeDbError(f"opencode session list 输出非数组: {str(data)[:200]}")
     return sorted(data, key=lambda s: s.get("updated", 0) or 0, reverse=True)
 
 
@@ -143,18 +133,14 @@ def export_session(db_path: Path, session_id: str, sanitize: bool = False) -> st
     args = ["export", session_id]
     if sanitize:
         args.append("--sanitize")
-    with _isolated_xdg_env(db_path) as xdg:
-        out = _run_opencode(xdg, args)
+    with isolated_xdg_env(db_path) as xdg:
+        out = run_opencode(xdg, args)
     try:
         data = json.loads(out)
     except json.JSONDecodeError as exc:
-        raise OpencodeDbError(
-            f"opencode export 输出无法解析为 JSON(session={session_id}): {out[:200]!r}"
-        ) from exc
+        raise OpencodeDbError(f"opencode export 输出无法解析为 JSON(session={session_id}): {out[:200]!r}") from exc
     if not (isinstance(data, dict) and "messages" in data):
-        raise OpencodeDbError(
-            f"opencode export 输出非合法 session(缺 messages;session={session_id})"
-        )
+        raise OpencodeDbError(f"opencode export 输出非合法 session(缺 messages;session={session_id})")
     return out
 
 
@@ -168,12 +154,11 @@ def resolve_session(sessions: list[dict], session_id: str | None) -> dict | None
     """
     if session_id is not None:
         for s in sessions:
-            if s.get("id") == session_id:
-                return s
+            if not (s.get("id") == session_id):
+                continue
+            return s
         have = ", ".join(s.get("id", "?") for s in sessions) or "(无)"
-        raise OpencodeDbError(
-            f"session {session_id} 不在此 db;现有: {have}"
-        )
+        raise OpencodeDbError(f"session {session_id} 不在此 db;现有: {have}")
     if not sessions:
         raise OpencodeDbError("db 内无 session")
     if len(sessions) == 1:

@@ -14,20 +14,26 @@ from sift.audit.boundary import (
     declared_tool_names,
     frontmatter_tool_names,
 )
+from sift.audit.judge_context import AuditOptions
 from sift.models.audit_models import BoundarySummary, ToolUsageEntry
 from sift.models.batch_models import InstructionCheck
 from sift.models.enums import CheckMethod, InstructionPriority, InstructionSource
 from sift.models.execution_models import ToolCallRecord
 
 
-def _inst(text: str, source=InstructionSource.CONSTRAINT, tool_name: str | None = None,
-          headline: str = "", excerpt: str = "") -> InstructionCheck:
+def _inst(
+    text: str, source=InstructionSource.CONSTRAINT, tool_name: str | None = None, headline: str = "", excerpt: str = ""
+) -> InstructionCheck:
     params = {"tool_name": tool_name} if tool_name else {}
     return InstructionCheck(
-        source=source, instruction_text=text, section="Rules",
+        source=source,
+        instruction_text=text,
+        section="Rules",
         priority=InstructionPriority.REQUIRED,
         check_method=CheckMethod.TOOL_CALL_CHECK if tool_name else CheckMethod.LLM_JUDGE,
-        params=params, headline=headline, source_excerpt=excerpt,
+        params=params,
+        headline=headline,
+        source_excerpt=excerpt,
     )
 
 
@@ -38,6 +44,7 @@ def _trace(*names: str) -> list[ToolCallRecord]:
 # ---------------------------------------------------------------------------
 # 内置表 + 分类
 # ---------------------------------------------------------------------------
+
 
 def test_builtin_table_members_all_lowercase():
     """表内成员全小写(判定口径 name.lower() in BUILTIN_TOOLS 的前提)。"""
@@ -64,10 +71,17 @@ def test_mcp_tool_without_declaration_is_undeclared():
 # 声明侧抽取(三源)
 # ---------------------------------------------------------------------------
 
+
 def test_declared_tool_names_from_tool_requirement_params():
     """TOOL_REQUIREMENT.params.tool_name 是最可靠来源(extractor 已抽好)。"""
-    insts = [_inst("必须使用 codeql 扫描", source=InstructionSource.TOOL_REQUIREMENT,
-                   tool_name="codeql", headline="用 codeql 扫描")]
+    insts = [
+        _inst(
+            "必须使用 codeql 扫描",
+            source=InstructionSource.TOOL_REQUIREMENT,
+            tool_name="codeql",
+            headline="用 codeql 扫描",
+        )
+    ]
     declared = declared_tool_names(insts)
     assert "codeql" in declared
     assert declared["codeql"] == "用 codeql 扫描"  # 显示文本 headline 优先
@@ -75,8 +89,7 @@ def test_declared_tool_names_from_tool_requirement_params():
 
 def test_declared_tool_names_mcp_full_name_from_any_instruction_text():
     """约束/禁令文本里的 mcp__server__tool 全名也算声明(划边界的 MCP 工具)。"""
-    insts = [_inst("只许用 mcp__db__query 查数据,禁止直连生产库",
-                   excerpt="- 只许用 `mcp__db__query` 查数据")]
+    insts = [_inst("只许用 mcp__db__query 查数据,禁止直连生产库", excerpt="- 只许用 `mcp__db__query` 查数据")]
     declared = declared_tool_names(insts)
     assert "mcp__db__query" in declared
 
@@ -88,8 +101,7 @@ def test_declared_tool_names_backtick_token():
 
 def test_declared_tool_names_case_insensitive_match():
     """声明写 CodeQL、trace 里 codeql → 命中(双形大小写由 lower 统一)。"""
-    insts = [_inst("run CodeQL scan", source=InstructionSource.TOOL_REQUIREMENT,
-                   tool_name="CodeQL")]
+    insts = [_inst("run CodeQL scan", source=InstructionSource.TOOL_REQUIREMENT, tool_name="CodeQL")]
     s = aggregate_boundary([("t.jsonl", _trace("codeql"))], insts)
     assert s.declared == 1 and s.tools[0].classification == "domain"
 
@@ -101,6 +113,7 @@ def test_declared_tool_names_empty_when_no_tool_refs():
 # ---------------------------------------------------------------------------
 # 声明侧抽取第四源:frontmatter 工具白名单(agent tools: / skill allowed-tools:)
 # ---------------------------------------------------------------------------
+
 
 def test_frontmatter_tool_names_agent_tools_list():
     """agent 声明 frontmatter 的 tools: 白名单(如 pr-reviewer 的 Read/Grep/Bash)。"""
@@ -130,7 +143,8 @@ def test_frontmatter_tool_names_strips_permission_suffix():
     }
     # 端到端:带后缀声明的工具调用 → domain,不再误标
     s = aggregate_boundary(
-        [("t.jsonl", _trace("mcp__db__query"))], [],
+        [("t.jsonl", _trace("mcp__db__query"))],
+        [],
         frontmatter_tool_names(fm),
     )
     assert s.declared == 1 and s.undeclared == 0
@@ -159,7 +173,7 @@ def test_frontmatter_server_level_whitelist_covers_server_tools():
 def test_frontmatter_tool_names_ignores_non_list_and_non_str():
     """YAML 手写体多样:非 list 字段 / list 里非 str 项一律静默忽略(宁漏不猜)。"""
     assert frontmatter_tool_names({}) == {}
-    assert frontmatter_tool_names({"tools": "Read, Grep"}) == {}      # 逗号串不是 list
+    assert frontmatter_tool_names({"tools": "Read, Grep"}) == {}  # 逗号串不是 list
     assert frontmatter_tool_names({"tools": None}) == {}
     assert frontmatter_tool_names({"tools": ["Read", 3, None]}) == {"read": "frontmatter: tools"}
 
@@ -168,7 +182,9 @@ def test_frontmatter_declared_tools_reclassifies_domain():
     """frontmatter 声明的 MCP 工具 → domain(不声明则 undeclared);builtin 名无害。"""
     fm_tools = frontmatter_tool_names({"tools": ["mcp__issues__search"]})
     s = aggregate_boundary(
-        [("t.jsonl", _trace("mcp__issues__search", "mcp__slack__post"))], [], fm_tools,
+        [("t.jsonl", _trace("mcp__issues__search", "mcp__slack__post"))],
+        [],
+        fm_tools,
     )
     assert s.declared == 1 and s.undeclared == 1
     hit = next(e for e in s.tools if e.classification == "domain")
@@ -186,6 +202,7 @@ def test_declared_tool_names_body_display_wins_over_frontmatter():
 # 对账 + 聚合
 # ---------------------------------------------------------------------------
 
+
 def test_declared_hit_carries_declared_by_and_is_domain():
     insts = [_inst("只许用 mcp__db__query 查数据")]
     s = aggregate_boundary([("t.jsonl", _trace("mcp__db__query", "mcp__web__fetch"))], insts)
@@ -196,29 +213,35 @@ def test_declared_hit_carries_declared_by_and_is_domain():
 
 def test_sessions_and_calls_across_transcripts():
     """sessions = 出现于几个 transcript(去重);calls = 总调用次数;transcripts 列文件名。"""
-    s = aggregate_boundary([
-        ("a.jsonl", _trace("mcp__db__query", "mcp__db__query")),
-        ("b.jsonl", _trace("mcp__db__query")),
-    ], [])
+    s = aggregate_boundary(
+        [
+            ("a.jsonl", _trace("mcp__db__query", "mcp__db__query")),
+            ("b.jsonl", _trace("mcp__db__query")),
+        ],
+        [],
+    )
     e = s.tools[0]
     assert e.sessions == 2 and e.calls == 3 and e.transcripts == ["a.jsonl", "b.jsonl"]
 
 
 def test_sorting_undeclared_first_then_domain():
     """undeclared-domain 先(sessions 降序),再 domain(calls 降序)。"""
-    s = aggregate_boundary([
-        ("a.jsonl", _trace("mcp__x__one")),                 # undeclared, sessions=1
-        ("a.jsonl", _trace("mcp__x__two")),                 # undeclared, sessions=1
-        ("b.jsonl", _trace("mcp__x__two")),                 # undeclared, sessions=2 → 排最前
-        ("a.jsonl", _trace("mcp__decl__p", "mcp__decl__p", "mcp__decl__p")),  # domain calls=3
-        ("a.jsonl", _trace("mcp__decl__q")),                # domain calls=1
-    ], [_inst("用 mcp__decl__p 与 mcp__decl__q")])
+    s = aggregate_boundary(
+        [
+            ("a.jsonl", _trace("mcp__x__one")),  # undeclared, sessions=1
+            ("a.jsonl", _trace("mcp__x__two")),  # undeclared, sessions=1
+            ("b.jsonl", _trace("mcp__x__two")),  # undeclared, sessions=2 → 排最前
+            ("a.jsonl", _trace("mcp__decl__p", "mcp__decl__p", "mcp__decl__p")),  # domain calls=3
+            ("a.jsonl", _trace("mcp__decl__q")),  # domain calls=1
+        ],
+        [_inst("用 mcp__decl__p 与 mcp__decl__q")],
+    )
     order = [(e.name, e.classification) for e in s.tools]
     assert order == [
-        ("mcp__x__two", "undeclared-domain"),   # sessions=2
-        ("mcp__x__one", "undeclared-domain"),   # sessions=1,name序
-        ("mcp__decl__p", "domain"),             # calls=3
-        ("mcp__decl__q", "domain"),             # calls=1
+        ("mcp__x__two", "undeclared-domain"),  # sessions=2
+        ("mcp__x__one", "undeclared-domain"),  # sessions=1,name序
+        ("mcp__decl__p", "domain"),  # calls=3
+        ("mcp__decl__q", "domain"),  # calls=1
     ]
 
 
@@ -230,8 +253,9 @@ def test_empty_input_all_zero():
 def test_model_defaults_and_roundtrip():
     """ToolUsageEntry/BoundarySummary 默认值 + JSON 往返(旧 report 兼容的前提)。"""
     assert BoundarySummary().total_tools == 0 and BoundarySummary().tools == []
-    s = BoundarySummary(total_tools=1, undeclared=1, tools=[ToolUsageEntry(
-        name="mcp__x__y", classification="undeclared-domain")])
+    s = BoundarySummary(
+        total_tools=1, undeclared=1, tools=[ToolUsageEntry(name="mcp__x__y", classification="undeclared-domain")]
+    )
     restored = BoundarySummary.model_validate_json(s.model_dump_json())
     assert restored.tools[0].name == "mcp__x__y"
     assert restored.tools[0].sessions == 0 and restored.tools[0].transcripts == []
@@ -241,19 +265,30 @@ def test_model_defaults_and_roundtrip():
 # audit() 接线(集成)
 # ---------------------------------------------------------------------------
 
+
 def test_audit_report_boundary_field_end_to_end(monkeypatch, tmp_path):
     """audit() 产出 boundary:fixture transcript 只用 Read(builtin)→ 视图空、不误报;
-    声明正文里的工具要求真实参与对账(declarations 来自 refine 后 instructions)。"""
+    声明正文里的工具要求真实参与对账(declarations 来自 refine 后 instructions)。
+    """
     from pathlib import Path
+
     from sift.audit.auditor import TranscriptAuditor
 
     monkeypatch.setattr(
         "sift.audit.auditor.call_claude",
         lambda *a, **k: '[{"index":0,"violated":false,"evidence":"未违规"}]',
     )
-    cc = Path(__file__).parent.parent / "fixtures" / "example-skills" / \
-        "log-error-analyzer-zh" / "transcripts" / "synthetic-violation.jsonl"
-    report = TranscriptAuditor().audit("lea", "# x\n\nNEVER fabricate data.\n", [cc])
+    cc = (
+        Path(__file__).parent.parent
+        / "fixtures"
+        / "example-skills"
+        / "log-error-analyzer-zh"
+        / "transcripts"
+        / "synthetic-violation.jsonl"
+    )
+    report = TranscriptAuditor().audit(
+        skill_name="lea", skill_body="# x\n\nNEVER fabricate data.\n", transcripts=[cc], options=AuditOptions()
+    )
     # 该 transcript 全部工具调用是 Read(builtin)→ 不进视图
     assert report.boundary.total_tools == 0
     assert report.boundary.undeclared == 0
@@ -268,17 +303,12 @@ def test_audit_report_boundary_no_declared_tools(monkeypatch, tmp_path):
         lambda *a, **k: '[{"index":0,"violated":false,"evidence":"未违规"}]',
     )
     # 构造只含一次 mcp 工具调用的 transcript
-    lines = [
-        json.dumps({"type": "user", "message": {"role": "user", "content": "查点东西"}}),
-        json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
-            {"type": "tool_use", "name": "mcp__db__query", "id": "t1", "input": {"sql": "select 1"}}]}}),
-        json.dumps({"type": "user", "message": {"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}),
-        json.dumps({"type": "result", "result": "done", "usage": {"input_tokens": 1, "output_tokens": 1}}),
-    ]
+    lines = _boundary_tool_lines("mcp__db__query", {"sql": "select 1"})
     tp = tmp_path / "session.jsonl"
     tp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    report = TranscriptAuditor().audit("s", "# x\n\nNEVER fabricate data.\n", [tp])
+    report = TranscriptAuditor().audit(
+        skill_name="s", skill_body="# x\n\nNEVER fabricate data.\n", transcripts=[tp], options=AuditOptions()
+    )
     assert report.boundary.total_tools == 1
     assert report.boundary.undeclared == 1 and report.boundary.declared == 0
     e = report.boundary.tools[0]
@@ -293,19 +323,36 @@ def test_audit_declared_tools_param_feeds_boundary(monkeypatch, tmp_path):
         "sift.audit.auditor.call_claude",
         lambda *a, **k: '[{"index":0,"violated":false,"evidence":"未违规"}]',
     )
-    lines = [
-        json.dumps({"type": "user", "message": {"role": "user", "content": "查点东西"}}),
-        json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
-            {"type": "tool_use", "name": "mcp__issues__search", "id": "t1", "input": {"q": "x"}}]}}),
-        json.dumps({"type": "user", "message": {"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}),
-        json.dumps({"type": "result", "result": "done", "usage": {"input_tokens": 1, "output_tokens": 1}}),
-    ]
+    lines = _boundary_tool_lines("mcp__issues__search", {"q": "x"})
     tp = tmp_path / "session.jsonl"
     tp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     report = TranscriptAuditor().audit(
-        "s", "# x\n\nNEVER fabricate data.\n", [tp],
-        declared_tools={"mcp__issues__search": "frontmatter: tools"},
+        skill_name="s",
+        skill_body="# x\n\nNEVER fabricate data.\n",
+        transcripts=[tp],
+        options=AuditOptions(declared_tools={"mcp__issues__search": "frontmatter: tools"}),
     )
     assert report.boundary.declared == 1 and report.boundary.undeclared == 0
     assert report.boundary.tools[0].declared_by == "frontmatter: tools"
+
+
+def _boundary_tool_lines(tool_name, tool_input):
+    return [
+        json.dumps({"type": "user", "message": {"role": "user", "content": "查点东西"}}),
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "name": tool_name, "id": "t1", "input": tool_input}],
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "user",
+                "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+            }
+        ),
+        json.dumps({"type": "result", "result": "done", "usage": {"input_tokens": 1, "output_tokens": 1}}),
+    ]

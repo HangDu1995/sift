@@ -27,8 +27,8 @@ SOFT_CATEGORIES = (AuditCategory.STEP, AuditCategory.CONDITIONAL)
 
 
 class CalibrationChecker:
+    @staticmethod
     def calibrate(
-        self,
         grading: GradingResult,
         compliance: AuditReport | None = None,
     ) -> CalibrationReport:
@@ -43,33 +43,7 @@ class CalibrationChecker:
         result_pass = scoring_rate >= RESULT_PASS_THRESHOLD
 
         # ---- 过程判定:只看 PASS/FAIL(排除 N/A 不适用、UNRESOLVED 没判成、INDETERMINATE 判不准)----
-        hard_violations: list[HardViolation] = []
-        soft_notes: dict[str, int] = {}
-        compliance_rate: float | None = None
-
-        judged = (
-            [f for f in compliance.findings
-             if f.verdict in (AuditVerdict.PASS, AuditVerdict.FAIL)]
-            if compliance and compliance.findings else []
-        )
-
-        if not judged:
-            process_status = ProcessStatus.UNKNOWN
-        else:
-            passed = sum(1 for f in judged if f.verdict == AuditVerdict.PASS)
-            compliance_rate = round(passed / len(judged), 4)
-            for f in judged:
-                if f.verdict != AuditVerdict.FAIL:
-                    continue
-                if f.category in HARD_CATEGORIES:
-                    hard_violations.append(HardViolation(
-                        category=f.category.value,
-                        instruction_text=f.instruction_text,
-                        evidence=f.evidence,
-                    ))
-                elif f.category in SOFT_CATEGORIES:
-                    soft_notes[f.category.value] = soft_notes.get(f.category.value, 0) + 1
-            process_status = ProcessStatus.VIOLATED if hard_violations else ProcessStatus.OK
+        process_status, hard_violations, soft_notes, compliance_rate = _calibrate_process(compliance)
 
         # ---- 矩阵 ----
         if process_status == ProcessStatus.UNKNOWN:
@@ -77,10 +51,7 @@ class CalibrationChecker:
         elif process_status == ProcessStatus.OK:
             verdict = CalibrationVerdict.TRUSTED if result_pass else CalibrationVerdict.FIXABLE
         else:  # VIOLATED
-            verdict = (
-                CalibrationVerdict.HIGH_SCORE_SUSPECT
-                if result_pass else CalibrationVerdict.SKILL_FAILED
-            )
+            verdict = CalibrationVerdict.HIGH_SCORE_SUSPECT if result_pass else CalibrationVerdict.SKILL_FAILED
 
         return CalibrationReport(
             verdict=verdict,
@@ -94,3 +65,37 @@ class CalibrationChecker:
             scoring_rate_llm=round(llm_rate, 4) if llm_rate is not None else None,
             compliance_rate=compliance_rate,
         )
+
+
+def _calibrate_process(compliance):
+    """Calibrate process evidence using hard violations while retaining soft notes."""
+    hard_violations: list[HardViolation] = []
+    soft_notes: dict[str, int] = {}
+    compliance_rate: float | None = None
+
+    judged = (
+        [f for f in compliance.findings if f.verdict in (AuditVerdict.PASS, AuditVerdict.FAIL)]
+        if compliance and compliance.findings
+        else []
+    )
+
+    if not judged:
+        process_status = ProcessStatus.UNKNOWN
+    else:
+        passed = sum(1 for f in judged if f.verdict == AuditVerdict.PASS)
+        compliance_rate = round(passed / len(judged), 4)
+        for f in judged:
+            if f.verdict != AuditVerdict.FAIL:
+                continue
+            if f.category in HARD_CATEGORIES:
+                hard_violations.append(
+                    HardViolation(
+                        category=f.category.value,
+                        instruction_text=f.instruction_text,
+                        evidence=f.evidence,
+                    )
+                )
+            elif f.category in SOFT_CATEGORIES:
+                soft_notes[f.category.value] = soft_notes.get(f.category.value, 0) + 1
+        process_status = ProcessStatus.VIOLATED if hard_violations else ProcessStatus.OK
+    return process_status, hard_violations, soft_notes, compliance_rate

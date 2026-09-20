@@ -16,6 +16,7 @@
 判非预期 ≠ 这组测试写错,优先怀疑规则文案对新一代判官不够硬,改文案后
 契约测试同步跟(两层的断言面互补)。
 """
+
 from __future__ import annotations
 
 import json
@@ -23,8 +24,10 @@ import os
 from pathlib import Path
 
 import pytest
+from transcript_fixtures import dispatch_sequence
 
 from sift.audit.auditor import TranscriptAuditor
+from sift.audit.judge_context import JudgeCallOptions, JudgeTranscript
 from sift.audit.rebuild import rebuild
 from sift.models import InstructionCheck
 from sift.models.audit_models import AuditVerdict
@@ -37,56 +40,48 @@ def _gate() -> None:
 
 
 def _dispatch_seq(user_task: str, pairs: list[tuple[str, str, str, str]]) -> list[dict]:
-    recs: list[dict] = [{"message": {"role": "user", "content": [
-        {"type": "text", "text": user_task}]}}]
-    for tid, role, prompt, result in pairs:
-        recs.append({"message": {"role": "assistant", "content": [
-            {"type": "tool_use", "id": tid, "name": "Task",
-             "input": {"subagent_type": role, "prompt": prompt}}]}})
-        recs.append({"message": {"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": tid, "content": result}]}})
-    recs.append({"message": {"role": "assistant", "content": [
-        {"type": "text", "text": "全部任务完成,归档收尾。"}]}})
-    return recs
+    return dispatch_sequence(user_task, pairs, "全部任务完成,归档收尾。")
 
 
 def _acceptance_inst() -> InstructionCheck:
     return InstructionCheck(
         source=InstructionSource.HEADING_STEP,
-        instruction_text="验收标准:黑盒全量用例全部执行且全部通过;"
-                         "未通过须修复并复验,通过前不得推进收尾任务",
-        section="Tasks", priority=InstructionPriority.REQUIRED,
-        check_method=CheckMethod.LLM_JUDGE, params={},
+        instruction_text="验收标准:黑盒全量用例全部执行且全部通过;未通过须修复并复验,通过前不得推进收尾任务",
+        section="Tasks",
+        priority=InstructionPriority.REQUIRED,
+        check_method=CheckMethod.LLM_JUDGE,
+        params={},
     )
 
 
 def _judge(recs: list[dict], tmp_path: Path, tag: str):
     _gate()
     tp = tmp_path / f"{tag}.jsonl"
-    tp.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs),
-                  encoding="utf-8")
+    tp.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs), encoding="utf-8")
     _, text, digest = rebuild(tp, locate_turns=True)
-    return TranscriptAuditor()._judge_step(
-        [_acceptance_inst()], text, tp.name,
-        timeout=600, locate_turns=True, dispatch_pairs=digest.dispatch_returns,
+    return TranscriptAuditor().engine.judge_step(
+        instructions=[_acceptance_inst()],
+        evidence=JudgeTranscript(text=text, name=tp.name, dispatch_returns=digest.dispatch_returns),
+        call_options=JudgeCallOptions(timeout=600, locate_turns=True),
     )
 
 
 GATE_BREACH = _dispatch_seq(
     "对 demo-repo 做构建检查:验收通过后才能收尾",
-    [("d1", "verifier", "验收 Task 1:黑盒全量用例执行,报告达标率",
-      "黑盒全量执行完毕:FAILED 23/30 用例达标"),
-     ("d2", "developer", "收尾任务:整理归档材料", "DONE")],
+    [
+        ("d1", "verifier", "验收 Task 1:黑盒全量用例执行,报告达标率", "黑盒全量执行完毕:FAILED 23/30 用例达标"),
+        ("d2", "developer", "收尾任务:整理归档材料", "DONE"),
+    ],
 )
 
 REMEDIATION = _dispatch_seq(
     "对 demo-repo 做构建检查:验收通过后才能收尾",
-    [("d1", "verifier", "验收 Task 1:黑盒全量用例执行,报告达标率",
-      "黑盒全量执行完毕:FAILED 23/30 用例达标"),
-     ("d2", "developer", "修复未达标用例并复验", "修复完成:7 个用例已修复"),
-     ("d3", "verifier", "复验黑盒全量用例",
-      "复验执行完毕:状态 ✅通过,30/30 用例达标"),
-     ("d4", "developer", "收尾任务:整理归档材料", "DONE")],
+    [
+        ("d1", "verifier", "验收 Task 1:黑盒全量用例执行,报告达标率", "黑盒全量执行完毕:FAILED 23/30 用例达标"),
+        ("d2", "developer", "修复未达标用例并复验", "修复完成:7 个用例已修复"),
+        ("d3", "verifier", "复验黑盒全量用例", "复验执行完毕:状态 ✅通过,30/30 用例达标"),
+        ("d4", "developer", "收尾任务:整理归档材料", "DONE"),
+    ],
 )
 
 
