@@ -8,6 +8,7 @@ zero-dependency baseline coverage.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -15,6 +16,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from sift.executables import resolve_executable
 from sift.models import (
     ScannerResult,
     ScannerStatus,
@@ -28,6 +30,97 @@ from sift.models import (
 class SecurityVetter:
     def __init__(self, skip_external: bool = False):
         self._skip_external = skip_external
+
+    @staticmethod
+    def _scan_secrets(skill_path: Path) -> ScannerResult:
+        findings: list[SecurityFinding] = []
+
+        secret_pattern = re.compile(
+            r"(api_key|apikey|secret|token|password|credential)\s*[:=]\s*['\"][A-Za-z0-9_\-]{16,}['\"]",
+            re.IGNORECASE,
+        )
+
+        for rel, text in _scan_text_files(
+            skill_path, exclude_suffixes=(".pyc", ".pyo", ".so", ".dylib", ".png", ".jpg", ".gif", ".pdf")
+        ):
+            for i, line in enumerate(text.splitlines(), 1):
+                if not (secret_pattern.search(line)):
+                    continue
+                findings.append(
+                    SecurityFinding(
+                        scanner="secrets-scan",
+                        severity=SecuritySeverity.HIGH,
+                        description="Hardcoded credentials detected",
+                        file_path=rel,
+                        line=i,
+                    )
+                )
+                break
+
+        base64_pattern = re.compile(r"""['"][A-Za-z0-9+/]{40,}={0,2}['"]""")
+        for rel, text in _scan_text_files(skill_path, include_suffixes=(".sh", ".py", ".js", ".ts")):
+            has_base64 = any(base64_pattern.search(line) for line in text.splitlines())
+            if not (has_base64 and not any(f.file_path == rel for f in findings)):
+                continue
+            findings.append(
+                SecurityFinding(
+                    scanner="secrets-scan",
+                    severity=SecuritySeverity.MEDIUM,
+                    description="Base64 encoded string found (review manually)",
+                    file_path=rel,
+                )
+            )
+
+        has_high = any(f.severity in (SecuritySeverity.CRITICAL, SecuritySeverity.HIGH) for f in findings)
+        has_medium = any(f.severity == SecuritySeverity.MEDIUM for f in findings)
+
+        if has_high:
+            status = ScannerStatus.FAIL
+            msg = "Hardcoded credentials detected"
+        elif has_medium:
+            status = ScannerStatus.WARN
+            msg = "Base64 encoded strings found"
+        else:
+            status = ScannerStatus.PASS
+            msg = "No hardcoded secrets found"
+
+        return ScannerResult(name="secrets-scan", status=status, findings=findings, message=msg)
+
+    @staticmethod
+    def _scan_structure(skill_path: Path) -> ScannerResult:
+        findings, issues = _check_skill_metadata(skill_path)
+
+        dangerous_pattern = re.compile(
+            r"(rm\s+-rf\s|curl.*\|\s*(ba)?sh|wget.*\|\s*(ba)?sh|\beval\s|\bexec\s+\S)",
+            re.IGNORECASE,
+        )
+        for rel, text in _scan_text_files(skill_path, include_suffixes=(".sh", ".py", ".js", ".ts")):
+            for i, line in enumerate(text.splitlines(), 1):
+                if not (dangerous_pattern.search(line)):
+                    continue
+                findings.append(
+                    SecurityFinding(
+                        scanner="structure-check",
+                        severity=SecuritySeverity.HIGH,
+                        description="Dangerous shell command detected",
+                        file_path=rel,
+                        line=i,
+                    )
+                )
+                issues += 1
+                break
+
+        if issues > 0:
+            status = ScannerStatus.FAIL
+            msg = f"{issues} structure issue(s)"
+        elif any(f.severity == SecuritySeverity.MEDIUM for f in findings):
+            status = ScannerStatus.WARN
+            msg = "Minor structure warnings"
+        else:
+            status = ScannerStatus.PASS
+            msg = "Skill structure valid"
+
+        return ScannerResult(name="structure-check", status=status, findings=findings, message=msg)
 
     def vet(self, skill_path: Path) -> SecurityReport:
         skill_path = skill_path.resolve()
@@ -44,9 +137,7 @@ class SecurityVetter:
         for s in scanners:
             all_findings.extend(s.findings)
 
-        high_count = sum(
-            1 for f in all_findings if f.severity in (SecuritySeverity.CRITICAL, SecuritySeverity.HIGH)
-        )
+        high_count = sum(1 for f in all_findings if f.severity in (SecuritySeverity.CRITICAL, SecuritySeverity.HIGH))
         medium_count = sum(1 for f in all_findings if f.severity == SecuritySeverity.MEDIUM)
 
         if high_count > 0:
@@ -73,7 +164,7 @@ class SecurityVetter:
         try:
             skill_name = url.rstrip("/").split("/")[-1].replace(".git", "")
             subprocess.run(
-                ["git", "clone", "--depth", "1", url, tmpdir],
+                [resolve_executable("git"), "clone", "--depth", "1", url, tmpdir],
                 capture_output=True,
                 timeout=60,
                 check=True,
@@ -106,7 +197,7 @@ class SecurityVetter:
                 timeout=120,
             )
             result = proc.stdout.strip()
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        except (subprocess.TimeoutExpired, OSError):
             return ScannerResult(name="aguara", status=ScannerStatus.SKIP, message="aguara execution failed")
 
         if not result:
@@ -117,37 +208,7 @@ class SecurityVetter:
         except json.JSONDecodeError:
             return ScannerResult(name="aguara", status=ScannerStatus.PASS, message="No structured output")
 
-        findings: list[SecurityFinding] = []
-        for f in data.get("findings", []):
-            sev = f.get("severity", 0)
-            if sev >= 4:
-                severity = SecuritySeverity.HIGH
-            elif sev >= 3:
-                severity = SecuritySeverity.MEDIUM
-            else:
-                severity = SecuritySeverity.LOW
-            findings.append(SecurityFinding(
-                scanner="aguara",
-                severity=severity,
-                description=f.get("description", ""),
-                file_path=f.get("file_path", ""),
-                line=f.get("line"),
-            ))
-
-        high = [f for f in findings if f.severity in (SecuritySeverity.CRITICAL, SecuritySeverity.HIGH)]
-        medium = [f for f in findings if f.severity == SecuritySeverity.MEDIUM]
-
-        if high:
-            status = ScannerStatus.FAIL
-            msg = f"{len(high)} HIGH severity findings"
-        elif medium:
-            status = ScannerStatus.WARN
-            msg = f"{len(medium)} MEDIUM severity findings"
-        else:
-            status = ScannerStatus.PASS
-            msg = "No prompt injection patterns found"
-
-        return ScannerResult(name="aguara", status=status, findings=findings, message=msg)
+        return _aguara_report(data)
 
     def _scan_skill_scanner(self, skill_path: Path) -> ScannerResult:
         if self._skip_external:
@@ -169,8 +230,10 @@ class SecurityVetter:
                 timeout=120,
             )
             result = proc.stdout.strip()
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            return ScannerResult(name="skill-scanner", status=ScannerStatus.SKIP, message="skill-scanner execution failed")
+        except (subprocess.TimeoutExpired, OSError):
+            return ScannerResult(
+                name="skill-scanner", status=ScannerStatus.SKIP, message="skill-scanner execution failed"
+            )
 
         if not result:
             return ScannerResult(name="skill-scanner", status=ScannerStatus.PASS, message="No issues found")
@@ -180,162 +243,122 @@ class SecurityVetter:
         except json.JSONDecodeError:
             return ScannerResult(name="skill-scanner", status=ScannerStatus.PASS, message="No structured output")
 
-        severity_str = data.get("severity", "none").lower()
-        severity_map = {
-            "critical": SecuritySeverity.CRITICAL,
-            "high": SecuritySeverity.HIGH,
-            "medium": SecuritySeverity.MEDIUM,
-        }
-        severity = severity_map.get(severity_str, SecuritySeverity.LOW)
+        return _scanner_security_result(data)
 
-        findings: list[SecurityFinding] = []
-        if severity in (SecuritySeverity.CRITICAL, SecuritySeverity.HIGH, SecuritySeverity.MEDIUM):
-            findings.append(SecurityFinding(
+
+def _scanner_security_result(data):
+    severity_str = data.get("severity", "none").lower()
+    severity_map = {
+        "critical": SecuritySeverity.CRITICAL,
+        "high": SecuritySeverity.HIGH,
+        "medium": SecuritySeverity.MEDIUM,
+    }
+    severity = severity_map.get(severity_str, SecuritySeverity.LOW)
+
+    findings: list[SecurityFinding] = []
+    if severity in (SecuritySeverity.CRITICAL, SecuritySeverity.HIGH, SecuritySeverity.MEDIUM):
+        findings.append(
+            SecurityFinding(
                 scanner="skill-scanner",
                 severity=severity,
                 description=data.get("description", "Vulnerability detected"),
-            ))
-
-        if severity in (SecuritySeverity.CRITICAL, SecuritySeverity.HIGH):
-            status = ScannerStatus.FAIL
-        elif severity == SecuritySeverity.MEDIUM:
-            status = ScannerStatus.WARN
-        else:
-            status = ScannerStatus.PASS
-
-        msg = data.get("description", "No critical vulnerabilities found")
-        return ScannerResult(name="skill-scanner", status=status, findings=findings, message=msg)
-
-    def _scan_secrets(self, skill_path: Path) -> ScannerResult:
-        findings: list[SecurityFinding] = []
-
-        secret_pattern = re.compile(
-            r"(api_key|apikey|secret|token|password|credential)\s*[:=]\s*['\"][A-Za-z0-9_\-]{16,}['\"]",
-            re.IGNORECASE,
+            )
         )
 
-        for root, _dirs, files in os.walk(skill_path):
-            for fname in files:
-                fpath = Path(root) / fname
-                if fpath.suffix in (".pyc", ".pyo", ".so", ".dylib", ".png", ".jpg", ".gif", ".pdf"):
-                    continue
-                try:
-                    text = fpath.read_text(encoding="utf-8", errors="ignore")
-                except OSError:
-                    continue
+    if severity in (SecuritySeverity.CRITICAL, SecuritySeverity.HIGH):
+        status = ScannerStatus.FAIL
+    elif severity == SecuritySeverity.MEDIUM:
+        status = ScannerStatus.WARN
+    else:
+        status = ScannerStatus.PASS
 
-                rel = str(fpath.relative_to(skill_path))
-                for i, line in enumerate(text.splitlines(), 1):
-                    if secret_pattern.search(line):
-                        findings.append(SecurityFinding(
-                            scanner="secrets-scan",
-                            severity=SecuritySeverity.HIGH,
-                            description="Hardcoded credentials detected",
-                            file_path=rel,
-                            line=i,
-                        ))
-                        break
+    msg = data.get("description", "No critical vulnerabilities found")
+    return ScannerResult(name="skill-scanner", status=status, findings=findings, message=msg)
 
-        base64_pattern = re.compile(r"""['"][A-Za-z0-9+/]{40,}={0,2}['"]""")
-        for root, _dirs, files in os.walk(skill_path):
-            for fname in files:
-                fpath = Path(root) / fname
-                if fpath.suffix not in (".sh", ".py", ".js", ".ts"):
-                    continue
-                try:
-                    text = fpath.read_text(encoding="utf-8", errors="ignore")
-                except OSError:
-                    continue
 
-                rel = str(fpath.relative_to(skill_path))
-                has_base64 = any(
-                    base64_pattern.search(line)
-                    for line in text.splitlines()
-                )
-                if has_base64 and not any(f.file_path == rel for f in findings):
-                    findings.append(SecurityFinding(
-                        scanner="secrets-scan",
-                        severity=SecuritySeverity.MEDIUM,
-                        description="Base64 encoded string found (review manually)",
-                        file_path=rel,
-                    ))
+def _scan_text_files(skill_path: Path, include_suffixes=None, exclude_suffixes=()):
+    """Yield readable scan inputs with the requested suffix policy and relative names."""
+    for root, _dirs, files in os.walk(skill_path):
+        for fname in files:
+            path = Path(root) / fname
+            if include_suffixes is not None and path.suffix not in include_suffixes:
+                continue
+            if path.suffix in exclude_suffixes:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                logging.getLogger(__name__).debug("Could not read scanner input %s", path, exc_info=True)
+                continue
+            yield str(path.relative_to(skill_path)), text
 
-        has_high = any(f.severity in (SecuritySeverity.CRITICAL, SecuritySeverity.HIGH) for f in findings)
-        has_medium = any(f.severity == SecuritySeverity.MEDIUM for f in findings)
 
-        if has_high:
-            status = ScannerStatus.FAIL
-            msg = "Hardcoded credentials detected"
-        elif has_medium:
-            status = ScannerStatus.WARN
-            msg = "Base64 encoded strings found"
+def _aguara_report(data: dict) -> ScannerResult:
+    """Map structured Aguara findings and severities into a scanner report."""
+    findings: list[SecurityFinding] = []
+    for f in data.get("findings", []):
+        sev = f.get("severity", 0)
+        if sev >= 4:
+            severity = SecuritySeverity.HIGH
+        elif sev >= 3:
+            severity = SecuritySeverity.MEDIUM
         else:
-            status = ScannerStatus.PASS
-            msg = "No hardcoded secrets found"
+            severity = SecuritySeverity.LOW
+        findings.append(
+            SecurityFinding(
+                scanner="aguara",
+                severity=severity,
+                description=f.get("description", ""),
+                file_path=f.get("file_path", ""),
+                line=f.get("line"),
+            )
+        )
 
-        return ScannerResult(name="secrets-scan", status=status, findings=findings, message=msg)
+    high = [f for f in findings if f.severity in (SecuritySeverity.CRITICAL, SecuritySeverity.HIGH)]
+    medium = [f for f in findings if f.severity == SecuritySeverity.MEDIUM]
 
-    def _scan_structure(self, skill_path: Path) -> ScannerResult:
-        findings: list[SecurityFinding] = []
-        issues = 0
+    if high:
+        status = ScannerStatus.FAIL
+        msg = f"{len(high)} HIGH severity findings"
+    elif medium:
+        status = ScannerStatus.WARN
+        msg = f"{len(medium)} MEDIUM severity findings"
+    else:
+        status = ScannerStatus.PASS
+        msg = "No prompt injection patterns found"
 
-        skill_md = skill_path / "SKILL.md"
-        if not skill_md.exists():
-            findings.append(SecurityFinding(
+    return ScannerResult(name="aguara", status=status, findings=findings, message=msg)
+
+
+def _check_skill_metadata(skill_path: Path) -> tuple[list[SecurityFinding], int]:
+    """检查 SKILL.md 及其 frontmatter，区分缺失和格式警告。"""
+    findings: list[SecurityFinding] = []
+    issues = 0
+
+    skill_md = skill_path / "SKILL.md"
+    if not skill_md.exists():
+        findings.append(
+            SecurityFinding(
                 scanner="structure-check",
                 severity=SecuritySeverity.HIGH,
                 description="Missing SKILL.md",
-            ))
-            issues += 1
-        else:
-            content = ""
-            try:
-                content = skill_md.read_text(encoding="utf-8")
-            except OSError:
-                pass
+            )
+        )
+        issues += 1
+    else:
+        content = ""
+        try:
+            content = skill_md.read_text(encoding="utf-8")
+        except OSError:
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
 
-            if content and not content.lstrip().startswith("---"):
-                findings.append(SecurityFinding(
+        if content and not content.lstrip().startswith("---"):
+            findings.append(
+                SecurityFinding(
                     scanner="structure-check",
                     severity=SecuritySeverity.MEDIUM,
                     description="SKILL.md missing YAML frontmatter",
-                ))
+                )
+            )
 
-        dangerous_pattern = re.compile(
-            r"(rm\s+-rf\s|curl.*\|\s*(ba)?sh|wget.*\|\s*(ba)?sh|\beval\s|\bexec\s+\S)",
-            re.IGNORECASE,
-        )
-        for root, _dirs, files in os.walk(skill_path):
-            for fname in files:
-                fpath = Path(root) / fname
-                if fpath.suffix not in (".sh", ".py", ".js", ".ts"):
-                    continue
-                try:
-                    text = fpath.read_text(encoding="utf-8", errors="ignore")
-                except OSError:
-                    continue
-
-                rel = str(fpath.relative_to(skill_path))
-                for i, line in enumerate(text.splitlines(), 1):
-                    if dangerous_pattern.search(line):
-                        findings.append(SecurityFinding(
-                            scanner="structure-check",
-                            severity=SecuritySeverity.HIGH,
-                            description="Dangerous shell command detected",
-                            file_path=rel,
-                            line=i,
-                        ))
-                        issues += 1
-                        break
-
-        if issues > 0:
-            status = ScannerStatus.FAIL
-            msg = f"{issues} structure issue(s)"
-        elif any(f.severity == SecuritySeverity.MEDIUM for f in findings):
-            status = ScannerStatus.WARN
-            msg = "Minor structure warnings"
-        else:
-            status = ScannerStatus.PASS
-            msg = "Skill structure valid"
-
-        return ScannerResult(name="structure-check", status=status, findings=findings, message=msg)
+    return findings, issues

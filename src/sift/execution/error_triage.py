@@ -3,6 +3,7 @@
 纯诊断/展示层——绝不进任何评测判决(pass_rate/win_rate/compliance/verdict 都不读 triage)。
 只读 runner 已填的 error 字符串,加根因标签 + 修复建议。和 anomaly.py(时长维度)正交。
 """
+
 from __future__ import annotations
 
 import re
@@ -40,7 +41,10 @@ _PATTERNS: list[tuple["re.Pattern[str]", str, str]] = [
         "端点限流:降并发(--max-concurrent)/重试/查客户端身份凭据(AI_AGENT+ENTRYPOINT)",
     ),
     (
-        re.compile(r"refused|reset by peer|connection|ENOTFOUND|ECONN|unreachable", re.IGNORECASE),
+        re.compile(
+            r"refused|reset by peer|connection|ENOTFOUND|ECONN|unreachable",
+            re.IGNORECASE,
+        ),
         "connection",
         "连不上端点:查端点 URL / 网络 / DNS",
     ),
@@ -62,8 +66,9 @@ def classify_error(error_str: str) -> ErrorTriage:
     if not error_str:
         return ErrorTriage(root_cause="unknown", suggestion="(空 error)请查完整日志")
     for pattern, cause, suggestion in _PATTERNS:
-        if pattern.search(error_str):
-            return ErrorTriage(root_cause=cause, suggestion=suggestion)
+        if not (pattern.search(error_str)):
+            continue
+        return ErrorTriage(root_cause=cause, suggestion=suggestion)
     snippet = error_str[:200].replace("\n", " ")
     return ErrorTriage(
         root_cause="unknown",
@@ -91,17 +96,37 @@ _CAUSE_LABEL: dict[str, str] = {
 }
 
 # 注:"unknown" 不列 → 落 unresolved_cause_info 的默认兜底,建议恒非空。
+_INFRASTRUCTURE_CAUSES = (
+    "timeout",
+    "rate_limited",
+    "connection",
+    "cli_missing",
+    "auth",
+    "max_turns",
+    "session_not_found",
+)
+
 UNRESOLVED_CAUSE_INFO: dict[str, tuple[str, str]] = {
     # 基础设施 cause:c 必在 _PATTERNS 里,直取 suggestion(不兜空)
     c: (_CAUSE_LABEL.get(c, c), _CAUSE_SUGGESTIONS[c])
-    for c in ("timeout", "rate_limited", "connection", "cli_missing",
-              "auth", "max_turns", "session_not_found")
+    for c in _INFRASTRUCTURE_CAUSES
 }
-UNRESOLVED_CAUSE_INFO.update({
-    "parse_failed": (_CAUSE_LABEL["parse_failed"], "批调用成功但解析全空,多为瞬态——建议重跑"),
-    "unmentioned": (_CAUSE_LABEL["unmentioned"], "transcript 未覆盖或 LLM 未提及,重跑可能无益——检查出题/transcript"),
-    "judge_error": (_CAUSE_LABEL["judge_error"], "非 LLM 调用失败,请查完整日志/上报"),
-})
+UNRESOLVED_CAUSE_INFO.update(
+    {
+        "parse_failed": (
+            _CAUSE_LABEL["parse_failed"],
+            "批调用成功但解析全空,多为瞬态——建议重跑",
+        ),
+        "unmentioned": (
+            _CAUSE_LABEL["unmentioned"],
+            "transcript 未覆盖或 LLM 未提及,重跑可能无益——检查出题/transcript",
+        ),
+        "judge_error": (
+            _CAUSE_LABEL["judge_error"],
+            "非 LLM 调用失败,请查完整日志/上报",
+        ),
+    }
+)
 
 
 def unresolved_cause_info(cause: str) -> tuple[str, str]:

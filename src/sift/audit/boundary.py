@@ -26,6 +26,7 @@ undeclared-domain,人看一眼即可补表);**Skill 调用本身不算动作**(s
 生效)与 skill 的 ``allowed-tools:`` ——由调用方(CLI/runner,拿得到 frontmatter)抽好
 传入,引擎层不读文件。
 """
+
 from __future__ import annotations
 
 import re
@@ -37,18 +38,35 @@ from sift.models.enums import InstructionSource
 # 内置工具表(全小写;cc + opencode 合一初版)。表 = 数据不是逻辑:新增内置工具漏在
 # 表外会被保守列进 undeclared-domain(信息性),补一行即可。
 # 含 non_business 白名单(grep/读文件/env init 等过渡性操作)。
-BUILTIN_TOOLS: frozenset[str] = frozenset({
-    # cc / opencode 通用原语
-    "read", "write", "edit", "multiedit", "notebookedit",
-    "bash", "glob", "grep",
-    # 子代理 / 计划 / 交互
-    "task", "agent", "ask", "askuserquestion", "exitplanmode", "plan", "stop",
-    "todowrite", "todo",
-    # web / 知识
-    "webfetch", "websearch",
-    # skill 进入信号(slice 层,不算动作)
-    "skill", "slashcommand",
-})
+BUILTIN_TOOLS: frozenset[str] = frozenset(
+    {
+        # cc / opencode 通用原语
+        "read",
+        "write",
+        "edit",
+        "multiedit",
+        "notebookedit",
+        "bash",
+        "glob",
+        "grep",
+        # 子代理 / 计划 / 交互
+        "task",
+        "agent",
+        "ask",
+        "askuserquestion",
+        "exitplanmode",
+        "plan",
+        "stop",
+        "todowrite",
+        "todo",
+        # web / 知识
+        "webfetch",
+        "websearch",
+        # skill 进入信号(slice 层,不算动作)
+        "skill",
+        "slashcommand",
+    }
+)
 
 # mcp 全名:mcp__<server>__<tool>(server/tool 可含字母数字下划线连字符)。
 _MCP_FULL_NAME_RE = re.compile(r"\bmcp__[A-Za-z0-9_\-]+__[A-Za-z0-9_\-]+")
@@ -76,8 +94,9 @@ def frontmatter_tool_names(frontmatter: dict) -> dict[str, str]:
             if not isinstance(item, str):
                 continue
             key = item.split("(", 1)[0].strip().lower()
-            if key and key not in out:
-                out[key] = f"frontmatter: {field}"
+            if not (key and key not in out):
+                continue
+            out[key] = f"frontmatter: {field}"
     return out
 
 
@@ -139,42 +158,7 @@ def aggregate_boundary(
     entries: dict[str, ToolUsageEntry] = {}
 
     for transcript_name, trace in tool_traces:
-        seen_in_session: set[str] = set()
-        for call in trace:
-            # attr(ToolCallRecord)/ dict 双风格取 name(同 _tool_trace_section 惯例——
-            # dict 记录走 .get 静默空,不炸:信息性视图不因个别坏记录中断)。
-            _name = getattr(call, "name", None)
-            if _name is None and isinstance(call, dict):
-                _name = call.get("name")
-            name = (_name or "").strip()
-            if not name:
-                continue
-            key = name.lower()
-            if key in BUILTIN_TOOLS:
-                continue  # 内置原语/白名单:不是动作,不进视图
-            if key in seen_in_session:
-                entries[key].calls += 1
-                continue
-            seen_in_session.add(key)
-            if key not in entries:
-                hit = declared.get(key)
-                if hit is None and key.startswith("mcp__") and key.count("__") >= 2:
-                    # server 级白名单(``mcp__server``,授权整个 server——cc 权限规则
-                    # 的合法形态)前缀匹配:工具全名 ``mcp__server__tool`` 落回
-                    # server 键;不认会把该 server 全部工具误标未声明。
-                    hit = declared.get(key.rsplit("__", 1)[0])
-                entries[key] = ToolUsageEntry(
-                    name=name,
-                    classification="domain" if hit else "undeclared-domain",
-                    declared_by=hit or "",
-                    sessions=0,
-                    calls=0,
-                    transcripts=[],
-                )
-            entries[key].sessions += 1
-            entries[key].calls += 1
-            if transcript_name not in entries[key].transcripts:
-                entries[key].transcripts.append(transcript_name)
+        _accumulate_boundary_trace(trace, entries, declared, transcript_name)
 
     tools = list(entries.values())
     undeclared = [e for e in tools if e.classification == "undeclared-domain"]
@@ -187,3 +171,43 @@ def aggregate_boundary(
         undeclared=len(undeclared),
         tools=undeclared + domain,
     )
+
+
+def _accumulate_boundary_trace(trace, entries, declared, transcript_name):
+    seen_in_session: set[str] = set()
+    for call in trace:
+        # attr(ToolCallRecord)/ dict 双风格取 name(同 _tool_trace_section 惯例——
+        # dict 记录走 .get 静默空,不炸:信息性视图不因个别坏记录中断)。
+        _name = getattr(call, "name", None)
+        if _name is None and isinstance(call, dict):
+            _name = call.get("name")
+        name = (_name or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in BUILTIN_TOOLS:
+            continue  # 内置原语/白名单:不是动作,不进视图
+        if key in seen_in_session:
+            entries[key].calls += 1
+            continue
+        seen_in_session.add(key)
+        if key not in entries:
+            hit = declared.get(key)
+            if hit is None and key.startswith("mcp__") and key.count("__") >= 2:
+                # server 级白名单(``mcp__server``,授权整个 server——cc 权限规则
+                # 的合法形态)前缀匹配:工具全名 ``mcp__server__tool`` 落回
+                # server 键;不认会把该 server 全部工具误标未声明。
+                hit = declared.get(key.rsplit("__", 1)[0])
+            entries[key] = ToolUsageEntry(
+                name=name,
+                classification="domain" if hit else "undeclared-domain",
+                declared_by=hit or "",
+                sessions=0,
+                calls=0,
+                transcripts=[],
+            )
+        entries[key].sessions += 1
+        entries[key].calls += 1
+        if not (transcript_name not in entries[key].transcripts):
+            continue
+        entries[key].transcripts.append(transcript_name)

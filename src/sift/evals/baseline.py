@@ -66,6 +66,7 @@ def skill_name_mismatch(evals_path: Path, running_skill_name: str) -> str | None
         return None
     baseline_name = meta.get("skill_name", "")
     if baseline_name and running_skill_name and baseline_name != running_skill_name:
-        return (f"baseline skill_name '{baseline_name}' ≠ running skill '{running_skill_name}'"
-                f" — possibly wrong exam paper")
+        return (
+            f"baseline skill_name '{baseline_name}' ≠ running skill '{running_skill_name}' — possibly wrong exam paper"
+        )
     return None

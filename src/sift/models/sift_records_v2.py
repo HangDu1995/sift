@@ -169,41 +169,50 @@ class SiftRecordsV2(BaseModel):
         """Reject broken capture references and corrupted content-addressed blobs."""
         for capture_id, capture in self.captures.items():
             if capture.capture_id not in (None, capture_id):
-                raise ValueError(
-                    f"capture key 与 capture_id 不一致: {capture_id}"
-                )
-            for effect in capture.effects:
-                for field_name in ("before_blob", "after_blob"):
-                    blob_ref = getattr(effect, field_name)
-                    if blob_ref is not None and blob_ref not in self.blobs:
-                        raise ValueError(
-                            f"capture {capture_id} 引用了缺失 blob {blob_ref}"
-                        )
+                raise ValueError(f"capture key 与 capture_id 不一致: {capture_id}")
+            _validate_capture_blobs(capture, self, capture_id)
 
-        referenced_capture_ids = {
-            tool_call.capture_id
-            for record in self.records
-            for tool_call in record.tool_calls
-            if tool_call.capture_id is not None
-        }
+        referenced_capture_ids = _referenced_capture_ids(self.records)
         missing_captures = sorted(referenced_capture_ids - self.captures.keys())
         if missing_captures:
-            raise ValueError(
-                "tool call 引用了缺失 capture " + ", ".join(missing_captures)
-            )
+            raise ValueError("tool call 引用了缺失 capture " + ", ".join(missing_captures))
 
-        for digest, blob in self.blobs.items():
-            try:
-                raw = (
-                    blob.content.encode("utf-8")
-                    if blob.encoding == "utf-8"
-                    else base64.b64decode(blob.content, validate=True)
-                )
-            except (ValueError, TypeError) as exc:
-                raise ValueError(f"blob {digest} 内容或编码无效") from exc
-            expected = digest.removeprefix("sha256:")
-            if hashlib.sha256(raw).hexdigest() != expected:
-                raise ValueError(f"blob {digest} SHA-256 校验失败")
-            if blob.size is not None and blob.size != len(raw):
-                raise ValueError(f"blob {digest} size 不匹配")
+        _validate_content_blobs(self.blobs)
         return self
+
+
+def _validate_capture_blobs(capture, self, capture_id):
+    for effect in capture.effects:
+        for field_name in ("before_blob", "after_blob"):
+            blob_ref = getattr(effect, field_name)
+            if not (blob_ref is not None and blob_ref not in self.blobs):
+                continue
+            raise ValueError(f"capture {capture_id} 引用了缺失 blob {blob_ref}")
+
+
+def _validate_content_blobs(blobs):
+    for digest, blob in blobs.items():
+        try:
+            raw = (
+                blob.content.encode("utf-8")
+                if blob.encoding == "utf-8"
+                else base64.b64decode(blob.content, validate=True)
+            )
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"blob {digest} 内容或编码无效") from exc
+        expected = digest.removeprefix("sha256:")
+        if hashlib.sha256(raw).hexdigest() != expected:
+            raise ValueError(f"blob {digest} SHA-256 校验失败")
+        if not (blob.size is not None and blob.size != len(raw)):
+            continue
+        raise ValueError(f"blob {digest} size 不匹配")
+
+
+def _referenced_capture_ids(records) -> set[str]:
+    """Collect non-null capture references before validating their targets."""
+    references: set[str] = set()
+    for record in records:
+        for tool_call in record.tool_calls:
+            if tool_call.capture_id is not None:
+                references.add(tool_call.capture_id)
+    return references

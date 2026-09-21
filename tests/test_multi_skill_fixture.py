@@ -8,6 +8,7 @@ fixture(``fixtures/example-skills/multi-skill-demo/multi-skill.jsonl``)由确定
 这些是 *fixture 自身*的结构不变量(段数 / 无跨 skill 文件污染 / 子 agent 段作用域正确);
 end-to-end audit(违规检测)由 Task 4 覆盖,不在此。
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -19,7 +20,9 @@ import pytest
 from sift.audit.slice import slice_transcript
 from sift.evals.transcript import build_digest
 
-FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "example-skills" / "multi-skill-demo" / "multi-skill.jsonl"
+FIXTURE = (
+    Path(__file__).resolve().parent.parent / "fixtures" / "example-skills" / "multi-skill-demo" / "multi-skill.jsonl"
+)
 BUILDER = FIXTURE.parent / "build_multi_skill.py"
 
 LEA, CRA, RCZ = "log-error-analyzer", "code-review-auditor", "release-checklist-zh"
@@ -35,12 +38,13 @@ def _file_ops(span: list[dict]) -> list[tuple[str, str]]:
     ops: list[tuple[str, str]] = []
     for rec in span:
         for b in (rec.get("message") or {}).get("content") or []:
-            if isinstance(b, dict) and b.get("type") == "tool_use":
-                name, inp = b.get("name"), b.get("input") or {}
-                if name in ("Read", "Write", "Edit"):
-                    ops.append((name, inp.get("file_path", "")))
-                elif name == "Bash":
-                    ops.append((name, inp.get("command", "")))
+            if not (isinstance(b, dict) and b.get("type") == "tool_use"):
+                continue
+            name, inp = b.get("name"), b.get("input") or {}
+            if name in ("Read", "Write", "Edit"):
+                ops.append((name, inp.get("file_path", "")))
+            elif name == "Bash":
+                ops.append((name, inp.get("command", "")))
     return ops
 
 
@@ -56,9 +60,10 @@ def spans_by_skill():
 # ---- fixture 存在 + 与 builder 同步 ----------------------------------------
 
 
-def test_fixture_committed_and_in_sync_with_builder():
+def test_fixture_committed_and_in_sync_with_builder(monkeypatch):
     """committed jsonl 必须与确定性 builder 当前输出一致(防 builder 改了忘重生成)。"""
     assert FIXTURE.exists(), f"fixture 缺失: {FIXTURE}"
+    monkeypatch.syspath_prepend(str(BUILDER.parent))
     spec = importlib.util.spec_from_file_location("build_multi_skill", BUILDER)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -118,23 +123,37 @@ def test_rcz_span_no_log_or_src_contamination(spans_by_skill):
 
 def test_subagent_cra_span_scoped_to_agent_return(spans_by_skill):
     """子 agent 的 cra 段:全段 parent_tool_use_id 指向同一 Agent tool_use,
-    且该 Agent tool_use 出现在主作用域 lea span2 里(子 agent 返回后主段继续)。"""
-    sub_span = next(
-        s for s in spans_by_skill[CRA] if all(r.get("parent_tool_use_id") for r in s)
-    )
+    且该 Agent tool_use 出现在主作用域 lea span2 里(子 agent 返回后主段继续)。
+    """
+    sub_span = next(s for s in spans_by_skill[CRA] if all(r.get("parent_tool_use_id") for r in s))
     parents = {r["parent_tool_use_id"] for r in sub_span}
     assert len(parents) == 1, "子 agent 段应全部归同一 Agent 调用"
     agent_tid = next(iter(parents))
 
     # 该 Agent tool_use 在主作用域(某 lea span)里能找到,且 id 匹配
+    found = _has_parent_agent_call(spans_by_skill, agent_tid)
+    assert found, f"子 agent tid {agent_tid} 未在主作用域 Agent tool_use 中找到"
+
+
+def _has_parent_agent_call(spans_by_skill, agent_tid):
     found = False
     for span in spans_by_skill[LEA]:
-        for rec in span:
-            for b in (rec.get("message") or {}).get("content") or []:
-                if (isinstance(b, dict) and b.get("type") == "tool_use"
-                        and b.get("name") == "Agent" and b.get("id") == agent_tid):
-                    found = True
-    assert found, f"子 agent tid {agent_tid} 未在主作用域 Agent tool_use 中找到"
+        found = _span_has_agent_call(span, agent_tid, found)
+    return found
+
+
+def _span_has_agent_call(span, agent_tid, found):
+    for rec in span:
+        for b in (rec.get("message") or {}).get("content") or []:
+            if not (
+                isinstance(b, dict)
+                and b.get("type") == "tool_use"
+                and b.get("name") == "Agent"
+                and b.get("id") == agent_tid
+            ):
+                continue
+            found = True
+    return found
 
 
 def test_post_subagent_main_work_attributed_to_lea_not_cra(spans_by_skill):

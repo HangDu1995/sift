@@ -25,10 +25,15 @@
 重新生成(两份一起):
     .venv/bin/python fixtures/example-skills/multi-skill-demo/build_multi_skill.py
 """
+
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+from fixture_support import output as _output
+from fixture_support import review_issue, review_report
 
 SESSION = "synth-multi-skill"
 MODEL = "glm-5.2"
@@ -176,21 +181,22 @@ def fulfill(order):
 # ---- 产物:违规版(BAD,给 audit)------------------------------------------
 
 # VIOLATION: 缺 total_errors(必填整数计数) + E9001 不在码表却当已知码分类(应归 unclassified)
-ERROR_REPORT_BAD = json.dumps({
-    "errors": [
-        {"code": "E1002", "message": "disk quota exceeded on /var/data", "line_number": 1},
-        {"code": "E9001", "message": "unknown auth failure for user alice", "line_number": 3},
-    ],
-}, ensure_ascii=False, indent=2)
+ERROR_REPORT_BAD = json.dumps(
+    {
+        "errors": [
+            {"code": "E1002", "message": "disk quota exceeded on /var/data", "line_number": 1},
+            {"code": "E9001", "message": "unknown auth failure for user alice", "line_number": 3},
+        ],
+    },
+    ensure_ascii=False,
+    indent=2,
+)
 
 # VIOLATION: 缺 summary(必填 string)
-REVIEW_REPORT_BAD = json.dumps({
-    "file": "src/payment.py",
-    "issues": [
-        {"line": 2, "severity": "high", "category": "assignment-in-conditional",
-         "description": "assignment in conditional; use == instead of ="},
-    ],
-}, ensure_ascii=False, indent=2)
+REVIEW_REPORT_BAD = review_report(
+    "src/payment.py",
+    review_issue("high", "assignment-in-conditional", "assignment in conditional; use == instead of ="),
+)
 
 # VIOLATION: 缺 "### 修复"(skill changelog 格式要求 新增 + 修复 两段)
 CHANGELOG_BAD = """\
@@ -200,36 +206,33 @@ CHANGELOG_BAD = """\
 """
 
 # 子 agent 的 review-report.json(同样缺 summary)
-REVIEW_REPORT_BAD_SUB = json.dumps({
-    "file": "src/orders.py",
-    "issues": [
-        {"line": 2, "severity": "medium", "category": "bare-except",
-         "description": "bare except swallows all errors"},
-    ],
-}, ensure_ascii=False, indent=2)
+REVIEW_REPORT_BAD_SUB = review_report(
+    "src/orders.py", review_issue("medium", "bare-except", "bare except swallows all errors")
+)
 
 # ---- 产物:好版本(GOOD,给 mining 出卷)----------------------------------
 
 # CORRECT: total_errors=1(只 E1002 已知)、E9001 不在码表 → 归 unclassified(不编造)
-ERROR_REPORT_GOOD = json.dumps({
-    "total_errors": 1,
-    "errors": [
-        {"code": "E1002", "message": "disk quota exceeded on /var/data", "line_number": 1},
-    ],
-    "unclassified": [
-        {"message": "unknown auth failure for user alice", "line_number": 3},
-    ],
-}, ensure_ascii=False, indent=2)
+ERROR_REPORT_GOOD = json.dumps(
+    {
+        "total_errors": 1,
+        "errors": [
+            {"code": "E1002", "message": "disk quota exceeded on /var/data", "line_number": 1},
+        ],
+        "unclassified": [
+            {"message": "unknown auth failure for user alice", "line_number": 3},
+        ],
+    },
+    ensure_ascii=False,
+    indent=2,
+)
 
 # CORRECT: 补 summary
-REVIEW_REPORT_GOOD = json.dumps({
-    "file": "src/payment.py",
-    "summary": "1 high-severity issue found: assignment in conditional on line 2.",
-    "issues": [
-        {"line": 2, "severity": "high", "category": "assignment-in-conditional",
-         "description": "assignment in conditional; use == instead of ="},
-    ],
-}, ensure_ascii=False, indent=2)
+REVIEW_REPORT_GOOD = review_report(
+    "src/payment.py",
+    review_issue("high", "assignment-in-conditional", "assignment in conditional; use == instead of ="),
+    "1 high-severity issue found: assignment in conditional on line 2.",
+)
 
 # CORRECT: 补 "### 修复" 段
 CHANGELOG_GOOD = """\
@@ -240,17 +243,67 @@ CHANGELOG_GOOD = """\
 - 修复 charge 函数把赋值当条件的 bug
 """
 
-REVIEW_REPORT_GOOD_SUB = json.dumps({
-    "file": "src/orders.py",
-    "summary": "1 medium-severity issue found: bare except on line 2.",
-    "issues": [
-        {"line": 2, "severity": "medium", "category": "bare-except",
-         "description": "bare except swallows all errors"},
-    ],
-}, ensure_ascii=False, indent=2)
+REVIEW_REPORT_GOOD_SUB = review_report(
+    "src/orders.py",
+    review_issue("medium", "bare-except", "bare except swallows all errors"),
+    "1 medium-severity issue found: bare except on line 2.",
+)
 
 
 # ---- 拼 transcript --------------------------------------------------------
+
+
+def _build_subagent_review(review_report_sub: str) -> None:
+    """生成完整子代理派发、执行和回报段，保持全局 ID 与作用域顺序。"""
+    agent_rec, agent_tid = tool_use(
+        "Agent",
+        {
+            "description": "Review orders module",
+            "subagent_type": "general-purpose",
+            "prompt": (
+                "Use the code-review-auditor skill to review src/orders.py for bugs, then write review-report.json."
+            ),
+        },
+        parent=None,  # 主作用域发起
+    )
+    R.append(agent_rec)
+
+    # 子 agent 内部记录(parent_tool_use_id = agent_tid → 归子作用域)
+    invoke_skill(CRA, parent=agent_tid)
+    read_file("src/orders.py", ORDERS_PY, parent=agent_tid)
+    bash("grep -n except src/orders.py", "2:    except:", parent=agent_tid, desc="find except blocks")
+    write_file("review-report.json", review_report_sub, parent=agent_tid)
+
+    # Agent tool_result:子 agent 返回(主作用域记录,tool_use_id == agent_tid)。
+    # 这条主作用域 record 触发 slicer 的 depth-1 闭包,结束子 agent 作用域。
+    R.append(
+        user(
+            [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": agent_tid,
+                    "content": [{"type": "text", "text": "Reviewed the module and wrote the review report."}],
+                }
+            ],
+            parent=None,
+        )
+    )
+
+
+def _build_system_record() -> None:
+    """写入固定初始化记录，不消耗递增工具 ID。"""
+    R.append(
+        {
+            "type": "system",
+            "subtype": "init",
+            "cwd": "/tmp/multi-skill-demo",
+            "session_id": SESSION,
+            "tools": ["Skill", "Read", "Write", "Edit", "Bash", "Agent"],
+            "model": MODEL + "[1m]",
+            "uuid": "init-000",
+        }
+    )
+
 
 def build(clean: bool = False) -> list[dict]:
     """组装 transcript records。clean=False → 违规版(audit);True → 好版本(mining)。
@@ -262,17 +315,12 @@ def build(clean: bool = False) -> list[dict]:
     R.clear()
 
     error_report = ERROR_REPORT_GOOD if clean else ERROR_REPORT_BAD
-    review_report = REVIEW_REPORT_GOOD if clean else REVIEW_REPORT_BAD
+    selected_review_report = REVIEW_REPORT_GOOD if clean else REVIEW_REPORT_BAD
     review_report_sub = REVIEW_REPORT_GOOD_SUB if clean else REVIEW_REPORT_BAD_SUB
     changelog = CHANGELOG_GOOD if clean else CHANGELOG_BAD
 
     # 系统初始化(精简,仅示结构)。
-    R.append({
-        "type": "system", "subtype": "init", "cwd": "/tmp/multi-skill-demo",
-        "session_id": SESSION,
-        "tools": ["Skill", "Read", "Write", "Edit", "Bash", "Agent"],
-        "model": MODEL + "[1m]", "uuid": "init-000",
-    })
+    _build_system_record()
 
     # === Step 1: Skill(log-error-analyzer) 第一次调用 ==========================
     invoke_skill(LEA)
@@ -284,7 +332,7 @@ def build(clean: bool = False) -> list[dict]:
     invoke_skill(CRA)
     read_file("src/payment.py", PAYMENT_PY)
     read_file("references/code-patterns.md", CODE_PATTERNS)
-    write_file("review-report.json", review_report)
+    write_file("review-report.json", selected_review_report)
 
     # === Step 3: Skill(release-checklist-zh) ===================================
     invoke_skill(RCZ)
@@ -300,47 +348,28 @@ def build(clean: bool = False) -> list[dict]:
     write_file("error-report.json", error_report)
 
     # === Step 5: 主 agent 起 Agent → 子 agent 调 Skill(code-review-auditor)=====
-    agent_rec, agent_tid = tool_use(
-        "Agent",
-        {
-            "description": "Review orders module",
-            "subagent_type": "general-purpose",
-            "prompt": (
-                "Use the code-review-auditor skill to review src/orders.py for bugs, "
-                "then write review-report.json."
-            ),
-        },
-        parent=None,                                            # 主作用域发起
-    )
-    R.append(agent_rec)
-
-    # 子 agent 内部记录(parent_tool_use_id = agent_tid → 归子作用域)
-    invoke_skill(CRA, parent=agent_tid)
-    read_file("src/orders.py", ORDERS_PY, parent=agent_tid)
-    bash("grep -n except src/orders.py", "2:    except:", parent=agent_tid, desc="find except blocks")
-    write_file("review-report.json", review_report_sub, parent=agent_tid)
-
-    # Agent tool_result:子 agent 返回(主作用域记录,tool_use_id == agent_tid)。
-    # 这条主作用域 record 触发 slicer 的 depth-1 闭包,结束子 agent 作用域。
-    R.append(user(
-        [{"type": "tool_result", "tool_use_id": agent_tid,
-          "content": [{"type": "text", "text": "Reviewed the module and wrote the review report."}]}],
-        parent=None,
-    ))
+    _build_subagent_review(review_report_sub)
 
     # === Step 6: 主 agent 继续 log-error-analyzer 工作(子 agent 返回后)=========
     # 关键污染测试:此时主作用域 active 仍是 log-error-analyzer(子 agent 调的 cra 不应改写它),
     # 所以这里的 logs/ 工作归 lea span2,不归 cra。
     read_file("logs/security.log", LOG_SECURITY)
     write_file("error-report.json", error_report)
-    R.append(text_block("Triage complete: 3 error lines classified across logs/app.log, logs/auth.log, logs/security.log."))
+    R.append(
+        text_block("Triage complete: 3 error lines classified across logs/app.log, logs/auth.log, logs/security.log.")
+    )
 
     # 最终结果行(精简)。
-    R.append({
-        "type": "result", "subtype": "success", "is_error": False,
-        "result": "Multi-skill triage complete.", "session_id": SESSION,
-        "uuid": "result-000",
-    })
+    R.append(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "Multi-skill triage complete.",
+            "session_id": SESSION,
+            "uuid": "result-000",
+        }
+    )
 
     return list(R)
 
@@ -354,7 +383,9 @@ def main() -> None:
             "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n",
             encoding="utf-8",
         )
-        print(f"wrote {len(records)} records -> {out}{' (clean/好版本)' if clean else ' (violation/违规版)'}")
+        _output(
+            f"wrote {len(records)} records -> {out}{' (clean/好版本)' if clean else ' (violation/违规版)'}", sys.stdout
+        )
 
 
 if __name__ == "__main__":

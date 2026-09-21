@@ -3,17 +3,17 @@
 
 替代固定 threading.Semaphore,动态调在飞数上限,撞限流乘性减、连续成功加性增。
 """
+
 from __future__ import annotations
 
 import json
 import threading
 
 import pytest
-
 from sift.audit import auditor
+from sift.audit.judge_context import BatchJudgeOptions, JudgeBatch
 from sift.concurrency import AdaptiveConcurrencyLimiter
-from sift.utils import _HttpRateLimited
-
+from sift.llm_transport import HttpRateLimited
 
 # ── 基础门控(Semaphore 语义)─────────────────────────────────────────────
 
@@ -159,7 +159,8 @@ def test_blocking_acquire_waits_for_release():
 
 def test_on_throttled_lowering_keeps_inflight_blocked():
     """降 ceiling 后,in_flight 仍 >= 新 ceiling → 新 acquire 继续阻塞,
-    直到在飞 release 自然减到 < ceiling 才放行(验证不强杀、不超限)。"""
+    直到在飞 release 自然减到 < ceiling 才放行(验证不强杀、不超限)。
+    """
     lim = AdaptiveConcurrencyLimiter(initial=4)
     for _ in range(4):  # 占满 4
         lim.acquire()
@@ -192,19 +193,20 @@ def test_on_success_raising_wakes_waiter():
     t.join()
 
 
-# ── _judge_batch_with_retry 接 AIMD(集成)─────────────────────────────────
+# ── judge_batch_with_retry 接 AIMD(集成)─────────────────────────────────
 
 
 def test_judge_batch_aimd_on_rate_limit_then_success(monkeypatch):
-    """call_claude 先抛 _HttpRateLimited 再成功 → on_throttled(降 ceiling)+ 退避 sleep +
-    成功后 on_success。"""
-    auditor._LLM_LIMITER.reset(6)
+    """call_claude 先抛 HttpRateLimited 再成功 → on_throttled(降 ceiling)+ 退避 sleep +
+    成功后 on_success。
+    """
+    auditor.LLM_LIMITER.reset(6)
     seq = []
 
     def fake_call(prompt, **kw):
         seq.append(1)
         if len(seq) == 1:
-            raise _HttpRateLimited("429 test")
+            raise HttpRateLimited("429 test")
         return '[{"index":0,"verdict":"pass","evidence":"ok"}]'
 
     monkeypatch.setattr(auditor, "call_claude", fake_call)
@@ -212,104 +214,113 @@ def test_judge_batch_aimd_on_rate_limit_then_success(monkeypatch):
     monkeypatch.setattr(auditor.time, "sleep", lambda s: sleeps.append(s))
     monkeypatch.setattr(auditor.random, "uniform", lambda a, b: 0.0)
 
-    result = auditor._judge_batch_with_retry(
-        "p", None, 10, lambda t, n: json.loads(t), 1,
-        on_progress=None, label="测", k=1, total=1,
-        is_unparsed=lambda v: not v, transport="http",
+    result = auditor.judge_batch_with_retry(
+        parse_fn=lambda t, n: json.loads(t),
+        is_unparsed=lambda v: not v,
+        batch=JudgeBatch(prompt="p", count=1, number=1, total=1),
+        options=BatchJudgeOptions(model=None, timeout=10, on_progress=None, label="测", transport="http"),
     )
     assert result == [{"index": 0, "verdict": "pass", "evidence": "ok"}]
-    assert auditor._LLM_LIMITER.ceiling == 3  # 6//2 降了
-    assert auditor._RATE_LIMIT_BACKOFF in sleeps  # AIMD 退避发生
-    auditor._LLM_LIMITER.reset(6)
+    assert auditor.LLM_LIMITER.ceiling == 3  # 6//2 降了
+    assert auditor.RATE_LIMIT_BACKOFF in sleeps  # AIMD 退避发生
+    auditor.LLM_LIMITER.reset(6)
 
 
 def test_judge_batch_success_keeps_ceiling_below_probe(monkeypatch):
     """成功 → on_success(streak+1),但一次 < probe_every(8),ceiling 不变。"""
-    auditor._LLM_LIMITER.reset(6)
-    monkeypatch.setattr(auditor, "call_claude",
-                        lambda *a, **k: '[{"index":0,"verdict":"pass","evidence":"ok"}]')
+    auditor.LLM_LIMITER.reset(6)
+    monkeypatch.setattr(auditor, "call_claude", lambda *a, **k: '[{"index":0,"verdict":"pass","evidence":"ok"}]')
     monkeypatch.setattr(auditor.time, "sleep", lambda s: None)
-    auditor._judge_batch_with_retry(
-        "p", None, 10, lambda t, n: json.loads(t), 1,
-        on_progress=None, label="测", k=1, total=1,
-        is_unparsed=lambda v: not v, transport="http",
+    auditor.judge_batch_with_retry(
+        parse_fn=lambda t, n: json.loads(t),
+        is_unparsed=lambda v: not v,
+        batch=JudgeBatch(prompt="p", count=1, number=1, total=1),
+        options=BatchJudgeOptions(model=None, timeout=10, on_progress=None, label="测", transport="http"),
     )
-    assert auditor._LLM_LIMITER.ceiling == 6  # 一次成功不够 probe_every,不升不降
-    auditor._LLM_LIMITER.reset(6)
+    assert auditor.LLM_LIMITER.ceiling == 6  # 一次成功不够 probe_every,不升不降
+    auditor.LLM_LIMITER.reset(6)
 
 
 def test_judge_batch_fixed_mode_skips_aimd_on_rate_limit(monkeypatch):
     """固定模式(set_fixed)下撞 429:on_throttled no-op(ceiling 不降),但仍退避重试救回。"""
-    auditor._LLM_LIMITER.set_fixed(4)
+    auditor.LLM_LIMITER.set_fixed(4)
     seq = []
 
     def fake_call(prompt, **kw):
         seq.append(1)
         if len(seq) == 1:
-            raise _HttpRateLimited("429")
+            raise HttpRateLimited("429")
         return '[{"index":0,"verdict":"pass","evidence":"ok"}]'
 
     monkeypatch.setattr(auditor, "call_claude", fake_call)
     monkeypatch.setattr(auditor.time, "sleep", lambda s: None)
     monkeypatch.setattr(auditor.random, "uniform", lambda a, b: 0.0)
-    auditor._judge_batch_with_retry(
-        "p", None, 10, lambda t, n: json.loads(t), 1,
-        on_progress=None, label="测", k=1, total=1,
-        is_unparsed=lambda v: not v, transport="http",
+    auditor.judge_batch_with_retry(
+        parse_fn=lambda t, n: json.loads(t),
+        is_unparsed=lambda v: not v,
+        batch=JudgeBatch(prompt="p", count=1, number=1, total=1),
+        options=BatchJudgeOptions(model=None, timeout=10, on_progress=None, label="测", transport="http"),
     )
-    assert auditor._LLM_LIMITER.ceiling == 4  # 固定模式不降
-    assert auditor._LLM_LIMITER.adaptive is False
-    auditor._LLM_LIMITER.reset(6)
+    assert auditor.LLM_LIMITER.ceiling == 4  # 固定模式不降
+    assert auditor.LLM_LIMITER.adaptive is False
+    auditor.LLM_LIMITER.reset(6)
 
 
 def test_judge_batch_emits_throttle_progress(monkeypatch):
     """撞 429 时 on_progress 收到「撞限流…并发降至 N」进度行(可观测,诊断用)。"""
-    auditor._LLM_LIMITER.reset(8)
+    auditor.LLM_LIMITER.reset(8)
     seq = []
 
     def fake_call(prompt, **kw):
         seq.append(1)
         if len(seq) == 1:
-            raise _HttpRateLimited("429")
+            raise HttpRateLimited("429")
         return '[{"index":0,"verdict":"pass","evidence":"ok"}]'
 
     monkeypatch.setattr(auditor, "call_claude", fake_call)
     monkeypatch.setattr(auditor.time, "sleep", lambda s: None)
     monkeypatch.setattr(auditor.random, "uniform", lambda a, b: 0.0)
     progs: list[str] = []
-    auditor._judge_batch_with_retry(
-        "p", None, 10, lambda t, n: json.loads(t), 1,
-        on_progress=progs.append, label="测", k=1, total=1,
-        is_unparsed=lambda v: not v, transport="http",
+    auditor.judge_batch_with_retry(
+        parse_fn=lambda t, n: json.loads(t),
+        is_unparsed=lambda v: not v,
+        batch=JudgeBatch(prompt="p", count=1, number=1, total=1),
+        options=BatchJudgeOptions(model=None, timeout=10, on_progress=progs.append, label="测", transport="http"),
     )
     assert any("撞限流" in m and "降至 4" in m for m in progs)  # 8//2=4
-    auditor._LLM_LIMITER.reset(6)
+    auditor.LLM_LIMITER.reset(6)
 
 
 def test_limiter_singleton_shared_across_modules():
-    """_LLM_LIMITER 模块级单例:auditor(上提后 from-import)与 concurrency 必须同一对象。
-    否则 audit 与 eval 侧各用一个 → 共享容量失效(B2 防回归)。"""
-    from sift.concurrency import _LLM_LIMITER as cc_limiter
-    assert auditor._LLM_LIMITER is cc_limiter
-    assert auditor._LLM_SEMAPHORE is cc_limiter  # 别名也指向同一单例
+    """LLM_LIMITER 模块级单例:auditor(上提后 from-import)与 concurrency 必须同一对象。
+    否则 audit 与 eval 侧各用一个 → 共享容量失效(B2 防回归)。
+    """
+    from sift import concurrency
+    from sift.concurrency import LLM_LIMITER as cc_limiter
+
+    assert auditor.LLM_LIMITER is cc_limiter
+    assert concurrency.LLM_SEMAPHORE is cc_limiter  # 别名也指向同一单例
 
 
-# ── call_llm_with_retry(调用级重试壳:AIMD 门控 + 429 退避 + 耗尽抛 _LLMRetryExhausted)──
+# ── call_llm_with_retry(调用级重试壳:AIMD 门控 + 429 退避 + 耗尽抛 LLMRetryExhausted)──
 
 
 def _reset_limiter_and_time(monkeypatch):
     import sift.concurrency as cc
-    cc._LLM_LIMITER.reset(cc._MAX_BATCH_CONCURRENT)
+
+    cc.LLM_LIMITER.reset(cc.MAX_BATCH_CONCURRENT)
     monkeypatch.setattr(cc.time, "sleep", lambda *a: None)
     monkeypatch.setattr(cc.random, "uniform", lambda *a: 0.0)
     return cc
 
 
 def test_llm_retry_exhausted_not_runtime_error():
-    """_LLMRetryExhausted 非 RuntimeError 子类(镜像 _HttpRateLimited,防被通用 except 误吞,
-    调用方须显式 catch 才降级)。"""
+    """LLMRetryExhausted 非 RuntimeError 子类(镜像 HttpRateLimited,防被通用 except 误吞,
+    调用方须显式 catch 才降级)。
+    """
     import sift.concurrency as cc
-    assert not issubclass(cc._LLMRetryExhausted, RuntimeError)
+
+    assert not issubclass(cc.LLMRetryExhausted, RuntimeError)
 
 
 def test_call_llm_with_retry_success_calls_on_success(monkeypatch):
@@ -317,14 +328,15 @@ def test_call_llm_with_retry_success_calls_on_success(monkeypatch):
     cc = _reset_limiter_and_time(monkeypatch)
     monkeypatch.setattr(cc, "call_claude", lambda *a, **k: "ok")
     spied = []
-    monkeypatch.setattr(cc._LLM_LIMITER, "on_success", lambda: spied.append(1))
+    monkeypatch.setattr(cc.LLM_LIMITER, "on_success", lambda: spied.append(1))
     assert cc.call_llm_with_retry("p") == "ok"
     assert spied == [1]
 
 
 def test_call_llm_with_retry_forwards_on_progress_to_call_claude(monkeypatch):
     """on_progress/max_tokens 透传进 call_claude(进度行从这走;max_tokens = 调用方按
-    工作量给的首档上限,suggest 按簇数)。"""
+    工作量给的首档上限,suggest 按簇数)。
+    """
     cc = _reset_limiter_and_time(monkeypatch)
     captured = {}
 
@@ -335,12 +347,12 @@ def test_call_llm_with_retry_forwards_on_progress_to_call_claude(monkeypatch):
     monkeypatch.setattr(cc, "call_claude", fake_call_claude)
     assert cc.call_llm_with_retry("p", on_progress=print, max_tokens=12345) == "ok"
     assert captured.get("on_progress") is print
-    assert captured.get("max_tokens") == 12345
+    assert captured["config"].max_tokens == 12345
 
 
 def test_call_llm_with_retry_429_then_success_calls_on_throttled(monkeypatch):
     cc = _reset_limiter_and_time(monkeypatch)
-    seq = [_HttpRateLimited("429"), "ok"]
+    seq = [HttpRateLimited("429"), "ok"]
 
     def fake(*a, **k):
         v = seq.pop(0)
@@ -350,21 +362,21 @@ def test_call_llm_with_retry_429_then_success_calls_on_throttled(monkeypatch):
 
     monkeypatch.setattr(cc, "call_claude", fake)
     thr = []
-    monkeypatch.setattr(cc._LLM_LIMITER, "on_throttled", lambda: thr.append(1))
-    monkeypatch.setattr(cc._LLM_LIMITER, "on_success", lambda: None)
+    monkeypatch.setattr(cc.LLM_LIMITER, "on_throttled", lambda: thr.append(1))
+    monkeypatch.setattr(cc.LLM_LIMITER, "on_success", lambda: None)
     assert cc.call_llm_with_retry("p") == "ok"
-    assert thr == [1]   # 429 必触发降并发
+    assert thr == [1]  # 429 必触发降并发
 
 
 def test_call_llm_with_retry_exhaustion_raises(monkeypatch):
     cc = _reset_limiter_and_time(monkeypatch)
 
     def always_429(*a, **k):
-        raise _HttpRateLimited("429")
+        raise HttpRateLimited("429")
 
     monkeypatch.setattr(cc, "call_claude", always_429)
-    monkeypatch.setattr(cc._LLM_LIMITER, "on_throttled", lambda: None)
-    with pytest.raises(cc._LLMRetryExhausted):
+    monkeypatch.setattr(cc.LLM_LIMITER, "on_throttled", lambda: None)
+    with pytest.raises(cc.LLMRetryExhausted):
         cc.call_llm_with_retry("p", max_retries=1)
 
 
@@ -379,5 +391,5 @@ def test_call_llm_with_retry_runtime_error_retried(monkeypatch):
         return v
 
     monkeypatch.setattr(cc, "call_claude", fake)
-    monkeypatch.setattr(cc._LLM_LIMITER, "on_success", lambda: None)
+    monkeypatch.setattr(cc.LLM_LIMITER, "on_success", lambda: None)
     assert cc.call_llm_with_retry("p") == "ok"

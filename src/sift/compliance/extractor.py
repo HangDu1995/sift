@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import re
 
-from sift.i18n import ANTI_FABRICATION_CN  # 反捏造词与 static_analysis/checks.py 共用(P2-13)
+from sift.i18n import (
+    ANTI_FABRICATION_CN,  # 反捏造词与 static_analysis/checks.py 共用(P2-13)
+)
 from sift.models import (
     CheckMethod,
     InstructionCheck,
@@ -24,25 +26,79 @@ _TOOL_VERBS_CN: tuple[str, ...] = ("运行", "执行", "调用", "启动", "跑"
 # 实测活体命中)被误抽,下游 match_tool_call 条件3 `\bJSON\b` 非确定性命中(读过 config.json
 # → 假 PASS;没读 → 假 FAIL)→ verdict 噪声。裸用一律停用;含连字符复合名(csv-parser)或
 # CLI 名(psql)整体抽出、不受影响(见 test_tool_requirement_stopwords_*)。
-_TOOL_STOPWORDS: frozenset[str] = frozenset({
-    # (a) 虚词/碎片:"动词 + 这些词"不是真工具名。
-    "when", "and", "the", "a", "an", "full", "all", "this", "that", "it", "they",
-    "you", "your", "their", "concurrently", "simultaneously", "together", "in",
-    "on", "at", "to", "of", "for", "with", "by", "from", "both", "each", "some",
-    "any", "more",
-    # (b) 格式/协议/标准名:裸用(「使用 JSON」「使用 API」)被误抽成工具名,但它们不是工具。
-    "json", "yaml", "xml", "html", "css", "csv", "tsv",
-    "api", "http", "https", "rest",
-    "sql",
-    "url", "uri",
-})
+_TOOL_STOPWORDS: frozenset[str] = frozenset(
+    {
+        # (a) 虚词/碎片:"动词 + 这些词"不是真工具名。
+        "when",
+        "and",
+        "the",
+        "a",
+        "an",
+        "full",
+        "all",
+        "this",
+        "that",
+        "it",
+        "they",
+        "you",
+        "your",
+        "their",
+        "concurrently",
+        "simultaneously",
+        "together",
+        "in",
+        "on",
+        "at",
+        "to",
+        "of",
+        "for",
+        "with",
+        "by",
+        "from",
+        "both",
+        "each",
+        "some",
+        "any",
+        "more",
+        # (b) 格式/协议/标准名:裸用(「使用 JSON」「使用 API」)被误抽成工具名,但它们不是工具。
+        "json",
+        "yaml",
+        "xml",
+        "html",
+        "css",
+        "csv",
+        "tsv",
+        "api",
+        "http",
+        "https",
+        "rest",
+        "sql",
+        "url",
+        "uri",
+    }
+)
 
 
-_PARAM_STOPPERS: frozenset[str] = frozenset({
-    # 连接词:其后通常是下一个工具/另一个动作,不是当前工具的参数 → 遇到即停(一行多工具保护)。
-    "和", "或", "还有", "以及", "然后", "并", "接着", "同时",
-    "and", "or", "then", "also", "plus", "+", "&",
-})
+_PARAM_STOPPERS: frozenset[str] = frozenset(
+    {
+        # 连接词:其后通常是下一个工具/另一个动作,不是当前工具的参数 → 遇到即停(一行多工具保护)。
+        "和",
+        "或",
+        "还有",
+        "以及",
+        "然后",
+        "并",
+        "接着",
+        "同时",
+        "and",
+        "or",
+        "then",
+        "also",
+        "plus",
+        "+",
+        "&",
+    }
+)
 
 # 参考文件/脚本路径(references/X | scripts/X)。_extract_reference_usage 抽指令用,
 # _dedup_covered_reference_usage 判覆盖用——同一份正则,避免两处漂移。
@@ -115,25 +171,6 @@ def _heading_at(headings: list[tuple[int, str]], offset: int) -> str:
 
 
 class InstructionExtractor:
-    def extract(self, body: str) -> list[InstructionCheck]:
-        checks: list[InstructionCheck] = []
-        sections = self._split_sections(body)
-        # body 级 extractor(跨章节扫描)的 match 偏移 → 真实标题回填用;一趟算好共用。
-        headings = _heading_map(body)
-
-        for section_name, section_text in sections:
-            checks.extend(self._extract_heading_steps(section_name, section_text))
-            checks.extend(self._extract_tool_requirements(section_name, section_text))
-
-        checks.extend(self._extract_constraints(body, headings))
-        checks.extend(self._extract_anti_fabrication(body, headings))
-        checks.extend(self._extract_output_format(body))
-        checks.extend(self._extract_reference_usage(body, headings))
-
-        checks = self._dedup_covered_reference_usage(checks)
-
-        return checks
-
     @staticmethod
     def _dedup_covered_reference_usage(checks: list[InstructionCheck]) -> list[InstructionCheck]:
         """删掉被更忠实指令覆盖的 REFERENCE_USAGE 文件级副本。
@@ -152,15 +189,13 @@ class InstructionExtractor:
         """
         covered: set[str] = set()
         for c in checks:
-            if c.source != InstructionSource.REFERENCE_USAGE:
-                covered.update(_REF_PATH_RE.findall(c.instruction_text or ""))
-        return [
-            c for c in checks
-            if c.source != InstructionSource.REFERENCE_USAGE
-            or c.params.get("script_path") not in covered
-        ]
+            if not (c.source != InstructionSource.REFERENCE_USAGE):
+                continue
+            covered.update(_REF_PATH_RE.findall(c.instruction_text or ""))
+        return [c for c in checks if _reference_is_uncovered(c, covered)]
 
-    def _split_sections(self, body: str) -> list[tuple[str, str]]:
+    @staticmethod
+    def _split_sections(body: str) -> list[tuple[str, str]]:
         sections: list[tuple[str, str]] = []
         current_heading = "Root"
         current_lines: list[str] = []
@@ -196,14 +231,12 @@ class InstructionExtractor:
         # body 级指令的 excerpt 全部指向前一条;docstring 语义 = 所在 bullet)。
         line_end = text.find("\n", anchor)
         window = text[: (line_end if line_end != -1 else len(text)) + 1]
-        item_starts = [
-            m.start() for m in re.finditer(r"(?m)^[ \t]*([-*+]\s+|\d+\.\s+)", window)
-        ]
+        item_starts = [m.start() for m in re.finditer(r"(?m)^[ \t]*([-*+]\s+|\d+\.\s+)", window)]
         if not item_starts:
             # 散文:回退到 anchor 所在行(整行,可能自带主语)
             line_start = text.rfind("\n", 0, anchor) + 1
             line_end = text.find("\n", anchor)
-            return _clean_md(text[line_start : line_end if line_end != -1 else len(text)])
+            return _clean_md(text[line_start: line_end if line_end != -1 else len(text)])
         bullet_start = item_starts[-1]
         indent_m = re.match(r"[ \t]*", text[bullet_start:])  # 列表项起始行的前导空白(恒匹配)
         base_indent = len(indent_m.group(0)) if indent_m else 0
@@ -212,7 +245,7 @@ class InstructionExtractor:
         pos = pos + 1 if pos != -1 else len(text)
         while pos < len(text):
             nl = text.find("\n", pos)
-            seg = text[pos : nl if nl != -1 else len(text)]
+            seg = text[pos: nl if nl != -1 else len(text)]
             if seg.strip() == "":
                 break  # 空行终止(紧凑 list;loose list 跨空行不常见,保守)
             indent = len(seg) - len(seg.lstrip(" \t"))
@@ -220,6 +253,87 @@ class InstructionExtractor:
                 break  # 缩进 ≤ 列表项 → 不属本 bullet(下一列表项 / 同级 / 散文)
             pos = nl + 1 if nl != -1 else len(text)
         return _clean_md(text[bullet_start:pos])
+
+    @staticmethod
+    def _extract_reference_usage(body: str, headings: list[tuple[int, str]]) -> list[InstructionCheck]:
+        checks: list[InstructionCheck] = []
+        # finditer 而非 findall:出现序恒等(下游有序去重不变),额外记每个 ref 首次
+        # 出现的偏移供 source_section 回填真实标题。
+        first_offset: dict[str, int] = {}
+        for m in _REF_PATH_RE.finditer(body):
+            first_offset.setdefault(m.group(0), m.start())
+        # 区分两类(P0-1d follow-up,修路由型 skill 假红灯 —— 见 §41 观察 1):
+        # - 类别级 references/<X>(X 无扩展名 = 目录/类别):路由型 skill 的**互斥备选**,
+        #   每任务只 1 类适用。合并成一条"查阅参考资料"(查任意 references/ 读)。
+        #   否则 N 类互斥里 N-1 个不适用的会被算成假 FAIL —— ascendc-tiling-design
+        #   曾 1/7 假红灯:softmax 属 reduction,Claude 只读 reduction 是对的,另 6 类
+        #   本就不适用却算 FAIL,prog 率被虚低。
+        # - 文件级(references/<X>.md 或 scripts/<X>):独立必读,各自一条查真 Read
+        #   (读 1/3 不该算全过)。
+        # 有序去重(set 跨进程顺序随 PYTHONHASHSEED 漂 → REFERENCE_USAGE 指令顺序随机
+        # → refine/headline 缓存 key 跨进程变 = 必 miss;judge 分批(每批 _MAX_LLM_IN_BATCH
+        # 条)边界也随顺序变 = verdict 跨进程漂)。按 refs(_REF_PATH_RE.findall 的确定性
+        # 出现序)去重,顺序跨进程稳定,缓存才命中、verdict 才可复现。
+        category_refs: list[tuple[str, int]] = []
+        file_refs: list[tuple[str, int]] = []
+        for ref, offset in first_offset.items():
+            seg = ref.split("/")[-1]
+            if ref.startswith("references/") and "." not in seg:
+                category_refs.append((ref, offset))
+            else:
+                file_refs.append((ref, offset))
+        if category_refs:
+            checks.append(
+                InstructionCheck(
+                    source=InstructionSource.REFERENCE_USAGE,
+                    instruction_text=(
+                        f"Consult reference material ({len(category_refs)} alternative category references)"
+                    ),
+                    section="References",
+                    priority=InstructionPriority.RECOMMENDED,
+                    # 路由型 skill 提取期无法知道任务属哪类,只查"有没有查参考"(反捏造语义)。
+                    # 读哪类由 Claude 路由决定;误路由(读错类)属内容/scoring,不是 compliance。
+                    check_method=CheckMethod.TOOL_CALL_CHECK,
+                    params={"script_path": "references/"},
+                    # 类别级聚合指令归到首个类别 ref 首次提及处的标题。
+                    source_section=_heading_at(headings, category_refs[0][1]),
+                )
+            )
+        for ref, offset in file_refs:
+            checks.append(
+                InstructionCheck(
+                    source=InstructionSource.REFERENCE_USAGE,
+                    instruction_text=f"Use reference file: {ref}",
+                    section="References",
+                    priority=InstructionPriority.RECOMMENDED,
+                    # P0-1d: 查"Claude 真读了/调用了没",不是"文件在不在 output_dir"。
+                    # 后者因 P0-2 把 references 拷进考场而恒真、无意义。TOOL_CALL_CHECK +
+                    # script_path 让 _check_tool_call 匹配 tool_trace 入参里的该路径。
+                    check_method=CheckMethod.TOOL_CALL_CHECK,
+                    params={"script_path": ref},
+                    source_section=_heading_at(headings, offset),
+                )
+            )
+        return checks
+
+    def extract(self, body: str) -> list[InstructionCheck]:
+        checks: list[InstructionCheck] = []
+        sections = self._split_sections(body)
+        # body 级 extractor(跨章节扫描)的 match 偏移 → 真实标题回填用;一趟算好共用。
+        headings = _heading_map(body)
+
+        for section_name, section_text in sections:
+            checks.extend(self._extract_heading_steps(section_name, section_text))
+            checks.extend(self._extract_tool_requirements(section_name, section_text))
+
+        checks.extend(self._extract_constraints(body, headings))
+        checks.extend(self._extract_anti_fabrication(body, headings))
+        checks.extend(extract_output_format(body))
+        checks.extend(self._extract_reference_usage(body, headings))
+
+        checks = self._dedup_covered_reference_usage(checks)
+
+        return checks
 
     def _extract_heading_steps(self, section: str, text: str) -> list[InstructionCheck]:
         checks: list[InstructionCheck] = []
@@ -238,14 +352,16 @@ class InstructionExtractor:
             if not clean or len(clean) < 5:
                 continue
 
-            checks.append(InstructionCheck(
-                source=InstructionSource.HEADING_STEP,
-                instruction_text=clean,
-                section=section,
-                priority=InstructionPriority.REQUIRED,
-                check_method=CheckMethod.LLM_JUDGE,
-                source_excerpt=self._bullet_excerpt(text, line_start),
-            ))
+            checks.append(
+                InstructionCheck(
+                    source=InstructionSource.HEADING_STEP,
+                    instruction_text=clean,
+                    section=section,
+                    priority=InstructionPriority.REQUIRED,
+                    check_method=CheckMethod.LLM_JUDGE,
+                    source_excerpt=self._bullet_excerpt(text, line_start),
+                )
+            )
 
         return checks
 
@@ -276,15 +392,17 @@ class InstructionExtractor:
                 # 抽 required_params(遇连接词停,保护一行多工具;见 _extract_required_params)。
                 rest = text[match.end(0):].split("\n", 1)[0]
                 required_params = _extract_required_params(rest)
-                checks.append(InstructionCheck(
-                    source=InstructionSource.TOOL_REQUIREMENT,
-                    instruction_text=match.group(0).strip(),
-                    section=section,
-                    priority=InstructionPriority.REQUIRED,
-                    check_method=CheckMethod.TOOL_CALL_CHECK,
-                    params={"tool_name": tool_name, "required_params": required_params},
-                    source_excerpt=self._bullet_excerpt(text, match.start()),
-                ))
+                checks.append(
+                    InstructionCheck(
+                        source=InstructionSource.TOOL_REQUIREMENT,
+                        instruction_text=match.group(0).strip(),
+                        section=section,
+                        priority=InstructionPriority.REQUIRED,
+                        check_method=CheckMethod.TOOL_CALL_CHECK,
+                        params={"tool_name": tool_name, "required_params": required_params},
+                        source_excerpt=self._bullet_excerpt(text, match.start()),
+                    )
+                )
         return checks
 
     def _extract_constraints(self, body: str, headings: list[tuple[int, str]]) -> list[InstructionCheck]:
@@ -293,25 +411,24 @@ class InstructionExtractor:
         # "不可" 后跟这些字构成普通词(不可用/不可见/不可数/不可能...),非禁止性约束 →
         # 负向前瞻排除,否则把「不可用时的回退方案见 X」误当约束(ascendc-env-check 实测)。
         # "不可遗漏/不可省略" 等真约束保留(后跟字不在排除表)。
-        cn = "|".join(
-            r"不可(?!用|见|数|能|逆|抗|解|测|及)" if k == "不可" else k
-            for k in _CONSTRAINT_KEYWORDS_CN
-        )
+        cn = "|".join(r"不可(?!用|见|数|能|逆|抗|解|测|及)" if k == "不可" else k for k in _CONSTRAINT_KEYWORDS_CN)
         pattern = re.compile(
             r"(NEVER|ALWAYS|MUST\s+NOT|DO\s+NOT|SHALL\s+NOT|SHOULD\s+NOT)\s+.{5,}"
             rf"|(?:{cn}).{{2,}}",
             re.IGNORECASE,
         )
         for match in pattern.finditer(body):
-            checks.append(InstructionCheck(
-                source=InstructionSource.CONSTRAINT,
-                instruction_text=match.group(0).strip(),
-                section="Constraint",
-                priority=InstructionPriority.REQUIRED,
-                check_method=CheckMethod.LLM_JUDGE,
-                source_excerpt=self._bullet_excerpt(body, match.start()),
-                source_section=_heading_at(headings, match.start()),
-            ))
+            checks.append(
+                InstructionCheck(
+                    source=InstructionSource.CONSTRAINT,
+                    instruction_text=match.group(0).strip(),
+                    section="Constraint",
+                    priority=InstructionPriority.REQUIRED,
+                    check_method=CheckMethod.LLM_JUDGE,
+                    source_excerpt=self._bullet_excerpt(body, match.start()),
+                    source_section=_heading_at(headings, match.start()),
+                )
+            )
         return checks
 
     def _extract_anti_fabrication(self, body: str, headings: list[tuple[int, str]]) -> list[InstructionCheck]:
@@ -330,8 +447,13 @@ class InstructionExtractor:
             line_start = offset
             offset += len(line) + 1
             ls = line.strip().lower()
-            if "fabricat" in ls or "invent" in ls or "hallucinat" in ls or any(w in line for w in ANTI_FABRICATION_CN):
-                checks.append(InstructionCheck(
+            if not (
+                any(word in ls for word in ("fabricat", "invent", "hallucinat"))
+                or any(w in line for w in ANTI_FABRICATION_CN)
+            ):
+                continue
+            checks.append(
+                InstructionCheck(
                     source=InstructionSource.ANTI_FABRICATION,
                     instruction_text=line.strip(),
                     section="Anti-Fabrication",
@@ -339,107 +461,59 @@ class InstructionExtractor:
                     check_method=CheckMethod.LLM_JUDGE,
                     source_excerpt=self._bullet_excerpt(body, line_start),
                     source_section=_heading_at(headings, line_start),
-                ))
+                )
+            )
         return checks
 
-    def _extract_output_format(self, body: str) -> list[InstructionCheck]:
-        # Bug B 修复:只在"输出/格式/template/result"标题下抽代码块当输出模板,
-        # 否则 SKILL 里任意命令示例/JSON 片段都会被当"必须遵守的输出模板"→ audit 假 FAIL。
-        # fence-aware:代码块内含 # 行(markdown 示例/注释)不算 heading,整块归属到
-        # 它开 fence 时所处的 heading(不用 _split_sections——它 fence-naive 会把块切碎)。
-        # 取舍:宁可漏抽(输出格式没放在匹配标题下 → 少几条 output 检查)也别过抽(假 FAIL)。
-        checks: list[InstructionCheck] = []
-        OUTPUT_HEADINGS = ("输出", "格式", "template", "result", "output", "format")
-        current_heading = "Root"
-        in_fence = False
-        fence_heading = "Root"
-        block_lines: list[str] = []
-        per_section_count: dict[str, int] = {}
-        for line in body.split("\n"):
-            if line.lstrip().startswith("```"):
-                if not in_fence:
-                    in_fence = True
-                    fence_heading = current_heading
-                    block_lines = []
-                else:
-                    in_fence = False
-                    h = fence_heading.lower()
-                    if any(kw in h for kw in OUTPUT_HEADINGS) and per_section_count.get(fence_heading, 0) < 3:
-                        per_section_count[fence_heading] = per_section_count.get(fence_heading, 0) + 1
-                        checks.append(InstructionCheck(
-                            source=InstructionSource.OUTPUT_FORMAT,
-                            instruction_text="Output should follow template format",
-                            section=fence_heading,
-                            priority=InstructionPriority.RECOMMENDED,
-                            check_method=CheckMethod.PATTERN_MATCH,
-                            params={"sample": "\n".join(block_lines)[:200]},
-                        ))
-                continue
-            if in_fence:
-                block_lines.append(line)
-            elif line.startswith("#"):
-                current_heading = line.lstrip("#").strip()
-        return checks
 
-    def _extract_reference_usage(self, body: str, headings: list[tuple[int, str]]) -> list[InstructionCheck]:
-        checks: list[InstructionCheck] = []
-        # finditer 而非 findall:出现序恒等(下游有序去重不变),额外记每个 ref 首次
-        # 出现的偏移供 source_section 回填真实标题。
-        refs: list[str] = []
-        first_offset: dict[str, int] = {}
-        for m in _REF_PATH_RE.finditer(body):
-            refs.append(m.group(0))
-            first_offset.setdefault(m.group(0), m.start())
-        # 区分两类(P0-1d follow-up,修路由型 skill 假红灯 —— 见 §41 观察 1):
-        # - 类别级 references/<X>(X 无扩展名 = 目录/类别):路由型 skill 的**互斥备选**,
-        #   每任务只 1 类适用。合并成一条"查阅参考资料"(查任意 references/ 读)。
-        #   否则 N 类互斥里 N-1 个不适用的会被算成假 FAIL —— ascendc-tiling-design
-        #   曾 1/7 假红灯:softmax 属 reduction,Claude 只读 reduction 是对的,另 6 类
-        #   本就不适用却算 FAIL,prog 率被虚低。
-        # - 文件级(references/<X>.md 或 scripts/<X>):独立必读,各自一条查真 Read
-        #   (读 1/3 不该算全过)。
-        # 有序去重(set 跨进程顺序随 PYTHONHASHSEED 漂 → REFERENCE_USAGE 指令顺序随机
-        # → refine/headline 缓存 key 跨进程变 = 必 miss;judge 分批(每批 _MAX_LLM_IN_BATCH
-        # 条)边界也随顺序变 = verdict 跨进程漂)。按 refs(_REF_PATH_RE.findall 的确定性
-        # 出现序)去重,顺序跨进程稳定,缓存才命中、verdict 才可复现。
-        category_refs: list[str] = []
-        file_refs: list[str] = []
-        seen: set[str] = set()
-        for ref in refs:
-            if ref in seen:
-                continue
-            seen.add(ref)
-            seg = ref.split("/")[-1]
-            if ref.startswith("references/") and "." not in seg:
-                category_refs.append(ref)
+def _reference_is_uncovered(check: InstructionCheck, covered: set[str]) -> bool:
+    """Keep non-reference checks and references without a stronger covering instruction."""
+    if check.source != InstructionSource.REFERENCE_USAGE:
+        return True
+    return check.params.get("script_path") not in covered
+
+
+def extract_output_format(body: str) -> list[InstructionCheck]:
+    # Bug B 修复:只在"输出/格式/template/result"标题下抽代码块当输出模板,
+    # 否则 SKILL 里任意命令示例/JSON 片段都会被当"必须遵守的输出模板"→ audit 假 FAIL。
+    # fence-aware:代码块内含 # 行(markdown 示例/注释)不算 heading,整块归属到
+    # 它开 fence 时所处的 heading(不用 _split_sections——它 fence-naive 会把块切碎)。
+    # 取舍:宁可漏抽(输出格式没放在匹配标题下 → 少几条 output 检查)也别过抽(假 FAIL)。
+    checks: list[InstructionCheck] = []
+    output_headings = ("输出", "格式", "template", "result", "output", "format")
+    current_heading = "Root"
+    in_fence = False
+    fence_heading = "Root"
+    block_lines: list[str] = []
+    per_section_count: dict[str, int] = {}
+    for line in body.split("\n"):
+        if line.lstrip().startswith("```"):
+            if not in_fence:
+                in_fence = True
+                fence_heading = current_heading
+                block_lines = []
             else:
-                file_refs.append(ref)
-        if category_refs:
-            checks.append(InstructionCheck(
-                source=InstructionSource.REFERENCE_USAGE,
-                instruction_text=(
-                    f"Consult reference material ({len(category_refs)} alternative category references)"
-                ),
-                section="References",
+                in_fence = False
+                _append_output_template(fence_heading, output_headings, per_section_count, checks, block_lines)
+            continue
+        if in_fence:
+            block_lines.append(line)
+        elif line.startswith("#"):
+            current_heading = line.lstrip("#").strip()
+    return checks
+
+
+def _append_output_template(fence_heading, output_headings, per_section_count, checks, block_lines):
+    h = fence_heading.lower()
+    if any(kw in h for kw in output_headings) and per_section_count.get(fence_heading, 0) < 3:
+        per_section_count[fence_heading] = per_section_count.get(fence_heading, 0) + 1
+        checks.append(
+            InstructionCheck(
+                source=InstructionSource.OUTPUT_FORMAT,
+                instruction_text="Output should follow template format",
+                section=fence_heading,
                 priority=InstructionPriority.RECOMMENDED,
-                # 路由型 skill 提取期无法知道任务属哪类,只查"有没有查参考"(反捏造语义)。
-                # 读哪类由 Claude 路由决定;误路由(读错类)属内容/scoring,不是 compliance。
-                check_method=CheckMethod.TOOL_CALL_CHECK,
-                params={"script_path": "references/"},
-                # 类别级聚合指令归到首个类别 ref 首次提及处的标题。
-                source_section=_heading_at(headings, first_offset[category_refs[0]]),
-            ))
-        for ref in file_refs:
-            checks.append(InstructionCheck(
-                source=InstructionSource.REFERENCE_USAGE,
-                instruction_text=f"Use reference file: {ref}",
-                section="References",
-                priority=InstructionPriority.RECOMMENDED,
-                # P0-1d: 查"Claude 真读了/调用了没",不是"文件在不在 output_dir"。
-                # 后者因 P0-2 把 references 拷进考场而恒真、无意义。TOOL_CALL_CHECK +
-                # script_path 让 _check_tool_call 匹配 tool_trace 入参里的该路径。
-                check_method=CheckMethod.TOOL_CALL_CHECK,
-                params={"script_path": ref},
-                source_section=_heading_at(headings, first_offset[ref]),
-            ))
-        return checks
+                check_method=CheckMethod.PATTERN_MATCH,
+                params={"sample": "\n".join(block_lines)[:200]},
+            )
+        )

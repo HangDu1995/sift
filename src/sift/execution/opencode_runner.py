@@ -12,9 +12,11 @@ spawn ``opencode run <prompt> --format json --dangerously-skip-permissions --dir
 - stdin 关 EOF 避免 non-TTY 挂起;``--dangerously-skip-permissions`` headless 必带
   (opencode 无 --permission-mode);进程组 + killpg 超时清理。
 """
+
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import signal
@@ -25,15 +27,17 @@ from pathlib import Path
 from typing import Callable
 
 from sift.errors import ExecutionError
-from sift.evals.opencode_db import _isolated_xdg_env_empty, _run_opencode
+from sift.evals.opencode_db import isolated_xdg_env_empty, run_opencode
 from sift.execution.cli_runner import build_live_prompt
+from sift.execution.options import ExecutionOptions
 from sift.models import RunOutput
 from sift.utils import claude_cli_env
 
 
 def _ensure_api_key(env: dict[str, str]) -> dict[str, str]:
     """opencode @ai-sdk/anthropic 只读 ANTHROPIC_API_KEY;本机 GLM Coding Plan 给的是
-    ANTHROPIC_AUTH_TOKEN → 缺 API_KEY 时 alias 过来(抄 opsbot driver/opencode.py:221)。"""
+    ANTHROPIC_AUTH_TOKEN → 缺 API_KEY 时 alias 过来(抄 opsbot driver/opencode.py:221)。
+    """
     if not env.get("ANTHROPIC_API_KEY") and env.get("ANTHROPIC_AUTH_TOKEN"):
         env["ANTHROPIC_API_KEY"] = env["ANTHROPIC_AUTH_TOKEN"]
     return env
@@ -80,6 +84,7 @@ def _parse_opencode_stream(stdout: str) -> tuple[int, dict[str, int], str, str, 
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
             continue
         typ = ev.get("type")
         part = ev.get("part") or {}
@@ -104,32 +109,23 @@ def _parse_opencode_stream(stdout: str) -> tuple[int, dict[str, int], str, str, 
 
 
 class OpenCodeRunner:
-    def run(
-        self,
-        prompt: str,
-        skill_path: Path | None = None,
-        model: str | None = None,
-        timeout: int = 120,
-        cwd: Path | None = None,
-        max_turns: int = 10,
-        on_progress: Callable[[str], None] | None = None,
-    ) -> RunOutput:
+    @staticmethod
+    def run(prompt, skill_path=None, options: ExecutionOptions = ExecutionOptions()) -> RunOutput:
+        model = options.model
+        timeout = options.timeout
+        cwd = options.cwd
+        on_progress = options.on_progress
         if shutil.which("opencode") is None:
             raise ExecutionError(
-                "opencode CLI 未找到;--executor opencode 需先装 opencode 并确保在 PATH"
-                "(https://opencode.ai)"
+                "opencode CLI 未找到;--executor opencode 需先装 opencode 并确保在 PATH(https://opencode.ai)"
             )
         injected = build_live_prompt(prompt, skill_path)
         workspace = cwd or Path.cwd()
 
-        args = ["opencode", "run", "--format", "json", "--dangerously-skip-permissions",
-                "--dir", str(workspace)]
-        if model and "/" in model:
-            args.extend(["-m", model])
-        args.append(injected)
+        args = _opencode_run_command(injected, workspace, model)
 
         start = time.time()
-        with _isolated_xdg_env_empty() as xdg:
+        with isolated_xdg_env_empty() as xdg:
             env = _ensure_api_key({**claude_cli_env(), "XDG_DATA_HOME": str(xdg)})
             try:
                 proc = subprocess.Popen(
@@ -144,67 +140,11 @@ class OpenCodeRunner:
             except FileNotFoundError as exc:
                 raise ExecutionError(f"opencode CLI 启动失败: {exc}") from exc
 
-            # stdin 关 EOF:避免 opencode non-TTY stdin 挂起(opsbot spike finding)
-            assert proc.stdin is not None
-            proc.stdin.close()
-
-            stdout_chunks: list[str] = []
-            stderr_chunks: list[str] = []
-
-            def _stdout_reader() -> None:
-                assert proc.stdout is not None
-                for raw in iter(proc.stdout.readline, b""):
-                    text = raw.decode("utf-8", errors="replace")
-                    stdout_chunks.append(text)
-                    if on_progress:
-                        msg = _progress_from_opencode_line(text)
-                        if msg:
-                            on_progress(msg)
-
-            def _stderr_reader() -> None:
-                assert proc.stderr is not None
-                for raw in iter(proc.stderr.readline, b""):
-                    stderr_chunks.append(raw.decode("utf-8", errors="replace"))
-
-            t_out = threading.Thread(target=_stdout_reader, daemon=True)
-            t_err = threading.Thread(target=_stderr_reader, daemon=True)
-            t_out.start()
-            t_err.start()
-            timed_out = False
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except (ProcessLookupError, OSError):
-                    proc.kill()
-                proc.wait()
-            t_out.join(timeout=5)
-            t_err.join(timeout=5)
-            if timed_out:
-                raise ExecutionError(f"opencode run 超时({timeout}s)")
-
-            stdout = "".join(stdout_chunks)
-            stderr = "".join(stderr_chunks)
+            stdout, stderr = _collect_opencode_output(proc, timeout, on_progress)
             if proc.returncode != 0:
-                raise ExecutionError(
-                    f"opencode run 失败(exit {proc.returncode}): {stderr[:500]}"
-                )
+                raise ExecutionError(f"opencode run 失败(exit {proc.returncode}): {stderr[:500]}")
 
-            # export 刚跑的 session;不带 --sanitize(audit 要原文)
-            try:
-                sessions = json.loads(_run_opencode(xdg, ["session", "list", "--format", "json"]).strip() or "[]")
-            except json.JSONDecodeError:
-                sessions = []
-            if not sessions:
-                raise ExecutionError(
-                    f"opencode run 未持久化 session(无法 export;stderr: {stderr[:300]})"
-                )
-            # 隔离 XDG db 是 fresh 的,只含本次 opencode run 刚建的那条 session → sessions[0] 即它;
-            # 若 opencode 将来会额外建辅助 session,改按 timestamp 过滤而非盲取 [0]。
-            sid = sessions[0].get("id", "")
-            transcript_json = _run_opencode(xdg, ["export", sid])  # 原文,不 sanitize
+            transcript_json = _export_opencode_session(xdg, stderr)
 
             total_tokens, tool_calls, result_text, stop_reason, num_turns = _parse_opencode_stream(stdout)
             duration_ms = int((time.time() - start) * 1000)
@@ -218,3 +158,93 @@ class OpenCodeRunner:
                 stop_reason=stop_reason,
                 num_turns=num_turns,
             )
+
+
+def _collect_opencode_output(proc, timeout: int, on_progress: Callable[[str], None] | None) -> tuple[str, str]:
+    """并行读取输出，并在超时后终止进程组、回收 reader 线程。"""
+    # stdin 关 EOF:避免 opencode non-TTY stdin 挂起(opsbot spike finding)
+    if proc.stdin is None:
+        raise RuntimeError("Required process pipe is unavailable")
+    proc.stdin.close()
+
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    t_out = threading.Thread(target=_read_opencode_stdout, args=(proc, stdout_chunks, on_progress), daemon=True)
+    t_err = threading.Thread(target=_read_opencode_stderr, args=(proc, stderr_chunks), daemon=True)
+    t_out.start()
+    t_err.start()
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except OSError:
+            proc.kill()
+        proc.wait()
+    t_out.join(timeout=5)
+    t_err.join(timeout=5)
+    if timed_out:
+        raise ExecutionError(f"opencode run 超时({timeout}s)")
+
+    stdout = "".join(stdout_chunks)
+    stderr = "".join(stderr_chunks)
+    return stdout, stderr
+
+
+def _export_opencode_session(xdg: Path, stderr: str) -> str:
+    """从本次隔离数据库导出原始会话，保留缺失会话时的诊断。"""
+    # export 刚跑的 session;不带 --sanitize(audit 要原文)
+    try:
+        sessions = json.loads(run_opencode(xdg, ["session", "list", "--format", "json"]).strip() or "[]")
+    except json.JSONDecodeError:
+        sessions = []
+    if not sessions:
+        raise ExecutionError(f"opencode run 未持久化 session(无法 export;stderr: {stderr[:300]})")
+    # 隔离 XDG db 是 fresh 的,只含本次 opencode run 刚建的那条 session → sessions[0] 即它;
+    # 若 opencode 将来会额外建辅助 session,改按 timestamp 过滤而非盲取 [0]。
+    sid = sessions[0].get("id", "")
+    transcript_json = run_opencode(xdg, ["export", sid])  # 原文,不 sanitize
+
+    return transcript_json
+
+
+def _read_opencode_stdout(proc, stdout_chunks: list[str], on_progress: Callable[[str], None] | None) -> None:
+    """读取进程管道，按原顺序收集解码后的文本。"""
+    if proc.stdout is None:
+        raise RuntimeError("Required process pipe is unavailable")
+    for raw in iter(proc.stdout.readline, b""):
+        text = raw.decode("utf-8", errors="replace")
+        stdout_chunks.append(text)
+        if not (on_progress):
+            continue
+        msg = _progress_from_opencode_line(text)
+        if msg:
+            on_progress(msg)
+
+
+def _read_opencode_stderr(proc, stderr_chunks: list[str]) -> None:
+    """读取进程管道，按原顺序收集解码后的文本。"""
+    if proc.stderr is None:
+        raise RuntimeError("Required process pipe is unavailable")
+    for raw in iter(proc.stderr.readline, b""):
+        stderr_chunks.append(raw.decode("utf-8", errors="replace"))
+
+
+def _opencode_run_command(injected: str, workspace: Path, model: str | None) -> list[str]:
+    """仅传入 opencode 支持的 provider/model 名称，保持参数排列。"""
+    args = [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--dangerously-skip-permissions",
+        "--dir",
+        str(workspace),
+    ]
+    if model and "/" in model:
+        args.extend(["-m", model])
+    args.append(injected)
+    return args

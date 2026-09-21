@@ -8,6 +8,20 @@ from typing import Any
 import yaml
 
 
+_KNOWN_CONFIG_KEYS = frozenset(
+    [
+        "domain_templates",
+        "grading",
+        "prompt_templates",
+        "scanning",
+        "skill_keywords",
+        "type_templates",
+        "version",
+        "workspace",
+    ]
+)
+
+
 class EvalConfig:
     def __init__(
         self,
@@ -47,11 +61,7 @@ class EvalConfig:
             prompt_templates=data.get("prompt_templates", []),
             grading_threshold=grading.get("default_threshold", 0.7),
             workspace_defaults=data.get("workspace", {}),
-            extra={k: v for k, v in data.items() if k not in {
-                "scanning", "grading", "domain_templates", "type_templates",
-                "skill_keywords", "prompt_templates",
-                "workspace", "version",
-            }},
+            extra={k: v for k, v in data.items() if k not in _KNOWN_CONFIG_KEYS},
         )
 
 

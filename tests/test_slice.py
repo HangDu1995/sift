@@ -1,7 +1,9 @@
 # tests/test_slice.py
 import json
 from pathlib import Path
-from sift.audit.slice import build_subagent_tool_trace, slice_transcript, scope_signals
+
+from sift.audit.slice import build_subagent_tool_trace, scope_signals, slice_transcript
+
 
 # kind='skill'(按 Skill 调用切)与 kind='agent'(按 agent 归属切)各一组薄封装,省得每处传 kind。
 def _slice_skill(path, name):
@@ -11,30 +13,45 @@ def _slice_skill(path, name):
 def _slice_agent(path, name):
     return slice_transcript(path, name, "agent")
 
+
 def _write(tmp_path: Path, recs: list) -> Path:
     p = tmp_path / "t.jsonl"
     p.write_text("\n".join(json.dumps(r) for r in recs), encoding="utf-8")
     return p
 
+
 def _skill(tid, name):
-    return {"message": {"role": "assistant", "content": [
-        {"type": "tool_use", "id": tid, "name": "Skill", "input": {"skill": name}}]}}
+    return {
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": tid, "name": "Skill", "input": {"skill": name}}],
+        }
+    }
+
 
 def _asst_text(t):
     return {"message": {"role": "assistant", "content": [{"type": "text", "text": t}]}}
 
+
 def _tool_use(tid, name, inp):
-    return {"message": {"role": "assistant", "content": [
-        {"type": "tool_use", "id": tid, "name": name, "input": inp}]}}
+    return {"message": {"role": "assistant", "content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}]}}
+
 
 def _tool_result(tid, text):
-    return {"message": {"role": "user", "content": [
-        {"type": "tool_result", "tool_use_id": tid, "content": text}]}}
+    return {"message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": text}]}}
+
 
 def _agent(tid):
     """主作用域里发起子 agent 的 Agent tool_use。"""
-    return {"message": {"role": "assistant", "content": [
-        {"type": "tool_use", "id": tid, "name": "Agent", "input": {"subagent_type": "general-purpose"}}]}}
+    return {
+        "message": {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": tid, "name": "Agent", "input": {"subagent_type": "general-purpose"}}
+            ],
+        }
+    }
+
 
 def _in_sub(parent, rec):
     """给 record 打 parent_tool_use_id,归入子 agent 作用域。"""
@@ -53,6 +70,7 @@ def _ag(agent, text, parent=None):
         rec["parent_tool_use_id"] = parent
     return rec
 
+
 def test_namespaced_skill_name_stripped_to_match(tmp_path):
     """真 transcript 的 input.skill 是命名空间名(如 plugin:skill),slicer 剥前缀后匹配 target。
 
@@ -60,13 +78,14 @@ def test_namespaced_skill_name_stripped_to_match(tmp_path):
     (命名空间名)会静默得 0 span → 假 exit 2。这条钉死剥前缀路径。
     """
     recs = [
-        _skill("s1", "ops-team:log-error-analyzer"),   # 命名空间名(非裸名)
+        _skill("s1", "ops-team:log-error-analyzer"),  # 命名空间名(非裸名)
         _tool_use("r1", "Read", {"file_path": "app.log"}),
         _tool_result("r1", "ERR"),
     ]
     spans = _slice_skill(_write(tmp_path, recs), "log-error-analyzer")
-    assert len(spans) == 1                              # 剥掉 ops-team: 前缀后命中
+    assert len(spans) == 1  # 剥掉 ops-team: 前缀后命中
     assert any("app.log" in json.dumps(r, ensure_ascii=False) for r in spans[0])
+
 
 def test_single_main_skill_span_to_end(tmp_path):
     recs = [
@@ -123,19 +142,37 @@ def test_subagent_skill_scoped_to_return_no_main_pollution(tmp_path):
     recs = [
         _skill("s1", "log-error-analyzer"),
         _tool_use("r1", "Read", {"file_path": "app.log"}),
-        {"message": {"role": "assistant", "content": [
-            {"type": "tool_use", "id": agent_id, "name": "Agent", "input": {"subagent_type": "general-purpose"}}]}},
-        {"parent_tool_use_id": agent_id, "message": {"role": "assistant", "content": [
-            {"type": "tool_use", "id": "sb", "name": "Skill", "input": {"skill": "code-review-auditor"}}]}},
-        {"parent_tool_use_id": agent_id, "message": {"role": "assistant", "content": [
-            {"type": "tool_use", "id": "rr", "name": "Read", "input": {"file_path": "src/c.py"}}]}},
+        {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": agent_id, "name": "Agent", "input": {"subagent_type": "general-purpose"}}
+                ],
+            }
+        },
+        {
+            "parent_tool_use_id": agent_id,
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "sb", "name": "Skill", "input": {"skill": "code-review-auditor"}}
+                ],
+            },
+        },
+        {
+            "parent_tool_use_id": agent_id,
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "rr", "name": "Read", "input": {"file_path": "src/c.py"}}],
+            },
+        },
         _tool_result(agent_id, "subagent done"),
         _tool_use("r2", "Read", {"file_path": "app2.log"}),
     ]
     a = _slice_skill(_write(tmp_path, recs), "log-error-analyzer")
     a_texts = [json.dumps(r, ensure_ascii=False) for seg in a for r in seg]
-    assert any("app2.log" in t for t in a_texts)      # 返回后主 agent 仍归 A(不被 B 污染)
-    assert not any("src/c.py" in t for t in a_texts)   # 子 agent 内部不进主段
+    assert any("app2.log" in t for t in a_texts)  # 返回后主 agent 仍归 A(不被 B 污染)
+    assert not any("src/c.py" in t for t in a_texts)  # 子 agent 内部不进主段
     b = _slice_skill(_write(tmp_path, recs), "code-review-auditor")
     assert len(b) == 1
     b_texts = [json.dumps(r, ensure_ascii=False) for r in b[0]]
@@ -147,17 +184,17 @@ def test_nested_subagent_depth2_skill_scoped(tmp_path):
     a_id = "call_agentA"
     b_id = "call_agentB"
     recs = [
-        _skill("s1", "log-error-analyzer"),                       # main 调 X
+        _skill("s1", "log-error-analyzer"),  # main 调 X
         _tool_use("r1", "Read", {"file_path": "app.log"}),
-        _agent(a_id),                                            # main 起 A
-        _in_sub(a_id, _agent(b_id)),                             # A 起 B
-        _in_sub(b_id, _skill("sb", "code-review-auditor")),      # B 调 Y
+        _agent(a_id),  # main 起 A
+        _in_sub(a_id, _agent(b_id)),  # A 起 B
+        _in_sub(b_id, _skill("sb", "code-review-auditor")),  # B 调 Y
         _in_sub(b_id, _tool_use("rb", "Read", {"file_path": "src/c.py"})),
-        _in_sub(b_id, _asst_text("B analyze")),                  # B 干活
-        _in_sub(a_id, _tool_result(b_id, "B done")),             # B 返回(在 A 作用域)
-        _in_sub(a_id, _asst_text("A summarize")),                # A 干活
-        _tool_result(a_id, "A done"),                            # A 返回(主作用域)
-        _tool_use("r2", "Read", {"file_path": "app2.log"}),      # 主继续
+        _in_sub(b_id, _asst_text("B analyze")),  # B 干活
+        _in_sub(a_id, _tool_result(b_id, "B done")),  # B 返回(在 A 作用域)
+        _in_sub(a_id, _asst_text("A summarize")),  # A 干活
+        _tool_result(a_id, "A done"),  # A 返回(主作用域)
+        _tool_use("r2", "Read", {"file_path": "app2.log"}),  # 主继续
     ]
     p = _write(tmp_path, recs)
 
@@ -182,14 +219,14 @@ def test_same_skill_main_and_subagent_two_spans(tmp_path):
     """同 skill 在 main 和子 agent 各调一次→2 段(按作用域),互不污染。"""
     a_id = "call_agentA"
     recs = [
-        _skill("s1", "log-error-analyzer"),                       # main 调 X
+        _skill("s1", "log-error-analyzer"),  # main 调 X
         _tool_use("r1", "Read", {"file_path": "app.log"}),
-        _agent(a_id),                                            # main 起 A
-        _in_sub(a_id, _skill("s2", "log-error-analyzer")),       # A 也调 X
+        _agent(a_id),  # main 起 A
+        _in_sub(a_id, _skill("s2", "log-error-analyzer")),  # A 也调 X
         _in_sub(a_id, _tool_use("r2", "Read", {"file_path": "src/c.py"})),
         _in_sub(a_id, _asst_text("A analyze")),
-        _tool_result(a_id, "A done"),                            # A 返回
-        _tool_use("r3", "Read", {"file_path": "app2.log"}),      # main 继续
+        _tool_result(a_id, "A done"),  # A 返回
+        _tool_use("r3", "Read", {"file_path": "app2.log"}),  # main 继续
     ]
     p = _write(tmp_path, recs)
     spans = _slice_skill(p, "log-error-analyzer")
@@ -232,28 +269,29 @@ def test_agent_kind_interleaved_breaks_run_into_two_spans(tmp_path):
     p = _write(tmp_path, recs)
 
     a = _slice_agent(p, "A")
-    assert len(a) == 2                                   # A 的 run 被 B 断成两段
+    assert len(a) == 2  # A 的 run 被 B 断成两段
     assert "A 第一次" in json.dumps(a[0], ensure_ascii=False)
     assert "A 第二次" in json.dumps(a[1], ensure_ascii=False)
-    assert "B 插进" not in json.dumps(a, ensure_ascii=False)     # B 的内容不泄进 A 的段
+    assert "B 插进" not in json.dumps(a, ensure_ascii=False)  # B 的内容不泄进 A 的段
     assert "main 起手" not in json.dumps(a, ensure_ascii=False)  # 无 agent 的 record 不进段
 
-    assert len(_slice_agent(p, "B")) == 1                # B 连续 → 1 段
+    assert len(_slice_agent(p, "B")) == 1  # B 连续 → 1 段
 
 
 def test_agent_kind_nested_subagent_splits_outer_run(tmp_path):
     """嵌套:A dispatch B 后 resume A(A-pre…[B]…A-post)。A-pre/A-post 虽共享 parent_tool_use_id,
-    扁平切片器不看 parent_tool_use_id,仍按连续性切 → A 断 2 段。钉「不读 parent_tool_use_id」。"""
-    pA, pB = "call_A", "call_B"
+    扁平切片器不看 parent_tool_use_id,仍按连续性切 → A 断 2 段。钉「不读 parent_tool_use_id」。
+    """
+    parent_a, parent_b = "call_A", "call_B"
     recs = [
-        _ag("A", "A-pre", parent=pA),
-        _ag("B", "B 嵌套", parent=pB),
-        _ag("A", "A-post", parent=pA),
+        _ag("A", "A-pre", parent=parent_a),
+        _ag("B", "B 嵌套", parent=parent_b),
+        _ag("A", "A-post", parent=parent_a),
     ]
     p = _write(tmp_path, recs)
 
     a = _slice_agent(p, "A")
-    assert len(a) == 2                                   # 共享 pA 也被断开(扁平,不看 parent)
+    assert len(a) == 2  # 共享 pA 也被断开(扁平,不看 parent)
     assert "A-pre" in json.dumps(a[0], ensure_ascii=False)
     assert "A-post" in json.dumps(a[1], ensure_ascii=False)
     assert "B 嵌套" not in json.dumps(a, ensure_ascii=False)
@@ -261,8 +299,9 @@ def test_agent_kind_nested_subagent_splits_outer_run(tmp_path):
 
 # ── root-kind:主作用域(顶层 agent)切(_slice_root)。 ──
 
+
 def _slice_root(path):
-    return slice_transcript(path, "", "root")   # target 忽略(root 不按名)
+    return slice_transcript(path, "", "root")  # target 忽略(root 不按名)
 
 
 def test_root_kind_returns_main_scope_excluding_subagent_inside(tmp_path):
@@ -273,13 +312,13 @@ def test_root_kind_returns_main_scope_excluding_subagent_inside(tmp_path):
     """
     a_id = "call_agentA"
     recs = [
-        _asst_text("MAIN_START"),                                 # 主
-        _tool_use("r1", "Read", {"file_path": "app.log"}),        # 主
-        _agent(a_id),                                             # 主(dispatch 调用,主作用域)
-        _in_sub(a_id, _tool_use("r2", "Read", {"file_path": "src/c.py"})),   # 子内部
-        _in_sub(a_id, _asst_text("SUB_MARKER")),                             # 子内部
-        _tool_result(a_id, "sub done"),                           # 主(dispatch 返回,主作用域)
-        _asst_text("MAIN_END"),                                   # 主
+        _asst_text("MAIN_START"),  # 主
+        _tool_use("r1", "Read", {"file_path": "app.log"}),  # 主
+        _agent(a_id),  # 主(dispatch 调用,主作用域)
+        _in_sub(a_id, _tool_use("r2", "Read", {"file_path": "src/c.py"})),  # 子内部
+        _in_sub(a_id, _asst_text("SUB_MARKER")),  # 子内部
+        _tool_result(a_id, "sub done"),  # 主(dispatch 返回,主作用域)
+        _asst_text("MAIN_END"),  # 主
     ]
     spans = _slice_root(_write(tmp_path, recs))
     assert len(spans) == 1
@@ -307,10 +346,10 @@ def test_root_kind_single_span_despite_subagent_interleaving(tmp_path):
         _agent(a_id),
         _in_sub(a_id, _asst_text("SUB_ONLY")),
         _tool_result(a_id, "done"),
-        _asst_text("MAIN_B"),   # 主,物理上在子 agent 之后
+        _asst_text("MAIN_B"),  # 主,物理上在子 agent 之后
     ]
     spans = _slice_root(_write(tmp_path, recs))
-    assert len(spans) == 1                       # 单 span(非断段,区别于 _slice_agent)
+    assert len(spans) == 1  # 单 span(非断段,区别于 _slice_agent)
     texts = json.dumps(spans[0], ensure_ascii=False)
     assert "MAIN_A" in texts and "MAIN_B" in texts
     assert "SUB_ONLY" not in texts
@@ -354,8 +393,10 @@ def test_scope_signals_root_when_subagent_dispatched(tmp_path):
     """transcript 有子 agent 作用域(parent_tool_use_id 非空)→ 含 "root" 锚点。"""
     a_id = "call_A"
     recs = [
-        _asst_text("main"), _agent(a_id),
-        _in_sub(a_id, _asst_text("sub")), _tool_result(a_id, "done"),
+        _asst_text("main"),
+        _agent(a_id),
+        _in_sub(a_id, _asst_text("sub")),
+        _tool_result(a_id, "done"),
     ]
     assert "root" in scope_signals([_write(tmp_path, recs)], "whatever-name-ignored-for-root")
 
@@ -383,8 +424,7 @@ def test_scope_signals_multi_transcript_union(tmp_path):
     t1 = tmp_path / "a.jsonl"
     t1.write_text(json.dumps(_skill("s1", "foo")), encoding="utf-8")
     t2 = tmp_path / "b.jsonl"
-    t2.write_text("\n".join(json.dumps(r) for r in [_agent(a_id), _in_sub(a_id, _asst_text("sub"))]),
-                  encoding="utf-8")
+    t2.write_text("\n".join(json.dumps(r) for r in [_agent(a_id), _in_sub(a_id, _asst_text("sub"))]), encoding="utf-8")
     sig = scope_signals([t1, t2], "foo")
     assert "skill" in sig and "root" in sig and "agent" not in sig
 
@@ -393,18 +433,21 @@ def test_scope_signals_unreadable_file_skipped(tmp_path):
     """读失败的 transcript 不炸、贡献空(不影响其它 transcript 信号)。"""
     a_id = "call_A"
     good = tmp_path / "good.jsonl"
-    good.write_text("\n".join(json.dumps(r) for r in [_agent(a_id), _in_sub(a_id, _asst_text("sub"))]),
-                    encoding="utf-8")
-    ghost = tmp_path / "ghost.jsonl"   # 不存在
+    good.write_text(
+        "\n".join(json.dumps(r) for r in [_agent(a_id), _in_sub(a_id, _asst_text("sub"))]), encoding="utf-8"
+    )
+    ghost = tmp_path / "ghost.jsonl"  # 不存在
     sig = scope_signals([ghost, good], "nope")
     assert sig == {"root"}
 
 
 # ---- build_subagent_tool_trace: A1 旁路证据源(root 判定的"缺席≠未发生"洗冤通道) ----
 
+
 def test_build_subagent_tool_trace_agent_attribution_via_dispatch(tmp_path):
     """cc 原生路径:子代理 record 的角色名从主作用域 Agent/Task tool_use 的
-    id → subagent_type 映射取(其 parent_tool_use_id 指向该 tool_use)。"""
+    id → subagent_type 映射取(其 parent_tool_use_id 指向该 tool_use)。
+    """
     a_id = "agent-1"
     recs = [
         _agent(a_id),  # input.subagent_type = "general-purpose"(默认 helper)
@@ -422,15 +465,27 @@ def test_build_subagent_tool_trace_agent_attribution_via_dispatch(tmp_path):
 
 def test_build_subagent_tool_trace_rec_agent_wins(tmp_path):
     """insight structured 路径:rec.agent(角色名)优先于派发映射
-    (其 parent_tool_use_id 是 subagentSessionId,查映射本就落空)。"""
+    (其 parent_tool_use_id 是 subagentSessionId,查映射本就落空)。
+    """
     a_id = "ses_sub_123"
     recs = [
         # 主作用域有一个 Task 派发(id 与 a_id 无关——insight 路径的 ptid 非 tool_use id)
         _tool_use("tu_root", "task", {"subagent_type": "verifier", "prompt": "验收"}),
-        {"agent": "code-verifier", "parent_tool_use_id": a_id,
-         "message": {"role": "assistant", "content": [
-             {"type": "tool_use", "id": "tu2", "name": "Read",
-              "input": {"filePath": "docs/x/references/demo-contract.md"}}]}},
+        {
+            "agent": "code-verifier",
+            "parent_tool_use_id": a_id,
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "tu2",
+                        "name": "Read",
+                        "input": {"filePath": "docs/x/references/demo-contract.md"},
+                    }
+                ],
+            },
+        },
     ]
     p = _write(tmp_path, recs)
     trace = build_subagent_tool_trace(p)
@@ -459,9 +514,11 @@ def test_build_subagent_tool_trace_task_lowercase_dispatch(tmp_path):
 
 # ---- 层3:派发-回报对(digest 收集 + 段落渲染) ----
 
+
 def test_digest_collects_dispatch_returns(tmp_path):
     """task tool_use 与 tool_result 配对收集进 digest.dispatch_returns(层3 证据单元)。"""
     from sift.evals.transcript import _digest_from_records, stamp_turn_indices
+
     records = [
         _tool_use("tu_1", "task", {"subagent_type": "verifier", "prompt": "验收 Task 47"}),
         _tool_result("tu_1", "FAILED: 254/275"),
@@ -484,16 +541,16 @@ def test_digest_collects_dispatch_returns(tmp_path):
 
 def test_dispatch_pairs_section_render_and_truncate():
     """段落渲染:统计行 + 失败标记计数 + trivial 压缩;超限裁剪保失败行。"""
-    from sift.evals.transcript import DispatchReturn
     from sift.audit.auditor import _DISPATCH_PAIRS_LIMIT, _dispatch_pairs_section
+    from sift.evals.transcript import DispatchReturn
 
     def _p(role, prompt, result, dt=1, rt=2):
-        return DispatchReturn(dispatch_turn=dt, result_turn=rt, role=role,
-                              prompt_head=prompt, result_head=result, result_len=len(result))
+        return DispatchReturn(
+            dispatch_turn=dt, result_turn=rt, role=role, prompt_head=prompt, result_head=result, result_len=len(result)
+        )
 
     # 小规模:全渲染
-    pairs = [_p("verifier", "验收 Task 47", "FAILED: 254/275"),
-             _p("developer", "建目录", "DONE")]
+    pairs = [_p("verifier", "验收 Task 47", "FAILED: 254/275"), _p("developer", "建目录", "DONE")]
     sec = _dispatch_pairs_section(pairs)
     assert "统计:派发 2 次(verifier 1 / developer 1)" in sec
     assert "回报含失败字样 1 份" in sec
@@ -501,52 +558,50 @@ def test_dispatch_pairs_section_render_and_truncate():
     assert "(子代理产出)" in sec
 
     # 大规模(超限):失败行保留、trivial 压计数、中段省略
-    many = ([_p("verifier", f"验收 Task {i}", f"FAILED: 用例 {i} 超阈值", dt=i, rt=i + 1)
-             for i in range(5)]
-            + [_p("developer", f"开发任务 {i} 长prompt" * 10, "x" * 150, dt=100 + i, rt=101 + i)
-               for i in range(120)])
+    many = [_p("verifier", f"验收 Task {i}", f"FAILED: 用例 {i} 超阈值", dt=i, rt=i + 1) for i in range(5)] + [
+        _p("developer", f"开发任务 {i} 长prompt" * 10, "x" * 150, dt=100 + i, rt=101 + i) for i in range(120)
+    ]
     sec2 = _dispatch_pairs_section(many)
     assert len(sec2) <= _DISPATCH_PAIRS_LIMIT + 600  # 封顶(允许头部/省略行余量)
-    assert "FAILED: 用例 0 超阈值" in sec2           # 失败行全保
-    assert "省略" in sec2 or "另有" in sec2           # 压缩标记存在
+    assert "FAILED: 用例 0 超阈值" in sec2  # 失败行全保
+    assert "省略" in sec2 or "另有" in sec2  # 压缩标记存在
     assert sec2.count("[T1") >= 1
 
     # 评审修复①:失败判定只看回报窗口——prompt 含「失败」但回报成功的长文本派发
     # (修 bug 工作流常态)不算失败行,不绕过预算 → 封顶不被打破(评审实测旧版
     # 100 条此形态派发可把段落撑到 19295 字符,超限 2.4 倍)。
-    bugfix = [_p("developer", f"修复失败的用例 {i} " * 10, "全部通过 " * 30, dt=i, rt=i + 1)
-              for i in range(100)]
+    bugfix = [_p("developer", f"修复失败的用例 {i} " * 10, "全部通过 " * 30, dt=i, rt=i + 1) for i in range(100)]
     sec3 = _dispatch_pairs_section(bugfix)
-    assert "回报含失败字样 0 份" in sec3              # prompt 的「失败」不计入
+    assert "回报含失败字样 0 份" in sec3  # prompt 的「失败」不计入
     assert len(sec3) <= _DISPATCH_PAIRS_LIMIT + 600  # 封顶守住
 
     # 评审修复②:失败行也守预算——超量失败回报压「另有 M 份」计数,不无条件全留
-    failed_many = [_p("verifier", f"验收 Task {i}", f"FAILED: 用例 {i} 超阈值 " * 20,
-                      dt=i, rt=i + 1) for i in range(60)]
+    failed_many = [
+        _p("verifier", f"验收 Task {i}", f"FAILED: 用例 {i} 超阈值 " * 20, dt=i, rt=i + 1) for i in range(60)
+    ]
     sec4 = _dispatch_pairs_section(failed_many)
     assert len(sec4) <= _DISPATCH_PAIRS_LIMIT + 600  # 封顶是不变式
-    assert "份含失败字样的回报未展开" in sec4         # 超预算失败行压计数
-    assert "FAILED: 用例 0 超阈值" in sec4           # 预算内失败行仍在(优先保留)
+    assert "份含失败字样的回报未展开" in sec4  # 超预算失败行压计数
+    assert "FAILED: 用例 0 超阈值" in sec4  # 预算内失败行仍在(优先保留)
 
     # 按派发挂执行计数:aux 记录的 parent_tool_use_id 对上 dispatch_id → 行尾带
     # 〔子代理执行: …〕;对不上(aux 无 id / 派发 id 缺失)→ 行形态不变。
     from sift.models import ToolCallRecord
+
     pair_v = _p("verifier", "验收 Task 47", "FAILED: 254/275")
     pair_v.dispatch_id = "d1"
-    aux = [ToolCallRecord(name="Bash", input_summary="b", input={"command": "pytest -q"},
-                          parent_tool_use_id="d1"),
-           ToolCallRecord(name="Bash", input_summary="b", input={"command": "pytest -x"},
-                          parent_tool_use_id="d1"),
-           ToolCallRecord(name="Write", input_summary="w", input={"file_path": "LOG.md"},
-                          parent_tool_use_id="d1"),
-           ToolCallRecord(name="Read", input_summary="r", input={"file_path": "a.md"},
-                          parent_tool_use_id="d_other")]  # 别的派发:不计入 d1 行
+    aux = [
+        ToolCallRecord(name="Bash", input_summary="b", input={"command": "pytest -q"}, parent_tool_use_id="d1"),
+        ToolCallRecord(name="Bash", input_summary="b", input={"command": "pytest -x"}, parent_tool_use_id="d1"),
+        ToolCallRecord(name="Write", input_summary="w", input={"file_path": "LOG.md"}, parent_tool_use_id="d1"),
+        ToolCallRecord(name="Read", input_summary="r", input={"file_path": "a.md"}, parent_tool_use_id="d_other"),
+    ]  # 别的派发:不计入 d1 行
     sec5 = _dispatch_pairs_section([pair_v, _p("developer", "建目录", "DONE")], aux)
     d1_line = [l for l in sec5.splitlines() if "验收 Task 47" in l][0]
     assert "〔子代理执行: bash×2、write×1〕" in d1_line
-    assert "read" not in d1_line.split("〔")[-1]        # d_other 的 read 不串行
+    assert "read" not in d1_line.split("〔")[-1]  # d_other 的 read 不串行
     d2_line = [l for l in sec5.splitlines() if "建目录" in l][0]
-    assert "〔子代理执行" not in d2_line                # 无关联痕迹 → 行形态不变
+    assert "〔子代理执行" not in d2_line  # 无关联痕迹 → 行形态不变
 
     # 空 → 空段(整段不进 prompt)
     assert _dispatch_pairs_section(None) == ""
@@ -555,19 +610,25 @@ def test_dispatch_pairs_section_render_and_truncate():
 
 def test_result_windows_head_tail():
     """层3-改进2:回报头+尾窗口——剥带属性的 <task>/<task_result> 包装,长文本取
-    头+尾(验收结论惯例在尾部),短文本全进 head、tail 为空。"""
+    头+尾(验收结论惯例在尾部),短文本全进 head、tail 为空。
+    """
     from sift.evals.transcript import _result_windows
-    long_ret = ('<task id="ses_x" state="completed">\n<task_result>\n准备工作中。'
-                + "过程细节" * 40 + "\n状态:❌失败,7/23 用例达标\n</task_result>\n</task>")
+
+    long_ret = (
+        '<task id="ses_x" state="completed">\n<task_result>\n准备工作中。'
+        + "过程细节" * 40
+        + "\n状态:❌失败,7/23 用例达标\n</task_result>\n</task>"
+    )
     h, t = _result_windows(long_ret)
-    assert "task" not in h and "task" not in t          # 包装已剥(含带属性形态)
+    assert "task" not in h and "task" not in t  # 包装已剥(含带属性形态)
     assert h.startswith("准备工作中。")
-    assert "❌失败,7/23" in t                            # 尾部结论必然可见
+    assert "❌失败,7/23" in t  # 尾部结论必然可见
     h2, t2 = _result_windows("DONE")
-    assert (h2, t2) == ("DONE", "")                     # 短文本不劈两半
+    assert (h2, t2) == ("DONE", "")  # 短文本不劈两半
 
 
 # ---- build_subagent_tool_trace:opencode 形(非主 agent 半边) ----
+
 
 def _oc_msg(agent: str, parts: list[dict], role: str = "assistant") -> dict:
     return {"info": {"role": role, "agent": agent, "time": {"created": 0}}, "parts": parts}
@@ -585,38 +646,60 @@ def _write_oc(tmp_path, sess: dict, name: str = "oc.json") -> Path:
 
 def test_build_subagent_tool_trace_opencode_non_main_agents(tmp_path):
     """opencode 形 aux:非主 agent message 的 tool parts 全收,工具名归一 +
-    camelCase 字段映射与主 trace 同口径;turn 恒 None(编号体系不同,宁缺毋错)。"""
-    sess = _oc_session([
-        _oc_msg("build", [{"type": "text", "text": "主 agent 只编排"},
-                          {"type": "tool", "tool": "task",
-                           "state": {"input": {"prompt": "验收"}, "output": "DONE"}}]),
-        _oc_msg("code-verifier", [{"type": "tool", "tool": "read",
-                                   "state": {"input": {"filePath": "docs/demo-contract.md"},
-                                             "output": "…"}},
-                                  {"type": "tool", "tool": "bash",
-                                   "state": {"input": {"command": "pytest -q"}, "output": "ok"}}]),
-        _oc_msg("build", [{"type": "text", "text": "收尾"}]),
-        _oc_msg("release-checklist", [{"type": "tool", "tool": "write",
-                                       "state": {"input": {"filePath": "LOG.md", "content": "x"},
-                                                 "output": ""}}]),
-        _oc_msg(None, [{"type": "tool", "tool": "bash", "state": {"input": {"command": "ls"}, "output": ""}}]),
-    ])
+    camelCase 字段映射与主 trace 同口径;turn 恒 None(编号体系不同,宁缺毋错)。
+    """
+    sess = _oc_session(
+        [
+            _oc_msg(
+                "build",
+                [
+                    {"type": "text", "text": "主 agent 只编排"},
+                    {"type": "tool", "tool": "task", "state": {"input": {"prompt": "验收"}, "output": "DONE"}},
+                ],
+            ),
+            _oc_msg(
+                "code-verifier",
+                [
+                    {
+                        "type": "tool",
+                        "tool": "read",
+                        "state": {"input": {"filePath": "docs/demo-contract.md"}, "output": "…"},
+                    },
+                    {"type": "tool", "tool": "bash", "state": {"input": {"command": "pytest -q"}, "output": "ok"}},
+                ],
+            ),
+            _oc_msg("build", [{"type": "text", "text": "收尾"}]),
+            _oc_msg(
+                "release-checklist",
+                [
+                    {
+                        "type": "tool",
+                        "tool": "write",
+                        "state": {"input": {"filePath": "LOG.md", "content": "x"}, "output": ""},
+                    }
+                ],
+            ),
+            _oc_msg(None, [{"type": "tool", "tool": "bash", "state": {"input": {"command": "ls"}, "output": ""}}]),
+        ]
+    )
     trace = build_subagent_tool_trace(_write_oc(tmp_path, sess))
     assert [(t.name, t.agent) for t in trace] == [
-        ("Read", "code-verifier"), ("Bash", "code-verifier"),
+        ("Read", "code-verifier"),
+        ("Bash", "code-verifier"),
         ("Write", "release-checklist"),
         # 无 agent 标注的裸 message 被保守跳过(归属不明,宁可不洗)
     ]
     # camelCase → snake_case 与主 trace 同口径(Read 的 filePath → file_path)
     assert trace[0].input == {"file_path": "docs/demo-contract.md"}
-    assert all(t.turn is None for t in trace)          # opencode 不带 turn(两套编号宁缺毋错)
+    assert all(t.turn is None for t in trace)  # opencode 不带 turn(两套编号宁缺毋错)
     assert all(not t.parent_tool_use_id for t in trace)  # 无 id 关联 → 派发引用走回退
 
 
 def test_build_subagent_tool_trace_opencode_no_sub_or_no_main(tmp_path):
     """纯主 agent session → 空;缺 info.agent(无主可对)→ 空(防御,root 路早 exit 2)。"""
-    only_main = _oc_session([_oc_msg("build", [{"type": "tool", "tool": "bash",
-                                                "state": {"input": {"command": "ls"}, "output": ""}}])])
+    only_main = _oc_session(
+        [_oc_msg("build", [{"type": "tool", "tool": "bash", "state": {"input": {"command": "ls"}, "output": ""}}])]
+    )
     assert build_subagent_tool_trace(_write_oc(tmp_path, only_main, "oc1.json")) == []
     no_main = _oc_session([_oc_msg("x", [{"type": "text", "text": "hi"}])], main_agent="")
     no_main["info"] = {}

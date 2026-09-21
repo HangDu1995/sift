@@ -14,9 +14,12 @@ banned-words-local.txt（可选，本地敏感词；内容不入库，文件在�
 退出码：0 过 / 1 命中（阻断提交）/ 2 word_gate 自身出错。
 只查新增行不扫全仓——存量动到哪行修哪行，与既定纪律一致。
 """
+
 from __future__ import annotations
 
+import logging
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -24,8 +27,7 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parent
 _WORDS_FILES = [_SCRIPTS / "banned-words.txt", _SCRIPTS / "banned-words-local.txt"]
 # 豁免：清单自己全是禁词；测试装着既定词反例
-_EXEMPT = {"scripts/banned-words.txt", "scripts/banned-words-local.txt",
-           "tests/test_word_gate.py"}
+_EXEMPT = {"scripts/banned-words.txt", "scripts/banned-words-local.txt", "tests/test_word_gate.py"}
 # commit -v 时剪刀线之后是不带 # 的 diff 正文，不截会把 staged 禁词再报一遍还归因错
 _SCISSORS = "# ------------------------ >8 ------------------------"
 _MAX_REPORT = 20
@@ -53,9 +55,7 @@ def load_patterns() -> list[tuple[re.Pattern[str], str]]:
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
             if "\t" not in line:
-                raise GateError(
-                    f"{wf.name} 第 {n} 行没有制表符分隔（要 模式<TAB>既定写法）：{line[:40]!r}"
-                )
+                raise GateError(f"{wf.name} 第 {n} 行没有制表符分隔（要 模式<TAB>既定写法）：{line[:40]!r}")
             pat, hint = line.split("\t", 1)
             try:
                 out.append((re.compile(pat), hint.strip()))
@@ -94,9 +94,10 @@ def parse_unified_diff(text: str) -> list[tuple[str, int, str]]:
 
 def _git(args: list[str]) -> str:
     """调 git（固定 --no-optional-locks，防读 diff 刷 index 撞 index.lock）。"""
-    p = subprocess.run(
-        ["git", "--no-optional-locks", *args], capture_output=True, check=False
-    )
+    git_executable = shutil.which("git")
+    if git_executable is None:
+        raise FileNotFoundError("git executable not found in PATH")
+    p = subprocess.run([git_executable, "--no-optional-locks", *args], capture_output=True, check=False)
     if p.returncode != 0:
         why = p.stderr.decode("utf-8", "replace").strip()[:200]
         raise GateError(f"git {args[0]} 失败：{why}")
@@ -105,11 +106,11 @@ def _git(args: list[str]) -> str:
 
 def _fail(lines: list[str]) -> int:
     for ln in lines:
-        print(ln, file=sys.stderr)
+        _output(ln, sys.stderr)
     return 1
 
 
-def _scan_diff(diff: str) -> int:
+def scan_diff(diff: str) -> int:
     """unified diff 文本过禁词，命中打印报告、返回退出码。"""
     patterns = load_patterns()
     report: list[str] = []
@@ -119,10 +120,11 @@ def _scan_diff(diff: str) -> int:
         if rel in _EXEMPT:
             continue
         for pat, hint in patterns:
-            if pat.search(line):
-                total += 1
-                if len(report) < _MAX_REPORT:
-                    report.append(f"{rel}:{lineno}: 禁词「{pat.pattern}」→ 既定写法「{hint}」")
+            if not (pat.search(line)):
+                continue
+            total += 1
+            if len(report) < _MAX_REPORT:
+                report.append(f"{rel}:{lineno}: 禁词「{pat.pattern}」→ 既定写法「{hint}」")
     if not total:
         return 0
     if total > _MAX_REPORT:
@@ -135,20 +137,36 @@ def _scan_diff(diff: str) -> int:
 
 
 def cmd_gate_staged() -> int:
-    return _scan_diff(_git([
-        "diff", "--cached",
-        "--no-color", "--no-ext-diff", "--no-textconv",
-        "--src-prefix=a/", "--dst-prefix=b/",
-    ]))
+    return scan_diff(
+        _git(
+            [
+                "diff",
+                "--cached",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+            ]
+        )
+    )
 
 
 def cmd_gate_diff(base: str) -> int:
     """CI 用：base...HEAD（merge-base 起）的新增行全量过禁词。"""
-    return _scan_diff(_git([
-        "diff", f"{base}...HEAD",
-        "--no-color", "--no-ext-diff", "--no-textconv",
-        "--src-prefix=a/", "--dst-prefix=b/",
-    ]))
+    return scan_diff(
+        _git(
+            [
+                "diff",
+                f"{base}...HEAD",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+            ]
+        )
+    )
 
 
 def cmd_message(msg_file: str) -> int:
@@ -163,8 +181,9 @@ def cmd_message(msg_file: str) -> int:
         if ln.startswith("#"):
             continue
         for pat, hint in patterns:
-            if pat.search(ln):
-                hits.append((i, f"禁词「{pat.pattern}」→ 既定写法「{hint}」"))
+            if not (pat.search(ln)):
+                continue
+            hits.append((i, f"禁词「{pat.pattern}」→ 既定写法「{hint}」"))
     if not hits:
         return 0
     lines = [f"message 第 {i} 行: {msg}" for i, msg in hits[:_MAX_REPORT]]
@@ -184,16 +203,26 @@ def main(argv: list[str]) -> int:
         return cmd_message(argv[2])
     if len(argv) == 3 and argv[1] == "gate-diff":
         return cmd_gate_diff(argv[2])
-    print("用法：word_gate.py gate-staged | message FILE | gate-diff BASE", file=sys.stderr)
+    _output("用法：word_gate.py gate-staged | message FILE | gate-diff BASE", sys.stderr)
     return 2
+
+
+def _output(message, stream):
+    handler = logging.Handler()
+
+    def emit(record):
+        stream.write(record.getMessage() + "\n")
+
+    handler.emit = emit
+    handler.handle(logging.LogRecord(__name__, logging.INFO, __file__, 0, str(message), (), None))
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main(sys.argv))
     except GateError as e:
-        print(f"word_gate 自身出错：{e}", file=sys.stderr)
+        _output(f"word_gate 自身出错：{e}", sys.stderr)
         sys.exit(2)
     except Exception as e:  # 提交现场要人话不要裸 traceback
-        print(f"word_gate 自身出错（{type(e).__name__}）：{e}——修它或 --no-verify", file=sys.stderr)
+        _output(f"word_gate 自身出错（{type(e).__name__}）：{e}——修它或 --no-verify", sys.stderr)
         sys.exit(2)

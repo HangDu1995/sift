@@ -65,6 +65,7 @@ class CalibrationVerdict(str, Enum):
     TRUSTED=结果对+过程对;HIGH_SCORE_SUSPECT=结果对+过程错;
     FIXABLE=结果错+过程对;SKILL_FAILED=结果错+过程错;PROCESS_UNKNOWN=过程无可判定。
     """
+
     TRUSTED = "TRUSTED"
     HIGH_SCORE_SUSPECT = "HIGH_SCORE_SUSPECT"
     FIXABLE = "FIXABLE"
@@ -74,6 +75,7 @@ class CalibrationVerdict(str, Enum):
 
 class ProcessStatus(str, Enum):
     """过程面状态:ok=过程对;violated=有 prohibition/output 硬类违规;unknown=无可判定。"""
+
     OK = "ok"
     VIOLATED = "violated"
     UNKNOWN = "unknown"

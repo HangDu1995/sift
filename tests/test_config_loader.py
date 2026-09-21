@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pytest
@@ -19,15 +20,17 @@ def framework_yaml(tmp_path: Path) -> Path:
 
 
 class TestEvalConfigDefaults:
-    def test_default_values(self):
+    @staticmethod
+    def test_default_values():
         config = EvalConfig()
         assert config.collection_prefix == ""
         assert config.skills_dir == "skills/"
         assert config.domain_templates == {}
         assert config.type_templates == {}
-        assert config.grading_threshold == 0.7
+        assert math.isclose(config.grading_threshold, 0.7, rel_tol=0.0, abs_tol=0.0)
 
-    def test_from_dict(self):
+    @staticmethod
+    def test_from_dict():
         data = {
             "scanning": {"collection_prefix": "mylib-*"},
             "domain_templates": {
@@ -43,11 +46,13 @@ class TestEvalConfigDefaults:
         assert "api" in config.domain_templates
         assert len(config.domain_templates["api"]) == 1
 
-    def test_from_empty_dict(self):
+    @staticmethod
+    def test_from_empty_dict():
         config = EvalConfig.from_dict({})
         assert config.collection_prefix == ""
 
-    def test_from_dict_with_skill_keywords(self):
+    @staticmethod
+    def test_from_dict_with_skill_keywords():
         data = {
             "skill_keywords": {
                 "builder": ["build", "compile"],
@@ -60,50 +65,74 @@ class TestEvalConfigDefaults:
 
 
 class TestThreeLayerMerge:
-    def test_framework_only(self, tmp_path: Path):
+    @staticmethod
+    def test_framework_only(tmp_path: Path):
         fw = tmp_path / "defaults.yaml"
-        fw.write_text(yaml.dump({
-            "scanning": {"collection_prefix": ""},
-            "grading": {"default_threshold": 0.8},
-        }))
+        fw.write_text(
+            yaml.dump(
+                {
+                    "scanning": {"collection_prefix": ""},
+                    "grading": {"default_threshold": 0.8},
+                }
+            )
+        )
         config = load_config(tmp_path, config_path=fw)
-        assert config.grading_threshold == 0.8
+        assert math.isclose(config.grading_threshold, 0.8, rel_tol=0.0, abs_tol=0.0)
 
-    def test_project_overrides_framework(self, tmp_path: Path):
+    @staticmethod
+    def test_project_overrides_framework(tmp_path: Path):
         fw = tmp_path / "defaults.yaml"
-        fw.write_text(yaml.dump({
-            "scanning": {"collection_prefix": ""},
-            "grading": {"default_threshold": 0.5},
-        }))
+        fw.write_text(
+            yaml.dump(
+                {
+                    "scanning": {"collection_prefix": ""},
+                    "grading": {"default_threshold": 0.5},
+                }
+            )
+        )
         proj = tmp_path / "eval-config.yaml"
-        proj.write_text(yaml.dump({
-            "scanning": {"collection_prefix": "mylib-*"},
-            "grading": {"default_threshold": 0.9},
-        }))
+        proj.write_text(
+            yaml.dump(
+                {
+                    "scanning": {"collection_prefix": "mylib-*"},
+                    "grading": {"default_threshold": 0.9},
+                }
+            )
+        )
         config = load_config(tmp_path, config_path=fw, project_config_path=proj)
         assert config.collection_prefix == "mylib-*"
-        assert config.grading_threshold == 0.9
+        assert math.isclose(config.grading_threshold, 0.9, rel_tol=0.0, abs_tol=0.0)
 
-    def test_skill_local_overrides_project(self, tmp_path: Path):
+    @staticmethod
+    def test_skill_local_overrides_project(tmp_path: Path):
         fw = tmp_path / "defaults.yaml"
         fw.write_text(yaml.dump({"scanning": {"collection_prefix": ""}}))
         proj = tmp_path / "eval-config.yaml"
-        proj.write_text(yaml.dump({
-            "domain_templates": {
-                "api": {"assertions": [{"type": "CONTAINS_PATTERN", "pattern": "v1"}]},
-            },
-        }))
+        proj.write_text(
+            yaml.dump(
+                {
+                    "domain_templates": {
+                        "api": {"assertions": [{"type": "CONTAINS_PATTERN", "pattern": "v1"}]},
+                    },
+                }
+            )
+        )
         skill_cfg = tmp_path / "sift.yaml"
-        skill_cfg.write_text(yaml.dump({
-            "prompt_templates": ["custom prompt 1"],
-        }))
+        skill_cfg.write_text(
+            yaml.dump(
+                {
+                    "prompt_templates": ["custom prompt 1"],
+                }
+            )
+        )
         config = load_config(tmp_path, config_path=fw, project_config_path=proj, skill_config_path=skill_cfg)
         assert "api" in config.domain_templates
         assert config.prompt_templates == ["custom prompt 1"]
 
 
 class TestTemplateFlattening:
-    def test_flatten_nested_assertions(self):
+    @staticmethod
+    def test_flatten_nested_assertions():
         data = {
             "domain_templates": {
                 "api": {
@@ -117,7 +146,8 @@ class TestTemplateFlattening:
         config = EvalConfig.from_dict(data)
         assert len(config.domain_templates["api"]) == 2
 
-    def test_flat_list_assertions(self):
+    @staticmethod
+    def test_flat_list_assertions():
         data = {
             "domain_templates": {
                 "api": [
@@ -128,6 +158,7 @@ class TestTemplateFlattening:
         config = EvalConfig.from_dict(data)
         assert len(config.domain_templates["api"]) == 1
 
-    def test_missing_yaml_returns_defaults(self, tmp_path: Path):
+    @staticmethod
+    def test_missing_yaml_returns_defaults(tmp_path: Path):
         config = load_config(tmp_path, config_path=tmp_path / "nonexistent.yaml")
         assert config.collection_prefix == ""

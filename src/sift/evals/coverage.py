@@ -4,19 +4,23 @@
 每点被哪几道 eval 覆盖;covered_by 空 = 漏测。rationale 是自由文本,靠 LLM 语义映射,
 不建硬结构化 instruction_ref(理由见 handbook §4.2,记忆 sift-no-structured-skillmd-same-root)。
 """
+
 import json
+import logging
 import re
 import time
 from pathlib import Path
 
+from sift.llm_transport import LLMCallConfig
 from sift.models import EvalSet
 from sift.models.coverage_report import CoveragePoint, CoverageReport
 from sift.parser import parse_skill_md
 from sift.utils import call_claude
 
 
-def _build_coverage_prompt(name: str, description: str, content: str, eval_set: EvalSet,
-                           kind: str | None = None) -> str:
+def _build_coverage_prompt(
+    name: str, description: str, content: str, eval_set: EvalSet, kind: str | None = None
+) -> str:
     is_agent = kind == "agent"
     role_word = "AI agent" if is_agent else "Claude Code Skill"
     def_head = "## Agent system prompt" if is_agent else "## Skill definition (SKILL.md)"
@@ -51,16 +55,17 @@ Output JSON ONLY, no other text:
 
 def _parse_coverage_response(response: str, skill_name: str) -> CoverageReport:
     """解析 LLM 覆盖映射响应。畸形/空 → 空 report(不炸,漏测诊断宁少报不乱报)。
-    正则抠最大 {...}(fence 在大括号外被自然略过)对齐 generator._parse_llm_response。"""
+    正则抠最大 {...}(fence 在大括号外被自然略过)对齐 generator._parse_llm_response。
+    """
     obj = None
     try:
         obj = json.loads(response)
-    except (json.JSONDecodeError, ValueError):
+    except ValueError:
         m = re.search(r"\{.*\}", response, re.S)
         if m:
             try:
                 obj = json.loads(m.group(0))
-            except (json.JSONDecodeError, ValueError):
+            except ValueError:
                 obj = None
     if not isinstance(obj, dict):
         return CoverageReport(skill_name=skill_name)
@@ -79,18 +84,21 @@ def _parse_coverage_response(response: str, skill_name: str) -> CoverageReport:
             try:
                 ids.append(int(i))
             except (TypeError, ValueError):
+                logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
                 continue
-        points.append(CoveragePoint(
-            label=str(rp.get("label", ""))[:200],
-            source_quote=str(rp.get("source_quote", "")),
-            covered_by=ids,
-        ))
+        points.append(
+            CoveragePoint(
+                label=str(rp.get("label", ""))[:200],
+                source_quote=str(rp.get("source_quote", "")),
+                covered_by=ids,
+            )
+        )
     return CoverageReport(skill_name=skill_name, points=points)
 
 
-def analyze_coverage(skill_path: Path, eval_set: EvalSet, *,
-                     model: str | None = None, timeout: int = 120,
-                     kind: str | None = None) -> CoverageReport:
+def analyze_coverage(
+    skill_path: Path, eval_set: EvalSet, *, model: str | None = None, timeout: int = 120, kind: str | None = None
+) -> CoverageReport:
     """一次 LLM:声明正文 + evals → 覆盖映射 report。call_claude 失败 → 空 report(诊断不炸)。
 
     kind='agent' 时 prompt 用 agent 措辞(内容点提取吃 parse 后 body,skill/agent 通用)。
@@ -100,7 +108,7 @@ def analyze_coverage(skill_path: Path, eval_set: EvalSet, *,
     usage: dict = {}
     start = time.perf_counter()
     try:
-        response = call_claude(prompt, model=model, timeout=timeout, on_usage=usage.update)
+        response = call_claude(prompt=prompt, on_usage=usage.update, config=LLMCallConfig(model=model, timeout=timeout))
     except RuntimeError:
         return CoverageReport(skill_name=name, duration_seconds=time.perf_counter() - start)
     rep = _parse_coverage_response(response, name)

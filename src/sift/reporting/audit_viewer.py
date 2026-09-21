@@ -3,6 +3,7 @@
 读 templates/audit-report.html,把 AuditReport.model_dump() 作为 EMBEDDED_DATA 注入,
 返回自包含 HTML。audit 命令写完 JSON 后用它写 audit-report.html。
 """
+
 from __future__ import annotations
 
 import json
@@ -17,7 +18,8 @@ _PLACEHOLDER = "/*__EMBEDDED_DATA__*/"
 class AuditReportGenerator:
     """生成 audit HTML 报告。数据 = AuditReport.model_dump(),无需 find_runs 递归。"""
 
-    def generate_html(self, report: AuditReport) -> str:
+    @staticmethod
+    def generate_html(report: AuditReport) -> str:
         template = (_TEMPLATE_DIR / "audit-report.html").read_text(encoding="utf-8")
         data = report.model_dump(mode="json")
         payload = json.dumps(data, ensure_ascii=False, indent=2)

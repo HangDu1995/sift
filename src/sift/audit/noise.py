@@ -17,6 +17,7 @@ audit 产出的 FAIL finding 里混着两类——
 对齐 dedup.py 定位。``noise_label`` 用 str(不引入 enum),值 ``"tool_noise"`` /
 ``"skill_issue"`` / ``"uncertain"``。
 """
+
 from __future__ import annotations
 
 import re
@@ -93,9 +94,11 @@ def annotate_noise(findings: list[AuditFinding]) -> list[AuditFinding]:
         if reasons:
             f.noise_label = "tool_noise"
             f.noise_reasons = reasons
-        elif (f.source in _HARD_CONSTRAINT_SOURCES
-              and f.method == AuditMethod.PROGRAMMATIC
-              and not _contradicts(f.evidence)):
+        elif (
+            f.source in _HARD_CONSTRAINT_SOURCES
+            and f.method == AuditMethod.PROGRAMMATIC
+            and not _contradicts(f.evidence)
+        ):
             f.noise_label = "skill_issue"
             f.noise_reasons = ["硬约束程序判定 FAIL"]
         else:

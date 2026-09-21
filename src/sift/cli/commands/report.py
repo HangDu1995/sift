@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -28,9 +29,10 @@ def generate_report_html(workspace: Path) -> Path | None:
         try:
             scorecard_data = json.loads(sc_path.read_text(encoding="utf-8"))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
 
     from sift.reporting.viewer import ReportGenerator
+
     output_path = workspace / "report.html"
     ReportGenerator().write_static(workspace, output_path, bench_data, previous=None, scorecard=scorecard_data)
     return output_path
@@ -62,7 +64,7 @@ def report(
         try:
             scorecard_data = json.loads(scorecard_path.read_text(encoding="utf-8"))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
 
     prev_data = None
     if previous and previous.exists():
@@ -74,7 +76,7 @@ def report(
                 prev_runs_data = json.loads(previous.read_text(encoding="utf-8"))
                 prev_data = {"runs": prev_runs_data.get("runs", [])}
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
 
     gen = ReportGenerator()
     output_path = workspace / "report.html"
@@ -83,4 +85,5 @@ def report(
 
     if open_browser:
         import webbrowser
+
         webbrowser.open(f"file://{output_path.resolve()}")

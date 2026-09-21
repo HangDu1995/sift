@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from sift.models import SkillCategory
 
-
 _PREFERENCE_SIGNALS = [
     # 英文
     "exact template",

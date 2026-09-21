@@ -41,4 +41,11 @@ def _isolate_refine_cache_dir(monkeypatch, tmp_path):
     ② 同 instructions 的测试跨 run 撞缓存,后者变 hit 而期望 miss 的断言失真。
     """
     from sift.audit import refine_cache
+
     monkeypatch.setattr(refine_cache, "_cache_dir", lambda: tmp_path)
+
+
+@pytest.fixture
+def no_llm_retry_wait(monkeypatch) -> None:
+    """仅由明确选择它的测试关闭重试退避，不影响并发计时测试。"""
+    monkeypatch.setattr("sift.audit.auditor.time.sleep", lambda *args, **kwargs: None)

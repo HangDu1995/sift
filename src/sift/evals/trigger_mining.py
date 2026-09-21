@@ -23,9 +23,11 @@ critique 正文/描述拆两调用的先例):a) 只喂 description 不喂 skill 
 运行时 ``fired`` 判定零 LLM(``trigger_runner``:被测 skill 名逐字匹配
 invoked_skills),考题多少不影响判定质量——本模块只影响出题。
 """
+
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Callable
@@ -43,6 +45,7 @@ NEAR_MISS_BATCH = 10
 # 事实层(零 LLM)
 # ---------------------------------------------------------------------------
 
+
 def _user_text(rec: dict) -> str:
     """record 的真实用户文本(非 tool_result / 系统注入);无 → 空。
 
@@ -58,10 +61,7 @@ def _user_text(rec: dict) -> str:
     if isinstance(content, str):
         t = content.strip()
     elif isinstance(content, list):
-        t = "\n".join(
-            b.get("text", "") for b in content
-            if isinstance(b, dict) and b.get("type") == "text"
-        ).strip()
+        t = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text").strip()
     else:
         return ""
     if not t or t.startswith("<system-reminder>") or "Caveat: The messages below" in t:
@@ -75,10 +75,11 @@ def _skill_fired(rec: dict, name_norm: str) -> bool:
     if msg.get("role") != "assistant" or not isinstance(msg.get("content"), list):
         return False
     for b in msg["content"]:
-        if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Skill":
-            full = ((b.get("input") or {}).get("skill") or "")
-            if full.rsplit(":", 1)[-1].strip().lower() == name_norm:
-                return True
+        if not (isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Skill"):
+            continue
+        full = (b.get("input") or {}).get("skill") or ""
+        if full.rsplit(":", 1)[-1].strip().lower() == name_norm:
+            return True
     return False
 
 
@@ -117,8 +118,9 @@ def mine_untriggered_queries(transcript_path: Path, skill_name: str) -> list[str
             else:
                 pending, fired = "", False  # 卫生不过关:占位防误归属,不收
             continue
-        if _skill_fired(rec, name_norm):
-            fired = True
+        if not (_skill_fired(rec, name_norm)):
+            continue
+        fired = True
     _flush(pending, fired)
     return candidates
 
@@ -131,6 +133,7 @@ def probe_dedup_key(prompt: str) -> str:
 # ---------------------------------------------------------------------------
 # 语义层(LLM 过滤「领域相邻」)
 # ---------------------------------------------------------------------------
+
 
 def _build_near_miss_prompt(description: str, batch: list[str]) -> str:
     lines = "\n".join(f"{i}. {q}" for i, q in enumerate(batch, 1))
@@ -173,13 +176,13 @@ def _parse_near_miss_response(response: str, batch_size: int) -> dict[int, tuple
     """
     try:
         data = json.loads(response)
-    except (json.JSONDecodeError, Exception):
+    except Exception:
         match = re.search(r"\{.*\}", response, re.DOTALL)
         if not match:
             return {}
         try:
             data = json.loads(match.group())
-        except (json.JSONDecodeError, Exception):
+        except Exception:
             return {}
     if not isinstance(data, dict):
         # 合法 JSON 但非对象(裸数组/字符串)——不守卫会在 .get 上 AttributeError 炸穿
@@ -203,12 +206,15 @@ def _parse_near_miss_response(response: str, batch_size: int) -> dict[int, tuple
             if 0 <= idx < batch_size and verdict in ("near_miss", "unrelated"):
                 out[idx] = (verdict, str(item.get("reason", "")))
         except (TypeError, ValueError):
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
             continue
     return out
 
 
 def filter_near_miss(
-    candidates: list[str], description: str, llm_call: Callable[[str], str],
+    candidates: list[str],
+    description: str,
+    llm_call: Callable[[str], str],
 ) -> list[tuple[str, str]]:
     """语义层:逐条判「领域相邻」→ ``[(verdict, reason), ...]`` 与 candidates 对齐。
 
@@ -219,7 +225,7 @@ def filter_near_miss(
     """
     verdicts: list[tuple[str, str]] = []
     for i in range(0, len(candidates), NEAR_MISS_BATCH):
-        batch = candidates[i:i + NEAR_MISS_BATCH]
+        batch = candidates[i: i + NEAR_MISS_BATCH]
         try:
             parsed = _parse_near_miss_response(llm_call(_build_near_miss_prompt(description, batch)), len(batch))
         except RuntimeError:

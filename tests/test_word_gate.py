@@ -5,6 +5,7 @@ word_gate.py 在 scripts/ 不在 src/,经 sys.path 直接 import(pyproject 的
 pythonpath 只加 src)。真拦截行为的端到端(真 staged/真 message)靠
 scripts/hooks/ 调用链,不在这里mock git。
 """
+
 from __future__ import annotations
 
 import re
@@ -77,21 +78,20 @@ def test_parse_unified_diff_paths_and_linenos():
 
 def test_scan_diff_hits_and_exempt(capsys, monkeypatch):
     """命中 → 退出 1 + 报告(路径:行号 + 既定写法);豁免文件同词放行。"""
-    monkeypatch.setattr(word_gate, "load_patterns",
-                        lambda: [(re.compile("坏词"), "好词")])
+    monkeypatch.setattr(word_gate, "load_patterns", lambda: [(re.compile("坏词"), "好词")])
     diff = (
         "--- a/docs/x.md\n+++ b/docs/x.md\n@@ -1,1 +1,2 @@\n"
         " 上下文\n+这句里有坏词\n"
         "--- a/tests/test_word_gate.py\n+++ b/tests/test_word_gate.py\n@@ -1,0 +1,1 @@\n"
         "+豁免文件里的坏词(canary 反例)\n"
     )
-    assert word_gate._scan_diff(diff) == 1
+    assert word_gate.scan_diff(diff) == 1
     err = capsys.readouterr().err
     assert "docs/x.md:2" in err and "「好词」" in err
-    assert "test_word_gate" not in err          # 豁免不报
+    assert "test_word_gate" not in err  # 豁免不报
 
 
-def test_cmd_message_scissors_and_comments(tmp_path, capsys):
+def test_cmd_message_scissors_and_comments(tmp_path, capsys, monkeypatch):
     """message 检查:剪刀线之后的 diff 正文与 # 注释行不算;命中行报行号。"""
     banned_line = "这行有坏词"
     msg = tmp_path / "msg.txt"
@@ -102,16 +102,16 @@ def test_cmd_message_scissors_and_comments(tmp_path, capsys):
         "剪刀线后 commit -v 的 diff 正文里的坏词不算\n",
         encoding="utf-8",
     )
+
     # 用真实清单跑:临时挂一个已知模式,免依赖清单具体内容
-    orig = word_gate.load_patterns
-    word_gate.load_patterns = lambda: [(re.compile("坏词"), "好词")]
-    try:
-        assert word_gate.cmd_message(str(msg)) == 1
-    finally:
-        word_gate.load_patterns = orig
+    def load_test_patterns():
+        return [(re.compile("坏词"), "好词")]
+
+    monkeypatch.setattr(word_gate, "load_patterns", load_test_patterns)
+    assert word_gate.cmd_message(str(msg)) == 1
     err = capsys.readouterr().err
     assert "第 3 行" in err
-    assert err.count("message 第") == 1         # 只报非注释、剪刀线前那处(汇总行除外)
+    assert err.count("message 第") == 1  # 只报非注释、剪刀线前那处(汇总行除外)
 
 
 def test_main_usage_error():

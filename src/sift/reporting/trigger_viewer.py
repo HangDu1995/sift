@@ -4,6 +4,7 @@
 注入,返回自包含 HTML。trigger 命令写完 JSON 后用它写 trigger-report.html(与 audit
 同款 always-write)。
 """
+
 from __future__ import annotations
 
 import json
@@ -18,7 +19,8 @@ _PLACEHOLDER = "/*__EMBEDDED_DATA__*/"
 class TriggerReportGenerator:
     """生成 trigger HTML 报告。数据 = TriggerReport.model_dump()。"""
 
-    def generate_html(self, report: TriggerReport) -> str:
+    @staticmethod
+    def generate_html(report: TriggerReport) -> str:
         template = (_TEMPLATE_DIR / "trigger-report.html").read_text(encoding="utf-8")
         data = report.model_dump(mode="json")
         payload = json.dumps(data, ensure_ascii=False, indent=2)

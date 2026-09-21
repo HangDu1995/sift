@@ -12,7 +12,7 @@ from sift.cli.main import app, console
 from sift.parser import resolve_skill_dir
 
 
-def _render_security_report(report, console: Console) -> None:
+def _render_security_report(report, output_console: Console) -> None:
     table = Table(title=f"Security Scan: {report.skill_name}")
     table.add_column("Scanner", style="bold")
     table.add_column("Status")
@@ -27,27 +27,27 @@ def _render_security_report(report, console: Console) -> None:
         else:
             status = "[dim]SKIP[/dim]"
         table.add_row(s.name, status, s.message)
-    console.print(table)
+    output_console.print(table)
 
     if report.findings:
-        console.print("\n[bold]Findings:[/bold]")
+        output_console.print("\n[bold]Findings:[/bold]")
         for f in report.findings:
             color = "red" if f.severity in ("CRITICAL", "HIGH") else "yellow"
             loc = f" ({f.file_path}" + (f":{f.line}" if f.line else "") + ")" if f.file_path else ""
-            console.print(f"  [{color}]{f.severity}[/{color}] [{f.scanner}] {f.description}{loc}")
+            output_console.print(f"  [{color}]{f.severity}[/{color}] [{f.scanner}] {f.description}{loc}")
 
     if report.verdict == "BLOCKED":
-        console.print(f"\n[red bold]VERDICT: BLOCKED[/red bold] — {report.summary}")
+        output_console.print(f"\n[red bold]VERDICT: BLOCKED[/red bold] — {report.summary}")
     elif report.verdict == "REVIEW_NEEDED":
-        console.print(f"\n[yellow bold]VERDICT: REVIEW NEEDED[/yellow bold] — {report.summary}")
+        output_console.print(f"\n[yellow bold]VERDICT: REVIEW NEEDED[/yellow bold] — {report.summary}")
     else:
-        console.print(f"\n[green bold]VERDICT: SAFE[/green bold] — {report.summary}")
+        output_console.print(f"\n[green bold]VERDICT: SAFE[/green bold] — {report.summary}")
 
 
 @app.command(rich_help_panel="静态体检(不跑 cc)")
 def vet(
     skill_path: Path = typer.Argument(..., help="Path to skill directory or GitHub URL", exists=True),
-    format: str = typer.Option("table", "--format", help="Output format: table or json"),
+    output_format: str = typer.Option("table", "--format", help="Output format: table or json"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path"),
     skip_external: bool = typer.Option(False, "--skip-external", help="Skip external scanners (aguara, skill-scanner)"),
 ):
@@ -60,9 +60,9 @@ def vet(
         report = vetter.vet(skill_path)
     except Exception as exc:
         console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from exc
 
-    if format == "json":
+    if output_format == "json":
         data = report.model_dump(mode="json")
         text = json.dumps(data, indent=2, ensure_ascii=False)
         if output:
@@ -75,11 +75,9 @@ def vet(
         _render_security_report(report, console)
 
     # 落盘:仅当显式 -o(默认不写文件,避免污染 skill 目录)
-    if output and format != "json":
+    if output and output_format != "json":
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(
-            json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        output.write_text(json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False), encoding="utf-8")
         console.print(f"Written to {output}")
 
     if report.verdict in ("BLOCKED", "REVIEW_NEEDED"):

@@ -35,6 +35,8 @@ from __future__ import annotations
 import re
 import subprocess
 
+from sift.executables import resolve_executable
+
 CLAUDE_MIN_VERSION = "2.1.0"
 CLAUDE_MAX_VERSION = "2.2.0"
 
@@ -42,8 +44,10 @@ CLAUDE_MAX_VERSION = "2.2.0"
 def get_claude_version() -> str | None:
     try:
         proc = subprocess.run(
-            ["claude", "--version"],
-            capture_output=True, text=True, timeout=10,
+            [resolve_executable("claude"), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if proc.returncode != 0:
             return None
@@ -58,8 +62,7 @@ def check_claude_available() -> tuple[bool, str]:
     version = get_claude_version()
     if version is None:
         return False, (
-            "claude CLI not found. Install Claude Code: "
-            "https://docs.anthropic.com/en/docs/claude-code/overview"
+            "claude CLI not found. Install Claude Code: https://docs.anthropic.com/en/docs/claude-code/overview"
         )
     return True, version
 
@@ -78,9 +81,7 @@ def check_claude_version() -> tuple[bool, str]:
 
     if parts < min_parts:
         return False, (
-            f"claude CLI version {version} is too old. "
-            f"sift requires >= {CLAUDE_MIN_VERSION}. "
-            f"Run: claude update"
+            f"claude CLI version {version} is too old. sift requires >= {CLAUDE_MIN_VERSION}. Run: claude update"
         )
     if parts >= max_parts:
         return True, (
@@ -95,5 +96,6 @@ def requires_claude():
     available, msg = check_claude_available()
     if not available:
         from sift.errors import ClaudeRunnerError
+
         raise ClaudeRunnerError(msg)
     return msg

@@ -23,29 +23,33 @@ skipped_reason;**无 FAIL 是正常终态 → 返回 None 不落盘**(同 trigge
 产物;「未跑:无 FAIL」是把正常态包装成例外态)。数据完整度门:UNRESOLVED 占比
 (summary.total 分母,INDETERMINATE 不进分子——重跑无益)>30% 不跑,提示先重跑。
 """
+
 from __future__ import annotations
 
 import json
 import threading
 import time
+from _thread import LockType
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from typing import Callable
 
-from sift.concurrency import _LLMRetryExhausted, call_llm_with_retry
+from sift.concurrency import LLMRetryExhausted, call_llm_with_retry
+from sift.llm_transport import HTTP_RETRY_MAX_TOKENS
 from sift.models.audit_models import (
     AuditReport,
-    AuditSuggestResult,
     AuditSuggestion,
+    AuditSuggestResult,
     AuditVerdict,
 )
 from sift.scoring._jsonschema import inline_schema
-from sift.utils import _HTTP_RETRY_MAX_TOKENS
 
 # 簇/批上限:批判官同款(10/批)。skill_body + PASS 清单每批全量(压缩后很小),FAIL 簇分批。
 _CLUSTERS_PER_BATCH = 10
 # 弹性输出上限:首档 = base + 每簇 N。探针实测 6 簇 output 10.2k、12 簇 16.2k(≈ 4k 底噪 +
 # 1.0k/簇),但同任务思考量 run-to-run 方差 ±30%(实测 10~16k)——给窄了撞方差就是浪费一整趟
 # 截断(e2e 实测多花 ~4min),过量给免费(上限不计费,按实际生成付费)→ 从宽:6k 底噪 +
-# 2.5k/簇。封顶 utils._HTTP_RETRY_MAX_TOKENS(升档梯子也从首档起 ×2)。
+# 2.5k/簇。封顶 utils.HTTP_RETRY_MAX_TOKENS(升档梯子也从首档起 ×2)。
 _SUGGEST_TOKENS_BASE = 6000
 _SUGGEST_TOKENS_PER_CLUSTER = 2500
 # 数据完整度门:UNRESOLVED 占比超此值不跑(证据残缺时建议必乱)。分母 = summary.total
@@ -60,35 +64,42 @@ _WIRE_CATEGORIES = ("skill_fix", "declaration_fix", "model_env")
 # {category, target_seqs, rationale}——suggestion/keeps_pass 对 fix 两类必填由**代码侧**
 # 校验(JSON Schema 表达不了按 category 的条件必填),缺 → 整条丢弃 + dropped_count
 # (不硬凑);model_env 条目忽略建议字段。
-_WIRE_SCHEMA = inline_schema({
-    "type": "object",
-    "properties": {
-        "attributions": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "category": {
-                        "type": "string",
-                        "enum": list(_WIRE_CATEGORIES),
-                        "description": "skill_fix=改 skill 正文 / declaration_fix=改声明 / model_env=模型或环境问题(不出建议)",
+_WIRE_SCHEMA = inline_schema(
+    {
+        "type": "object",
+        "properties": {
+            "attributions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "enum": list(_WIRE_CATEGORIES),
+                            "description": (
+                                "skill_fix=改 skill 正文 / declaration_fix=改声明 / model_env=模型或环境问题(不出建议)"
+                            ),
+                        },
+                        "target_seqs": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": ("该簇全部 FAIL finding 的 #N(逐指令簇:一条 attribution 对应一个簇)"),
+                        },
+                        "rationale": {"type": "string", "description": "归因理由(为何属这类)"},
+                        "suggestion": {
+                            "type": "string",
+                            "description": ("可直接照做的修改建议(skill_fix/declaration_fix 必填;model_env 留空)"),
+                        },
+                        "keeps_pass": {"type": "boolean", "description": "自检:建议改的段落不与任何 PASS 指令撞车"},
+                        "keeps_pass_note": {"type": "string", "description": "一句核对说明"},
                     },
-                    "target_seqs": {
-                        "type": "array",
-                        "items": {"type": "integer"},
-                        "description": "该簇全部 FAIL finding 的 #N(逐指令簇:一条 attribution 对应一个簇)",
-                    },
-                    "rationale": {"type": "string", "description": "归因理由(为何属这类)"},
-                    "suggestion": {"type": "string", "description": "可直接照做的修改建议(skill_fix/declaration_fix 必填;model_env 留空)"},
-                    "keeps_pass": {"type": "boolean", "description": "自检:建议改的段落不与任何 PASS 指令撞车"},
-                    "keeps_pass_note": {"type": "string", "description": "一句核对说明"},
+                    "required": ["category", "target_seqs", "rationale"],
                 },
-                "required": ["category", "target_seqs", "rationale"],
             },
         },
-    },
-    "required": ["attributions"],
-})
+        "required": ["attributions"],
+    }
+)
 
 
 def _tokens_of(usage: dict) -> int:
@@ -96,8 +107,9 @@ def _tokens_of(usage: dict) -> int:
     n = 0
     for k in ("input_tokens", "output_tokens"):
         v = usage.get(k, 0)
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            n += v
+        if not (isinstance(v, (int, float)) and not isinstance(v, bool)):
+            continue
+        n += v
     return n
 
 
@@ -111,8 +123,9 @@ def _pass_list(report: AuditReport) -> list[str]:
     derived_texts = {f.instruction_text for f in report.findings if f.derived_from_transcript}
     out: list[str] = []
     for row in report.by_instruction:
-        if row.fail_count == 0 and row.pass_count > 0 and row.instruction_text not in derived_texts:
-            out.append(row.headline or row.source_excerpt or row.instruction_text)
+        if not (row.fail_count == 0 and row.pass_count > 0 and row.instruction_text not in derived_texts):
+            continue
+        out.append(row.headline or row.source_excerpt or row.instruction_text)
     return out
 
 
@@ -143,25 +156,33 @@ def _cluster_block(i: int, cluster: dict, n_transcripts: int) -> str:
     lines = [f"### 簇 {i}"]
     for f in cluster["findings"]:
         tag = " [合成关系声明(顺序),建议须指向两端步骤的原文]" if f.synthetic else ""
-        noise = f" · 噪声判别:{f.noise_label}(工具噪声,不得据其出 skill_fix 建议)" if f.noise_label == "tool_noise" else ""
-        lines.append(
-            f"- finding #{f.seq} [{f.method.value}]{tag}{noise} evidence: {f.evidence}"
+        noise = (
+            (f" · 噪声判别:{f.noise_label}(工具噪声,不得据其出 skill_fix 建议)")
+            if f.noise_label == "tool_noise"
+            else ""
         )
+        lines.append((f"- finding #{f.seq} [{f.method.value}]{tag}{noise} evidence: {f.evidence}"))
     if row is not None:
         lines.append(
-            f"- 指令:{row.headline or row.source_excerpt or row.instruction_text}\n"
-            f"  跨会话:失败 {row.fail_count}/{row.total} · 失败于 "
-            f"{', '.join(row.fail_in_transcripts) or '(未记录)'} · 未判成 {row.unresolved_count}"
-            f"(transcript 总数 {n_transcripts})"
+            (
+                f"- 指令:{row.headline or row.source_excerpt or row.instruction_text}\n"
+                f"  跨会话:失败 {row.fail_count}/{row.total} · 失败于 "
+                f"{', '.join(row.fail_in_transcripts) or '(未记录)'} · 未判成 {row.unresolved_count}"
+                f"(transcript 总数 {n_transcripts})"
+            )
         )
     return "\n".join(lines)
 
 
 def _prompt(skill_body: str, pass_list: list[str], clusters: list[dict], n_transcripts: int) -> str:
     single_note = (
-        "\n注意:本次 transcript 总数为 1——「单发失败」不作为 model_env 的依据"
-        "(每条都是 1/1),归因交给 evidence / 程序判定 / 指令清晰度。\n"
-        if n_transcripts <= 1 else ""
+        (
+            "\n"
+            "注意:本次 transcript 总数为 1——「单发失败」不作为 model_env "
+            "的依据(每条都是 1/1),归因交给 evidence / 程序判定 / 指令清晰度。\n"
+        )
+        if n_transcripts <= 1
+        else ""
     )
     pass_section = "\n".join(f"- {p}" for p in pass_list) or "- (无)"
     blocks = "\n\n".join(_cluster_block(i, c, n_transcripts) for i, c in enumerate(clusters))
@@ -179,7 +200,7 @@ def _prompt(skill_body: str, pass_list: list[str], clusters: list[dict], n_trans
         "- model_env:单发失败(失败会话数 < transcript 总数)/ 工具噪声 / 环境问题 →"
         " **不出建议别硬凑**(category=model_env,suggestion 留空)。\n"
         f"{single_note}\n"
-        f"## skill 声明全文\n\"\"\"\n{skill_body}\n\"\"\"\n\n"
+        f'## skill 声明全文\n"""\n{skill_body}\n"""\n\n'
         "## 已通过(PASS)的指令清单(保留账本:你的建议不得与它们冲突——若建议改的段落"
         "恰是某条 PASS 指令,keeps_pass 填 false 并在 keeps_pass_note 说明)\n"
         f"{pass_section}\n\n"
@@ -207,6 +228,71 @@ def _parse_attributions(resp: str) -> list[dict] | None:
     return items if isinstance(items, list) else None
 
 
+@dataclass
+class _SuggestionBatchRunner:
+    """并行建议批次共用的输入和线程安全用量统计。"""
+
+    skill_body: str
+    pass_list: list[str]
+    n_transcripts: int
+    batches: list[list[dict]]
+    model: str | None
+    timeout: int
+    on_progress: Callable[[str], None] | None
+    usage: dict = field(default_factory=dict)
+    usage_lock: LockType = field(default_factory=threading.Lock)
+    calls_made: int = 0
+
+    def call_batch(self, k: int, batch: list[dict]):
+        """单批一次 LLM 调用;异常就地收(永不外抛),返回 ("ok"|"exhausted"|"error", payload)。"""
+        mt = min(HTTP_RETRY_MAX_TOKENS, _SUGGEST_TOKENS_BASE + _SUGGEST_TOKENS_PER_CLUSTER * len(batch))
+        prog = self.on_progress
+        if self.on_progress and len(self.batches) > 1:
+
+            def prog(m, _k=k + 1, _n=len(self.batches)):
+                return self.on_progress(f"  [批 {_k}/{_n}] {m.strip()}")
+
+        prompt = _prompt(self.skill_body, self.pass_list, batch, self.n_transcripts)
+        t0 = time.perf_counter()
+        try:
+            resp = call_llm_with_retry(
+                prompt,
+                model=self.model,
+                timeout=self.timeout,
+                schema=_WIRE_SCHEMA,
+                on_usage=self._on_usage,
+                transport="http",
+                on_progress=prog,  # http 升档/cc 回退进度行(单发最长 600s,静默像死机)
+                max_tokens=mt,
+            )
+        except LLMRetryExhausted:
+            self._batch_note(k, f"失败:重试耗尽 ⏱ {time.perf_counter() - t0:.1f}s")
+            return ("exhausted", None)
+        except Exception as exc:  # 单批挂不毁其余批(并行下其余批照常完成);原因带回汇总
+            self._batch_note(k, (f"失败:{str(exc)[:80]} ⏱ {time.perf_counter() - t0:.1f}s"))
+            return ("error", str(exc)[:120])
+        self._batch_note(k, f"完成 ⏱ {time.perf_counter() - t0:.1f}s")
+        return ("ok", _parse_attributions(resp))
+
+    def _on_usage(self, payload: dict) -> None:
+        # 并行批各自回报本批用量:锁内**累加**(update 是覆盖,后到批会把先到批的计数冲掉
+        # ——并行下丢一半 token 账);非数字字段(note 等)跳过,_tokens_of 同款守卫。
+        # calls 每次响应计 1(含截断/升档重试的每次尝试,与判官阶段 calls 同口径)——
+        # 报告阶段表 suggest 行要用,见 AuditSuggestResult 分项字段。
+        with self.usage_lock:
+            self.calls_made += 1
+            for k, v in payload.items():
+                if not (isinstance(v, (int, float)) and not isinstance(v, bool)):
+                    continue
+                self.usage[k] = self.usage.get(k, 0) + v
+
+    def _batch_note(self, k: int, msg: str) -> None:
+        # 批级可观测:仅多批时打(单批由 CLI 汇总行收口,不叠噪声);前缀与升档/cc 回退
+        # 进度行同形("  [批 k/n] "),看终端的人能对上哪条行属于哪一批。
+        if self.on_progress is not None and len(self.batches) > 1:
+            self.on_progress(f"  [批 {k + 1}/{len(self.batches)}] {msg}")
+
+
 def build_suggestions(
     report: AuditReport,
     skill_body: str,
@@ -219,7 +305,7 @@ def build_suggestions(
     - **无 FAIL → None 不落盘**(正常终态,同 trigger 无失败不留产物);
     - UNRESOLVED 占比 > 30% → 空结果 + skipped_reason(证据残缺,先重跑);
     - 分批 ≤10 簇/批、批间并行(≤4 workers,AIMD 门控),首档输出上限按簇数弹性
-      (6000 + 2500×簇数,封顶 utils._HTTP_RETRY_MAX_TOKENS);
+      (6000 + 2500×簇数,封顶 utils.HTTP_RETRY_MAX_TOKENS);
     - **永不向外抛**(挂点在落盘前):单批重试耗尽/异常 → skipped_reason 收尾
       (保留其余批的建议,该批簇计 dropped);整批空响应/解析失败 → 同;
     - 归因映射:fix 两类须非空 suggestion(缺 → 整条丢 + dropped_count);
@@ -232,83 +318,59 @@ def build_suggestions(
     total = report.summary.get("total", 0) or len(report.findings)
     unresolved = report.summary.get("unresolved", 0)
     if total and unresolved / total > _MAX_UNRESOLVED_RATE:
-        return AuditSuggestResult(skipped_reason=(
-            f"UNRESOLVED 占比 {unresolved}/{total} > 30%,证据残缺——先重跑补齐未判成条目,再要建议"
-        ))
+        return AuditSuggestResult(
+            skipped_reason=(f"UNRESOLVED 占比 {unresolved}/{total} > 30%,证据残缺——先重跑补齐未判成条目,再要建议")
+        )
 
     start = time.perf_counter()
-    usage: dict = {}
     clusters = _fail_clusters(report)
     max_seq = max((f.seq for f in report.findings), default=0)
     pass_list = _pass_list(report)
     n_transcripts = len(report.transcripts)
 
-    suggestions: list[AuditSuggestion] = []
-    model_env_seqs: set[int] = set()
-    dropped = 0
-    skipped_reason = ""
-    batches = [clusters[i:i + _CLUSTERS_PER_BATCH]
-               for i in range(0, len(clusters), _CLUSTERS_PER_BATCH)]
-    usage_lock = threading.Lock()
-    calls_made = 0  # 每次响应计 1(含截断/升档重试),阶段表 suggest 行用
-
-    def _on_usage(payload: dict) -> None:
-        # 并行批各自回报本批用量:锁内**累加**(update 是覆盖,后到批会把先到批的计数冲掉
-        # ——并行下丢一半 token 账);非数字字段(note 等)跳过,_tokens_of 同款守卫。
-        # calls 每次响应计 1(含截断/升档重试的每次尝试,与判官阶段 calls 同口径)——
-        # 报告阶段表 suggest 行要用,见 AuditSuggestResult 分项字段。
-        nonlocal calls_made
-        with usage_lock:
-            calls_made += 1
-            for k, v in payload.items():
-                if isinstance(v, (int, float)) and not isinstance(v, bool):
-                    usage[k] = usage.get(k, 0) + v
-
-    def _batch_note(k: int, msg: str) -> None:
-        # 批级可观测:仅多批时打(单批由 CLI 汇总行收口,不叠噪声);前缀与升档/cc 回退
-        # 进度行同形("  [批 k/n] "),看终端的人能对上哪条行属于哪一批。
-        if on_progress is not None and len(batches) > 1:
-            on_progress(f"  [批 {k + 1}/{len(batches)}] {msg}")
-
-    def _call_batch(k: int, batch: list[dict]):
-        """单批一次 LLM 调用;异常就地收(永不外抛),返回 ("ok"|"exhausted"|"error", payload)。"""
-        mt = min(_HTTP_RETRY_MAX_TOKENS,
-                 _SUGGEST_TOKENS_BASE + _SUGGEST_TOKENS_PER_CLUSTER * len(batch))
-        prog = on_progress
-        if on_progress and len(batches) > 1:
-            prog = (lambda m, _k=k + 1, _n=len(batches):
-                    on_progress(f"  [批 {_k}/{_n}] {m.strip()}"))
-        prompt = _prompt(skill_body, pass_list, batch, n_transcripts)
-        t0 = time.perf_counter()
-        try:
-            resp = call_llm_with_retry(
-                prompt, model=model, timeout=timeout,
-                schema=_WIRE_SCHEMA, on_usage=_on_usage, transport="http",
-                on_progress=prog,  # http 升档/cc 回退进度行(单发最长 600s,静默像死机)
-                max_tokens=mt,
-            )
-        except _LLMRetryExhausted:
-            _batch_note(k, f"失败:重试耗尽 ⏱ {time.perf_counter() - t0:.1f}s")
-            return ("exhausted", None)
-        except Exception as exc:  # 单批挂不毁其余批(并行下其余批照常完成);原因带回汇总
-            _batch_note(k, f"失败:{str(exc)[:80]} ⏱ {time.perf_counter() - t0:.1f}s")
-            return ("error", str(exc)[:120])
-        _batch_note(k, f"完成 ⏱ {time.perf_counter() - t0:.1f}s")
-        return ("ok", _parse_attributions(resp))
+    batches = [clusters[i: i + _CLUSTERS_PER_BATCH] for i in range(0, len(clusters), _CLUSTERS_PER_BATCH)]
+    batch_runner = _SuggestionBatchRunner(
+        skill_body=skill_body,
+        pass_list=pass_list,
+        n_transcripts=n_transcripts,
+        batches=batches,
+        model=model,
+        timeout=timeout,
+        on_progress=on_progress,
+    )
 
     # 判官完成 → CLI 汇总行之间原本整段静默(单批深度任务一静默就是数分钟,不知道在
     # 干嘛)——像判官的「[条件性] 判定 N 条…」一样先报一行阶段头。
     if on_progress is not None:
         _par = f"{len(batches)} 批并行" if len(batches) > 1 else "1 批"
-        on_progress(
-            f"生成改进建议:归因 {len(clusters)} 个失败簇 · {_par}(深度归因,可能数分钟)…"
-        )
+        on_progress((f"生成改进建议:归因 {len(clusters)} 个失败簇 · {_par}(深度归因,可能数分钟)…"))
 
     # 批间独立 → 并行(≤4 workers;call_llm_with_retry 内部过 AIMD 限流器,在飞照常受控)。
     # results 按提交序返回(ex.map 语义),下游按簇序消费,建议顺序确定。
     with ThreadPoolExecutor(max_workers=min(4, len(batches))) as ex:
-        results = list(ex.map(lambda k, b: _call_batch(k, b), range(len(batches)), batches))
+        results = list(ex.map(batch_runner.call_batch, range(len(batches)), batches))
 
+    suggestions, model_env_seqs, dropped, skipped_reason = _collect_suggestion_results(results, batches, max_seq)
+
+    return AuditSuggestResult(
+        suggestions=suggestions,
+        model_env_count=len(model_env_seqs),
+        dropped_count=dropped,
+        skipped_reason=skipped_reason,
+        tokens=_tokens_of(batch_runner.usage),
+        input_tokens=int(batch_runner.usage.get("input_tokens", 0)),
+        output_tokens=int(batch_runner.usage.get("output_tokens", 0)),
+        calls=batch_runner.calls_made,
+        duration_seconds=time.perf_counter() - start,
+    )
+
+
+def _collect_suggestion_results(results, batches, max_seq):
+    """Validate returned attributions in batch order and account for rejected items."""
+    suggestions: list[AuditSuggestion] = []
+    model_env_seqs: set[int] = set()
+    dropped = 0
+    skipped_reason = ""
     for (status, payload), batch in zip(results, batches):
         if status == "exhausted":
             skipped_reason = skipped_reason or "LLM 调用重试耗尽(疑似限流)"
@@ -323,46 +385,43 @@ def build_suggestions(
             # 整批没解出来:该批簇透明计数(继续收其余批,别让一批毁全部)
             dropped += len(batch)
             continue
-        for item in items:
-            if not isinstance(item, dict):
-                dropped += 1
-                continue
-            category = item.get("category")
-            if category not in _WIRE_CATEGORIES:
-                dropped += 1
-                continue
-            raw_seqs = item.get("target_seqs")
-            seqs = [
-                s for s in (raw_seqs if isinstance(raw_seqs, list) else [])
-                if isinstance(s, int) and not isinstance(s, bool) and 1 <= s <= max_seq
-            ]
-            if not seqs:
-                dropped += 1
-                continue
-            if category == "model_env":
-                model_env_seqs.update(seqs)
-                continue
-            text = str(item.get("suggestion") or "").strip()
-            if not text:
-                dropped += 1  # fix 类缺 suggestion:不硬凑(归因纪律在 wire 层的落实)
-                continue
-            suggestions.append(AuditSuggestion(
+        dropped = _collect_attribution_items(items, dropped, max_seq, model_env_seqs, suggestions)
+    return suggestions, model_env_seqs, dropped, skipped_reason
+
+
+def _collect_attribution_items(items, dropped, max_seq, model_env_seqs, suggestions):
+    for item in items:
+        if not isinstance(item, dict):
+            dropped += 1
+            continue
+        category = item.get("category")
+        if category not in _WIRE_CATEGORIES:
+            dropped += 1
+            continue
+        raw_seqs = item.get("target_seqs")
+        seqs = [
+            s
+            for s in (raw_seqs if isinstance(raw_seqs, list) else [])
+            if isinstance(s, int) and not isinstance(s, bool) and 1 <= s <= max_seq
+        ]
+        if not seqs:
+            dropped += 1
+            continue
+        if category == "model_env":
+            model_env_seqs.update(seqs)
+            continue
+        text = str(item.get("suggestion") or "").strip()
+        if not text:
+            dropped += 1  # fix 类缺 suggestion:不硬凑(归因纪律在 wire 层的落实)
+            continue
+        suggestions.append(
+            AuditSuggestion(
                 category=category,
                 target_seqs=seqs,
                 suggestion=text,
                 rationale=str(item.get("rationale") or ""),
                 keeps_pass=bool(item.get("keeps_pass", False)),
                 keeps_pass_note=str(item.get("keeps_pass_note") or ""),
-            ))
-
-    return AuditSuggestResult(
-        suggestions=suggestions,
-        model_env_count=len(model_env_seqs),
-        dropped_count=dropped,
-        skipped_reason=skipped_reason,
-        tokens=_tokens_of(usage),
-        input_tokens=int(usage.get("input_tokens", 0)),
-        output_tokens=int(usage.get("output_tokens", 0)),
-        calls=calls_made,
-        duration_seconds=time.perf_counter() - start,
-    )
+            )
+        )
+    return dropped

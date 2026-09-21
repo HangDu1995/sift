@@ -8,13 +8,16 @@
 并发限制后端 → 并发容量;速率限制后端 → ``速率限 × 单请求时长``(吞吐逼近速率限
 = 该后端真实上限)。不假设限制类型、只对限流信号反应,故适配任意后端。
 """
+
 from __future__ import annotations
 
+import logging
 import random
 import threading
 import time
 
-from sift.utils import _HttpRateLimited, call_claude
+from sift.llm_transport import HttpRateLimited, LLMCallConfig
+from sift.utils import call_claude
 
 
 class AdaptiveConcurrencyLimiter:
@@ -43,24 +46,41 @@ class AdaptiveConcurrencyLimiter:
         self._streak = 0
         self._adaptive = True
 
+    def __enter__(self) -> "AdaptiveConcurrencyLimiter":
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.release()
+
+    # ── 只读视图(测试/诊断)──────────────────────────────────────────────
+    @property
+    def ceiling(self) -> int:
+        with self._cond:
+            return self._ceiling
+
+    @property
+    def in_flight(self) -> int:
+        with self._cond:
+            return self._in_flight
+
+    @property
+    def adaptive(self) -> bool:
+        with self._cond:
+            return self._adaptive
+
     # ── 并发门控(同 Semaphore 语义)────────────────────────────────────────
     def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
         """获取一个在飞名额。``blocking=False`` 满则立即返 ``False``(不阻塞);
-        ``blocking=True`` 阻塞到有名额,``timeout`` 给定则超时返 ``False``。"""
+        ``blocking=True`` 阻塞到有名额,``timeout`` 给定则超时返 ``False``。
+        """
         with self._cond:
             if not blocking:
                 if self._in_flight >= self._ceiling:
                     return False
             else:
-                end = None if timeout is None else time.monotonic() + timeout
-                while self._in_flight >= self._ceiling:
-                    if end is None:
-                        self._cond.wait()
-                    else:
-                        remaining = end - time.monotonic()
-                        if remaining <= 0:
-                            return False
-                        self._cond.wait(remaining)
+                if not self._wait_for_slot(timeout):
+                    return False
             self._in_flight += 1
             return True
 
@@ -71,17 +91,11 @@ class AdaptiveConcurrencyLimiter:
             if self._in_flight < self._ceiling:
                 self._cond.notify_all()
 
-    def __enter__(self) -> "AdaptiveConcurrencyLimiter":
-        self.acquire()
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.release()
-
     # ── AIMD 调节 ──────────────────────────────────────────────────────────
     def on_success(self) -> None:
         """成功一次:streak+1,达 ``probe_every`` 则加性增(ceiling+1 封顶 cap)。
-        升 ceiling 后 ``notify_all`` 唤醒等待者。固定模式 no-op。"""
+        升 ceiling 后 ``notify_all`` 唤醒等待者。固定模式 no-op。
+        """
         with self._cond:
             if not self._adaptive:
                 return
@@ -96,7 +110,8 @@ class AdaptiveConcurrencyLimiter:
     def on_throttled(self) -> None:
         """撞限流:乘性减(ceiling//=2 不破 floor)、streak 清零。固定模式 no-op。
         降 ceiling **不 notify**:_in_flight 可能 > 新 ceiling,等其 release 自然减后
-        才放行(否则 notify 会让等待者立即通过 → 瞬时超新 ceiling)。"""
+        才放行(否则 notify 会让等待者立即通过 → 瞬时超新 ceiling)。
+        """
         with self._cond:
             if not self._adaptive:
                 return
@@ -132,35 +147,32 @@ class AdaptiveConcurrencyLimiter:
             self._in_flight = 0
             self._cond.notify_all()
 
-    # ── 只读视图(测试/诊断)──────────────────────────────────────────────
-    @property
-    def ceiling(self) -> int:
-        with self._cond:
-            return self._ceiling
-
-    @property
-    def in_flight(self) -> int:
-        with self._cond:
-            return self._in_flight
-
-    @property
-    def adaptive(self) -> bool:
-        with self._cond:
-            return self._adaptive
+    def _wait_for_slot(self, timeout: float | None) -> bool:
+        """持有条件锁时等待名额；调用方负责占用名额，保持超时语义。"""
+        end = None if timeout is None else time.monotonic() + timeout
+        while self._in_flight >= self._ceiling:
+            if end is None:
+                self._cond.wait()
+            else:
+                remaining = end - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._cond.wait(remaining)
+        return True
 
 
 # ── 模块级单例 + 配置(audit 与 eval 侧 grading/comparator/analyzer 共享一个 ceiling)────
-# 全局自适应并发限制器:_judge_batch_with_retry / call_llm_with_retry 在 call_claude 前后
+# 全局自适应并发限制器:judge_batch_with_retry / call_llm_with_retry 在 call_claude 前后
 # acquire/release,把跨所有调用方(判定器批 + eval 侧单次判定)的在飞 LLM 调用钉在 ≤ ceiling。
-# AIMD 调 ceiling:撞 429(_HttpRateLimited)乘性减、连续成功加性增,收敛到后端真实容量边界。
+# AIMD 调 ceiling:撞 429(HttpRateLimited)乘性减、连续成功加性增,收敛到后端真实容量边界。
 # 模块级单例 → 跨调用共享(端点容量稳定),audit 与 eval 侧争同一个(同账号同容量预算)。
-_MAX_BATCH_CONCURRENT = 6  # AIMD 探测起点(保守);真实边界由 on_throttled/on_success 摸出
-_LLM_LIMITER = AdaptiveConcurrencyLimiter(_MAX_BATCH_CONCURRENT)
-# 向后兼容别名:旧引用/测试按 _LLM_SEMAPHORE 名访问(limiter 兼容 acquire/release/__enter__)。
-_LLM_SEMAPHORE = _LLM_LIMITER
+MAX_BATCH_CONCURRENT = 6  # AIMD 探测起点(保守);真实边界由 on_throttled/on_success 摸出
+LLM_LIMITER = AdaptiveConcurrencyLimiter(MAX_BATCH_CONCURRENT)
+# 向后兼容别名:旧引用/测试按 LLM_SEMAPHORE 名访问(limiter 兼容 acquire/release/__enter__)。
+LLM_SEMAPHORE = LLM_LIMITER
 # AIMD 退避:撞 429 后按 基数×2^attempt 指数递增 sleep(+ random 抖动防多线程同步重试)
 # 再重试——速率限制按分钟窗口计,固定短退避会在窗口内反复撞死(glm-5.3 实测容量低于 5.2)。
-_RATE_LIMIT_BACKOFF = 2.0
+RATE_LIMIT_BACKOFF = 2.0
 
 
 def configure_max_concurrent(n: int) -> None:
@@ -171,7 +183,7 @@ def configure_max_concurrent(n: int) -> None:
     """
     if n < 1:
         raise ValueError(f"max_concurrent 必须 ≥ 1,收到 {n}")
-    _LLM_LIMITER.set_fixed(n)
+    LLM_LIMITER.set_fixed(n)
 
 
 def configure_adaptive(initial: int | None = None) -> None:
@@ -180,21 +192,21 @@ def configure_adaptive(initial: int | None = None) -> None:
     通用工具默认自适应——动态探当前端容量边界(严苛后端收敛到低值、宽松后端探到更高),
     不写死固定值。
     """
-    _LLM_LIMITER.set_adaptive(initial)
+    LLM_LIMITER.set_adaptive(initial)
 
 
 # ── 调用级 LLM 重试壳(供 eval 侧 grading/comparator/analyzer 切 http 用)──────────────
-class _LLMRetryExhausted(Exception):
+class LLMRetryExhausted(Exception):
     """``call_llm_with_retry`` 重试耗尽。
 
-    非 ``RuntimeError`` 子类(镜像 ``_HttpRateLimited``,防被通用 ``except RuntimeError`` 误吞),
+    非 ``RuntimeError`` 子类(镜像 ``HttpRateLimited``,防被通用 ``except RuntimeError`` 误吞),
     调用方须显式 catch 后各降级(grader→UNEVAL / comparator→failed / analyzer→skip),永不进 FAIL。
     """
 
 
-_LLM_WRAPPER_RETRY_MAX = 4        # 调用级重试上限(瞬态 429 / RuntimeError;4 次×指数退避跨速率窗口)
-_LLM_WRAPPER_RETRY_DELAY = 3.0    # 线性退避基数(× 尝试序号)
-_LLM_WRAPPER_BACKOFF = _RATE_LIMIT_BACKOFF  # 429 退避基数(+ random 抖动),与 audit 同源
+_LLM_WRAPPER_RETRY_MAX = 4  # 调用级重试上限(瞬态 429 / RuntimeError;4 次×指数退避跨速率窗口)
+_LLM_WRAPPER_RETRY_DELAY = 3.0  # 线性退避基数(× 尝试序号)
+_LLM_WRAPPER_BACKOFF = RATE_LIMIT_BACKOFF  # 429 退避基数(+ random 抖动),与 audit 同源
 
 
 def _emit(on_progress, msg: str) -> None:
@@ -202,7 +214,7 @@ def _emit(on_progress, msg: str) -> None:
         try:
             on_progress(msg)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
 
 
 def call_llm_with_retry(
@@ -217,13 +229,13 @@ def call_llm_with_retry(
     max_retries: int = _LLM_WRAPPER_RETRY_MAX,
     max_tokens: int | None = None,
 ) -> str:
-    """调用级 LLM 重试壳:AIMD 门控(``_LLM_LIMITER`` 限在飞)+ 429 退避重试(同份重发)→ 耗尽抛
-    ``_LLMRetryExhausted``。
+    """调用级 LLM 重试壳:AIMD 门控(``LLM_LIMITER`` 限在飞)+ 429 退避重试(同份重发)→ 耗尽抛
+    ``LLMRetryExhausted``。
 
     给 eval 侧 grading/comparator/analyzer(单次结构化/文本判定)用;audit 的批级 parse 重试
-    (0 解析重试)不在此范围,audit 继续用 ``_judge_batch_with_retry``(共享同一 limiter 实例)。
+    (0 解析重试)不在此范围,audit 继续用 ``judge_batch_with_retry``(共享同一 limiter 实例)。
 
-    结构严格镜像 audit ``_judge_batch_with_retry``:``with _LLM_LIMITER:`` 只圈 ``call_claude``
+    结构严格镜像 audit ``judge_batch_with_retry``:``with LLM_LIMITER:`` 只圈 ``call_claude``
     (重试退避不占槽);**成功赋值不早返**(早返会跳过 with 外的 ``on_success`` → AIMD 永不加性增
     → 静默劣化),``on_success``/``on_throttled``/sleep 都在 with 外。默认 ``transport="http"``
     (forced tool_use、schema-safe)。
@@ -233,28 +245,28 @@ def call_llm_with_retry(
             time.sleep(_LLM_WRAPPER_RETRY_DELAY * attempt)
             _emit(on_progress, f"  LLM 重试 {attempt}/{max_retries}…")
         try:
-            with _LLM_LIMITER:
+            with LLM_LIMITER:
                 result = call_claude(
-                    prompt, model=model, timeout=timeout, schema=schema,
-                    on_usage=on_usage, transport=transport,
-                    on_progress=on_progress,  # http 升档/cc 回退的进度行透传(utils 报行)
-                    max_tokens=max_tokens,    # 按工作量给首档上限(suggest 按簇数);None=默认
+                    prompt=prompt,
+                    on_usage=on_usage,
+                    on_progress=on_progress,
+                    config=LLMCallConfig(
+                        model=model, timeout=timeout, schema=schema, transport=transport, max_tokens=max_tokens
+                    ),
                 )
-        except _HttpRateLimited as exc:
-            # 429 指数退避(基数×2^attempt,镜像 audit _judge_batch_with_retry):速率窗口按
+        except HttpRateLimited as exc:
+            # 429 指数退避(基数×2^attempt,镜像 audit judge_batch_with_retry):速率窗口按
             # 分钟计,固定短退避会在窗口内反复撞死;让连撞的等待跨过窗口。
-            _LLM_LIMITER.on_throttled()
+            LLM_LIMITER.on_throttled()
             _emit(
                 on_progress,
-                f"  撞限流({str(exc)[:80]}),并发降至 {_LLM_LIMITER.ceiling},退避重试…",
+                f"  撞限流({str(exc)[:80]}),并发降至 {LLM_LIMITER.ceiling},退避重试…",
             )
-            time.sleep(_LLM_WRAPPER_BACKOFF * (2 ** attempt) + random.uniform(0, 1))
+            time.sleep(_LLM_WRAPPER_BACKOFF * (2**attempt) + random.uniform(0, 1))
             continue
         except RuntimeError as exc:
             _emit(on_progress, f"  LLM 调用失败: {str(exc)[:120]}")
             continue
-        _LLM_LIMITER.on_success()   # 成功才到这(with 已 release),AIMD 加性增
+        LLM_LIMITER.on_success()  # 成功才到这(with 已 release),AIMD 加性增
         return result
-    raise _LLMRetryExhausted(f"LLM 调用重试耗尽(max_retries={max_retries})")
-
-
+    raise LLMRetryExhausted(f"LLM 调用重试耗尽(max_retries={max_retries})")

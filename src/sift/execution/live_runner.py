@@ -26,15 +26,14 @@ from typing import Callable
 
 from sift.errors import InputError
 from sift.execution.cli_runner import ClaudeRunner
+from sift.execution.options import ExecutionOptions, LiveTaskOptions
 from sift.execution.runner import _copy_skill_references
 from sift.models import RunOutput
 
 ProgressCallback = Callable[..., None]
 
 # 拷贝 --cwd 时忽略的大目录(.git/.venv 等),避免拷贝爆炸
-_IGNORE_ON_COPY = shutil.ignore_patterns(
-    ".git", ".venv", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache"
-)
+_IGNORE_ON_COPY = shutil.ignore_patterns(".git", ".venv", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache")
 
 
 def make_live_runner(name: str):
@@ -46,23 +45,12 @@ def make_live_runner(name: str):
         return ClaudeRunner()
     if name == "opencode":
         from sift.execution.opencode_runner import OpenCodeRunner
+
         return OpenCodeRunner()
     raise InputError(f"未知 executor: {name}(支持: cc, opencode)")
 
 
-def run_live_task(
-    skill_path: Path,
-    task: str,
-    cwd: Path | None = None,
-    runs: int = 1,
-    model: str | None = None,
-    timeout: int = 300,
-    max_turns: int = 10,
-    output_dir: Path = Path("output"),
-    on_progress: ProgressCallback | None = None,
-    on_run_progress: ProgressCallback | None = None,
-    executors: list[str] | None = None,
-) -> Path:
+def run_live_task(skill_path: Path, task: str, options: LiveTaskOptions = LiveTaskOptions()) -> Path:
     """跑路径1 真任务模式,返回 output_dir。
 
     产物:output_dir/workspace/(隔离拷贝,多执行器共享同一考场 = 公平比较基底)、
@@ -73,12 +61,12 @@ def run_live_task(
     executors 默认 ["cc"];多执行器时各执行器分别跑 runs 次,
     transcript 扩展名按执行器分派(cc .jsonl / opencode .json)。
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
+    options.output_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. --cwd 拷贝隔离;无 cwd 则 spawn cwd 用 skill 目录(纯对话任务无文件材料)
-    if cwd is not None:
-        workspace = output_dir / "workspace"
-        shutil.copytree(cwd, workspace, ignore=_IGNORE_ON_COPY, dirs_exist_ok=True)
+    if options.cwd is not None:
+        workspace = options.output_dir / "workspace"
+        shutil.copytree(options.cwd, workspace, ignore=_IGNORE_ON_COPY, dirs_exist_ok=True)
     else:
         workspace = skill_path
 
@@ -86,28 +74,30 @@ def run_live_task(
     _copy_skill_references(skill_path, workspace)
 
     # 3. executor × run 双层 spawn
-    execs = list(executors) if executors else ["cc"]
+    execs = list(options.executors) if options.executors else ["cc"]
     multi = len(execs) > 1
     for exec_name in execs:
         runner = make_live_runner(exec_name)
         ext = ".json" if exec_name == "opencode" else ".jsonl"
-        for run_num in range(1, runs + 1):
-            run_dir = output_dir / (f"run-{run_num}-{exec_name}" if multi else f"run-{run_num}")
+        for run_num in range(1, options.runs + 1):
+            run_dir = options.output_dir / (f"run-{run_num}-{exec_name}" if multi else f"run-{run_num}")
             run_dir.mkdir(parents=True, exist_ok=True)
 
-            if on_run_progress:
-                on_run_progress(f"▶ {exec_name} run {run_num}/{runs}")
+            if options.on_run_progress:
+                options.on_run_progress(f"▶ {exec_name} run {run_num}/{options.runs}")
             # 每次 spawn 流式吐进度(cc 逐行 stream-json → on_progress),不再全程静默到结束
-            during = (lambda msg: on_run_progress(f"  {msg}")) if on_run_progress else None
+            during = (lambda msg: options.on_run_progress(f"  {msg}")) if options.on_run_progress else None
 
             run_output: RunOutput = runner.run(
                 prompt=task,
                 skill_path=skill_path,
-                model=model,
-                timeout=timeout,
-                cwd=workspace,
-                max_turns=max_turns,
-                on_progress=during,
+                options=ExecutionOptions(
+                    model=options.model,
+                    timeout=options.timeout,
+                    cwd=workspace,
+                    max_turns=options.max_turns,
+                    on_progress=during,
+                ),
             )
 
             # 4. dump 会话流成 transcript(cc .jsonl / opencode .json),打通 audit 闭环
@@ -129,7 +119,8 @@ def run_live_task(
                 json.dumps(run_debug, indent=2, ensure_ascii=False), encoding="utf-8"
             )
 
-            if on_progress:
-                on_progress(run_num, runs, run_output)
+            if not (options.on_progress):
+                continue
+            options.on_progress(run_num, options.runs, run_output)
 
-    return output_dir
+    return options.output_dir

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from sift.models import (
     AssertionTier,
@@ -18,23 +19,215 @@ from sift.models import (
 )
 
 if TYPE_CHECKING:
-    from sift.models import ToolCallRecord
     from sift.scoring.plugins import AssertionPluginRegistry
+
+
+class ExecutionEvidence(NamedTuple):
+    """可选的执行证据；文件断言无需这些材料。"""
+
+    transcript: str = ""
+    tool_trace: list | None = None
+    num_turns: int = 0
+    stop_reason: str = ""
 
 
 class ProgrammaticChecker:
     def __init__(self, plugin_registry: AssertionPluginRegistry | None = None) -> None:
         self._plugins = plugin_registry
 
+    # ---- Tier 1 handlers ----
+
+    @staticmethod
+    def _file_exists(params: dict, output_dir: Path, _ctx: dict) -> tuple[AssertionVerdict, str]:
+        filename = params.get("filename", "")
+        target = output_dir / filename
+        if target.exists():
+            return AssertionVerdict.PASS, f"File exists: {filename}"
+        return AssertionVerdict.FAIL, f"File not found: {filename}"
+
+    @staticmethod
+    def _file_contains(params: dict, output_dir: Path, _ctx: dict) -> tuple[AssertionVerdict, str]:
+        filename = params.get("filename", "")
+        pattern = params.get("pattern", "")
+        target = output_dir / filename
+        if not target.exists():
+            return AssertionVerdict.FAIL, f"File not found: {filename}"
+        try:
+            content = target.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return AssertionVerdict.ERROR, f"Cannot read {filename}"
+        if re.search(pattern, content):
+            return AssertionVerdict.PASS, f"Pattern '{pattern}' found in {filename}"
+        return AssertionVerdict.FAIL, f"Pattern '{pattern}' not found in {filename}"
+
+    @staticmethod
+    def _contains_pattern(params: dict, output_dir: Path, ctx: dict) -> tuple[AssertionVerdict, str]:
+        pattern = params.get("pattern", "")
+        # scope:'transcript' = 只查 agent/skill 的文本输出,完全不碰文件。
+        # 只读/纯建议 agent 不产文件,带 path 的断言会读输入 fixture 而非 agent 的回答 →
+        # 同义反复恒 PASS(模式碰巧在输入里)/ 恒 FAIL(模式只在回答里)。scope 把判卷对象
+        # 从"文件"拨到"agent 的回答文本(transcript)"。
+        if params.get("scope") == "transcript":
+            transcript = ctx.get("transcript", "")
+            if transcript and re.search(pattern, transcript):
+                return AssertionVerdict.PASS, f"Pattern '{pattern}' found in transcript"
+            return AssertionVerdict.FAIL, f"Pattern '{pattern}' not found in transcript"
+        filepath = params.get("path", "")
+        target = output_dir / filepath if filepath else output_dir
+        if target.is_file():
+            content = target.read_text(encoding="utf-8", errors="replace")
+            if re.search(pattern, content):
+                return AssertionVerdict.PASS, f"Pattern '{pattern}' found in {filepath or target}"
+            return AssertionVerdict.FAIL, f"Pattern '{pattern}' not found in {filepath or target}"
+        for f in output_dir.rglob("*"):
+            if not (f.is_file()):
+                continue
+            try:
+                content = f.read_text(encoding="utf-8", errors="replace")
+                if re.search(pattern, content):
+                    return AssertionVerdict.PASS, f"Pattern '{pattern}' found in {f.name}"
+            except Exception:
+                logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
+                continue
+        # Fallback: search in transcript (supports advisory/knowledge skills with no file output)
+        transcript = ctx.get("transcript", "")
+        if transcript and re.search(pattern, transcript):
+            return AssertionVerdict.PASS, f"Pattern '{pattern}' found in transcript"
+        return AssertionVerdict.FAIL, f"Pattern '{pattern}' not found in any file or transcript"
+
+    @staticmethod
+    def _has_nested_field(data: dict, field: str) -> bool:
+        parts = field.split(".")
+        current = data
+        for part in parts:
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                return False
+        return True
+
+    @staticmethod
+    def _line_count(params: dict, output_dir: Path, _ctx: dict) -> tuple[AssertionVerdict, str]:
+        min_lines = params.get("min")
+        max_lines = params.get("max")
+        filepath = params.get("path", "")
+        target = output_dir / filepath if filepath else output_dir
+
+        if target.is_file():
+            count = len(target.read_text(encoding="utf-8", errors="replace").splitlines())
+        else:
+            total = 0
+            for f in output_dir.rglob("*"):
+                if not (f.is_file()):
+                    continue
+                total += len(f.read_text(encoding="utf-8", errors="replace").splitlines())
+            count = total
+
+        if min_lines is not None and count < min_lines:
+            return AssertionVerdict.FAIL, f"Line count {count} < min {min_lines}"
+        if max_lines is not None and count > max_lines:
+            return AssertionVerdict.FAIL, f"Line count {count} > max {max_lines}"
+        return AssertionVerdict.PASS, f"Line count: {count}"
+
+    @staticmethod
+    def _not_contains(params: dict, output_dir: Path, ctx: dict) -> tuple[AssertionVerdict, str]:
+        pattern = params.get("pattern", "")
+        # scope:'transcript' = 只查 transcript(见 _contains_pattern 同名分支的说明)。
+        if params.get("scope") == "transcript":
+            transcript = ctx.get("transcript", "")
+            if transcript and re.search(pattern, transcript):
+                return AssertionVerdict.FAIL, f"Pattern '{pattern}' found in transcript (should be absent)"
+            return AssertionVerdict.PASS, f"Pattern '{pattern}' not found in transcript"
+        filepath = params.get("path", "")
+        target = output_dir / filepath if filepath else output_dir
+        if target.is_file():
+            content = target.read_text(encoding="utf-8", errors="replace")
+            if re.search(pattern, content):
+                return AssertionVerdict.FAIL, f"Pattern '{pattern}' found (should be absent)"
+            return AssertionVerdict.PASS, f"Pattern '{pattern}' not found"
+
+        for f in output_dir.rglob("*"):
+            if not (f.is_file()):
+                continue
+            try:
+                content = f.read_text(encoding="utf-8", errors="replace")
+                if re.search(pattern, content):
+                    return AssertionVerdict.FAIL, f"Pattern '{pattern}' found in {f.name} (should be absent)"
+            except Exception:
+                logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
+                continue
+        return AssertionVerdict.PASS, f"Pattern '{pattern}' not found"
+
+    @staticmethod
+    def _custom_script(params: dict, output_dir: Path, _ctx: dict) -> tuple[AssertionVerdict, str]:
+        script = params.get("script", "")
+        args = params.get("args", [])
+        if not script:
+            return AssertionVerdict.ERROR, "No script specified"
+        try:
+            result = subprocess.run(
+                [sys.executable, script, *args],
+                capture_output=True,
+                text=True,
+                cwd=str(output_dir),
+                timeout=60,
+            )
+            if result.returncode == 0:
+                return AssertionVerdict.PASS, f"Script passed: {result.stdout.strip()}"
+            return AssertionVerdict.FAIL, f"Script failed (exit {result.returncode}): {result.stderr.strip()}"
+        except subprocess.TimeoutExpired:
+            return AssertionVerdict.TIMEOUT, "Script timed out"
+        except FileNotFoundError:
+            return AssertionVerdict.FAIL, f"Script not found: {script}"
+
+    @staticmethod
+    def _tool_called(params: dict, _output_dir: Path, ctx: dict) -> tuple[AssertionVerdict, str]:
+        tool_name = params.get("tool_name", "")
+        min_count = params.get("min_count", 1)
+        tool_trace = ctx.get("tool_trace", [])
+        count = sum(1 for t in tool_trace if getattr(t, "name", "") == tool_name)
+        if count >= min_count:
+            return AssertionVerdict.PASS, f"Tool '{tool_name}' called {count} times (min {min_count})"
+        return AssertionVerdict.FAIL, f"Tool '{tool_name}' called {count} times, need >= {min_count}"
+
+    @staticmethod
+    def _step_count(params: dict, _output_dir: Path, ctx: dict) -> tuple[AssertionVerdict, str]:
+        num_turns = ctx.get("num_turns", 0)
+        min_val = params.get("min")
+        max_val = params.get("max")
+        if min_val is not None and num_turns < min_val:
+            return AssertionVerdict.FAIL, f"Step count {num_turns} < min {min_val}"
+        if max_val is not None and num_turns > max_val:
+            return AssertionVerdict.FAIL, f"Step count {num_turns} > max {max_val}"
+        return AssertionVerdict.PASS, f"Step count: {num_turns}"
+
+    @staticmethod
+    def _read_all_files(output_dir: Path, include: str | None = None) -> dict[str, str]:
+        contents: dict[str, str] = {}
+        if include:
+            pattern = str(output_dir / include)
+        else:
+            pattern = str(output_dir / "**" / "*")
+        import glob
+
+        for filepath in glob.glob(pattern, recursive=True):
+            p = Path(filepath)
+            if not (p.is_file()):
+                continue
+            try:
+                contents[filepath] = p.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
+                continue
+        return contents
+
     def check(
-        self,
-        eval_case: EvalCase,
-        output_dir: Path,
-        transcript: str = "",
-        tool_trace: list | None = None,
-        num_turns: int = 0,
-        stop_reason: str = "",
+        self, eval_case: EvalCase, output_dir: Path, evidence: ExecutionEvidence = ExecutionEvidence()
     ) -> list[ExpectationResult]:
+        transcript = evidence.transcript
+        tool_trace = evidence.tool_trace
+        num_turns = evidence.num_turns
+        stop_reason = evidence.stop_reason
         results: list[ExpectationResult] = []
         context = {
             "transcript": transcript,
@@ -45,9 +238,7 @@ class ProgrammaticChecker:
         for assertion in eval_case.assertions:
             if assertion.tier == AssertionTier.TIER3:
                 continue  # Tier 3 assertions (LLM_GRADE, LLM_FACT, LLM_NOT_DELEGATE) are handled by LLM grader
-            verdict, evidence = self._run_assertion(
-                assertion.type, assertion.params, output_dir, context
-            )
+            verdict, evidence = self._run_assertion(assertion.type, assertion.params, output_dir, context)
             exp = ExpectationResult(
                 text=assertion.name,
                 passed=(verdict == AssertionVerdict.PASS),
@@ -80,61 +271,6 @@ class ProgrammaticChecker:
             return AssertionVerdict.ERROR, f"Unknown assertion type: {atype}"
         return handler(params, output_dir, ctx)
 
-    # ---- Tier 1 handlers ----
-
-    def _file_exists(self, params: dict, output_dir: Path, _ctx: dict) -> tuple[AssertionVerdict, str]:
-        filename = params.get("filename", "")
-        target = output_dir / filename
-        if target.exists():
-            return AssertionVerdict.PASS, f"File exists: {filename}"
-        return AssertionVerdict.FAIL, f"File not found: {filename}"
-
-    def _file_contains(self, params: dict, output_dir: Path, _ctx: dict) -> tuple[AssertionVerdict, str]:
-        filename = params.get("filename", "")
-        pattern = params.get("pattern", "")
-        target = output_dir / filename
-        if not target.exists():
-            return AssertionVerdict.FAIL, f"File not found: {filename}"
-        try:
-            content = target.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            return AssertionVerdict.ERROR, f"Cannot read {filename}"
-        if re.search(pattern, content):
-            return AssertionVerdict.PASS, f"Pattern '{pattern}' found in {filename}"
-        return AssertionVerdict.FAIL, f"Pattern '{pattern}' not found in {filename}"
-
-    def _contains_pattern(self, params: dict, output_dir: Path, ctx: dict) -> tuple[AssertionVerdict, str]:
-        pattern = params.get("pattern", "")
-        # scope:'transcript' = 只查 agent/skill 的文本输出,完全不碰文件。
-        # 只读/纯建议 agent 不产文件,带 path 的断言会读输入 fixture 而非 agent 的回答 →
-        # 同义反复恒 PASS(模式碰巧在输入里)/ 恒 FAIL(模式只在回答里)。scope 把判卷对象
-        # 从"文件"拨到"agent 的回答文本(transcript)"。
-        if params.get("scope") == "transcript":
-            transcript = ctx.get("transcript", "")
-            if transcript and re.search(pattern, transcript):
-                return AssertionVerdict.PASS, f"Pattern '{pattern}' found in transcript"
-            return AssertionVerdict.FAIL, f"Pattern '{pattern}' not found in transcript"
-        filepath = params.get("path", "")
-        target = output_dir / filepath if filepath else output_dir
-        if target.is_file():
-            content = target.read_text(encoding="utf-8", errors="replace")
-            if re.search(pattern, content):
-                return AssertionVerdict.PASS, f"Pattern '{pattern}' found in {filepath or target}"
-            return AssertionVerdict.FAIL, f"Pattern '{pattern}' not found in {filepath or target}"
-        for f in output_dir.rglob("*"):
-            if f.is_file():
-                try:
-                    content = f.read_text(encoding="utf-8", errors="replace")
-                    if re.search(pattern, content):
-                        return AssertionVerdict.PASS, f"Pattern '{pattern}' found in {f.name}"
-                except Exception:
-                    continue
-        # Fallback: search in transcript (supports advisory/knowledge skills with no file output)
-        transcript = ctx.get("transcript", "")
-        if transcript and re.search(pattern, transcript):
-            return AssertionVerdict.PASS, f"Pattern '{pattern}' found in transcript"
-        return AssertionVerdict.FAIL, f"Pattern '{pattern}' not found in any file or transcript"
-
     def _json_has_field(self, params: dict, output_dir: Path, _ctx: dict) -> tuple[AssertionVerdict, str]:
         filename = params.get("filename", "")
         field = params.get("field", "")
@@ -149,84 +285,6 @@ class ProgrammaticChecker:
             return AssertionVerdict.PASS, f"Field '{field}' found in {filename}"
         return AssertionVerdict.FAIL, f"Field '{field}' not found in {filename}"
 
-    def _has_nested_field(self, data: dict, field: str) -> bool:
-        parts = field.split(".")
-        current = data
-        for part in parts:
-            if isinstance(current, dict) and part in current:
-                current = current[part]
-            else:
-                return False
-        return True
-
-    def _line_count(self, params: dict, output_dir: Path, _ctx: dict) -> tuple[AssertionVerdict, str]:
-        min_lines = params.get("min")
-        max_lines = params.get("max")
-        filepath = params.get("path", "")
-        target = output_dir / filepath if filepath else output_dir
-
-        if target.is_file():
-            count = len(target.read_text(encoding="utf-8", errors="replace").splitlines())
-        else:
-            total = 0
-            for f in output_dir.rglob("*"):
-                if f.is_file():
-                    total += len(f.read_text(encoding="utf-8", errors="replace").splitlines())
-            count = total
-
-        if min_lines is not None and count < min_lines:
-            return AssertionVerdict.FAIL, f"Line count {count} < min {min_lines}"
-        if max_lines is not None and count > max_lines:
-            return AssertionVerdict.FAIL, f"Line count {count} > max {max_lines}"
-        return AssertionVerdict.PASS, f"Line count: {count}"
-
-    def _not_contains(self, params: dict, output_dir: Path, ctx: dict) -> tuple[AssertionVerdict, str]:
-        pattern = params.get("pattern", "")
-        # scope:'transcript' = 只查 transcript(见 _contains_pattern 同名分支的说明)。
-        if params.get("scope") == "transcript":
-            transcript = ctx.get("transcript", "")
-            if transcript and re.search(pattern, transcript):
-                return AssertionVerdict.FAIL, f"Pattern '{pattern}' found in transcript (should be absent)"
-            return AssertionVerdict.PASS, f"Pattern '{pattern}' not found in transcript"
-        filepath = params.get("path", "")
-        target = output_dir / filepath if filepath else output_dir
-        if target.is_file():
-            content = target.read_text(encoding="utf-8", errors="replace")
-            if re.search(pattern, content):
-                return AssertionVerdict.FAIL, f"Pattern '{pattern}' found (should be absent)"
-            return AssertionVerdict.PASS, f"Pattern '{pattern}' not found"
-
-        for f in output_dir.rglob("*"):
-            if f.is_file():
-                try:
-                    content = f.read_text(encoding="utf-8", errors="replace")
-                    if re.search(pattern, content):
-                        return AssertionVerdict.FAIL, f"Pattern '{pattern}' found in {f.name} (should be absent)"
-                except Exception:
-                    continue
-        return AssertionVerdict.PASS, f"Pattern '{pattern}' not found"
-
-    def _custom_script(self, params: dict, output_dir: Path, _ctx: dict) -> tuple[AssertionVerdict, str]:
-        script = params.get("script", "")
-        args = params.get("args", [])
-        if not script:
-            return AssertionVerdict.ERROR, "No script specified"
-        try:
-            result = subprocess.run(
-                [sys.executable, script, *args],
-                capture_output=True,
-                text=True,
-                cwd=str(output_dir),
-                timeout=60,
-            )
-            if result.returncode == 0:
-                return AssertionVerdict.PASS, f"Script passed: {result.stdout.strip()}"
-            return AssertionVerdict.FAIL, f"Script failed (exit {result.returncode}): {result.stderr.strip()}"
-        except subprocess.TimeoutExpired:
-            return AssertionVerdict.TIMEOUT, "Script timed out"
-        except FileNotFoundError:
-            return AssertionVerdict.FAIL, f"Script not found: {script}"
-
     def _cross_file_consistency(self, params: dict, output_dir: Path, _ctx: dict) -> tuple[AssertionVerdict, str]:
         include = params.get("include")
         files = self._read_all_files(output_dir, include)
@@ -234,19 +292,7 @@ class ProgrammaticChecker:
             return AssertionVerdict.PASS, "No files to check"
         import_re = re.compile(r"""import\s+.*\s+from\s+['"](\.[^'"]+)['"]""")
         broken: list[str] = []
-        for filepath, content in files.items():
-            for m in import_re.finditer(content):
-                ref = m.group(1)
-                for ext in ("", ".ts", ".js", ".ets", ".json"):
-                    if ext and ref.endswith(ext):
-                        base = ref[:-len(ext)]
-                    else:
-                        base = ref
-                    candidate = (Path(filepath).parent / (base + ext)).resolve()
-                    if candidate.exists():
-                        break
-                else:
-                    broken.append(f"{Path(filepath).name}: {ref}")
+        _find_broken_imports(files, import_re, broken)
         if broken:
             return AssertionVerdict.FAIL, f"Unresolved imports: {broken[:5]}"
         return AssertionVerdict.PASS, "All imports resolve"
@@ -256,23 +302,9 @@ class ProgrammaticChecker:
         files = self._read_all_files(output_dir, include)
         if not files:
             return AssertionVerdict.PASS, "No files to check"
-        pairs = {"{": "}", "(": ")", "[": "]"}
         errors: list[str] = []
         for filepath, content in files.items():
-            stack: list[str] = []
-            for ch in content:
-                if ch in pairs:
-                    stack.append(ch)
-                elif ch in pairs.values():
-                    if not stack:
-                        errors.append(f"{Path(filepath).name}: unexpected '{ch}'")
-                        break
-                    opener = stack.pop()
-                    if pairs[opener] != ch:
-                        errors.append(f"{Path(filepath).name}: mismatched '{opener}' vs '{ch}'")
-                        break
-            if stack and not errors:
-                errors.append(f"{Path(filepath).name}: unclosed '{stack[-1]}'")
+            _scan_brackets(filepath, content, errors)
         if errors:
             return AssertionVerdict.FAIL, f"Syntax issues: {errors[:5]}"
         return AssertionVerdict.PASS, "All files pass basic syntax check"
@@ -287,38 +319,43 @@ class ProgrammaticChecker:
         passed, evidence = handler(params, output_dir)
         return (AssertionVerdict.PASS if passed else AssertionVerdict.FAIL), evidence
 
-    def _tool_called(self, params: dict, _output_dir: Path, ctx: dict) -> tuple[AssertionVerdict, str]:
-        tool_name = params.get("tool_name", "")
-        min_count = params.get("min_count", 1)
-        tool_trace = ctx.get("tool_trace", [])
-        count = sum(1 for t in tool_trace if getattr(t, "name", "") == tool_name)
-        if count >= min_count:
-            return AssertionVerdict.PASS, f"Tool '{tool_name}' called {count} times (min {min_count})"
-        return AssertionVerdict.FAIL, f"Tool '{tool_name}' called {count} times, need >= {min_count}"
 
-    def _step_count(self, params: dict, _output_dir: Path, ctx: dict) -> tuple[AssertionVerdict, str]:
-        num_turns = ctx.get("num_turns", 0)
-        min_val = params.get("min")
-        max_val = params.get("max")
-        if min_val is not None and num_turns < min_val:
-            return AssertionVerdict.FAIL, f"Step count {num_turns} < min {min_val}"
-        if max_val is not None and num_turns > max_val:
-            return AssertionVerdict.FAIL, f"Step count {num_turns} > max {max_val}"
-        return AssertionVerdict.PASS, f"Step count: {num_turns}"
+def _find_broken_imports(files, import_re, broken):
+    for filepath, content in files.items():
+        for m in import_re.finditer(content):
+            _check_relative_import(m, filepath, broken)
 
-    @staticmethod
-    def _read_all_files(output_dir: Path, include: str | None = None) -> dict[str, str]:
-        contents: dict[str, str] = {}
-        if include:
-            pattern = str(output_dir / include)
+
+def _check_relative_import(m, filepath, broken):
+    ref = m.group(1)
+    for ext in ("", ".ts", ".js", ".ets", ".json"):
+        if ext and ref.endswith(ext):
+            base = ref[: -len(ext)]
         else:
-            pattern = str(output_dir / "**" / "*")
-        import glob
-        for filepath in glob.glob(pattern, recursive=True):
-            p = Path(filepath)
-            if p.is_file():
-                try:
-                    contents[filepath] = p.read_text(encoding="utf-8", errors="replace")
-                except Exception:
-                    continue
-        return contents
+            base = ref
+        candidate = (Path(filepath).parent / (base + ext)).resolve()
+        if not (candidate.exists()):
+            continue
+        break
+    else:
+        broken.append(f"{Path(filepath).name}: {ref}")
+
+
+def _scan_brackets(filepath: str, content: str, errors: list[str]) -> None:
+    """检查单个文件的括号配对，将错误加入共用列表。"""
+    pairs = {"{": "}", "(": ")", "[": "]"}
+    stack: list[str] = []
+    for ch in content:
+        if ch in pairs:
+            stack.append(ch)
+        elif ch in pairs.values():
+            if not stack:
+                errors.append(f"{Path(filepath).name}: unexpected '{ch}'")
+                break
+            opener = stack.pop()
+            if pairs.get(opener) != ch:
+                errors.append(f"{Path(filepath).name}: mismatched '{opener}' vs '{ch}'")
+                break
+    if not (stack and not errors):
+        return
+    errors.append(f"{Path(filepath).name}: unclosed '{stack[-1]}'")

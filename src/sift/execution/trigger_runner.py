@@ -35,10 +35,10 @@ from pathlib import Path
 
 from sift.audit.slice import invoked_skills
 from sift.execution.cli_runner import ClaudeRunner
+from sift.execution.options import ExecutionOptions
 from sift.models.eval_models import TriggerProbe
 from sift.parser import parse_skill_md
 from sift.utils import claude_cli_env
-
 
 # anti-leakage + 长度分层诊断(纯诊断,trigger 第 4 维细化;报告期推断,不进 evals.json)。
 # PHRASE_LEAK_MIN_CHARS:prompt 含 description 的 ≥此值连续子串 → 判「词面命中」(literal);
@@ -52,6 +52,7 @@ LENGTH_LONG = 80
 # ---------------------------------------------------------------------------
 # 纯函数:单次 / 聚合判定
 # ---------------------------------------------------------------------------
+
 
 def probe_verdict(expect_trigger: bool, fired: bool) -> str:
     """单次 fired → PASS/FAIL。
@@ -98,10 +99,7 @@ def aggregate_rates(probes: list[dict]) -> dict:
 
     def by_group(expect: bool, key: str, values: tuple[str, ...]) -> dict[str, float | None]:
         return {
-            v: _group_mean([
-                p["trigger_rate"] for p in probes
-                if p["expect_trigger"] == expect and p.get(key) == v
-            ])
+            v: _group_mean([p["trigger_rate"] for p in probes if p["expect_trigger"] == expect and p.get(key) == v])
             for v in values
         }
 
@@ -144,8 +142,9 @@ def classify_phrase(prompt: str, description: str, min_chars: int = PHRASE_LEAK_
         return "paraphrase"
     prompt_n = _normalize_text(prompt)
     for i in range(len(desc_n) - min_chars + 1):
-        if desc_n[i:i + min_chars] in prompt_n:
-            return "literal"
+        if not (desc_n[i: i + min_chars] in prompt_n):
+            continue
+        return "literal"
     return "paraphrase"
 
 
@@ -166,6 +165,7 @@ def length_bucket(prompt: str) -> str:
 # TriggerRunner — 沙箱/spawn/检测/聚合 编排
 # ---------------------------------------------------------------------------
 
+
 class TriggerRunner:
     """trigger-accuracy 探题编排器。
 
@@ -182,12 +182,11 @@ class TriggerRunner:
         runs: int = 1,
         workers: int = 4,
     ):
-        """
-        Args:
-            skill_path: 被测 skill 目录(含 SKILL.md)。
-            model / timeout / max_turns: 透传 run_trigger。
-            runs: 每个 probe 重复跑几次(trigger 带随机性,多次采样聚合成 trigger_rate)。
-            workers: 占位(API 稳定预留);v1 串行跑,本参数当前不生效。
+        """Args:
+        skill_path: 被测 skill 目录(含 SKILL.md)。
+        model / timeout / max_turns: 透传 run_trigger。
+        runs: 每个 probe 重复跑几次(trigger 带随机性,多次采样聚合成 trigger_rate)。
+        workers: 占位(API 稳定预留);v1 串行跑,本参数当前不生效。
         """
         self.skill_path = Path(skill_path)
         # parse_skill_md 返 (name, description, content, frontmatter, body)
@@ -198,62 +197,6 @@ class TriggerRunner:
         self.max_turns = max_turns
         self.runs = runs
         self.workers = workers  # v1 不用(串行),占位待后续线程池
-
-    def _sandbox_with_skill(self, base: Path, probe_id: int, run: int) -> Path:
-        """建 ``base/probe-<id>/run-<run>/`` 沙箱,把被测 skill 拷进 ``.claude/skills/<name>/``。
-
-        跳过 skill 目录里自带的 ``.claude``(避免 skill 自带 project plugin 污染隔离);
-        其余文件/子目录(含 references/scripts 等触发后 cc 会读的附件)整树拷过去。
-        """
-        sandbox = base / f"probe-{probe_id}" / f"run-{run}"
-        dst = sandbox / ".claude" / "skills" / self.name
-        dst.mkdir(parents=True, exist_ok=True)
-        for item in self.skill_path.iterdir():
-            if item.name == ".claude":
-                continue
-            target = dst / item.name
-            if item.is_dir():
-                shutil.copytree(item, target, dirs_exist_ok=True)
-            else:
-                shutil.copy2(item, target)
-        return sandbox
-
-    def _run_probe_once(self, probe: TriggerProbe, out_base: Path, run: int, on_progress=None) -> tuple[bool, str, int, int, int]:
-        """单 probe 单 run:建沙箱 → spawn(真实 HOME)→ 写 transcript → 检测 fired。
-
-        Returns:
-            ``(fired, transcript_path, total_tokens, exit_code, duration_ms)``。``fired`` = 被测 skill 名
-            (frontmatter name)出现在 ``invoked_skills`` 检出列表里。``exit_code`` 透传给
-            ``run()`` 判非零退出(cc 撞限流 / 异常退出常 exit 1 + 错误打 stdout、stderr 空,
-            此时 ``run_trigger`` 不 raise,须据此判 UNRESOLVED,见 ``run()``)。``duration_ms``
-            是这次 cc spawn 的墙钟(``RunOutput.duration_ms``,cli_runner 计量),``run()`` 累加成
-            per-probe / 全局耗时(对齐 run 口径)。
-
-        **不隔离 HOME**(对齐 run/audit):cc 2.x 的全局 plugin 不随 HOME(实测换空 HOME 后
-        全局 plugin skill 照样加载,没隔掉),而 cc 的文件/keyring 认证源在 HOME 里——覆
-        HOME 为空目录会把认证一起隔离掉,终端 shell(无 IDE 注入的 ``ANTHROPIC_AUTH_TOKEN``)
-        撞 'Not logged in' → cc 非零退出、0 token → 全 probe UNRESOLVED。故用真实 HOME
-        (``claude_cli_env`` 继承终端 env,含真实 HOME)。隔离全局 skill 的顾虑不成立:
-        ``fired`` 判定只看被测 skill 名是否出现在 ``invoked_skills``(见上),别的 skill 参
-        与发现不改变这个布尔。
-        """
-        sandbox = self._sandbox_with_skill(out_base, probe.id, run)
-        # claude_cli_env 补身份头(治限流)+ 继承终端 env(含真实 HOME → cc 能读认证文件/keyring)。
-        # 不覆 HOME:cc 2.x plugin 不随 HOME(隔不掉),覆了反断认证(见 docstring)。
-        env = claude_cli_env()
-        out = self.runner.run_trigger(
-            prompt=probe.prompt,
-            cwd=sandbox,
-            env=env,
-            model=self.model,
-            timeout=self.timeout,
-            max_turns=self.max_turns,
-            on_progress=(lambda line: on_progress(f"  {line}")) if on_progress else None,
-        )
-        transcript = sandbox / "transcript.jsonl"
-        transcript.write_text(out.stdout, encoding="utf-8")
-        fired = self.name in invoked_skills(transcript)
-        return fired, str(transcript), out.total_tokens, out.exit_code, out.duration_ms
 
     def run(self, probes: list[TriggerProbe], out_base: Path, on_progress=None) -> dict:
         """跑全部探题、聚合 trigger 率。
@@ -281,35 +224,45 @@ class TriggerRunner:
         ``probe-*``(trigger 专属),不动 ``evals.json`` 等。
         """
         for stale in Path(out_base).glob("probe-*"):
-            if stale.is_dir():
-                shutil.rmtree(stale, ignore_errors=True)
+            if not (stale.is_dir()):
+                continue
+            shutil.rmtree(stale, ignore_errors=True)
         results: list[dict] = []
         total_duration_ms = 0
         for i, probe in enumerate(probes):
             if on_progress:
                 on_progress(f"probe {i + 1}/{len(probes)} ({'该触发' if probe.expect_trigger else '不该触发'})")
-            fired_count = 0
-            unresolved = False
-            tokens = 0
-            duration_ms = 0
-            transcript_path = ""
-            for r in range(self.runs):
-                try:
-                    fired, path, tk, exit_code, dur = self._run_probe_once(probe, out_base, r, on_progress=on_progress)
-                    fired_count += int(fired)
-                    tokens += tk
-                    duration_ms += dur
-                    if not transcript_path:
-                        transcript_path = path   # 人审入口:首个成功 run 的 transcript
-                    if not fired and exit_code != 0:
-                        unresolved = True   # cc 异常退出且没触发 → 无法判定,计 UNRESOLVED
-                except Exception:
-                    unresolved = True
-            trigger_rate = fired_count / self.runs if self.runs else 0.0
-            verdict = "UNRESOLVED" if unresolved else _binary_verdict(
-                probe.expect_trigger, trigger_rate
-            )
-            results.append({
+            duration_ms = self._collect_probe_runs(probe, out_base, on_progress, results)
+            total_duration_ms += duration_ms
+        resolved = [r for r in results if not r["unresolved"]]
+        agg = aggregate_rates(resolved)
+        agg["unresolved"] = sum(1 for r in results if r["unresolved"])
+        agg["duration_ms"] = total_duration_ms
+        agg["total_tokens"] = sum(r["tokens"] for r in results)
+        return {"probes": results, **agg}
+
+    def _collect_probe_runs(self, probe, out_base, on_progress, results):
+        fired_count = 0
+        unresolved = False
+        tokens = 0
+        duration_ms = 0
+        transcript_path = ""
+        for r in range(self.runs):
+            try:
+                fired, path, tk, exit_code, dur = self._run_probe_once(probe, out_base, r, on_progress=on_progress)
+                fired_count += int(fired)
+                tokens += tk
+                duration_ms += dur
+                if not transcript_path:
+                    transcript_path = path  # 人审入口:首个成功 run 的 transcript
+                if not fired and exit_code != 0:
+                    unresolved = True  # cc 异常退出且没触发 → 无法判定,计 UNRESOLVED
+            except Exception:
+                unresolved = True
+        trigger_rate = fired_count / self.runs if self.runs else 0.0
+        verdict = "UNRESOLVED" if unresolved else _binary_verdict(probe.expect_trigger, trigger_rate)
+        results.append(
+            {
                 "id": probe.id,
                 "expect_trigger": probe.expect_trigger,
                 "prompt": probe.prompt,
@@ -322,11 +275,66 @@ class TriggerRunner:
                 "tokens": tokens,
                 "duration_ms": duration_ms,
                 "transcript_path": transcript_path,
-            })
-            total_duration_ms += duration_ms
-        resolved = [r for r in results if not r["unresolved"]]
-        agg = aggregate_rates(resolved)
-        agg["unresolved"] = sum(1 for r in results if r["unresolved"])
-        agg["duration_ms"] = total_duration_ms
-        agg["total_tokens"] = sum(r["tokens"] for r in results)
-        return {"probes": results, **agg}
+            }
+        )
+        return duration_ms
+
+    def _sandbox_with_skill(self, base: Path, probe_id: int, run: int) -> Path:
+        """建 ``base/probe-<id>/run-<run>/`` 沙箱,把被测 skill 拷进 ``.claude/skills/<name>/``。
+
+        跳过 skill 目录里自带的 ``.claude``(避免 skill 自带 project plugin 污染隔离);
+        其余文件/子目录(含 references/scripts 等触发后 cc 会读的附件)整树拷过去。
+        """
+        sandbox = base / f"probe-{probe_id}" / f"run-{run}"
+        dst = sandbox / ".claude" / "skills" / self.name
+        dst.mkdir(parents=True, exist_ok=True)
+        for item in self.skill_path.iterdir():
+            if item.name == ".claude":
+                continue
+            target = dst / item.name
+            if item.is_dir():
+                shutil.copytree(item, target, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, target)
+        return sandbox
+
+    def _run_probe_once(
+        self, probe: TriggerProbe, out_base: Path, run: int, on_progress=None
+    ) -> tuple[bool, str, int, int, int]:
+        """单 probe 单 run:建沙箱 → spawn(真实 HOME)→ 写 transcript → 检测 fired。
+
+        Returns:
+            ``(fired, transcript_path, total_tokens, exit_code, duration_ms)``。``fired`` = 被测 skill 名
+            (frontmatter name)出现在 ``invoked_skills`` 检出列表里。``exit_code`` 透传给
+            ``run()`` 判非零退出(cc 撞限流 / 异常退出常 exit 1 + 错误打 stdout、stderr 空,
+            此时 ``run_trigger`` 不 raise,须据此判 UNRESOLVED,见 ``run()``)。``duration_ms``
+            是这次 cc spawn 的墙钟(``RunOutput.duration_ms``,cli_runner 计量),``run()`` 累加成
+            per-probe / 全局耗时(对齐 run 口径)。
+
+        **不隔离 HOME**(对齐 run/audit):cc 2.x 的全局 plugin 不随 HOME(实测换空 HOME 后
+        全局 plugin skill 照样加载,没隔掉),而 cc 的文件/keyring 认证源在 HOME 里——覆
+        HOME 为空目录会把认证一起隔离掉,终端 shell(无 IDE 注入的 ``ANTHROPIC_AUTH_TOKEN``)
+        撞 'Not logged in' → cc 非零退出、0 token → 全 probe UNRESOLVED。故用真实 HOME
+        (``claude_cli_env`` 继承终端 env,含真实 HOME)。隔离全局 skill 的顾虑不成立:
+        ``fired`` 判定只看被测 skill 名是否出现在 ``invoked_skills``(见上),别的 skill 参
+        与发现不改变这个布尔。
+        """
+        sandbox = self._sandbox_with_skill(out_base, probe.id, run)
+        # claude_cli_env 补身份头(治限流)+ 继承终端 env(含真实 HOME → cc 能读认证文件/keyring)。
+        # 不覆 HOME:cc 2.x plugin 不随 HOME(隔不掉),覆了反断认证(见 docstring)。
+        env = claude_cli_env()
+        out = self.runner.run_trigger(
+            prompt=probe.prompt,
+            cwd=sandbox,
+            env=env,
+            options=ExecutionOptions(
+                model=self.model,
+                timeout=self.timeout,
+                max_turns=self.max_turns,
+                on_progress=(lambda line: on_progress(f"  {line}")) if on_progress else None,
+            ),
+        )
+        transcript = sandbox / "transcript.jsonl"
+        transcript.write_text(out.stdout, encoding="utf-8")
+        fired = self.name in invoked_skills(transcript)
+        return fired, str(transcript), out.total_tokens, out.exit_code, out.duration_ms

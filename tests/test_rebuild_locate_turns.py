@@ -1,5 +1,7 @@
 """rebuild 的 locate_turns 开关:[T{idx}] 前缀 + ToolCallRecord.turn 的渲染控制。"""
+
 from pathlib import Path
+
 from sift.audit.rebuild import rebuild
 
 
@@ -14,10 +16,10 @@ def _write_cc_jsonl(tmp_path: Path) -> Path:
         '{"type":"assistant","message":{"role":"assistant","content":['
         '{"type":"text","text":"do X"},'
         '{"type":"tool_use","name":"Read","input":{"file_path":"x"},"id":"t1"}'
-        ']}}\n'
+        "]}}\n"
         '{"type":"user","message":{"role":"user","content":['
         '{"type":"tool_result","tool_use_id":"t1","content":"x-content"}'
-        ']}}\n',
+        "]}}\n",
         encoding="utf-8",
     )
     return p
