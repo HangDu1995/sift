@@ -282,7 +282,7 @@ class TestUnmatchedLlm:
         trace = [ToolCallRecord(name="Task", input_summary="Verify Task 32 - Branch-1 KernelST")]
 
         TranscriptAuditor().engine.judge_conditional(
-            instructions=[_tool_inst(text="调用 TilingFunc", tool_name="TilingFunc")],
+            instructions=[_tool_inst(text="调用 FooFunc", tool_name="FooFunc")],
             evidence=JudgeTranscript(tool_trace=trace, scene="某场景", name="w.jsonl"),
             call_options=JudgeCallOptions(),
         )

@@ -47,9 +47,9 @@ class TestMatchFullInputForExistence:
         # 派发调用:summary 只有开头 200 字(无 mkdir),完整 input 的 prompt 深处才有
         return ToolCallRecord(
             name="Task",
-            input_summary="派发 developer agent:创建当前算子开发目录,按 STATE.md 的 Task 2 "
+            input_summary="派发 developer agent:创建当前组件开发目录,按 STATE.md 的 Task 2 "
             "执行环境准备,读取 proto/desc/golden 并初始化工作区,注意基线与目录结构约定" + ",补充说明文字" * 12,
-            input={"prompt": "…(长 prompt)… 请执行 mkdir -p docs/{OP}/develop/ 创建当前算子开发目录 …"},
+            input={"prompt": "…(长 prompt)… 请执行 mkdir -p docs/{OP}/develop/ 创建当前组件开发目录 …"},
         )
 
     def test_existence_hits_command_in_full_input(self) -> None:
@@ -119,7 +119,7 @@ class TestRefineInstructions:
     def test_refine_prompt_carries_excerpt_and_pseudo_tool_rule(monkeypatch) -> None:
         """refine prompt 喂 source_excerpt + 含「命令行标识符伪工具」类目。
 
-        判「调用 TilingFunc 是不是真指令」必须看到原文上下文(它只活在一条命令行
+        判「调用 FooFunc 是不是真指令」必须看到原文上下文(它只活在一条命令行
         里)——旧 prompt 只喂指令文本,伪工具要求判不出,漏成假 FAIL。摘录进 prompt
         也进缓存键(v2 bump),摘录变则失效重筛。
         """
@@ -130,15 +130,15 @@ class TestRefineInstructions:
             return json.dumps([{"index": 0, "is_real": False}])
 
         monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
-        inst = _tool_inst(text="调用 TilingFunc", tool_name="TilingFunc")
-        inst.source_excerpt = "验收标准:UT 可编译——cd operators/tests/tiling && cmake .. && make TilingFunc"
+        inst = _tool_inst(text="调用 FooFunc", tool_name="FooFunc")
+        inst.source_excerpt = "验收标准:UT 可编译——cd tests/unit && cmake .. && make FooFunc"
 
         TranscriptAuditor().engine.refine_instructions([inst], model=None, timeout=600, on_progress=None)
 
         assert len(prompts) == 1
         assert "cmake" in prompts[0]  # 摘录真进了 prompt
         assert "伪工具" in prompts[0]  # 新类目在
-        assert "TilingFunc" in prompts[0]
+        assert "FooFunc" in prompts[0]
         # v3:任务编号词类目(「`./run.sh` 跑 Task 25 用例」抽出「跑 Task」——Task 不是工具)
         assert "任务编号词" in prompts[0]
         assert "跑 Task" in prompts[0]

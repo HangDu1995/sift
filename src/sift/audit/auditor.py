@@ -2684,7 +2684,7 @@ def _real_instruction_prompt(batch, bn):
         '"6 failures across 3 files"是例句);或**命令行/代码片段里的标识符被抽成的'
         '伪工具要求**——"工具名"其实是编译目标/函数名/脚本参数/任务编号词,只出现在'
         '摘录的某条命令行/代码或任务编号表述里、不是执行者可调用的工具(如"调用 '
-        'TilingFunc"里的 TilingFunc 是测试目标名;"`./run.sh` 跑 Task 25 用例"抽出'
+        'FooFunc"里的 FooFunc 是测试目标名;"`./run.sh` 跑 Task 25 用例"抽出'
         '的"跑 Task"里 Task 是任务编号词,真命令是 run.sh)。\n'
         "- ⚠ indeterminate(分不清):只在真的无法判断时用,**必须**在 reason 写明;"
         "不要用 indeterminate 偷懒回避。\n\n"

@@ -100,7 +100,7 @@ def _claude_settings_env() -> dict[str, str]:
     """``~/.claude/settings.json`` 的 ``env`` 块(cc CLI 自身的凭据/model 来源)。
 
     裸 HTTP 解析凭据时 os.environ 缺了就回退读这里:VSCode/SDK 把 ``ANTHROPIC_*`` 注入
-    **交互 shell** 的 env,但非交互启动的子进程(如 cannbot-insight 的 ``next dev`` spawn
+    **交互 shell** 的 env,但非交互启动的子进程(如 Web 面板的 ``next dev`` spawn
     出来的 sift)继承不到 → 裸 HTTP 撞 ``KeyError`` /「无可用 model」全批失败(audit
     静默出 UNRESOLVED)。回退读 cc 同源的 settings.json,让裸 HTTP 在 **cc 能跑的任何上下文**
     都能跑(实测:剥光 os.environ 后从 settings.json 读 base/token/model 一发即通)。
