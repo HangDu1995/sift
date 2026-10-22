@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from sift.execution.live_runner import run_live_task
 from sift.execution.options import LiveTaskOptions
 from sift.models import RunOutput
@@ -215,8 +217,6 @@ def test_run_live_task_single_executor_no_suffix_backward_compat(tmp_path, monke
 
 
 def test_make_live_runner_unknown_raises(tmp_path):
-    import pytest
-
     from sift.errors import InputError
     from sift.execution import live_runner as lr
 
@@ -224,6 +224,7 @@ def test_make_live_runner_unknown_raises(tmp_path):
         lr.make_live_runner("foo")
 
 
+@pytest.mark.e2e
 def test_real_opencode_executor_end_to_end(tmp_path):
     """opt-in 真测(Pattern B):opencode 装好 + auth 配好才跑;否则 skip。
 
@@ -233,11 +234,15 @@ def test_real_opencode_executor_end_to_end(tmp_path):
     import json as _json
     import os as _os
     import shutil as _sh
+    import subprocess as _sp
 
-    import pytest
-
-    if _sh.which("opencode") is None:
+    oc = _sh.which("opencode")
+    if oc is None:
         pytest.skip("opencode CLI 未安装")
+    try:
+        _sp.run([oc, "--version"], capture_output=True, timeout=60, check=True)
+    except (OSError, _sp.SubprocessError):
+        pytest.skip("opencode CLI 不可执行(安装不完整/架构不符)，--version 探测失败")
     # gate:env 无 ANTHROPIC_AUTH_TOKEN 且无 ANTHROPIC_API_KEY → skip(auth 未配)
     if not (_os.environ.get("ANTHROPIC_AUTH_TOKEN") or _os.environ.get("ANTHROPIC_API_KEY")):
         pytest.skip("opencode auth 未配(需 ANTHROPIC_AUTH_TOKEN 或 ANTHROPIC_API_KEY)")
