@@ -31,11 +31,11 @@ This skill helps create data transformation scripts for CSV and JSON formats.
 import csv
 import json
 
-with open('input.csv', encoding='utf-8') as f:
+with open("input.csv", encoding="utf-8") as f:
     reader = csv.DictReader(f)
     data = [row for row in reader]
 
-with open('output.json', 'w', encoding='utf-8') as f:
+with open("output.json", "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
 ```
 

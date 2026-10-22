@@ -421,7 +421,8 @@ class TestBatching:
         )
 
         assert len(findings) == 32
-        assert calls == [10, 10, 10, 2]  # 分 10+10+10+2 四批
+        # 同 test_judges 批量禁令用例:并发跑批调用序不定,只锁多重集
+        assert sorted(calls, reverse=True) == [10, 10, 10, 2]
         # 全 N/A(applicable=false),无兜底 N/A / 无"批量超限"
         assert all(f.verdict == AuditVerdict.NA for f in findings)
         assert all("批量超限" not in f.evidence for f in findings)

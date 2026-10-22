@@ -235,7 +235,9 @@ class TestJudgeProhibition:
         )
 
         assert len(findings) == 35
-        assert calls == [10, 10, 10, 5]  # 分 10+10+10+5 四批
+        # 批次经 _run_batches_concurrent 并发执行,调用顺序由线程调度决定——
+        # 只锁多重集(10+10+10+5 四批、每批一次调用、无超限兜底),不锁顺序
+        assert sorted(calls, reverse=True) == [10, 10, 10, 5]
         assert all(f.verdict == AuditVerdict.PASS for f in findings)
         assert all(f.category == AuditCategory.PROHIBITION for f in findings)
         assert all("批量超限" not in f.evidence for f in findings)
