@@ -314,6 +314,8 @@ class AuditReport(BaseModel):
     transcript_sources: list[str] = Field(
         default_factory=list
     )  # 与 transcripts 同序标记来源（cc/opencode）；旧报告默认为空
+    # --run 导入时才填：run 身份、命中计数和每个审计单元的原始成员及调用 ID。
+    run: dict | None = None
     summary: (
         dict  # {"total": N, "pass": X, "fail": Y, "na": Z(不适用), "unresolved": U(没判成), "indeterminate": I(判不准)}
     )

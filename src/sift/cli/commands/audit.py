@@ -28,6 +28,7 @@ from rich.table import Table
 from sift.audit.auditor import TranscriptAuditor
 from sift.audit.boundary import frontmatter_tool_names
 from sift.audit.judge_context import AuditOptions
+from sift.audit.run import build_run_report_metadata, prepare_run_transcripts
 from sift.audit.suggest import build_suggestions
 from sift.cli.main import app, console
 from sift.cli.options import options_command
@@ -36,7 +37,7 @@ from sift.concurrency import (
     configure_adaptive,
     configure_max_concurrent,
 )
-from sift.errors import SiftError
+from sift.errors import InputError, SiftError
 from sift.evals.opencode_db import export_session, list_sessions, resolve_session
 from sift.evals.structured import is_structured_records, load_structured_records
 from sift.execution.error_triage import classify_error, unresolved_cause_info
@@ -56,6 +57,7 @@ class _AuditInputOptions:
     transcript: list[Path] | None
     locate_turns: bool
     max_concurrent: int | None
+    run: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +90,7 @@ class _PreparedAuditInput:
     display_names: list[str] | None
     aux_tool_traces: list | None
     out: Path
+    run_metadata: dict | None = None
 
 
 @dataclass
@@ -329,6 +332,12 @@ _AUDIT_DB_OPTION = typer.Option(
     help=(_AUDIT_DB_HELP),
 )
 
+_AUDIT_RUN_OPTION = typer.Option(
+    None,
+    "--run",
+    help="导出的 workflow run 目录；与 --transcript、--db 互斥；不支持 --kind root",
+)
+
 _AUDIT_SESSION_OPTION = typer.Option(
     None,
     "--session",
@@ -363,6 +372,7 @@ class AuditCommandOptions:
     output_format: str = _AUDIT_OUTPUT_FORMAT_OPTION
     open_browser: bool = _AUDIT_OPEN_BROWSER_OPTION
     db: Optional[Path] = _AUDIT_DB_OPTION
+    run: Optional[Path] = _AUDIT_RUN_OPTION
     session: Optional[str] = _AUDIT_SESSION_OPTION
     max_concurrent: Optional[int] = _AUDIT_MAX_CONCURRENT_OPTION
     suggest: bool = _AUDIT_SUGGEST_OPTION
@@ -381,6 +391,7 @@ def audit(cli_options: AuditCommandOptions):
             cli_options.transcript,
             cli_options.locate_turns,
             cli_options.max_concurrent,
+            cli_options.run,
         ),
         _AuditEngineOptions(
             cli_options.model, cli_options.refine_instructions, cli_options.generate_headline, cli_options.locate_turns
@@ -571,7 +582,8 @@ def _configure_audit_concurrency(max_concurrent):
 def _expand_structured_transcripts(transcript, display_names, expanded_tmps):
     """Expand structured input while tracking temporary files for caller cleanup."""
     if any(is_structured_records(tp) for tp in transcript):
-        display_names = [tp.name for tp in transcript]  # 先记原始名(同序),再替换成临时文件
+        if display_names is None:
+            display_names = [tp.name for tp in transcript]  # 先记原始名(同序),再替换成临时文件
         expanded: list[Path] = []
         for tp in transcript:
             if not is_structured_records(tp):
@@ -687,16 +699,19 @@ def _opencode_scope_agent(kind, tp, name):
     return target_agent
 
 
-def _validate_audit_inputs(db, session, transcript):
+def _validate_audit_inputs(db, session, transcript, run=None):
     """Reject conflicting or missing audit input options."""
+    if run is not None and (db is not None or transcript):
+        console.print("[red]Error:[/red] --run 与 --transcript、--db 互斥")
+        raise typer.Exit(code=2)
     if db is not None and transcript:
         console.print(("[red]Error:[/red] --db 与 --transcript 互斥,二选一"))
         raise typer.Exit(code=2)
     if session is not None and db is None:
         console.print("[red]Error:[/red] --session 仅与 --db 搭配使用")
         raise typer.Exit(code=2)
-    if db is None and not transcript:
-        console.print(("[red]Error:[/red] 需要 --transcript 或 --db 之一"))
+    if db is None and not transcript and run is None:
+        console.print(("[red]Error:[/red] 需要 --transcript、--db 或 --run 之一"))
         raise typer.Exit(code=2)
 
 
@@ -773,6 +788,12 @@ def _print_audit_report(report, name: str, report_path: Path, html_path: Path) -
             f"na=[yellow]{n_na}[/yellow]{src_tail}"
         )
     )
+    if report.run:
+        run = report.run
+        console.print(
+            f"Run {run['runId']}: 命中 {run['matchedSessionCount']} 个 session · "
+            f"{run['targetCallCount']} 次调用 · {run['auditUnitCount']} 个审计单元"
+        )
 
     # 声明覆盖一行(covered=任一 transcript PASS/FAIL,uncovered=全 N/A,unknown=说不清;
     # 反推指令不计):本批对账的证据面铺了声明的多大比例——低覆盖时上面那行 fail 数只
@@ -844,6 +865,7 @@ def _prepare_audit_input(options: _AuditInputOptions, temporary: _AuditTemporary
     transcript = options.transcript
     locate_turns = options.locate_turns
     max_concurrent = options.max_concurrent
+    run = options.run
     _configure_audit_concurrency(max_concurrent)
 
     name, _desc, _content, _frontmatter, body = parse_skill_md(skill_path)
@@ -858,9 +880,15 @@ def _prepare_audit_input(options: _AuditInputOptions, temporary: _AuditTemporary
     out = output_dir or Path("output")
 
     # 输入源:--db 与 --transcript 互斥;--session 仅搭 --db;都不给 → exit 2。
-    _validate_audit_inputs(db, session, transcript)
+    _validate_audit_inputs(db, session, transcript, run)
+    if run is not None and kind == "root":
+        console.print("[red]Error:[/red] run 输入暂不支持 --kind root")
+        raise typer.Exit(code=2)
 
     transcript = transcript or []
+    run_id: str | None = None
+    run_sources: list[dict] = []
+    run_warnings: list[str] = []
     # 显示名(与 transcript 同序):--db 导出 / 结构化输入展开都会产生**临时文件**,
     # 报告侧(findings.transcript / provenance 键 / 终端进度)一律用原始输入名——
     # 临时名跑一次变一次、跑完即删,写进 audit-report 下游对不上账(同一次证据包
@@ -873,6 +901,11 @@ def _prepare_audit_input(options: _AuditInputOptions, temporary: _AuditTemporary
         temporary.export_tmp, export_name = _audit_from_db(db, session)
         transcript = [temporary.export_tmp]
         display_names = [export_name]
+    elif run is not None:
+        run_id, transcript, run_sources, run_warnings = prepare_run_transcripts(
+            run, name, kind, temporary.expanded_tmps
+        )
+        display_names = [f"{src['sessionId']}.json" for src in run_sources]
 
     # 结构化 records 输入(--transcript 指向 {format:"sift-records"} 的 JSON):
     # 展开成临时 cc-jsonl 替进去,后续 --kind 切分 / rebuild 全按 cc 路径走,零改动。
@@ -900,7 +933,11 @@ def _prepare_audit_input(options: _AuditInputOptions, temporary: _AuditTemporary
     # aux_tool_traces 只在 kind=root 切片路径填充;None 时不传 kwarg——对
     # TranscriptAuditor 的调用形态与旧版完全一致(测试 fake / 外部调用方零感知)。
     # display_names 同理:只在「临时文件直接喂引擎」(无 --kind 的展开/--db)时传。
-    return _PreparedAuditInput(name, body, transcript, fm_tools, display_names, aux_tool_traces, out)
+    run_metadata = (
+        build_run_report_metadata(run_id, run, run_sources, run_warnings, transcript, display_names, kind, name)
+        if run_id is not None else None
+    )
+    return _PreparedAuditInput(name, body, transcript, fm_tools, display_names, aux_tool_traces, out, run_metadata)
 
 
 def _execute_audit(inputs: _PreparedAuditInput, options: _AuditEngineOptions):
@@ -931,6 +968,10 @@ def _run_audit_command(
     try:
         prepared = _prepare_audit_input(input_options, temporary)
         report = _execute_audit(prepared, engine_options)
+        if prepared.run_metadata is not None:
+            report.run = prepared.run_metadata
+            report.transcript_sources = ["run"] * len(report.transcripts)
+            report.warnings.extend(prepared.run_metadata["warnings"])
     except SiftError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         triage = classify_error(str(exc))
