@@ -54,14 +54,16 @@ def _content_blocks(rec: dict) -> list:
     return content if isinstance(content, list) else []
 
 
-def _skill_name_of(rec: dict) -> str | None:
-    """若 rec 含 Skill tool_use,返回 input.skill(剥命名空间前缀),否则 None。"""
+def _skill_calls_of(rec: dict) -> list[tuple[str, str]]:
+    """Return every Skill call in a message, preserving its native call id."""
+    found: list[tuple[str, str]] = []
     for b in _content_blocks(rec):
         if not (isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Skill"):
             continue
         full = (b.get("input") or {}).get("skill") or ""
-        return full.rsplit(":", 1)[-1]  # "superpowers:writing-skills" → "writing-skills"
-    return None
+        if full:
+            found.append((full.rsplit(":", 1)[-1], str(b.get("id") or "")))
+    return found
 
 
 def _tool_result_ids(rec: dict) -> set[str]:
@@ -74,11 +76,11 @@ def _tool_result_ids(rec: dict) -> set[str]:
 
 
 def _find_agent_ids(records: list[dict]) -> set[str]:
-    """收集所有 Agent tool_use 的 id(子 agent 作用域标记)。"""
+    """收集 Agent／task 派发的 id(子 agent 作用域标记)。"""
     ids: set[str] = set()
     for rec in records:
         for b in _content_blocks(rec):
-            if not (isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Agent"):
+            if not (isinstance(b, dict) and b.get("type") == "tool_use" and str(b.get("name", "")).lower() in {"agent", "task"}):
                 continue
             tid = b.get("id", "")
             if tid:
@@ -100,10 +102,9 @@ def invoked_skills(transcript_path: Path) -> list[str]:
     """
     seen: list[str] = []
     for rec in _records(transcript_path):
-        name = _skill_name_of(rec)
-        if not (name and name not in seen):
-            continue
-        seen.append(name)
+        for name, _ in _skill_calls_of(rec):
+            if name not in seen:
+                seen.append(name)
     return seen
 
 
@@ -146,7 +147,7 @@ def scope_signals(transcript_paths: list[Path], name: str) -> set[str]:
             logging.getLogger(__name__).debug("Optional operation failed; continuing with fallback", exc_info=True)
             continue
         for rec in records:
-            if name and _skill_name_of(rec) == name:
+            if name and any(skill == name for skill, _ in _skill_calls_of(rec)):
                 signals.add("skill")
             if name and rec.get("agent") == name:
                 signals.add("agent")
@@ -157,20 +158,22 @@ def scope_signals(transcript_paths: list[Path], name: str) -> set[str]:
 
 
 def _slice_skill_invoke(records: list[dict], target: str) -> list[list[dict]]:
-    """kind='skill':按 Skill 调用切——scope-aware last-invoked-owns。
+    """Slice each invocation, sharing context for calls in the same message.
 
-    每个 Skill(target) 调用起段,到同作用域下一个 Skill 调用或作用域结束;按 parent_tool_use_id
-    归作用域。主作用域的 Agent tool_result 触发 depth-1 closure(子 agent 作用域结束)。
+    A later Skill-bearing *message* closes the prior group. Two calls in one
+    message start together; neither is silently discarded or given exclusive
+    ownership of the following tool calls. Each emitted segment records its
+    exact native invocation id for run provenance.
     """
     agent_ids = _find_agent_ids(records)
-
-    # 作用域内状态:active = 当前生效 skill 名;cur = 当前段的 record 下标列表。
     scope_state: dict[str | None, dict] = {}
-    skill_spans: list[list[int]] = []
+    skill_spans: list[tuple[list[int], str]] = []
 
     def _flush(state: dict) -> None:
-        if state.get("active") == target and state.get("cur"):
-            skill_spans.append(state["cur"])
+        if state.get("cur"):
+            for skill, tool_id in state.get("active", []):
+                if skill == target:
+                    skill_spans.append((list(state["cur"]), tool_id))
 
     for i, rec in enumerate(records):
         # Unmatched capture has no reliable Skill invocation association.  Keep
@@ -179,19 +182,16 @@ def _slice_skill_invoke(records: list[dict], target: str) -> list[list[dict]]:
         if rec.get("_sift_standalone_capture"):
             continue
         scope = _scope_of(rec)
-        state = scope_state.setdefault(scope, {"active": None, "cur": []})
+        state = scope_state.setdefault(scope, {"active": [], "cur": []})
 
-        name = _skill_name_of(rec)
-        if name is not None:
-            # 同作用域新 Skill 调用:关掉当前 target 段(如有),再切 active
-            if state["active"] == target and state["cur"]:
-                _flush(state)
-            state["active"] = name
-            state["cur"] = [i] if name == target else []
+        calls = _skill_calls_of(rec)
+        if calls:
+            _flush(state)
+            state["active"] = calls
+            state["cur"] = [i] if any(skill == target for skill, _ in calls) else []
             continue
 
-        # 非 Skill record:若当前作用域 active 是 target,归入段
-        if state["active"] == target:
+        if any(skill == target for skill, _ in state["active"]):
             state["cur"].append(i)
 
         # depth-1 closure only:主作用域里的 Agent tool_result 结束对应子 agent 作用域。
@@ -206,14 +206,20 @@ def _slice_skill_invoke(records: list[dict], target: str) -> list[list[dict]]:
             sub = scope_state.get(tid)
             if sub:
                 _flush(sub)
-                sub["active"] = None
+                sub["active"] = []
                 sub["cur"] = []
 
     # transcript 末:刷掉所有仍活跃的 skill 段
     for state in scope_state.values():
         _flush(state)
 
-    return [[records[k] for k in span] for span in skill_spans]
+    segments: list[list[dict]] = []
+    for span, anchor_id in skill_spans:
+        segment = [records[k] for k in span]
+        if anchor_id:
+            segment[0] = {**segment[0], "_sift_slice_anchor_id": anchor_id}
+        segments.append(segment)
+    return segments
 
 
 def _slice_agent(records: list[dict], target: str) -> list[list[dict]]:

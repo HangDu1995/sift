@@ -331,6 +331,24 @@
           '</div>' +
         '</div>');
 
+      if (EMBEDDED_DATA.run) {
+        var run = EMBEDDED_DATA.run;
+        var unitRows = (run.units || []).map(function (unit) {
+          return '<li><strong>' + escapeHtml(unit.auditUnitId || '') + '</strong>' +
+            ' · session ' + escapeHtml(unit.sessionId || '') +
+            ' · ' + escapeHtml(unit.scope || '') +
+            '<br><span class="transcript">' + escapeHtml(unit.source || '') +
+            ' · 调用 ID: ' + escapeHtml((unit.matchedToolUseIds || []).join(', ') || '—') + '</span></li>';
+        }).join('');
+        root.insertAdjacentHTML('beforeend',
+          '<details class="finding" open><summary><strong>Run ' + escapeHtml(run.runId || '') + '</strong>' +
+          ' · 命中 ' + (run.matchedSessionCount || 0) + ' 个 session' +
+          ' · ' + (run.targetCallCount || 0) + ' 次调用' +
+          ' · ' + (run.auditUnitCount || 0) + ' 个审计单元</summary>' +
+          '<div class="transcript">导出目录：' + escapeHtml(run.bundlePath || '') + '</div>' +
+          '<ul>' + unitRows + '</ul></details>');
+      }
+
       // ①b 各阶段耗时/token(诊断 audit 慢在哪:extract/refine/headline/rebuild 切片/judge/postprocess;
       // --suggest 真跑过 LLM 时 CLI 会多追加一行 suggest——它是引擎外的 CLI 层后处理)
       var STAGE_LABEL = { extract: '抽取', refine: '精筛', headline: '标题', rebuild: '切片', judge: '判定', postprocess: '聚合', suggest: '建议' };
