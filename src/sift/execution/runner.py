@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, NamedTuple
 
 from sift.audit.judge_context import AuditOptions
-from sift.errors import ClaudeRunnerError, SiftError
+from sift.errors import ClaudeRunnerError, DshRunnerError, SiftError
 from sift.execution.anomaly import (  # noqa: F401 — re-exported for backward compat
     detect_outliers,
     detect_timeout,
@@ -25,6 +25,7 @@ from sift.execution.cli_runner import (  # noqa: F401 — re-exported for backwa
     ClaudeRunner,
     find_project_root,
 )
+from sift.execution.dsh_runner import DshRunner
 from sift.execution.options import ExecutionOptions
 from sift.execution.progress import ProgressUpdate
 from sift.models import (
@@ -396,7 +397,7 @@ class ABTestRunner:
     ):
         self.config = config
         self.scoring_config = scoring_config
-        self.runner = ClaudeRunner()
+        self.runner = DshRunner() if config.executor == "dsh" else ClaudeRunner()
         self.on_progress = on_progress
 
     @staticmethod
@@ -601,7 +602,12 @@ class ABTestRunner:
             )
             try:
                 run_output = self._execute_case(eval_case, prompt, outputs_dir, use_skill)
-            except ClaudeRunnerError as exc:
+                if self.config.executor == "dsh" and run_output.exit_code != 0:
+                    reason = run_output.stop_reason or f"exit_{run_output.exit_code}"
+                    raise DshRunnerError(
+                        f"dsh exited with code {run_output.exit_code}: {reason}"
+                    )
+            except (ClaudeRunnerError, DshRunnerError) as exc:
                 return handle_execution_failure(attempt, exc)
 
             return finish_attempt(attempt, run_output)
