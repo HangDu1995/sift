@@ -71,7 +71,7 @@ sift vet path/to/skill/ --skip-external # 跳过外部扫描器
 
 ### `init` — 初始化评测定义
 
-根据 SKILL.md 内容自动生成 `evals.json`。三种生成路径，优先级 `--from-run` 或 `--from-transcript`（两者互斥）> `--generate-prompts`（LLM）> 模板。`--kind agent` 改为给 **agent 定义.md** 出题（读 description + system prompt 凭角色造 role-matching 考题，不切段、不假设产文件，断言由 LLM 直接写）——agent 的「没有 transcript 时的出题路」；有真实 dispatch session 时，`--from-transcript --kind agent` 可从单个会话挖题，`--from-run --kind agent` 可从 run 中命中的会话挖题。
+根据 SKILL.md 内容自动生成 `evals.json`。三种生成路径，优先级 `--from-run` 或 `--from-transcript`（两者互斥）> `--generate-prompts`（LLM）> 模板。`--kind agent` 改为给 **agent 定义.md** 出题（读 description + system prompt 凭角色造 role-matching 考题，不切段、不假设产文件，断言由 LLM 直接写）——agent 的「没有 transcript 时的出题路」；有真实 dispatch session 时，`--from-transcript --kind agent` 可从单个会话挖评分题，`--from-run --kind agent` 可从 run 中命中的会话挖评分题。
 
 > 生成的 `evals.json` 格式（字段 / AssertionType 全表 / expectations vs assertions / tier 坑）详见 [evals-format.md](evals-format.md)。
 
@@ -82,9 +82,11 @@ sift init path/to/skill/ --from-transcript session.jsonl  # 从真实会话挖 e
 sift init path/to/skill/ --from-run path/to/run-bundle  # 从 run 中命中的完整 session 挖 eval
 sift init path/to/skill/ --from-run path/to/run-bundle --kind skill  # 只挖目标 skill 的执行部分
 sift init path/to/agent.md --kind agent                   # 只根据 agent 声明出题
-sift init path/to/agent.md --from-transcript session.jsonl --kind agent  # 从一份会话中的 agent 执行挖题
-sift init path/to/agent.md --from-run path/to/run-bundle --kind agent  # 从 run 中的 agent 执行挖题
+sift init path/to/agent.md --from-transcript session.jsonl --kind agent  # 从 agent 执行挖评分题
+sift init path/to/agent.md --from-run path/to/run-bundle --kind agent  # 从 run 中的 agent 执行挖评分题
 ```
+
+上面两个带 `--kind agent` 的历史记录命令生成的是**评分题**。`--trigger-probes` 测的是 skill 是否被调用；目前不能用它判断 agent 是否被派发。
 
 **参数**：
 
