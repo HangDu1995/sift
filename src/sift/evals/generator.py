@@ -666,7 +666,7 @@ Output JSON ONLY:
         self,
         skill_path: Path,
         sessions: list[tuple[str, Path]],
-        kind: str,
+        kind: str | None,
         on_heartbeat: Callable[[str], None] | None = None,
     ) -> EvalSet:
         """Mine each selected session separately, then combine its candidate cases."""

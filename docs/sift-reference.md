@@ -71,7 +71,7 @@ sift vet path/to/skill/ --skip-external # 跳过外部扫描器
 
 ### `init` — 初始化评测定义
 
-`sift init` 根据 skill 的 `SKILL.md` 或 agent 的定义文件生成 `evals.json`。默认让模型根据声明出题；提供 `--from-transcript` 时参考一份会话记录，提供 `--from-run` 时参考 run 包中的相关会话。后两者不能同时使用。给 agent 出题时，`--kind agent` 指明声明类型；如果有真实执行记录，可以用 `--from-transcript --kind agent` 或 `--from-run --kind agent` 从执行过程挖题。
+`sift init` 根据 skill 的 `SKILL.md` 或 agent 的定义文件生成 `evals.json`。默认让模型根据声明出题；提供 `--from-transcript` 时参考一份会话记录，提供 `--from-run` 时参考 run 包中的相关会话。后两者不能同时使用。省略 `--kind` 时，从命中的完整会话挖题；指定 `--kind skill` 或 `--kind agent` 时，只挖目标的执行部分。给 agent 出题时应指定 `--kind agent`，让出题提示按 agent 声明生成。
 
 > 生成的 `evals.json` 格式（字段 / AssertionType 全表 / expectations vs assertions / tier 坑）详见 [evals-format.md](evals-format.md)。
 
@@ -79,7 +79,8 @@ sift vet path/to/skill/ --skip-external # 跳过外部扫描器
 sift init path/to/skill/                                  # LLM 生成(默认)
 sift init path/to/skill/ --num-evals 8                    # 限制数量
 sift init path/to/skill/ --from-transcript session.jsonl  # 从真实会话挖 eval
-sift init path/to/skill/ --from-run path/to/run-bundle --kind skill  # 从 run 中命中的 session 挖 eval
+sift init path/to/skill/ --from-run path/to/run-bundle  # 从 run 中命中的完整 session 挖 eval
+sift init path/to/skill/ --from-run path/to/run-bundle --kind skill  # 只挖目标 skill 的执行部分
 sift init path/to/agent.md --kind agent                   # 只根据 agent 声明出题
 sift init path/to/agent.md --from-transcript session.jsonl --kind agent  # 从一份会话中的 agent 执行挖题
 sift init path/to/agent.md --from-run path/to/run-bundle --kind agent  # 从 run 中的 agent 执行挖题
@@ -94,7 +95,7 @@ sift init path/to/agent.md --from-run path/to/run-bundle --kind agent  # 从 run
 | `--model` | 默认 | LLM 模型 |
 | `--num-evals` | 无 | 最多生成的 eval case 数量 |
 | `--from-transcript` | 无 | 从真实 session transcript 挖 evals（加料 SKILL.md，非替代） |
-| `--from-run` | 无 | 从 run 包中有目标执行的 session 挖题，合并到一份 `evals.json`；须指定 `--kind skill` 或 `--kind agent`，不能与 `--from-transcript` 同用。 |
+| `--from-run` | 无 | 从 run 包中有目标调用的 session 挖题，合并到一份 `evals.json`；省略 `--kind` 时使用命中 session 的完整记录，不能与 `--from-transcript` 同用。 |
 | `--kind` | (无) | 声明类型：生成时 `agent` = 按 agent 角色出题（读 agent 定义.md 凭 description/system prompt 造 role-matching 题，断言由 LLM 直接写）；默认/`skill` 走 skill 出题。配 `--from-transcript` 则选挖掘作用域（`skill`=按 Skill 调用切 / `agent`=按 agent 归属切，同 audit --kind；不传 + 多 skill/agent → 警告） |
 | `--timeout` | 600 | LLM 调用超时秒数（mining 是单次大 prompt；撞超时 → degraded fallback） |
 | `--focus` | (无) | 定向生成某一类 eval 补盲区：`negative-cases`（反面场景）/ `edge-cases`（边界/错误）/ 任意自由文本（声明特定方向）；常配 `--append`。`anti-triggers` 是旧名，保留为静默别名 |
@@ -103,9 +104,9 @@ sift init path/to/agent.md --from-run path/to/run-bundle --kind agent  # 从 run
 
 `--from-transcript` 解析 session transcript（模型、user turns、用到的 skill），重建 input_files / commands / produced_files，生成带结构化 assertions 的 eval。若 LLM 失败降级为 fallback eval，会带 `degraded:*` flag 并在终端告警（不再静默）。多声明单元 transcript（多个 skill、或主 agent dispatch 了子 agent）不传 `--kind` 时会把全部当本声明挖（可能混进别的单元）→ 终端告警，建议加对应 `--kind skill` / `--kind agent` 只挖本声明段。默认 LLM 生成路径**先重试再降级**（对齐 audit 判官）：调用失败（超时/限流/CLI 错）或响应解析失败（畸形/截断）都大概率瞬态，重试最多 2 次（终端打 `重试 n/2…`），耗尽才退确定性模板出题——每题带 `degraded:llm-fallback(原因;重试 N 次后仍失败)` flag + 终端 ⚠ 块提示重跑，token 已花但考卷非 LLM 出的，一眼可辨。`--kind agent` 同样先重试（1+2 次）；耗尽返回 0 题 + 终端告警，且**不覆盖已有 evals.json**（exit 1，既有考卷字节不动——agent 无确定性 fallback，空集覆盖会把旧题毁在瞬时故障手里）。
 
-**从 run 挖题**：只用实际调用了目标 skill、或实际执行了目标 agent 的 session。例如 session A 调用了目标 skill 两次，session B 调用了一次：A 的两次调用合起来作为一份材料，B 单独作为一份材料；模型分别从 A、B 挖题，结果合并到同一个 `evals.json`。调用三次不表示一定生成三道题。挖 skill 时，还会参考各次调用前、同一 session 里的用户请求；挖 agent 时，会参考派发给它的任务。
+**从 run 挖题**：先找出调用了同名 skill 或派发了同名 agent 的 session。省略 `--kind` 时，每个命中 session 的完整记录各是一份挖题材料；指定 `--kind skill` 或 `--kind agent` 时，只取相应的执行部分。例如 session A 调用了目标 skill 两次，session B 调用了一次：模型分别从 A、B 挖题，结果合并到同一个 `evals.json`。调用三次不表示一定生成三道题。切 skill 执行部分时，还会参考各次调用前、同一 session 里的用户请求；切 agent 执行部分时，会参考派发给它的任务。
 
-**触发探题**：给 `--from-run --kind skill` 再加 `--trigger-probes`，会检查 run 中所有有效 session 的用户请求，包括没有调用目标 skill 的 session，找出记录中“目标 skill 未被调用”的请求作为负例候选。未调用只说明这次执行没有触发，不能单凭它认定 skill 本来就不该触发；生成的探题仍需人工核对。这个组合不支持 `--kind agent`。
+**触发探题**：给 `--from-run --kind skill` 再加 `--trigger-probes`，会检查 run 中所有有效 session 的用户请求，包括没有调用目标 skill 的 session，找出记录中“目标 skill 未被调用”的请求作为负例候选。未调用只说明这次执行没有触发，不能单凭它认定 skill 本来就不该触发；生成的探题仍需人工核对。run 的触发探题必须明确指定 `--kind skill`。
 
 **输入格式**：`--from-transcript` 接收一份 Claude Code 风格的 JSONL 会话文件；`--from-run` 接收 run 包目录。Sift 会自动处理 run 包里的会话文件，无需手动转换。
 

@@ -106,7 +106,7 @@ def _scoped_records(
 def prepare_run_mining_inputs(
     run_path: Path,
     name: str,
-    kind: str,
+    kind: str | None,
     temporary_dir: Path,
     *,
     include_unmatched: bool = False,
@@ -118,6 +118,9 @@ def prepare_run_mining_inputs(
     warnings = list(bundle.warnings)
     for index, member in enumerate(bundle.members):
         calls = find_target_calls(member, name, kind)
+        if kind is None:
+            agent_calls = find_target_calls(member, name, "agent")
+            calls = list(dict.fromkeys([*calls, *agent_calls]))
         if not calls and not include_unmatched:
             continue
         data, member_warnings = convert_run_member(member)
@@ -130,6 +133,9 @@ def prepare_run_mining_inputs(
         if include_unmatched:
             probe_paths.append(full)
         if not calls:
+            continue
+        if kind is None:
+            sessions.append(RunMiningSession(member.session_id, full, full, tuple(dict.fromkeys(calls))))
             continue
         segments = slice_transcript(full, name, kind)
         if not segments:

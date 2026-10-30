@@ -169,6 +169,40 @@ def test_run_mining_selects_calls_and_keeps_each_session_context(tmp_path, monke
     ]
 
 
+def test_run_mining_without_kind_keeps_whole_matched_sessions(tmp_path, monkeypatch):
+    root = tmp_path / "run"
+    root.mkdir()
+    _bundle(root, monkeypatch)
+    agent_only = root / "sessions/s3.native/s3.jsonl"
+    agent_only.write_text(
+        agent_only.read_text(encoding="utf-8")
+        + json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use", "id": "dispatch", "name": "task",
+                        "input": {"subagent_type": "demo", "prompt": "处理第四个任务"},
+                    }],
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+
+    prepared = prepare_run_mining_inputs(root, "demo", None, work)
+
+    assert [session.session_id for session in prepared.sessions] == ["s1", "s2", "s3"]
+    assert [session.call_ids for session in prepared.sessions] == [("a", "b"), ("c",), ("dispatch",)]
+    assert all(session.scoped_path == session.full_path for session in prepared.sessions)
+    assert "完成第一个任务" in build_digest(prepared.sessions[0].scoped_path).user_turns
+
+
 def test_init_from_run_generates_one_combined_evalset(tmp_path, monkeypatch):
     root = tmp_path / "run"
     root.mkdir()
@@ -211,6 +245,28 @@ def test_init_from_run_generates_one_combined_evalset(tmp_path, monkeypatch):
     assert "完成第一个任务" in prompts[0] and "完成第二个任务" in prompts[0]
     assert "完成第三个任务" in prompts[1] and "完成第一个任务" not in prompts[1]
     assert [case["id"] for case in json.loads(output.read_text())["evals"]] == [1, 2]
+
+
+def test_init_from_run_without_kind_generates_from_whole_sessions(tmp_path, monkeypatch):
+    root = tmp_path / "run"
+    root.mkdir()
+    _bundle(root, monkeypatch)
+    skill = _skill(tmp_path)
+    prompts = []
+
+    def fake_llm(self, prompt):
+        prompts.append(prompt)
+        return json.dumps({"skill_name": "demo", "evals": [{"id": 1, "prompt": f"task-{len(prompts)}"}]})
+
+    monkeypatch.setattr("sift.evals.generator.EvalInitGenerator._llm_call", fake_llm)
+    output = tmp_path / "evals.json"
+    result = CliRunner().invoke(app, ["init", str(skill), "--from-run", str(root), "-o", str(output)])
+
+    assert result.exit_code == 0, result.output
+    assert len(prompts) == 2
+    assert "完成第一个任务" in prompts[0] and "完成第二个任务" in prompts[0]
+    assert "完成第三个任务" in prompts[1]
+    assert len(json.loads(output.read_text(encoding="utf-8"))["evals"]) == 2
 
 
 def test_init_run_trigger_probes_reads_unmatched_session(tmp_path, monkeypatch):
@@ -260,11 +316,11 @@ def test_init_run_trigger_probes_reads_unmatched_session(tmp_path, monkeypatch):
     )
 
 
-def test_init_from_run_rejects_missing_kind_and_mixed_input(tmp_path):
+def test_init_from_run_rejects_untyped_trigger_probes_and_mixed_input(tmp_path):
     skill = _skill(tmp_path)
     runner = CliRunner()
-    missing_kind = runner.invoke(app, ["init", str(skill), "--from-run", "missing"])
-    assert missing_kind.exit_code == 2 and "需要 --kind" in missing_kind.output
+    untyped_probes = runner.invoke(app, ["init", str(skill), "--from-run", "missing", "--trigger-probes"])
+    assert untyped_probes.exit_code == 2 and "需要 --kind skill" in untyped_probes.output
     mixed = runner.invoke(
         app,
         ["init", str(skill), "--from-run", "missing", "--from-transcript", "x.jsonl"],

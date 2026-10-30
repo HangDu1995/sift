@@ -18,7 +18,7 @@ from sift.parser import parse_skill_md, resolve_skill_dir
 _INIT_KIND_HELP = (
     "声明类型:生成时 agent=按 agent 角色出题(默认/skill 走 skill 出题);配 "
     "--from-transcript 选挖掘作用域(skill=按 Skill 调用切 / agent=按 agent "
-    "归属切);配 --from-run 时必填"
+    "归属切);配 --from-run 时省略则挖命中 session 的完整记录"
 )
 
 _INIT_TIMEOUT_HELP = "LLM 调用超时秒数(mining 是单次大 prompt,默认 600;撞超时 → degraded fallback)"
@@ -145,11 +145,8 @@ def init(cli_options: InitCommandOptions):
         if cli_options.from_run is not None and cli_options.from_transcript is not None:
             console.print("[red]Error:[/red] --from-run 与 --from-transcript 互斥")
             raise typer.Exit(code=2)
-        if cli_options.from_run is not None and cli_options.kind not in ("skill", "agent"):
-            console.print("[red]Error:[/red] --from-run 需要 --kind skill 或 --kind agent")
-            raise typer.Exit(code=2)
-        if cli_options.from_run is not None and cli_options.trigger_probes and cli_options.kind == "agent":
-            console.print("[red]Error:[/red] run 的 trigger 探题仅适用于 --kind skill")
+        if cli_options.from_run is not None and cli_options.trigger_probes and cli_options.kind != "skill":
+            console.print("[red]Error:[/red] run 的 trigger 探题需要 --kind skill")
             raise typer.Exit(code=2)
         gen = EvalInitGenerator(model=cli_options.model, timeout=cli_options.timeout, focus=cli_options.focus)
 
