@@ -106,7 +106,7 @@ sift init path/to/agent.md --from-run path/to/run-bundle --kind agent  # 从 run
 
 `--from-transcript` 解析 session transcript（模型、user turns、用到的 skill），重建 input_files / commands / produced_files，生成带结构化 assertions 的 eval。若 LLM 失败降级为 fallback eval，会带 `degraded:*` flag 并在终端告警（不再静默）。多声明单元 transcript（多个 skill、或主 agent dispatch 了子 agent）不传 `--kind` 时会把全部当本声明挖（可能混进别的单元）→ 终端告警，建议加对应 `--kind skill` / `--kind agent` 只挖本声明段。默认 LLM 生成路径**先重试再降级**（对齐 audit 判官）：调用失败（超时/限流/CLI 错）或响应解析失败（畸形/截断）都大概率瞬态，重试最多 2 次（终端打 `重试 n/2…`），耗尽才退确定性模板出题——每题带 `degraded:llm-fallback(原因;重试 N 次后仍失败)` flag + 终端 ⚠ 块提示重跑，token 已花但考卷非 LLM 出的，一眼可辨。`--kind agent` 同样先重试（1+2 次）；耗尽返回 0 题 + 终端告警，且**不覆盖已有 evals.json**（exit 1，既有考卷字节不动——agent 无确定性 fallback，空集覆盖会把旧题毁在瞬时故障手里）。
 
-**从 run 挖题**：先找出调用了同名 skill 或派发了同名 agent 的 session。省略 `--kind` 时，每个命中 session 的完整记录各是一份挖题材料；指定 `--kind skill` 或 `--kind agent` 时，只取相应的执行部分。例如 session A 调用了目标 skill 两次，session B 调用了一次：模型分别从 A、B 挖题，结果合并到同一个 `evals.json`。调用三次不表示一定生成三道题。切 skill 执行部分时，还会参考各次调用前、同一 session 里的用户请求；切 agent 执行部分时，会参考派发给它的任务。
+**从 run 挖题**：先找出调用了同名 skill 或派发了同名 agent 的 session。省略 `--kind` 时，每个命中 session 的完整记录各是一份挖题材料；指定 `--kind skill` 或 `--kind agent` 时，只取相应的执行部分。例如 session A 调用了目标 skill 两次，session B 调用了一次：模型分别从 A、B 挖题，汇总后将题目 `prompt` 去掉首尾空白仍完全相同、且没有明确冲突的题合成一题，再写入同一个 `evals.json`。意思相近但措辞不同的题仍会分别保留；调用三次也不表示一定生成三道题。切 skill 执行部分时，还会参考各次调用前、同一 session 里的用户请求；切 agent 执行部分时，会参考派发给它的任务。
 
 **触发探题**：给 `--from-run --kind skill` 再加 `--trigger-probes`，会检查 run 中所有有效 session 的用户请求，包括没有调用目标 skill 的 session，找出记录中“目标 skill 未被调用”的请求作为负例候选。未调用只说明这次执行没有触发，不能单凭它认定 skill 本来就不该触发；生成的探题仍需人工核对。run 的触发探题必须明确指定 `--kind skill`。
 
