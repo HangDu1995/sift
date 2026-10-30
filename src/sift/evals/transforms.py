@@ -750,8 +750,10 @@ def collect_unknown_field_warnings(data: dict) -> list[str]:
     return warns
 
 
-def merge_same_task_evals(eval_set: EvalSet) -> EvalSet:
+def merge_same_task_evals(eval_set: EvalSet, *, separate_degraded: bool = False) -> EvalSet:
     """合并 prompt 相同的 eval → 一题多断言(去冗余、省 spawn)。
+
+    run 跨 session 汇总时可将降级题与正常题分组，避免前者的标记被合并吞掉。
 
     单 transcript 挖掘常产出多个同 prompt 的 eval(同一任务的多条评分细则:认某错误码、
     schema 完整、反编造…),各自 spawn 一次 cc 冗余、A/B 时是高度相关 trial。按 prompt
@@ -768,10 +770,11 @@ def merge_same_task_evals(eval_set: EvalSet) -> EvalSet:
     evals = eval_set.evals
     if len(evals) <= 1:
         return eval_set
-    groups: dict[str, list[EvalCase]] = {}
-    order: list[str] = []
+    groups: dict[tuple[str, bool], list[EvalCase]] = {}
+    order: list[tuple[str, bool]] = []
     for e in evals:
-        key = (e.prompt or "").strip()
+        degraded = separate_degraded and any(flag.startswith("degraded:") for flag in e.flags or [])
+        key = ((e.prompt or "").strip(), degraded)
         if key not in groups:
             groups[key] = []
             order.append(key)

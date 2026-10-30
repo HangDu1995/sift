@@ -679,7 +679,7 @@ Output JSON ONLY:
                 skill_path, transcript_path, on_heartbeat=on_heartbeat, kind=kind, already_scoped=True
             )
             cases.extend(result.evals)
-        return merge_same_task_evals(EvalSet(skill_name=name, evals=cases))
+        return merge_same_task_evals(EvalSet(skill_name=name, evals=cases), separate_degraded=True)
 
     def _llm_call(self, prompt: str) -> str:
         """call_claude + 累加 token/耗时到实例(init 终端显示用)。RuntimeError 透传调用方处理。"""

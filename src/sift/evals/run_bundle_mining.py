@@ -74,9 +74,13 @@ def _segment_context(
     records: list[dict], segment: list[dict], kind: str
 ) -> tuple[str, int | None]:
     first = segment[0]
+    parent_tool_id = str(first.get("parent_tool_use_id") or "")
+    if parent_tool_id:
+        prompt = _dispatch_prompt(records, parent_tool_id)
+        label = "派发给该 agent 的任务" if kind == "agent" else "派发给该子 agent 的任务"
+        return (f"{label}：{prompt}" if prompt else "", None)
     if kind == "agent":
-        prompt = _dispatch_prompt(records, str(first.get("parent_tool_use_id") or ""))
-        return (f"派发给该 agent 的任务：{prompt}" if prompt else "", None)
+        return "", None
     first_turn = int(first.get("_turn_index") or 0)
     for rec in reversed(records[: max(first_turn - 1, 0)]):
         text = _user_text(rec)
@@ -132,7 +136,16 @@ def prepare_run_bundle_mining_inputs(
         _write_jsonl(full, records)
         if include_unmatched:
             probe_paths.append(full)
+        had_calls = bool(calls)
+        converted_ids = {
+            str(call.get("id") or "")
+            for record in data["records"]
+            for call in record.get("tool_calls", [])
+        }
+        calls = [tool_id for tool_id in calls if tool_id in converted_ids]
         if not calls:
+            if had_calls:
+                warnings.append(f"{member.session_id}: 找到目标调用，但执行记录无法可靠导入，已跳过")
             continue
         if kind is None:
             sessions.append(RunBundleMiningSession(member.session_id, full, full, tuple(dict.fromkeys(calls))))

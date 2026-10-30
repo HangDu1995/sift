@@ -13,6 +13,7 @@ from sift.evals.generator import EvalInitGenerator
 from sift.evals.run_bundle_mining import prepare_run_bundle_mining_inputs
 from sift.evals.transcript import build_digest
 from sift.evals.trigger_mining import mine_untriggered_queries
+from sift.models import EvalSet
 
 
 def _bundle(tmp_path: Path, monkeypatch) -> Path:
@@ -203,6 +204,61 @@ def test_run_bundle_mining_without_kind_keeps_whole_matched_sessions(tmp_path, m
     assert "完成第一个任务" in build_digest(prepared.sessions[0].scoped_path).user_turns
 
 
+def test_run_bundle_mining_without_kind_skips_unlinked_child_call(tmp_path, monkeypatch):
+    root = tmp_path / "run"
+    root.mkdir()
+    _bundle(root, monkeypatch)
+    child = root / "sessions/s3.native/subagents/unlinked.jsonl"
+    child.parent.mkdir()
+    child.write_text(
+        json.dumps({
+            "message": {"role": "assistant", "content": [{
+                "type": "tool_use", "id": "hidden", "name": "skill", "input": {"name": "demo"},
+            }]},
+        }) + "\n",
+        encoding="utf-8",
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+
+    prepared = prepare_run_bundle_mining_inputs(root, "demo", None, work)
+
+    assert [session.session_id for session in prepared.sessions] == ["s1", "s2"]
+    assert any("s3: 找到目标调用，但执行记录无法可靠导入" in warning for warning in prepared.warnings)
+
+
+def test_run_bundle_mining_child_skill_uses_dispatch_task(tmp_path, monkeypatch):
+    root = tmp_path / "run"
+    root.mkdir()
+    _bundle(root, monkeypatch)
+    parent = root / "sessions/s3.native/s3.jsonl"
+    parent.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in [
+        {"message": {"role": "user", "content": "主会话的另一个请求"}, "timestamp": "2026-01-01T00:00:00Z"},
+        {"message": {"role": "assistant", "content": [{
+            "type": "tool_use", "id": "dispatch", "name": "Task",
+            "input": {"subagent_type": "worker", "prompt": "处理子任务 Z"},
+        }]}, "timestamp": "2026-01-01T00:00:01Z"},
+    ]) + "\n", encoding="utf-8")
+    child = root / "sessions/s3.native/subagents/child.jsonl"
+    child.parent.mkdir()
+    child.write_text(json.dumps({
+        "message": {"role": "assistant", "content": [{
+            "type": "tool_use", "id": "child-skill", "name": "skill", "input": {"name": "demo"},
+        }]}, "timestamp": "2026-01-01T00:00:02Z",
+    }) + "\n", encoding="utf-8")
+    child.with_suffix(".meta.json").write_text(json.dumps({"toolUseId": "dispatch"}), encoding="utf-8")
+    work = tmp_path / "work"
+    work.mkdir()
+
+    prepared = prepare_run_bundle_mining_inputs(root, "demo", "skill", work)
+    session = next(item for item in prepared.sessions if item.session_id == "s3")
+    digest = build_digest(session.scoped_path)
+
+    assert session.call_ids == ("child-skill",)
+    assert "派发给该子 agent 的任务：处理子任务 Z" in digest.user_turns
+    assert "主会话的另一个请求" not in digest.user_turns
+
+
 def test_init_from_run_generates_one_combined_evalset(tmp_path, monkeypatch):
     root = tmp_path / "run"
     root.mkdir()
@@ -267,6 +323,28 @@ def test_init_from_run_without_kind_generates_from_whole_sessions(tmp_path, monk
     assert "完成第一个任务" in prompts[0] and "完成第二个任务" in prompts[0]
     assert "完成第三个任务" in prompts[1]
     assert len(json.loads(output.read_text(encoding="utf-8"))["evals"]) == 2
+
+
+def test_run_mining_does_not_merge_degraded_case_into_normal_case(tmp_path, monkeypatch):
+    skill = _skill(tmp_path)
+    results = [
+        {"skill_name": "demo", "evals": [{"id": 1, "prompt": "相同任务", "expected_output": "正常结果 A"}]},
+        {"skill_name": "demo", "evals": [{"id": 1, "prompt": "相同任务", "expected_output": "正常结果 B"}]},
+        {"skill_name": "demo", "evals": [{
+            "id": 1, "prompt": "相同任务", "expected_output": "兜底结果", "flags": ["degraded:no-llm"],
+        }]},
+    ]
+    generator = EvalInitGenerator()
+    monkeypatch.setattr(generator, "generate_from_transcript", lambda *args, **kwargs: EvalSet.model_validate(results.pop(0)))
+
+    combined = generator.generate_from_run(skill, [("s1", Path("a")), ("s2", Path("b")), ("s3", Path("c"))], None)
+
+    assert len(combined.evals) == 2
+    assert [case.id for case in combined.evals] == [1, 2]
+    assert "正常结果 A" in combined.evals[0].expected_output
+    assert "正常结果 B" in combined.evals[0].expected_output
+    assert "兜底结果" not in combined.evals[0].expected_output
+    assert "degraded:no-llm" in combined.evals[1].flags
 
 
 def test_init_run_trigger_probes_reads_unmatched_session(tmp_path, monkeypatch):
