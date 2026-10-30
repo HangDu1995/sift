@@ -71,7 +71,7 @@ sift vet path/to/skill/ --skip-external # 跳过外部扫描器
 
 ### `init` — 初始化评测定义
 
-`sift init` 根据 skill 的 `SKILL.md` 或 agent 的定义文件生成 `evals.json`。默认让模型根据声明出题；提供 `--from-transcript` 时参考一份会话记录，提供 `--from-run` 时参考 run 包中的相关会话。后两者不能同时使用。省略 `--kind` 时，从命中的完整会话挖题；指定 `--kind skill` 或 `--kind agent` 时，只挖目标的执行部分。给 agent 出题时应指定 `--kind agent`，让出题提示按 agent 声明生成。
+根据 SKILL.md 内容自动生成 `evals.json`。三种生成路径，优先级 `--from-run` 或 `--from-transcript`（两者互斥）> `--generate-prompts`（LLM）> 模板。`--kind agent` 改为给 **agent 定义.md** 出题（读 description + system prompt 凭角色造 role-matching 考题，不切段、不假设产文件，断言由 LLM 直接写）——agent 的「没有 transcript 时的出题路」；有真实 dispatch session 时，`--from-transcript --kind agent` 可从单个会话挖题，`--from-run --kind agent` 可从 run 中命中的会话挖题。
 
 > 生成的 `evals.json` 格式（字段 / AssertionType 全表 / expectations vs assertions / tier 坑）详见 [evals-format.md](evals-format.md)。
 
