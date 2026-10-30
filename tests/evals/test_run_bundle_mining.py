@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from sift.cli.main import app
 from sift.evals.generator import EvalInitGenerator
-from sift.evals.run_bundle_mining import prepare_run_mining_inputs
+from sift.evals.run_bundle_mining import prepare_run_bundle_mining_inputs
 from sift.evals.transcript import build_digest
 from sift.evals.trigger_mining import mine_untriggered_queries
 
@@ -128,13 +128,13 @@ def _skill(tmp_path: Path) -> Path:
     return skill
 
 
-def test_run_mining_selects_calls_and_keeps_each_session_context(tmp_path, monkeypatch):
+def test_run_bundle_mining_selects_calls_and_keeps_each_session_context(tmp_path, monkeypatch):
     root = tmp_path / "run"
     root.mkdir()
     _bundle(root, monkeypatch)
     work = tmp_path / "work"
     work.mkdir()
-    prepared = prepare_run_mining_inputs(
+    prepared = prepare_run_bundle_mining_inputs(
         root, "demo", "skill", work, include_unmatched=True
     )
     assert [session.session_id for session in prepared.sessions] == ["s1", "s2"]
@@ -169,7 +169,7 @@ def test_run_mining_selects_calls_and_keeps_each_session_context(tmp_path, monke
     ]
 
 
-def test_run_mining_without_kind_keeps_whole_matched_sessions(tmp_path, monkeypatch):
+def test_run_bundle_mining_without_kind_keeps_whole_matched_sessions(tmp_path, monkeypatch):
     root = tmp_path / "run"
     root.mkdir()
     _bundle(root, monkeypatch)
@@ -195,7 +195,7 @@ def test_run_mining_without_kind_keeps_whole_matched_sessions(tmp_path, monkeypa
     work = tmp_path / "work"
     work.mkdir()
 
-    prepared = prepare_run_mining_inputs(root, "demo", None, work)
+    prepared = prepare_run_bundle_mining_inputs(root, "demo", None, work)
 
     assert [session.session_id for session in prepared.sessions] == ["s1", "s2", "s3"]
     assert [session.call_ids for session in prepared.sessions] == [("a", "b"), ("c",), ("dispatch",)]
@@ -385,7 +385,7 @@ def test_run_agent_mining_uses_linked_child_and_dispatch_task(tmp_path, monkeypa
     )
     work = tmp_path / "work"
     work.mkdir()
-    prepared = prepare_run_mining_inputs(root, "reviewer", "agent", work)
+    prepared = prepare_run_bundle_mining_inputs(root, "reviewer", "agent", work)
     assert len(prepared.sessions) == 1
     scoped = [
         json.loads(line)

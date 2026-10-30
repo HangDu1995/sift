@@ -13,7 +13,7 @@ from sift.evals.structured import load_structured_records
 
 
 @dataclass(frozen=True)
-class RunMiningSession:
+class RunBundleMiningSession:
     session_id: str
     scoped_path: Path
     full_path: Path
@@ -21,9 +21,9 @@ class RunMiningSession:
 
 
 @dataclass(frozen=True)
-class RunMiningInputs:
+class RunBundleMiningInputs:
     run_id: str
-    sessions: tuple[RunMiningSession, ...]
+    sessions: tuple[RunBundleMiningSession, ...]
     probe_paths: tuple[Path, ...]
     warnings: tuple[str, ...]
 
@@ -103,17 +103,17 @@ def _scoped_records(
     return scoped
 
 
-def prepare_run_mining_inputs(
+def prepare_run_bundle_mining_inputs(
     run_path: Path,
     name: str,
     kind: str | None,
     temporary_dir: Path,
     *,
     include_unmatched: bool = False,
-) -> RunMiningInputs:
+) -> RunBundleMiningInputs:
     """Validate a run, select target executions, and retain full sessions for probes."""
     bundle = load_run_bundle(run_path)
-    sessions: list[RunMiningSession] = []
+    sessions: list[RunBundleMiningSession] = []
     probe_paths: list[Path] = []
     warnings = list(bundle.warnings)
     for index, member in enumerate(bundle.members):
@@ -135,7 +135,7 @@ def prepare_run_mining_inputs(
         if not calls:
             continue
         if kind is None:
-            sessions.append(RunMiningSession(member.session_id, full, full, tuple(dict.fromkeys(calls))))
+            sessions.append(RunBundleMiningSession(member.session_id, full, full, tuple(dict.fromkeys(calls))))
             continue
         segments = slice_transcript(full, name, kind)
         if not segments:
@@ -160,12 +160,12 @@ def prepare_run_mining_inputs(
         )
         scoped = temporary_dir / f"member-{index}-scoped.jsonl"
         _write_jsonl(scoped, _scoped_records(records, segments, kind))
-        sessions.append(RunMiningSession(member.session_id, scoped, full, call_ids))
+        sessions.append(RunBundleMiningSession(member.session_id, scoped, full, call_ids))
     if not sessions:
         detail = f"；{warnings[-1]}" if warnings else ""
         raise InputError(
-            f"run {bundle.run_id}: 未找到 {name!r} 可用于挖题的 {kind} 执行{detail}"
+            f"run {bundle.run_id}: 未找到 {name!r} 可用于挖题的 {kind or 'skill／agent'} 执行{detail}"
         )
-    return RunMiningInputs(
+    return RunBundleMiningInputs(
         bundle.run_id, tuple(sessions), tuple(probe_paths), tuple(warnings)
     )
