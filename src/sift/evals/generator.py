@@ -679,7 +679,19 @@ Output JSON ONLY:
                 skill_path, transcript_path, on_heartbeat=on_heartbeat, kind=kind, already_scoped=True
             )
             cases.extend(result.evals)
-        return merge_same_task_evals(EvalSet(skill_name=name, evals=cases), separate_degraded=True)
+        normal_prompts = {
+            (case.prompt or "").strip()
+            for case in cases
+            if not any(flag.startswith("degraded:") for flag in case.flags or [])
+        }
+        cases = [
+            case for case in cases
+            if not (
+                (case.prompt or "").strip() in normal_prompts
+                and any(flag.startswith("degraded:") for flag in case.flags or [])
+            )
+        ]
+        return merge_same_task_evals(EvalSet(skill_name=name, evals=cases))
 
     def _llm_call(self, prompt: str) -> str:
         """call_claude + 累加 token/耗时到实例(init 终端显示用)。RuntimeError 透传调用方处理。"""

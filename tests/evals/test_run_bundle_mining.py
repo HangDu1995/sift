@@ -325,7 +325,7 @@ def test_init_from_run_without_kind_generates_from_whole_sessions(tmp_path, monk
     assert len(json.loads(output.read_text(encoding="utf-8"))["evals"]) == 2
 
 
-def test_run_mining_does_not_merge_degraded_case_into_normal_case(tmp_path, monkeypatch):
+def test_run_mining_discards_degraded_case_when_normal_case_covers_same_prompt(tmp_path, monkeypatch):
     skill = _skill(tmp_path)
     results = [
         {"skill_name": "demo", "evals": [{"id": 1, "prompt": "相同任务", "expected_output": "正常结果 A"}]},
@@ -333,17 +333,24 @@ def test_run_mining_does_not_merge_degraded_case_into_normal_case(tmp_path, monk
         {"skill_name": "demo", "evals": [{
             "id": 1, "prompt": "相同任务", "expected_output": "兜底结果", "flags": ["degraded:no-llm"],
         }]},
+        {"skill_name": "demo", "evals": [{
+            "id": 1, "prompt": "不同任务", "expected_output": "另一道兜底题", "flags": ["degraded:no-llm"],
+        }]},
     ]
     generator = EvalInitGenerator()
     monkeypatch.setattr(generator, "generate_from_transcript", lambda *args, **kwargs: EvalSet.model_validate(results.pop(0)))
 
-    combined = generator.generate_from_run(skill, [("s1", Path("a")), ("s2", Path("b")), ("s3", Path("c"))], None)
+    combined = generator.generate_from_run(
+        skill, [("s1", Path("a")), ("s2", Path("b")), ("s3", Path("c")), ("s4", Path("d"))], None
+    )
 
     assert len(combined.evals) == 2
     assert [case.id for case in combined.evals] == [1, 2]
     assert "正常结果 A" in combined.evals[0].expected_output
     assert "正常结果 B" in combined.evals[0].expected_output
     assert "兜底结果" not in combined.evals[0].expected_output
+    assert "degraded:no-llm" not in combined.evals[0].flags
+    assert combined.evals[1].prompt == "不同任务"
     assert "degraded:no-llm" in combined.evals[1].flags
 
 
