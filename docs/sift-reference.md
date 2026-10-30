@@ -81,7 +81,7 @@ sift init path/to/skill/ --num-evals 8                    # 限制数量
 sift init path/to/skill/ --from-transcript session.jsonl  # 从真实会话挖 eval
 sift init path/to/skill/ --from-run path/to/run-bundle  # 从 run 中命中的完整 session 挖 eval
 sift init path/to/skill/ --from-run path/to/run-bundle --kind skill  # 只挖目标 skill 的执行部分
-sift init path/to/agent.md --kind agent                   # 只根据 agent 声明出题
+sift init path/to/agent.md --kind agent                   # 给 agent 出题(读 agent 定义凭角色造 role-matching 题)
 sift init path/to/agent.md --from-transcript session.jsonl --kind agent  # 从 agent 执行挖评分题
 sift init path/to/agent.md --from-run path/to/run-bundle --kind agent  # 从 run 中的 agent 执行挖评分题
 ```
