@@ -1,4 +1,4 @@
-"""Prepare run member sessions as scoped inputs for transcript-based eval mining."""
+"""Prepare run bundle member sessions for transcript-based eval mining."""
 
 from __future__ import annotations
 

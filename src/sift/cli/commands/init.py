@@ -12,7 +12,7 @@ from sift.cli.main import app, console
 from sift.cli.options import options_command
 from sift.errors import SiftError
 from sift.evals.inspect import same_prompt_groups
-from sift.evals.run_mining import RunMiningInputs, prepare_run_mining_inputs
+from sift.evals.run_bundle_mining import RunMiningInputs, prepare_run_mining_inputs
 from sift.parser import parse_skill_md, resolve_skill_dir
 
 _INIT_KIND_HELP = (

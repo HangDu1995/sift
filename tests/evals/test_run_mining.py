@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from sift.cli.main import app
 from sift.evals.generator import EvalInitGenerator
-from sift.evals.run_mining import prepare_run_mining_inputs
+from sift.evals.run_bundle_mining import prepare_run_mining_inputs
 from sift.evals.transcript import build_digest
 from sift.evals.trigger_mining import mine_untriggered_queries
 
